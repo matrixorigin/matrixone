@@ -65,10 +65,7 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/utils.yaml@main
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
-      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
-      S3REGION: ${{ secrets.S3REGION }}
-      S3APIKEY: ${{ secrets.S3APIKEY }}
-      S3APISECRET: ${{ secrets.S3APISECRET }}
-      S3BUCKET: ${{ secrets.S3BUCKET }}
+      TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
+      TEST_S3FS_QCLOUD: ${{ secrets.TEST_S3FS_QCLOUD }}
       DOCU_GROUP_HOOK: ${{ secrets.DOCU_GROUP_HOOK }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

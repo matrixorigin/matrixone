@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	util "github.com/matrixorigin/matrixone/pkg/util/logservice"
 	"go.uber.org/zap"
 )
 
@@ -50,6 +51,12 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
 	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
+	nonVotingLocality := util.GetLocalityFromStr(cfg.BootstrapConfig.NonVotingLocality)
+
+	// If the standby mode is enabled, the number of log shard should be 2.
+	if cfg.BootstrapConfig.StandbyEnabled {
+		numOfLogShards++
+	}
 
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
 	if err != nil {
@@ -100,8 +107,14 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 			return nil
 		default:
 		}
-		if err := s.store.setInitialClusterInfo(numOfLogShards,
-			numOfTNShards, numOfLogReplicas, nextID, nextIDByKey); err != nil {
+		if err := s.store.setInitialClusterInfo(
+			numOfLogShards,
+			numOfTNShards,
+			numOfLogReplicas,
+			nextID,
+			nextIDByKey,
+			nonVotingLocality,
+		); err != nil {
 			s.runtime.SubLogger(runtime.SystemInit).Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil

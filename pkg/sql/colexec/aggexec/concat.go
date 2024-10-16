@@ -47,7 +47,7 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *groupConcatExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result []byte, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
@@ -123,10 +123,7 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 			return err
 		}
 	}
-	if err = exec.ret.aggSet(r); err != nil {
-		return err
-	}
-	return nil
+	return exec.ret.aggSet(r)
 }
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -151,7 +148,7 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 	return nil
 }
 
-func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex int) error {
+func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error {
 	// todo: too bad here.
 	exec.separator = partialResult.([]byte)
 	return nil
@@ -163,20 +160,19 @@ func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error
 	if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
 		return err
 	}
+	empty1, empty2 := exec.ret.groupIsEmpty(idx1), other.ret.groupIsEmpty(idx2)
 
-	v1 := exec.ret.aggGet()
-	v2 := other.ret.aggGet()
-	if len(v2) == 0 {
+	if empty2 {
 		return nil
 	}
-	if len(v1) > 0 && len(v2) > 0 {
-		v1 = append(v1, exec.separator...)
-		v1 = append(v1, v2...)
-		return exec.ret.aggSet(v1)
-	}
-	if len(v1) == 0 {
+	exec.ret.mergeEmpty(other.ret.basicResult, idx1, idx2)
+	v2 := other.ret.aggGet()
+	if empty1 {
 		return exec.ret.aggSet(v2)
 	}
+	v1 := exec.ret.aggGet()
+	v1 = append(v1, exec.separator...)
+	v1 = append(v1, v2...)
 	return exec.ret.aggSet(v1)
 }
 

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -114,7 +114,7 @@ const (
 			mo_catalog.mo_cdc_watermark w 
 		join 
 			mo_catalog.mo_tables t 
-		on w.table_id = t.rel_id 
+		on cast(SUBSTRING_INDEX(w.table_id,'_',1) as bigint unsigned) = t.rel_id 
 		where w.account_id = %d and w.task_id = '%s'`
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
@@ -269,7 +269,8 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err error) {
-	ts := getGlobalPu().TaskService
+	service := ses.GetService()
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -398,7 +399,8 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 				return
 			}
 
-			if err = initAesKeyWrapper(ctx, tx, creatorAccInfo.GetTenantID()); err != nil {
+			// TODO replace with creatorAccountId
+			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account, service); err != nil {
 				return
 			}
 
@@ -677,7 +679,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 		//Format: account.db.table:db.table
 		splitRes := strings.Split(pattern, ":")
 		if len(splitRes) != 2 {
-			return nil, moerr.NewInternalErrorf(ctx, "must be source : sink. invalid format")
+			return nil, moerr.NewInternalErrorf(ctx, "invalid table format: %s, must be `source:sink`.", pattern)
 		}
 
 		//handle source part
@@ -731,7 +733,7 @@ func extractTablePair(ctx context.Context, pattern string, defaultAcc string) (*
 func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable bool) (account string, db string, table string, isRegexpTable bool, err error) {
 	parts := strings.Split(strings.TrimSpace(input), ".")
 	if len(parts) != 2 && len(parts) != 3 {
-		err = moerr.NewInternalErrorf(ctx, "needs account.database.table or database.table. invalid format.")
+		err = moerr.NewInternalErrorf(ctx, "invalid table format: %s, needs account.database.table or database.table.", input)
 		return
 	}
 
@@ -741,18 +743,18 @@ func extractTableInfo(ctx context.Context, input string, mustBeConcreteTable boo
 		account, db, table = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
 
 		if !accountNameIsLegal(account) {
-			err = moerr.NewInternalErrorf(ctx, "invalid account name")
+			err = moerr.NewInternalErrorf(ctx, "invalid account name: %s", account)
 			return
 		}
 	}
 
 	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name")
+		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
 		return
 	}
 
 	if !tableNameIsLegal(table) {
-		err = moerr.NewInternalErrorf(ctx, "invalid table name")
+		err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
 		return
 	}
 
@@ -789,9 +791,6 @@ func extractTablePairs(ctx context.Context, pattern string, defaultAcc string) (
 	pts := &cdc2.PatternTuples{}
 
 	tablePairs := strings.Split(pattern, ",")
-	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
-	}
 
 	//step1 : split pattern by ',' => table pair
 	for _, pair := range tablePairs {
@@ -832,7 +831,7 @@ func extractRules(ctx context.Context, pattern string) (*cdc2.PatternTuples, err
 
 	tablePairs := strings.Split(pattern, ",")
 	if len(tablePairs) == 0 {
-		return nil, moerr.NewInternalError(ctx, "invalid pattern format")
+		return nil, moerr.NewInternalErrorf(ctx, "invalid pattern format: %s", pattern)
 	}
 	var err error
 	//step1 : split pattern by ',' => table pair
@@ -972,6 +971,7 @@ type CdcTask struct {
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	holdCh               chan int
 }
 
 func NewCdcTask(
@@ -1013,33 +1013,36 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
+			close(cdc.activeRoutine.Pause)
 			close(cdc.activeRoutine.Cancel)
 		}
+		// if Resume/Restart successfully will reach here, do nothing
 	}()
 
 	ctx := defines.AttachAccountId(rootCtx, uint32(cdc.cdcTask.Accounts[0].GetId()))
 
-	//step1 : get cdc task definition
+	// get cdc task definition
 	if err = cdc.retrieveCdcTask(ctx); err != nil {
 		return err
 	}
 
-	//check table be filtered or not
+	// check table be filtered or not
 	if filterTable(&cdc.tables, &cdc.filters) == 0 {
 		return moerr.NewInternalError(ctx, "all tables has been excluded by filters. start cdc failed.")
 	}
 
-	//step2 : get source tableid
+	// get source table id
 	var info *cdc2.DbTableInfo
 	dbTableInfos := make([]*cdc2.DbTableInfo, 0, len(cdc.tables.Pts))
+	tblIdStrMap := make(map[string]bool)
 	for _, tuple := range cdc.tables.Pts {
 		accId, accName, dbName, tblName := tuple.Source.AccountId, tuple.Source.Account, tuple.Source.Database, tuple.Source.Table
 		if needSkipThisTable(accName, dbName, tblName, &cdc.filters) {
 			logutil.Infof("cdc skip table %s:%s by filter", dbName, tblName)
 			continue
 		}
-		//get dbid tableid for the source table
-		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName)
+		// get db id, table id for the source table
+		info, err = cdc.retrieveTable(ctx, accId, accName, dbName, tblName, tblIdStrMap)
 		if err != nil {
 			return err
 		}
@@ -1058,11 +1061,11 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 
 	if firstTime {
 		// hold
-		ch := make(chan int, 1)
+		cdc.holdCh = make(chan int, 1)
 		select {
 		case <-ctx.Done():
 			break
-		case <-ch:
+		case <-cdc.holdCh:
 			break
 		}
 	}
@@ -1095,7 +1098,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	} else if count == 0 {
 		for _, info = range dbTableInfos {
 			// use startTs as watermark
-			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblId, cdc.startTs); err != nil {
+			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblIdStr, cdc.startTs); err != nil {
 				return err
 			}
 		}
@@ -1114,17 +1117,18 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
+	accId := cdc.cdcTask.Accounts[0].GetId()
 	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := getSqlForRetrievingCdcTask(cdc.cdcTask.Accounts[0].GetId(), cdcTaskId)
+	sql := getSqlForRetrievingCdcTask(accId, cdcTaskId)
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
 	}
 
 	if res.RowCount() < 1 {
-		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", accId, cdc.cdcTask.TaskId)
 	} else if res.RowCount() > 1 {
-		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", accId, cdc.cdcTask.TaskId)
 	}
 
 	//sink_type
@@ -1149,6 +1153,11 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		//sink_password
 		sinkPwd, err = res.GetString(ctx, 0, 2)
 		if err != nil {
+			return err
+		}
+
+		// TODO replace with creatorAccountId
+		if err = cdc.initAesKeyByInternalExecutor(ctx, catalog.System_Account); err != nil {
 			return err
 		}
 
@@ -1195,7 +1204,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	return nil
 }
 
-func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string) (*cdc2.DbTableInfo, error) {
+func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string, tblIdStrMap map[string]bool) (*cdc2.DbTableInfo, error) {
 	var dbId, tblId uint64
 	var err error
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1203,6 +1212,16 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return nil, res.Error()
+	}
+
+	getTblIdStr := func(tblId uint64) string {
+		for i := 0; ; i++ {
+			tblIdStr := fmt.Sprintf("%d_%d", tblId, i)
+			if _, ok := tblIdStrMap[tblIdStr]; !ok {
+				tblIdStrMap[tblIdStr] = true
+				return tblIdStr
+			}
+		}
 	}
 
 	/*
@@ -1229,6 +1248,7 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 		SourceAccountId:   accId,
 		SourceDbId:        dbId,
 		SourceTblId:       tblId,
+		SourceTblIdStr:    getTblIdStr(tblId),
 	}, err
 }
 
@@ -1255,8 +1275,14 @@ var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
 
 // Resume cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() (err error) {
+	logutil.Infof("cdc task %s resume\n", cdc.cdcTask.TaskName)
+	defer func() {
+		logutil.Infof("cdc task %s resume success\n", cdc.cdcTask.TaskName)
+	}()
+
 	for {
 		// closed in Pause, need renew
+		cdc.activeRoutine.Pause = make(chan struct{})
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		if err = Start(context.Background(), cdc, false); err == nil {
 			return
@@ -1267,8 +1293,14 @@ func (cdc *CdcTask) Resume() (err error) {
 
 // Restart cdc task from init watermark
 func (cdc *CdcTask) Restart() (err error) {
+	logutil.Infof("cdc task %s restart\n", cdc.cdcTask.TaskName)
+	defer func() {
+		logutil.Infof("cdc task %s restart success\n", cdc.cdcTask.TaskName)
+	}()
+
 	for {
 		// closed in Pause, need renew
+		cdc.activeRoutine.Pause = make(chan struct{})
 		cdc.activeRoutine.Cancel = make(chan struct{})
 		// delete previous records
 		if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err == nil {
@@ -1281,18 +1313,39 @@ func (cdc *CdcTask) Restart() (err error) {
 }
 
 // Pause cdc task
-func (cdc *CdcTask) Pause() error {
-	close(cdc.activeRoutine.Cancel)
-	cdc.activeRoutine.Cancel = nil
-	return nil
+func (cdc *CdcTask) Pause() (err error) {
+	logutil.Infof("cdc task %s pause\n", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s pause success\n", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s pause failed, err: %v\n", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	close(cdc.activeRoutine.Pause)
+	return
 }
 
 // Cancel cdc task
-func (cdc *CdcTask) Cancel() error {
-	if cdc.activeRoutine.Cancel != nil {
-		close(cdc.activeRoutine.Cancel)
+func (cdc *CdcTask) Cancel() (err error) {
+	logutil.Infof("cdc task %s cancel\n", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s cancel success\n", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s cancel failed, err: %v\n", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	close(cdc.activeRoutine.Cancel)
+	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return err
 	}
-	return cdc.sunkWatermarkUpdater.DeleteAllFromDb()
+
+	// let Start() go
+	cdc.holdCh <- 1
+	return
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
@@ -1300,11 +1353,11 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
 
 	// add watermark to updater
-	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblId)
+	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblIdStr)
 	if err != nil {
 		return err
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblId, watermark)
+	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblIdStr, watermark)
 
 	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
 	if err != nil {
@@ -1319,6 +1372,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
+		cdc.activeRoutine,
 	)
 	if err != nil {
 		return err
@@ -1342,19 +1396,45 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 }
 
 func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
-	tblId := info.SourceTblId
+	tblIdStr := info.SourceTblIdStr
 	// delete old watermark of table
-	cdc.sunkWatermarkUpdater.DeleteFromMem(tblId)
-	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblId); err != nil {
+	cdc.sunkWatermarkUpdater.DeleteFromMem(tblIdStr)
+	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblIdStr); err != nil {
 		return
 	}
 
 	// use start_ts as init watermark
-	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblId, cdc.startTs); err != nil {
+	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblIdStr, cdc.startTs); err != nil {
 		return
 	}
-	cdc.sunkWatermarkUpdater.UpdateMem(tblId, cdc.startTs)
+	cdc.sunkWatermarkUpdater.UpdateMem(tblIdStr, cdc.startTs)
 	return
+}
+
+func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
+	if len(cdc2.AesKey) > 0 {
+		return nil
+	}
+
+	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return res.Error()
+	} else if res.RowCount() < 1 {
+		return moerr.NewInternalErrorf(ctx, "no data key record for account %d", accountId)
+	}
+
+	encryptedKey, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
+	return
+}
+
+var initAesKeyByInternalExecutor = func(ctx context.Context, cdc *CdcTask, accountId uint32) error {
+	return cdc.initAesKeyByInternalExecutor(ctx, accountId)
 }
 
 func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
@@ -1443,7 +1523,7 @@ func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error)
 		)
 	}
 
-	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, conds...)
+	return runUpdateCdcTask(ctx, targetTaskStatus, uint64(accountId), taskName, ses.GetService(), conds...)
 }
 
 func runUpdateCdcTask(
@@ -1451,9 +1531,9 @@ func runUpdateCdcTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
-	conds ...taskservice.Condition,
-) (err error) {
-	ts := getGlobalPu().TaskService
+	service string,
+	conds ...taskservice.Condition) (err error) {
+	ts := getPu(service).TaskService
 	if ts == nil {
 		return nil
 	}
@@ -1508,12 +1588,18 @@ func updateCdcTask(
 		_ = rows.Close()
 	}()
 
+	empty := true
 	for rows.Next() {
+		empty = false
 		if err = rows.Scan(&taskId); err != nil {
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
 		taskKeyMap[tInfo] = struct{}{}
+	}
+
+	if taskName != "" && empty {
+		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
 	}
 
 	var prepare *sql.Stmt
@@ -1626,7 +1712,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	)
 
 	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
-	pu := getGlobalPu()
+	pu := getPu(ses.GetService())
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -1644,7 +1730,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	defer func() {
 		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
 	}()
-	timestamp := txnOp.SnapshotTS().ToStdTime().String()
+	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
 	sql := getSqlForGetTask(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
@@ -1706,9 +1792,10 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 
 func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
 	var (
-		dbName    string
-		tblName   string
-		watermark string
+		dbName       string
+		tblName      string
+		watermarkStr string
+		watermark    timestamp.Timestamp
 	)
 
 	s = "{\n"
@@ -1732,11 +1819,14 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			if tblName, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-			if watermark, err = result.GetString(ctx, i, 2); err != nil {
+			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+			if watermark, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark)
+			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().In(time.Local).String())
 		}
 	}
 
@@ -1747,11 +1837,11 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 var (
 	queryTableWrapper  = queryTable
 	decrypt            = cdc2.AesCFBDecodeWithKey
-	getGlobalPuWrapper = getGlobalPu
-	initAesKeyWrapper  = initAesKey
+	getGlobalPuWrapper = getPu
+	initAesKeyWrapper  = initAesKeyBySqlExecutor
 )
 
-func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32) (err error) {
+func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
 	if len(cdc2.AesKey) > 0 {
 		return nil
 	}
@@ -1772,6 +1862,6 @@ func initAesKey(ctx context.Context, executor taskservice.SqlExecutor, accountId
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper().SV.KeyEncryptionKey))
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
 	return
 }

@@ -113,7 +113,11 @@ func NewLocalFS(
 
 func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(size)
+		l.memCache.cache.EnsureNBytes(
+			size,
+			// evict at least 1/100 capacity to reduce number of evictions
+			int(l.memCache.cache.Capacity()/100),
+		)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
@@ -357,23 +361,13 @@ read_memory_cache:
 		}()
 	}
 
-	startLock := time.Now()
-	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
-		defer done()
-	} else {
-		wait()
-		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
-		goto read_memory_cache
-	}
-
 	// Record diskIO and netwokIO(un memory IO) resource
 	ioStart := time.Now()
 	defer func() {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
 	}()
 
+read_disk_cache:
 	if l.diskCache != nil {
 
 		t0 := time.Now()
@@ -405,6 +399,26 @@ read_memory_cache:
 		}
 		if vector.allDone() {
 			return nil
+		}
+	}
+
+	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
+	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
+	if mayReadMemoryCache || mayReadDiskCache {
+		// may read caches, merge
+		startLock := time.Now()
+		done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+		if done != nil {
+			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+			defer done()
+		} else {
+			wait()
+			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+			if mayReadMemoryCache {
+				goto read_memory_cache
+			} else {
+				goto read_disk_cache
+			}
 		}
 	}
 

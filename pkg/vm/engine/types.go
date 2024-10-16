@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -605,6 +604,7 @@ const (
 	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
 	Policy_CheckCommittedOnly   = Policy_SkipUncommitedInMemory | Policy_SkipUncommitedS3
 	Policy_CheckUnCommittedOnly = Policy_SkipCommittedInMemory | Policy_SkipCommittedS3
+	Policy_SkipAll              = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3 | Policy_SkipCommittedS3
 )
 
 type Tombstoner interface {
@@ -616,7 +616,7 @@ type Tombstoner interface {
 	StringWithPrefix(string) string
 
 	// false positive check
-	HasBlockTombstone(ctx context.Context, id objectio.Blockid, fs fileservice.FileService) (bool, error)
+	HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 	UnmarshalBinary(buf []byte) error
@@ -629,9 +629,9 @@ type Tombstoner interface {
 	// `deleted` is the rows that are deleted from this apply
 	// `left` is the rows that are left after this apply
 	ApplyInMemTombstones(
-		bid types.Blockid,
+		bid *types.Blockid,
 		rowsOffset []int64,
-		deleted *nulls.Nulls,
+		deleted *objectio.Bitmap,
 	) (left []int64)
 
 	// it applies the block related tombstones from the persisted tombstone file
@@ -639,10 +639,10 @@ type Tombstoner interface {
 	ApplyPersistedTombstones(
 		ctx context.Context,
 		fs fileservice.FileService,
-		snapshot types.TS,
-		bid types.Blockid,
+		snapshot *types.TS,
+		bid *types.Blockid,
 		rowsOffset []int64,
-		deletedMask *nulls.Nulls,
+		deletedMask *objectio.Bitmap,
 	) (left []int64, err error)
 
 	// a.merge(b) => a = a U b
@@ -757,14 +757,14 @@ type DataSource interface {
 
 	ApplyTombstones(
 		ctx context.Context,
-		bid objectio.Blockid,
+		bid *objectio.Blockid,
 		rowsOffset []int64,
 		applyPolicy TombstoneApplyPolicy,
 	) ([]int64, error)
 
 	GetTombstones(
-		ctx context.Context, bid objectio.Blockid,
-	) (deletedRows *nulls.Nulls, err error)
+		ctx context.Context, bid *objectio.Blockid,
+	) (deletedRows objectio.Bitmap, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
 
@@ -813,7 +813,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -897,12 +897,17 @@ type Relation interface {
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
-type Reader interface {
+type BaseReader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+}
+
+type Reader interface {
+	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)
+	//SetScanType()
 }
 
 type Database interface {

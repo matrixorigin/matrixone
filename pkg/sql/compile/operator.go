@@ -65,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -150,6 +149,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := group.NewArgument()
 		op.PreAllocSize = t.PreAllocSize
 		op.NeedEval = t.NeedEval
+		op.GroupingFlag = t.GroupingFlag
 		op.Exprs = t.Exprs
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
@@ -309,10 +309,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
 		op := filter.NewArgument()
-		op.E = t.GetExeExpr()
-		if op.E == nil {
-			op.E = t.E
-		}
+		op.E = t.E
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:
@@ -378,18 +375,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := mergecte.NewArgument()
 		op.SetInfo(&info)
 		return op
-	case vm.Mark:
-		t := sourceOp.(*mark.MarkJoin)
-		op := mark.NewArgument()
-		op.Result = t.Result
-		op.Conditions = t.Conditions
-		op.Cond = t.Cond
-		op.OnList = t.OnList
-		op.HashOnPK = t.HashOnPK
-		op.JoinMapTag = t.JoinMapTag
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
 	case vm.TableFunction:
 		t := sourceOp.(*table_function.TableFunction)
 		op := table_function.NewArgument()
@@ -451,12 +436,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)
+		if sourceArg.GetShufflePool() == nil {
+			sourceArg.SetShufflePool(shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
+		}
 		op := shuffle.NewArgument()
+		op.SetShufflePool(sourceArg.GetShufflePool())
 		op.ShuffleType = sourceArg.ShuffleType
 		op.ShuffleColIdx = sourceArg.ShuffleColIdx
 		op.ShuffleColMax = sourceArg.ShuffleColMax
 		op.ShuffleColMin = sourceArg.ShuffleColMin
-		op.AliveRegCnt = sourceArg.AliveRegCnt
+		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
@@ -535,7 +524,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
-		op := value_scan.NewArgument()
+		op := value_scan.NewValueScanFromProcess()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1118,7 +1107,7 @@ func constructFill(n *plan.Node) *fill.Fill {
 	return arg
 }
 
-func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
+func constructTimeWindow(_ context.Context, n *plan.Node, proc *process.Process) *timewin.TimeWin {
 	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
 	var typs []types.Type
 	var wStart, wEnd bool
@@ -1147,34 +1136,18 @@ func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.TimeWin {
 		i++
 	}
 
-	var err error
-	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-	itr := &timewin.Interval{}
-	itr.Typ, err = types.IntervalTypeOf(str)
+	arg := timewin.NewArgument()
+	err := arg.MakeIntervalAndSliding(n.Interval, n.Sliding)
 	if err != nil {
 		panic(err)
 	}
-	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-
-	var sld *timewin.Interval
-	if n.Sliding != nil {
-		sld = &timewin.Interval{}
-		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
-		sld.Typ, err = types.IntervalTypeOf(str)
-		if err != nil {
-			panic(err)
-		}
-		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-	}
-
-	arg := timewin.NewArgument()
 	arg.Types = typs
 	arg.Aggs = aggregationExpressions
-	arg.Ts = n.OrderBy[0].Expr
+	arg.Ts = n.GroupBy[0]
 	arg.WStart = wStart
 	arg.WEnd = wEnd
-	arg.Interval = itr
-	arg.Sliding = sld
+	arg.EndExpr = n.WEnd
+	arg.TsType = n.Timestamp.Typ
 	return arg
 }
 
@@ -1303,6 +1276,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.NeedEval = needEval
+	arg.GroupingFlag = n.GroupingFlag
 	arg.Exprs = n.GroupBy
 	arg.PreAllocSize = preAllocSize
 	return arg
@@ -1388,12 +1362,12 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.AliveRegCnt = int32(len(ss))
+	arg.BucketNum = int32(len(ss))
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -1408,12 +1382,12 @@ func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle 
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.AliveRegCnt = int32(len(ss))
+	arg.BucketNum = int32(len(ss))
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -1559,15 +1533,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
-		ret.JoinMapTag = arg.JoinMapTag
-
-	case vm.Mark:
-		arg := op.(*mark.MarkJoin)
-		ret.NeedHashMap = true
-		ret.Conditions = arg.Conditions[1]
-		ret.NeedBatches = true
-		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Join:
@@ -1885,7 +1850,7 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 }
 
 func constructValueScan() *value_scan.ValueScan {
-	return value_scan.NewArgument()
+	return value_scan.NewValueScanFromProcess()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

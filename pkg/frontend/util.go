@@ -26,8 +26,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -498,16 +500,12 @@ func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement,
 }
 
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
+	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
-		if outBytes == 0 && outPacket == 0 {
-			ses.Warnf(ctx, "unexpected protocol closed")
-		}
 	default:
-
 	}
 
 	if status == success {
@@ -763,204 +761,221 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		return nil, nil, err
 	}
 	//1. make vector type
-	bat := batch.New(true, colNames)
+	bat := batch.New(colNames)
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
-	for colIdx, typ := range colTyps {
-		bat.Vecs[colIdx] = vector.NewVec(typ)
+	for colIndex, typ := range colTyps {
+		bat.Vecs[colIndex] = vector.NewVec(typ)
 		nsp := nulls.NewWithSize(cnt)
 
 		switch typ.Oid {
 		case types.T_varchar:
-			vData := make([]string, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val string
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				if val, ok := row[colIdx].(string); ok {
-					vData[rowIdx] = val
 				} else {
-					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
+					strVal, ok := row[colIndex].(string)
+					if ok {
+						val = strVal
+					} else {
+						val = fmt.Sprintf("%v", row[colIndex])
+					}
+				}
+				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
+				if err != nil {
+					return nil, nil, err
 				}
 			}
-			if err = vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
-				return nil, nil, err
-			}
+
 		case types.T_text:
-			vData := make([][]byte, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val string
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				if val, ok := row[colIdx].([]byte); ok {
-					vData[rowIdx] = val
 				} else {
-					vData[rowIdx] = ([]byte)(fmt.Sprintf("%v", row[colIdx]))
+					strVal, ok := row[colIndex].(string)
+					if ok {
+						val = strVal
+					} else {
+						val = fmt.Sprintf("%v", row[colIndex])
+					}
 				}
-			}
-			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
-				return nil, nil, err
+
+				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_int8:
-			vData := make([]int8, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val int8
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int8)
 				}
-				vData[rowIdx] = row[colIdx].(int8)
-			}
-			err := vector.AppendFixedList[int8](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+				err := vector.AppendFixed[int8](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_int16:
-			vData := make([]int16, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val int16
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int16)
 				}
-				vData[rowIdx] = row[colIdx].(int16)
-			}
-			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[int16](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_int32:
-			vData := make([]int32, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val int32
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int32)
 				}
-				vData[rowIdx] = row[colIdx].(int32)
-			}
-			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[int32](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_int64:
-			vData := make([]int64, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val int64
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(int64)
 				}
-				vData[rowIdx] = row[colIdx].(int64)
-			}
-			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_float64:
-			vData := make([]float64, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val float64
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(float64)
 				}
-				vData[rowIdx] = row[colIdx].(float64)
-			}
-			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[float64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_float32:
-			vData := make([]float32, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val float32
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(float32)
 				}
-				vData[rowIdx] = row[colIdx].(float32)
-			}
-			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[float32](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_date:
-			vData := make([]types.Date, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val types.Date
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Date)
 				}
-				vData[rowIdx] = row[colIdx].(types.Date)
-			}
-			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_time:
-			vData := make([]types.Time, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val types.Time
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Time)
 				}
-				vData[rowIdx] = row[colIdx].(types.Time)
-			}
-			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_datetime:
-			vData := make([]types.Datetime, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val types.Datetime
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Datetime)
 				}
-				vData[rowIdx] = row[colIdx].(types.Datetime)
-			}
-			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_timestamp:
-			vData := make([]types.Timestamp, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val types.Timestamp
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
-				}
-				switch val := row[colIdx].(type) {
-				case types.Timestamp:
-					vData[rowIdx] = val
-				case string:
-					if vData[rowIdx], err = types.ParseTimestamp(time.Local, val, typ.Scale); err != nil {
-						return nil, nil, err
+				} else {
+					timeStampRowVal := row[colIndex]
+					switch v := timeStampRowVal.(type) {
+					case types.Timestamp:
+						val = v
+					case string:
+						val, err = types.ParseTimestamp(time.Local, v, typ.Scale)
+						if err != nil {
+							return nil, nil, err
+						}
+					default:
+						return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 					}
-				default:
-					return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", val)
 				}
-			}
-			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		case types.T_enum:
-			vData := make([]types.Enum, cnt)
 			for rowIdx, row := range rows {
-				if row[colIdx] == nil {
+				var val types.Enum
+				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
-					continue
+				} else {
+					val = row[colIndex].(types.Enum)
 				}
-				vData[rowIdx] = row[colIdx].(types.Enum)
-			}
-			err := vector.AppendFixedList[types.Enum](bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
-				return nil, nil, err
+
+				err := vector.AppendFixed[types.Enum](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtxf("unsupported type %d", typ.Oid)
 		}
 
-		bat.Vecs[colIdx].SetNulls(nsp)
+		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
 }
@@ -1049,6 +1064,11 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_timestamp),
 			}
 			tType = types.New(types.T_timestamp, 0, 0)
+		case defines.MYSQL_TYPE_ENUM:
+			pType = plan.Type{
+				Id: int32(types.T_enum),
+			}
+			tType = types.New(types.T_enum, 0, 0)
 		default:
 			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
@@ -1117,11 +1137,14 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql           string
-	hashedSql     string
-	stmt          tree.Statement
-	sqlSourceType []string
-	isRestore     bool
+	sql                 string
+	hashedSql           string
+	stmtName            string
+	stmt                tree.Statement
+	preparePlan         *plan.Plan // binary protocol execute
+	sqlSourceType       []string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
@@ -1138,6 +1161,10 @@ func (ui *UserInput) genHash() {
 
 func (ui *UserInput) getHash() string {
 	return ui.hashedSql
+}
+
+func (ui *UserInput) getPreparePlan() *plan.Plan {
+	return ui.preparePlan
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1377,12 +1404,6 @@ func (g *toposort) sort() (ans []string, err error) {
 		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
-}
-
-func setFPrints(txnOp TxnOperator, fprints footPrints) {
-	if txnOp != nil {
-		txnOp.SetFootPrints(fprints.prints[:])
-	}
 }
 
 type footPrints struct {
@@ -1674,7 +1695,7 @@ return serialized uriInfo
 func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, cdc.UriInfo, error) {
 	ok, uriInfo := compositedUriInfo(uri, uriPrefix)
 	if !ok {
-		return "", cdc.UriInfo{}, moerr.NewInternalError(ctx, "source uri is invalid format")
+		return "", cdc.UriInfo{}, moerr.NewInternalErrorf(ctx, "invalid uri format: %s", uri)
 	}
 
 	jsonUriInfo, err := cdc.JsonEncode(&uriInfo)
@@ -1783,4 +1804,60 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 		}
 	}
 	return cols, nil
+}
+
+var _ Allocator = new(LeakCheckAllocator)
+
+const (
+	leakCheckAllocatorModeNormal = iota
+	leakCheckAllocatorModeAllocReturnErr
+	leakCheckAllocatorModeAllocPanic
+)
+
+type LeakCheckAllocator struct {
+	sync.Mutex
+	allocated uint64
+	freed     uint64
+	records   map[unsafe.Pointer]int
+	mod       int
+}
+
+func NewLeakCheckAllocator() *LeakCheckAllocator {
+	return &LeakCheckAllocator{
+		records: make(map[unsafe.Pointer]int),
+	}
+}
+
+func (lca *LeakCheckAllocator) Alloc(capacity int) ([]byte, error) {
+	lca.Lock()
+	defer lca.Unlock()
+	if lca.mod == leakCheckAllocatorModeAllocReturnErr {
+		return nil, moerr.NewInternalErrorNoCtx("leak check allocator returns eror")
+	} else if lca.mod == leakCheckAllocatorModeAllocPanic {
+		panic("leak check allocator panic")
+	}
+	buf := make([]byte, capacity)
+	lca.allocated += uint64(len(buf))
+	lca.records[unsafe.Pointer(&buf[0])] = capacity
+	return buf, nil
+}
+
+func (lca *LeakCheckAllocator) Free(bytes []byte) {
+	if len(bytes) == 0 {
+		return
+	}
+	lca.Lock()
+	defer lca.Unlock()
+	if _, ok := lca.records[unsafe.Pointer(&bytes[0])]; ok {
+		delete(lca.records, unsafe.Pointer(&bytes[0]))
+	} else {
+		panic(fmt.Sprintf("no such ptr %v", unsafe.Pointer(&bytes[0])))
+	}
+	lca.freed += uint64(len(bytes))
+}
+
+func (lca *LeakCheckAllocator) CheckBalance() bool {
+	lca.Lock()
+	defer lca.Unlock()
+	return lca.allocated == lca.freed && len(lca.records) == 0
 }

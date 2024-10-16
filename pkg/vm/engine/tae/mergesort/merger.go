@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -217,12 +216,10 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				m.writer = m.host.PrepareNewWriter()
 			}
 			if m.isTombstone {
-				m.writer.SetDataType(objectio.SchemaTombstone)
 				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 					return err
 				}
 			} else {
-				m.writer.SetDataType(objectio.SchemaData)
 				if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 					return err
 				}
@@ -256,7 +253,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			m.writer = m.host.PrepareNewWriter()
 		}
 		if m.isTombstone {
-			m.writer.SetDataType(objectio.SchemaTombstone)
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}

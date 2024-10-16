@@ -223,6 +223,15 @@ func (c *PushClient) IsSubscriberReady() bool {
 	return c.subscriber.ready.Load()
 }
 
+func (c *PushClient) IsSubscribed(tblId uint64) bool {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	if _, ok := c.subscribed.m[tblId]; ok {
+		return true
+	}
+	return false
+}
+
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}
@@ -328,15 +337,32 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 		ts))
 }
 
+func (c *PushClient) skipSubscribeIf(
+	ctx context.Context, tbl *txnTable) (bool, *logtailreplay.PartitionState) {
+	//if table has been subscribed, return quickly.
+	if ps, ok := c.isSubscribed(tbl.db.databaseId, tbl.tableId); ok {
+		return true, ps
+	}
+
+	// no need to subscribe a view
+	// for issue #19192
+	if strings.ToUpper(tbl.relKind) == "V" {
+		return true, nil
+	}
+
+	return false, nil
+}
+
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
 	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
-	tableId := tbl.tableId
-	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, tableId); ok {
+	var skip bool
+	if skip, ps = c.skipSubscribeIf(ctx, tbl); skip {
 		return ps, nil
 	}
+
+	tableId := tbl.tableId
 
 	state, err := c.toSubIfUnsubscribed(ctx, tbl.db.databaseId, tableId)
 	if err != nil {
@@ -768,7 +794,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				c.pause(false)
 				time.Sleep(time.Second)
 
-				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
@@ -800,7 +826,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			return
 		}
 
-		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+		tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
@@ -1219,7 +1245,13 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] resp received", logTag, dbId, tblId)
+	logutil.Infof("%s %s subscribe tbl[db: %d, tbl: %d] resp received, %p",
+		s.eng.service,
+		logTag,
+		dbId,
+		tblId,
+		s,
+	)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
@@ -1480,7 +1512,7 @@ func waitServerReady(addr string) {
 }
 
 func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.getTNServices()
+	tnStores := e.GetTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
 	}

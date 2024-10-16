@@ -1000,6 +1000,7 @@ type blockIndexes struct {
 	indexes *BlockLocation
 }
 
+// PXU TODO: pass ctx
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
@@ -1009,7 +1010,7 @@ func (data *CheckpointData) WriteTo(
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)
 	name := objectio.BuildObjectName(segmentid, fileNum)
-	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1038,7 +1039,7 @@ func (data *CheckpointData) WriteTo(
 			}
 			checkpointFiles = append(checkpointFiles, name.String())
 			name = objectio.BuildObjectName(segmentid, fileNum)
-			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil)
+			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil, false)
 			if err != nil {
 				return
 			}
@@ -1152,7 +1153,7 @@ func (data *CheckpointData) WriteTo(
 
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
-	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil)
+	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil, false)
 	if err != nil {
 		return
 	}
@@ -1470,9 +1471,7 @@ func (data *CheckpointData) readMetaBatch(
 	return
 }
 
-func (data *CheckpointData) replayMetaBatch(version uint32) {
-	bat := data.bats[MetaIDX]
-	data.locations = make(map[string]objectio.Location)
+func buildMeta(bat *containers.Batch, locations map[string]objectio.Location, metas map[uint64]*CheckpointMeta) {
 	tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
 	dataObjectVec := bat.GetVectorByName(SnapshotMetaAttr_DataObjectBatchLocation).GetDownstreamVector()
@@ -1490,7 +1489,7 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 			for it.HasNext() {
 				block := it.Next()
 				if !block.GetLocation().IsEmpty() {
-					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+					locations[block.GetLocation().Name().String()] = block.GetLocation()
 				}
 			}
 			continue
@@ -1506,10 +1505,10 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 
 		tableMeta := NewCheckpointMeta()
 		tableMeta.DecodeFromString(tmp)
-		data.meta[tid] = tableMeta
+		metas[tid] = tableMeta
 	}
 
-	for _, meta := range data.meta {
+	for _, meta := range metas {
 		for _, table := range meta.tables {
 			if table == nil {
 				continue
@@ -1519,11 +1518,17 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 			for it.HasNext() {
 				block := it.Next()
 				if !block.GetLocation().IsEmpty() {
-					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+					locations[block.GetLocation().Name().String()] = block.GetLocation()
 				}
 			}
 		}
 	}
+}
+
+func (data *CheckpointData) replayMetaBatch(version uint32) {
+	bat := data.bats[MetaIDX]
+	data.locations = make(map[string]objectio.Location)
+	buildMeta(bat, data.locations, data.meta)
 }
 
 func (data *CheckpointData) readAll(
@@ -1901,7 +1906,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	createTS := entry.GetCreatedAt()
-	if createTS.Greater(&collector.start) {
+	if createTS.GT(&collector.start) {
 		return nil
 	}
 	return collector.visitObjectEntry(entry)
@@ -1928,7 +1933,7 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 // TODO
 // func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
 // 	entry.RLock()
-// 	if entry.GetCreatedAtLocked().Greater(collector.start) {
+// 	if entry.GetCreatedAtLocked().GT(collector.start) {
 // 		entry.RUnlock()
 // 		return nil
 // 	}

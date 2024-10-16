@@ -76,65 +76,99 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		return
 	}
 	metaFiles := make([]*MetaFile, 0)
+	compactedFiles := make([]*MetaFile, 0)
 	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
 		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &MetaFile{
+		start, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		metaFile := &MetaFile{
 			start: start,
 			end:   end,
 			index: i,
-		})
+			name:  dir.Name,
+		}
+		if ext == blockio.CompactedExt {
+			compactedFiles = append(compactedFiles, metaFile)
+			continue
+		}
+		metaFiles = append(metaFiles, metaFile)
 	}
 	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+dir.Name)
-	if err != nil {
-		return
-	}
-	bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if closeCB != nil {
-			closeCB()
+	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, err error) {
+		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
+		if err != nil {
+			return
 		}
-	}()
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
+		if err != nil {
+			return
+		}
+		if len(bats) == 0 {
+			return
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+		colNames := CheckpointSchema.Attrs()
+		colTypes := CheckpointSchema.Types()
+		var checkpointVersion int
+		// in version 1, checkpoint metadata doesn't contain 'version'.
+		vecLen := len(bats[0].Vecs)
+		logutil.Infof("checkpoint version: %d, list and load duration: %v", vecLen, time.Since(t0))
+		if vecLen < CheckpointSchemaColumnCountV1 {
+			checkpointVersion = 1
+		} else if vecLen < CheckpointSchemaColumnCountV2 {
+			checkpointVersion = 2
+		} else {
+			checkpointVersion = 3
+		}
+		for i := range bats[0].Vecs {
+			var vec containers.Vector
+			if bats[0].Vecs[i].Length() == 0 {
+				vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
+			} else {
+				vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
+			}
+			ckpBat.AddVector(colNames[i], vec)
+		}
+		c.readDuration += time.Since(t0)
+		entries, maxGlobalEnd = ReplayCheckpointEntries(ckpBat, checkpointVersion)
+		return
+	}
+
+	{
+		// replay compacted tree
+		for _, file := range compactedFiles {
+			compacted := containers.NewBatch()
+			defer compacted.Close()
+			entry, _, err := replayEntries(file.name, compacted)
+			if err != nil {
+				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
+			}
+			if len(entry) != 1 {
+				for _, e := range entry {
+					logutil.Infof("compacted checkpoint entry: %v", e.String())
+				}
+				panic("invalid compacted checkpoint file")
+			}
+			r.tryAddNewCompactedCheckpointEntry(entry[0])
+		}
+	}
+
 	bat := containers.NewBatch()
 	defer bat.Close()
-	colNames := CheckpointSchema.Attrs()
-	colTypes := CheckpointSchema.Types()
-	var checkpointVersion int
-	// in version 1, checkpoint metadata doesn't contain 'version'.
-	vecLen := len(bats[0].Vecs)
-	logutil.Infof("checkpoint version: %d, list and load duration: %v", vecLen, time.Since(t0))
-	if vecLen < CheckpointSchemaColumnCountV1 {
-		checkpointVersion = 1
-	} else if vecLen < CheckpointSchemaColumnCountV2 {
-		checkpointVersion = 2
-	} else {
-		checkpointVersion = 3
+	entries, maxGlobalEnd, err := replayEntries(dir.Name, bat)
+	if err != nil {
+		logutil.Infof("replay checkpoint file %s failed: %v", dir.Name, err.Error())
+		return
 	}
-	for i := range bats[0].Vecs {
-		if len(bats) == 0 {
-			continue
-		}
-		var vec containers.Vector
-		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
-		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
-		}
-		bat.AddVector(colNames[i], vec)
-	}
-	c.readDuration += time.Since(t0)
-
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
 	c.ckpEntries = entries
 
 	// step2. read checkpoint data, output is the ckpdatas
@@ -145,7 +179,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = r.rt.SID()
-		if checkpointEntry.end.Less(&maxGlobalEnd) {
+		if checkpointEntry.end.LT(&maxGlobalEnd) {
 			return
 		}
 		var err2 error
@@ -247,7 +281,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&maxGlobal.end) {
+		if maxTs.LT(&maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
 		// for force checkpoint, ckpLSN is 0.
@@ -260,7 +294,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		}
 	}
 	for _, e := range c.emptyFile {
-		if e.end.GreaterEq(&maxTs) {
+		if e.end.GE(&maxTs) {
 			return types.TS{}, 0, false,
 				moerr.NewInternalErrorf(ctx,
 					"read checkpoint %v failed",
@@ -272,7 +306,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if checkpointEntry == nil {
 			continue
 		}
-		if checkpointEntry.end.LessEq(&maxTs) {
+		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
@@ -281,7 +315,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&checkpointEntry.end) {
+		if maxTs.LT(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 		if checkpointEntry.ckpLSN != 0 {
@@ -313,6 +347,7 @@ func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) {
 	}
 	// logutil.Infof(c.r.catalog.SimplePPString(common.PPL3))
 	c.r.catalog.RelayFromSysTableObjects(c.r.ctx, readTxn, c.dataF, tables.ReadSysTableBatch, sortFunc)
+	logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
 }
 
 // ReplayObjectlist replays the data part of the checkpoint.
@@ -342,14 +377,14 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		if checkpointEntry == nil {
 			continue
 		}
-		if checkpointEntry.end.LessEq(&maxTs) {
+		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, false)
 		if err != nil {
 			return
 		}
-		if maxTs.Less(&checkpointEntry.end) {
+		if maxTs.LT(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 		ckpVers = append(ckpVers, checkpointEntry.version)
@@ -391,7 +426,7 @@ func MergeCkpMeta(
 	}
 	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
-		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
@@ -399,7 +434,7 @@ func MergeCkpMeta(
 		})
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(&metaFiles[j].end)
+		return metaFiles[i].end.LT(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
@@ -461,7 +496,7 @@ func MergeCkpMeta(
 	return name, err
 }
 
-func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
+func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
 	entries = make([]*CheckpointEntry, bat.Length())
 	for i := 0; i < bat.Length(); i++ {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
@@ -494,7 +529,7 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {
-			if end.Greater(&maxGlobalEnd) {
+			if end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = end
 			}
 		}

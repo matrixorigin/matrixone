@@ -114,6 +114,7 @@ message Group {
   uint64 preAllocSize = 7;
   bytes PartialResults = 8;
   repeated uint32 PartialResultTypes = 9;
+  repeated bool grouping_flag = 10;
 }
 
 message Insert{
@@ -190,7 +191,6 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
-  bool                block   = 2;
 }
 
 message PreInsertUnique {

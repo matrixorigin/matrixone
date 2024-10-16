@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"runtime"
@@ -23,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/google/pprof/profile"
+	"github.com/stretchr/testify/assert"
 )
 
 type testSampleValues struct {
@@ -48,10 +50,23 @@ func (t *testSampleValues) DefaultSampleType() string {
 }
 
 func (t *testSampleValues) Values() []int64 {
-	return []int64{
-		t.N.Load(),
-		t.A.Load(),
+	n := t.N.Load()
+	a := t.A.Load()
+	return []int64{n, a}
+}
+
+func (t *testSampleValues) Merge(merges []*testSampleValues) *testSampleValues {
+	n := t.N.Load()
+	a := t.A.Load()
+	for _, merge := range merges {
+		n += merge.N.Load()
+		a += merge.A.Load()
 	}
+	ret := new(testSampleValues)
+	ret.Init()
+	ret.N.Add(n)
+	ret.A.Add(a)
+	return ret
 }
 
 func TestProfiler(t *testing.T) {
@@ -59,8 +74,7 @@ func TestProfiler(t *testing.T) {
 }
 
 func TestProfilerWrite(t *testing.T) {
-	t.Skip()
-	f, err := os.Create("test_profile")
+	f, err := os.CreateTemp(t.TempDir(), "test_profile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,15 +83,34 @@ func TestProfilerWrite(t *testing.T) {
 }
 
 func testProfiler(t *testing.T, w io.Writer) {
+	// new
 	profiler := NewProfiler[testSampleValues]()
+
+	// sample
 	for i := 0; i < 65536; i++ {
 		values := profiler.Sample(0, 2)
 		values.N.Add(1)
 		values = profiler.Sample(0, 2)
 		values.A.Add(2)
 	}
-	if err := profiler.Write(w); err != nil {
+
+	// write
+	buf := new(bytes.Buffer)
+	if err := profiler.Write(io.MultiWriter(w, buf)); err != nil {
 		t.Fatal(err)
+	}
+
+	// read
+	p, err := profile.Parse(buf)
+	assert.Nil(t, err)
+	counter := make([]int64, 2)
+	for _, sample := range p.Sample {
+		for i := range sample.Value {
+			counter[i] += sample.Value[i]
+		}
+	}
+	if counter[0] < 60000 || counter[1] < 120000 {
+		t.Fatalf("got %+v\n", counter)
 	}
 }
 

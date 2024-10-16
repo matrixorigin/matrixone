@@ -21,14 +21,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/tidwall/btree"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/tidwall/btree"
 )
 
 const (
@@ -57,40 +59,40 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	Close()
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, sql string) error
+	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
 	Close()
 }
 
 type ActiveRoutine struct {
+	Pause  chan struct{}
 	Cancel chan struct{}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
-	activeRoutine := &ActiveRoutine{}
-	activeRoutine.Cancel = make(chan struct{})
-	return activeRoutine
+	return &ActiveRoutine{
+		Pause:  make(chan struct{}),
+		Cancel: make(chan struct{}),
+	}
 }
 
 type OutputType int
 
 const (
-	OutputTypeCheckpoint OutputType = iota
-	OutputTypeTailDone
-	OutputTypeUnfinishedTailWIP
+	OutputTypeSnapshot OutputType = iota
+	OutputTypeTail
 )
 
 func (t OutputType) String() string {
 	switch t {
-	case OutputTypeCheckpoint:
-		return "Checkpoint"
-	case OutputTypeTailDone:
-		return "TailDone"
-	case OutputTypeUnfinishedTailWIP:
-		return "UnfinishedTailWIP"
+	case OutputTypeSnapshot:
+		return "Snapshot"
+	case OutputTypeTail:
+		return "Tail"
 	default:
 		return "usp output type"
 	}
@@ -105,27 +107,6 @@ type DecoderOutput struct {
 	deleteAtmBatch *AtomicBatch
 }
 
-//func (d *DecoderOutput) ckpBatSize() int {
-//	if d.checkpointBat == nil {
-//		return 0
-//	}
-//	return d.checkpointBat.RowCount()
-//}
-//
-//func (d *DecoderOutput) insertBatSize() int {
-//	if d.insertAtmBatch == nil || d.insertAtmBatch.Rows == nil {
-//		return 0
-//	}
-//	return d.insertAtmBatch.Rows.Len()
-//}
-//
-//func (d *DecoderOutput) deleteBatSize() int {
-//	if d.deleteAtmBatch == nil || d.deleteAtmBatch.Rows == nil {
-//		return 0
-//	}
-//	return d.deleteAtmBatch.Rows.Len()
-//}
-
 type RowType int
 
 const (
@@ -137,7 +118,7 @@ const (
 type RowIterator interface {
 	Next() bool
 	Row(ctx context.Context, row []any) error
-	Close() error
+	Close()
 }
 
 type DbTableInfo struct {
@@ -147,6 +128,7 @@ type DbTableInfo struct {
 	SourceAccountId   uint64
 	SourceDbId        uint64
 	SourceTblId       uint64
+	SourceTblIdStr    string
 
 	SinkAccountName string
 	SinkDbName      string
@@ -164,32 +146,20 @@ func (info DbTableInfo) String() string {
 	)
 }
 
-// Batches denotes all rows have been read.
-type Batches struct {
-	Inserts []*AtomicBatch
-	Deletes []*AtomicBatch
-}
-
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
-	Mp       *mpool.MPool
-	From, To types.TS
-	Batches  []*batch.Batch
-	Rows     *btree.BTreeG[AtomicBatchRow]
+	Mp      *mpool.MPool
+	Batches []*batch.Batch
+	Rows    *btree.BTreeG[AtomicBatchRow]
 }
 
-func NewAtomicBatch(
-	mp *mpool.MPool,
-	from, to types.TS,
-) *AtomicBatch {
+func NewAtomicBatch(mp *mpool.MPool) *AtomicBatch {
 	opts := btree.Options{
 		Degree: 64,
 	}
 	ret := &AtomicBatch{
 		Mp:   mp,
-		From: from,
-		To:   to,
 		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, opts),
 	}
 	return ret
@@ -204,14 +174,38 @@ type AtomicBatchRow struct {
 
 func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 	//ts asc
-	if row.Ts.Less(&other.Ts) {
+	if row.Ts.LT(&other.Ts) {
 		return true
 	}
-	if row.Ts.Greater(&other.Ts) {
+	if row.Ts.GT(&other.Ts) {
 		return false
 	}
 	//pk asc
 	return bytes.Compare(row.Pk, other.Pk) < 0
+}
+
+func (bat *AtomicBatch) RowCount() int {
+	c := 0
+	for _, b := range bat.Batches {
+		rows := 0
+		if b != nil && len(b.Vecs) > 0 {
+			rows = b.Vecs[0].Length()
+		}
+		c += rows
+	}
+
+	if c != bat.Rows.Len() {
+		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
+	}
+	return c
+}
+
+func (bat *AtomicBatch) Allocated() int {
+	size := 0
+	for _, b := range bat.Batches {
+		size += b.Allocated()
+	}
+	return size
 }
 
 func (bat *AtomicBatch) Append(
@@ -219,6 +213,11 @@ func (bat *AtomicBatch) Append(
 	batch *batch.Batch,
 	tsColIdx, compositedPkColIdx int,
 ) {
+	start := time.Now()
+	defer func() {
+		v2.CdcAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if batch != nil {
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
@@ -257,28 +256,34 @@ func (bat *AtomicBatch) Close() {
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	return &atomicBatchRowIter{
-		iter:     bat.Rows.Iter(),
-		initIter: bat.Rows.Iter(),
+		iter: bat.Rows.Iter(),
 	}
 }
+
+//func (bat *AtomicBatch) DebugString(tableDef *plan.TableDef, isDelete bool) string {
+//	ctx := context.Background()
+//	keys := make([]string, 0, bat.Rows.Len())
+//	iter := bat.Rows.Iter()
+//	defer iter.Release()
+//	for iter.Next() {
+//		row := iter.Item()
+//		s, err := getRowPkAndTsFromBat(ctx, row.Src, tableDef, isDelete, row.Offset)
+//		if err != nil {
+//			return ""
+//		}
+//		keys = append(keys, s)
+//	}
+//	return fmt.Sprintf("count=%d, key=%v", bat.Rows.Len(), keys)
+//}
 
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
-	iter     btree.IterG[AtomicBatchRow]
-	initIter btree.IterG[AtomicBatchRow]
+	iter btree.IterG[AtomicBatchRow]
 }
 
 func (iter *atomicBatchRowIter) Item() AtomicBatchRow {
 	return iter.iter.Item()
-}
-
-func (iter *atomicBatchRowIter) Reset() {
-	iter.iter = iter.initIter
-}
-
-func (iter *atomicBatchRowIter) Prev() bool {
-	return iter.iter.Prev()
 }
 
 func (iter *atomicBatchRowIter) Next() bool {
@@ -295,9 +300,8 @@ func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 	)
 }
 
-func (iter *atomicBatchRowIter) Close() error {
+func (iter *atomicBatchRowIter) Close() {
 	iter.iter.Release()
-	return nil
 }
 
 type UriInfo struct {

@@ -41,26 +41,31 @@ const (
 	SnapshotExt   = "snap"
 	AcctExt       = "acct"
 	TmpExt        = "tmp"
+	CompactedExt  = "cpt"
 )
 
 func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
+func EncodeGCMetadataFileName(prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
+}
+
+func EncodeCompactedMetadataFileName(dir, prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), CompactedExt)
+}
+
 func EncodeCheckpointMetadataFileNameWithoutDir(prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), CheckpointExt)
 }
 
-func EncodeSnapshotMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), SnapshotExt)
+func EncodeSnapshotMetadataFileName(prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), SnapshotExt)
 }
 
-func EncodeTableMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), AcctExt)
-}
-
-func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
-	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
+func EncodeTableMetadataFileName(prefix string, start, end types.TS) string {
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), AcctExt)
 }
 
 func EncodeTmpFileName(dir, prefix string, ts int64) string {
@@ -75,11 +80,12 @@ func UpdateGCMetadataFileName(name string, start, end types.TS) string {
 	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), ext)
 }
 
-func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
+func DecodeCheckpointMetadataFileName(name string) (start, end types.TS, ext string) {
 	fileName := strings.Split(name, ".")
 	info := strings.Split(fileName[0], "_")
 	start = types.StringToTS(info[1])
 	end = types.StringToTS(info[2])
+	ext = fileName[1]
 	return
 }
 
@@ -109,7 +115,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 func EncodeLocationFromString(info string) (objectio.Location, error) {
 	location := strings.Split(info, "_")
 	if len(location) < 8 {
-		panic(fmt.Sprintf("info: %v", info))
+		panic(fmt.Sprintf("wrong location format: %v", info))
 	}
 	num, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {

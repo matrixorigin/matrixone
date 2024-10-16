@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -78,24 +77,29 @@ func IsRowDeleted(
 
 func GetTombstonesByBlockId(
 	ctx context.Context,
-	ts types.TS,
-	blockId objectio.Blockid,
+	ts *types.TS,
+	blockId *objectio.Blockid,
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
-	deletedMask *nulls.Nulls,
+	deletedMask *objectio.Bitmap,
 	fs fileservice.FileService,
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		var location objectio.ObjectLocation
+		var (
+			err2     error
+			mask     objectio.Bitmap
+			location objectio.ObjectLocation
+		)
 		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
-		if mask, err := FillBlockDeleteMask(
+		if mask, err2 = FillBlockDeleteMask(
 			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
-		); err != nil {
-			return false, err
+		); err2 != nil {
+			return false, err2
 		} else {
 			deletedMask.Or(mask)
 		}
 		loadedBlkCnt++
+		mask.Release()
 		return true, nil
 	}
 
@@ -135,7 +139,7 @@ func FindTombstonesOfBlock(
 
 func FindTombstonesOfObject(
 	ctx context.Context,
-	objectId objectio.ObjectId,
+	objectId *objectio.ObjectId,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
 ) (sels bitmap.Bitmap, err error) {
@@ -227,5 +231,32 @@ func CheckTombstoneFile(
 			}
 		}
 	}
+	return
+}
+
+// CoarseFilterTombstoneObject It is used to filter out tombstone objects that do not contain any deleted data objects.
+// This is a coarse filter using ZM, so false positives may occur
+func CoarseFilterTombstoneObject(
+	ctx context.Context,
+	nextDeletedDataObject func() *objectio.ObjectId,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (filtered []objectio.ObjectStats, err error) {
+	var bm, b bitmap.Bitmap
+	bm.InitWithSize(int64(len(tombstoneObjects)))
+	var objid *objectio.ObjectId
+	for objid = nextDeletedDataObject(); objid != nil; objid = nextDeletedDataObject() {
+		b, err = FindTombstonesOfObject(ctx, objid, tombstoneObjects, fs)
+		if err != nil {
+			return
+		}
+		bm.Or(&b)
+	}
+	filtered = make([]objectio.ObjectStats, 0, bm.Count())
+	itr := bm.Iterator()
+	for itr.HasNext() {
+		filtered = append(filtered, tombstoneObjects[itr.Next()])
+	}
+
 	return
 }

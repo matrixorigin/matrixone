@@ -45,8 +45,8 @@ func (r *basicResult) init(
 	}
 	r.mg = mg
 	r.mp = mg.Mp()
-	r.res = vector.NewVec(typ)
-	r.ess = vector.NewVec(types.T_bool.ToType())
+	r.res = vector.NewOffHeapVecWithType(typ)
+	r.ess = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 }
 
 func (r *basicResult) extend(more int) (oldLen, newLen int, err error) {
@@ -329,10 +329,12 @@ func (r *aggFuncBytesResult) grows(more int) error {
 }
 
 func (r *aggFuncBytesResult) aggGet() []byte {
-	// todo: we cannot do simple optimization to get bytes here because result was not read-only.
-	//  the set method may change the max length of the vector.
-	//  if we want, we should add a flag to indicate that the vector item's length is <= types.VarlenaInlineSize.
-	return r.res.GetBytesAt(r.groupToSet)
+	// never return the source pointer directly.
+	//
+	// if not, append action outside like `r = append(r, "more")` will cause memory contamination to other row.
+	newr := r.res.GetBytesAt(r.groupToSet)
+	newr = newr[:len(newr):len(newr)]
+	return newr
 }
 
 func (r *aggFuncBytesResult) aggSet(v []byte) error {

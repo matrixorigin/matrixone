@@ -104,7 +104,7 @@ func BackupData(
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil)
 }
 
 func getParallelCount(count int) int {
@@ -268,6 +268,7 @@ func execBackup(
 	count int,
 	ts types.TS,
 	typ string,
+	filesList *[]*taeFile,
 ) error {
 	backupTime := names[0]
 	trimInfo := names[1]
@@ -416,7 +417,10 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	return nil
+	if filesList != nil && len(taeFileList) > 0 {
+		*filesList = append(*filesList, taeFileList...)
+	}
+	return err
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs
@@ -442,7 +446,7 @@ func copyFileAndGetMetaFiles(
 			panic("not support dir")
 		}
 		start, end, ext := decodeFunc(file.Name)
-		if !backup.IsEmpty() && start.GreaterEq(&backup) {
+		if !backup.IsEmpty() && start.GE(&backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
@@ -472,7 +476,7 @@ func copyFileAndGetMetaFiles(
 	sort.Slice(metaFiles, func(i, j int) bool {
 		end1 := metaFiles[i].GetEnd()
 		end2 := metaFiles[j].GetEnd()
-		return end1.Less(&end2)
+		return end1.LT(&end2)
 	})
 
 	return taeFileList, metaFiles, files, nil
@@ -495,7 +499,7 @@ func CopyGCDir(
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {
 			end := metaFile.GetEnd()
-			if !min.IsEmpty() && end.Less(&min) {
+			if !min.IsEmpty() && end.LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.
 				// The gc water level is determined by the name of the meta,
@@ -524,7 +528,7 @@ func CopyCheckpointDir(
 	dir string, backup types.TS,
 ) ([]*taeFile, types.TS, error) {
 	decodeFunc := func(name string) (types.TS, types.TS, string) {
-		start, end := blockio.DecodeCheckpointMetadataFileName(name)
+		start, end, _ := blockio.DecodeCheckpointMetadataFileName(name)
 		return start, end, ""
 	}
 	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(ctx, srcFs, dstFs, dir, backup, decodeFunc, true)

@@ -17,9 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"path"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -357,6 +359,42 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
 }
 
+func TestCompileExternScanParallelReadWrite(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	ctx := context.TODO()
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			Ctx:    ctx,
+			Strict: true,
+		},
+	}
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+	}
+	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	filePath = path.Clean("/" + filePath)
+	fileSize := []int64{int64(colexec.WriteS3Threshold) * 2}
+	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
+	require.NoError(t, err)
+	param.Strict = false
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
+	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
+}
+
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
 	simpleFakeArgument := func(id vm.OpType) vm.Operator {
 		switch id {
@@ -439,4 +477,23 @@ func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
 
 	stack = append(stack, rootOp.OpType())
 	return stack
+}
+
+func TestRemoveStringBetween(t *testing.T) {
+	cases := []struct {
+		input, output string
+	}{
+		{
+			input:  "/* comment */ replace into t1 values (1);",
+			output: " replace into t1 values (1);",
+		},
+		{
+			input:  "/* comment */ replace /* replace */ into t1 values (1);",
+			output: " replace  into t1 values (1);",
+		},
+	}
+
+	for _, c := range cases {
+		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
+	}
 }

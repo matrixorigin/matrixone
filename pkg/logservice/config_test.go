@@ -80,9 +80,6 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 	assert.Equal(t, "9c4dccb4-4d3c-41f8-b482-5251dc7a41be", v2)
 
 	tests := [][]string{
-		{"131071:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
-		{"262144:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
-		{"262145:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"},
 		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41b"},
 		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", ""},
 		{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf", "1:1"},
@@ -195,7 +192,7 @@ func TestClientConfigValidate(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := tt.cfg.Validate()
+		err := tt.cfg.ValidateClient()
 		if tt.ok {
 			assert.NoError(t, err)
 		} else {

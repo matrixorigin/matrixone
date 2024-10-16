@@ -17,16 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -38,15 +32,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -344,16 +339,12 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	select {
-	case <-s.Proc.Ctx.Done():
-		// this clean-up action shouldn't be called before context check.
-		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
+	if s.Proc.Ctx.Err() != nil {
 		runErr = nil
-
-	default:
-		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 	}
+	// this clean-up action shouldn't be called before context check.
+	// because the clean-up action will cancel the context, and error will be suppressed.
+	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
@@ -540,10 +531,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		if arg.E != nil {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(arg.E))
+		err = arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		if err != nil {
+			return err
 		}
-		arg.SetExeExpr(colexec.RewriteFilterExprList(appendNotPkFilter))
 	}
 
 	// reset datasource
@@ -561,14 +552,16 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("can not expand ranges on remote pipeline!")
 		}
 
-		newExprList := plan2.DeepCopyExprList(inExprList)
-		if len(s.DataSource.node.BlockFilterList) > 0 {
-			tmp := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(s.DataSource.node.BlockFilterList))
-			tmp, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, tmp, s.Proc, true, true)
+		for _, e := range s.DataSource.BlockFilterList {
+			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}
-			newExprList = append(newExprList, tmp)
+		}
+
+		newExprList := plan2.DeepCopyExprList(inExprList)
+		if len(s.DataSource.node.BlockFilterList) > 0 {
+			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
 		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
@@ -652,18 +645,6 @@ func (s *Scope) setRootOperator(op vm.Operator) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
-}
-
-func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
-	vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-		leafOp.Release()
-		if leafOpParent == nil {
-			s.RootOp = dstLeafOp
-		} else {
-			leafOpParent.GetOperatorBase().SetChild(dstLeafOp, 0)
-		}
-		return nil
-	})
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
@@ -764,7 +745,8 @@ func (s *Scope) replace(c *Compile) error {
 		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
 		sql = c.sql[:idx]
 	} else {
-		sql = "insert " + c.sql[7:]
+		removed := removeStringBetween(c.sql, "/*", "*/")
+		sql = "insert " + strings.TrimSpace(removed)[7:]
 	}
 	result, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
@@ -772,6 +754,20 @@ func (s *Scope) replace(c *Compile) error {
 	}
 	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
+}
+
+func removeStringBetween(s, start, end string) string {
+	startIndex := strings.Index(s, start)
+	for startIndex != -1 {
+		endIndex := strings.Index(s, end)
+		if endIndex == -1 || startIndex > endIndex {
+			return s
+		}
+
+		s = s[:startIndex] + s[endIndex+len(end):]
+		startIndex = strings.Index(s, start)
+	}
+	return s
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
@@ -942,7 +938,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
 		step := len(readers) / s.NodeInfo.Mcpu
 		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, disttae.NewMergeReader(readers[i:i+step]))
+			newReaders = append(newReaders, engine_util.NewMergeReader(readers[i:i+step]))
 		}
 		readers = newReaders
 	}

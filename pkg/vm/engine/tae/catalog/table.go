@@ -45,7 +45,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats     *common.TableCompactStat
+	Stats     common.TableCompactStat
 	ID        uint64
 	db        *DBEntry
 	tableData data.Table
@@ -83,7 +83,6 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:               db,
 		TableNode:        &TableNode{},
-		Stats:            common.NewTableCompactStat(),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 	}
@@ -115,7 +114,6 @@ func NewReplayTableEntry() *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 		TableNode:        &TableNode{},
 	}
 	return e
@@ -131,7 +129,6 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode:        node,
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 	}
 }
 
@@ -152,7 +149,7 @@ func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS t
 		if obj.DeletedAt.IsEmpty() {
 			continue
 		}
-		if obj.DeletedAt.GreaterEq(&dedupedTS) && obj.DeletedAt.LessEq(&collectTS) {
+		if obj.DeletedAt.GE(&dedupedTS) && obj.DeletedAt.LE(&collectTS) {
 			if objs == nil {
 				objs = make([]*ObjectEntry, 0)
 			}
@@ -428,10 +425,8 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int,
 	}
 
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v\n"+
-			"Update History:\n  rows %v\n  dels %v ",
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
 		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
-		entry.Stats.RowCnt.String(), entry.Stats.RowDel.String(),
 	)
 	detail.WriteString(summary)
 	return detail.String()

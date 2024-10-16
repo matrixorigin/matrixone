@@ -53,7 +53,7 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	mergeDelete.ctr.delSource = rel
 	mergeDelete.ctr.partitionSources = partitionRels
 	mergeDelete.ctr.affectedRows = 0
-	mergeDelete.ctr.bat = new(batch.Batch)
+	mergeDelete.ctr.bat = batch.NewOffHeapEmpty()
 	return nil
 }
 
@@ -103,7 +103,6 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
-			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
 			err = mergeDelete.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
@@ -118,7 +117,6 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return input, err
 			}
-			bat.Cnt = 1
 			err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return input, err

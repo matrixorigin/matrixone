@@ -17,7 +17,6 @@ package engine_util
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,9 +62,9 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 	}
 }
 
-func WithBuffer(buffer *containers.OneSchemaBatchBuffer) SinkerOption {
+func WithBuffer(buffer *containers.OneSchemaBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
-		sinker.buf.isOwner = false
+		sinker.buf.isOwner = isOwner
 		sinker.buf.buffers = buffer
 	}
 }
@@ -84,19 +83,19 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
-	sortKeyPos    int
-	isPrimaryKey  bool
-	isTombstone   bool
-	seqnums       []uint16
-	schemaVersion uint32
-	withHidden    bool
+	sortKeyPos      int
+	isPrimaryKey    bool
+	isTombstone     bool
+	seqnums         []uint16
+	schemaVersion   uint32
+	hiddenSelection objectio.HiddenColumnSelection
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.isTombstone {
 			s.writer = blockio.ConstructTombstoneWriter(
-				s.withHidden,
+				s.hiddenSelection,
 				s.fs,
 			)
 		} else {
@@ -122,9 +121,9 @@ func (s *FSinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
 
 	var ss objectio.ObjectStats
 	if s.sortKeyPos > -1 {
-		ss = s.writer.GetObjectStats(objectio.WithSorted())
+		ss = s.writer.GetObjectStats(objectio.WithSorted(), objectio.WithCNCreated())
 	} else {
-		ss = s.writer.GetObjectStats()
+		ss = s.writer.GetObjectStats(objectio.WithCNCreated())
 	}
 
 	// s.writer.Reset
@@ -150,13 +149,13 @@ func (s *FSinkerImpl) Close() error {
 type FileSinkerFactory func(*mpool.MPool, fileservice.FileService) FileSinker
 
 // This factory is used to create a FileSinker for tombstone
-// withHidden: whether to write hidden tombstone
+// hiddenSelection: whether to write hidden tombstone
 //
 //	true: TN created tombstone objects
 //	false: CN created tombstone objects
-func NewTombstoneFSinkerImplFactory(withHidden bool) FileSinkerFactory {
+func NewTombstoneFSinkerImplFactory(hidden objectio.HiddenColumnSelection) FileSinkerFactory {
 	return func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
-		return NewTombstoneFSinkerImpl(withHidden, mp, fs)
+		return NewTombstoneFSinkerImpl(hidden, mp, fs)
 	}
 }
 
@@ -183,15 +182,15 @@ func NewFSinkerImplFactory(
 }
 
 func NewTombstoneFSinkerImpl(
-	withHidden bool,
+	hidden objectio.HiddenColumnSelection,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) *FSinkerImpl {
 	return &FSinkerImpl{
-		fs:          fs,
-		mp:          mp,
-		isTombstone: true,
-		withHidden:  withHidden,
+		fs:              fs,
+		mp:              mp,
+		isTombstone:     true,
+		hiddenSelection: hidden,
 	}
 }
 
@@ -216,14 +215,14 @@ func NewFSinkerImpl(
 }
 
 func NewTombstoneSinker(
-	withHidden bool,
+	hidden objectio.HiddenColumnSelection,
 	pkType types.Type,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...SinkerOption,
 ) *Sinker {
-	factory := NewTombstoneFSinkerImplFactory(withHidden)
-	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, withHidden)
+	factory := NewTombstoneFSinkerImplFactory(hidden)
+	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, hidden)
 	return NewSinker(
 		objectio.TombstonePrimaryKeyIdx,
 		attrs,
@@ -551,14 +550,16 @@ func (sinker *Sinker) Write(
 	offset := 0
 	left := data.RowCount()
 	for left > 0 {
-		curr = sinker.popStaged()
 		if curr == nil {
-			curr = sinker.fetchBuffer()
-		} else if curr.RowCount() == objectio.BlockMaxRows {
-			if err = sinker.pushStaged(ctx, curr); err != nil {
-				return
+			curr = sinker.popStaged()
+			if curr == nil {
+				curr = sinker.fetchBuffer()
+			} else if curr.RowCount() == objectio.BlockMaxRows {
+				if err = sinker.pushStaged(ctx, curr); err != nil {
+					return
+				}
+				curr = sinker.fetchBuffer()
 			}
-			curr = sinker.fetchBuffer()
 		}
 
 		toAdd := left
@@ -566,11 +567,10 @@ func (sinker *Sinker) Write(
 		if currPos+toAdd > objectio.BlockMaxRows {
 			toAdd = objectio.BlockMaxRows - currPos
 		}
-		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
+		if err = curr.UnionWindow(data, offset, toAdd, sinker.mp); err != nil {
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
-
 			if err = sinker.pushStaged(ctx, curr); err != nil {
 				return
 			}
@@ -592,7 +592,8 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 	// spill the remaining data
-	if sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
+	if sinker.staged.inMemorySize > 0 &&
+		sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
 		if err := sinker.trySpill(ctx); err != nil {
 			return err
 		}

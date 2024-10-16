@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -72,8 +73,12 @@ func getStoreTestConfig() Config {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipPort = testGossipPort
+	cfg.RaftAddress = getTestRaftAddress()
+	cfg.GossipPort = getTestGossipPort()
+	testGossipAddress := getTestGossipAddress(cfg.GossipPort)
+	dummyGossipSeedAddress := getDummyGossipSeedAddress()
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	cfg.LogServicePort = getTestServicePort()
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
@@ -89,9 +94,18 @@ func getStoreTestConfig() Config {
 
 func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, runtime.DefaultRuntime())
+	store, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
 	assert.NoError(t, err)
 	runtime.DefaultRuntime().Logger().Info("1")
 	defer func() {
@@ -100,8 +114,53 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	runtime.DefaultRuntime().Logger().Info("2")
 }
 
-func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
-	store, err := newLogStore(cfg, func() taskservice.TaskService { return taskService }, runtime.DefaultRuntime())
+func TestNewStoreRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg0 := getStoreTestConfig()
+	genCfg0 := func() Config {
+		return cfg0
+	}
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
+	store0, err := newLogStoreWithRetry(
+		genCfg0,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store0.close())
+	}()
+
+	var cfg Config
+	first := true
+	genCfg := func() Config {
+		if first {
+			first = false
+			return cfg0
+		} else {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	store1, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
+	assert.NoError(t, err)
+	assert.NoError(t, store1.close())
+}
+
+func getTestStore(genCfg func() Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
+	store, err := newLogStoreWithRetry(
+		genCfg,
+		func() taskservice.TaskService { return taskService },
+		nil,
+		runtime.DefaultRuntime(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -118,9 +177,18 @@ func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.Task
 
 func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, runtime.DefaultRuntime())
+	store, err := newLogStoreWithRetry(
+		genCfg,
+		nil,
+		nil,
+		runtime.DefaultRuntime(),
+	)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -133,9 +201,13 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 
 func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -145,9 +217,13 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 
 func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -159,9 +235,13 @@ func TestReplicaCanBeStopped(t *testing.T) {
 
 func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true, nil)
+	store, err := getTestStore(genCfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -195,21 +275,6 @@ func TestAppendLog(t *testing.T) {
 		lsn, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
-	}
-	runStoreTest(t, fn)
-}
-
-func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
-	fn := func(t *testing.T, store *store) {
-		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
-		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
-		cmd := make([]byte, headerSize+8+8)
-		binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
-		binaryEnc.PutUint64(cmd[headerSize:], 101)
-		binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
-		_, err := store.append(ctx, 1, cmd)
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
 	runStoreTest(t, fn)
 }
@@ -308,7 +373,14 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	assert.Equal(t, pb.HAKeeperCreated, state.State)
 
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-	err = store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey)
+	err = store.setInitialClusterInfo(
+		1,
+		1,
+		1,
+		hakeeper.K8SIDRangeEnd+10,
+		nextIDByKey,
+		nil,
+	)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -525,6 +597,14 @@ func TestAddReplicaRejectedForInvalidCCI(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestAddNonVotingReplicaRejectedForInvalidCCI(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		err := store.addNonVotingReplica(1, 100, uuid.New().String(), 0)
+		assert.Equal(t, dragonboat.ErrRejected, err)
+	}
+	runStoreTest(t, fn)
+}
+
 func TestAddReplica(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		for {
@@ -547,6 +627,29 @@ func TestAddReplica(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestAddNonVotingReplica(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		for {
+			_, _, ok, err := store.nh.GetLeaderID(1)
+			require.NoError(t, err)
+			if ok {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		m, err := store.nh.SyncGetShardMembership(ctx, 1)
+		require.NoError(t, err)
+		err = store.addNonVotingReplica(1, 100, uuid.New().String(), m.ConfigChangeID)
+		assert.NoError(t, err)
+		hb := store.getHeartbeatMessage()
+		assert.Equal(t, 1, len(hb.Replicas[0].Replicas))
+		assert.Equal(t, 1, len(hb.Replicas[0].NonVotingReplicas))
+	}
+	runStoreTest(t, fn)
+}
+
 func getTestStores() (*store, *store, error) {
 	cfg1 := DefaultConfig()
 	cfg1.UUID = uuid.NewString()
@@ -558,7 +661,7 @@ func getTestStores() (*store, *store, error) {
 	cfg1.RaftPort = 9002
 	cfg1.GossipPort = 9011
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	store1, err := newLogStore(cfg1, nil, runtime.DefaultRuntime())
+	store1, err := newLogStore(cfg1, nil, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -572,7 +675,7 @@ func getTestStores() (*store, *store, error) {
 	cfg2.RaftPort = 9007
 	cfg2.GossipPort = 9012
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	store2, err := newLogStore(cfg2, nil, runtime.DefaultRuntime())
+	store2, err := newLogStore(cfg2, nil, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -668,10 +771,35 @@ func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
 	return false
 }
 
+func hasNonVotingReplica(s *store, shardID uint64, replicaID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			for r := range info.NonVotingReplicas {
+				if r == replicaID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func mustHaveReplica(t *testing.T,
 	s *store, shardID uint64, replicaID uint64) {
 	for i := 0; i < 100; i++ {
 		if hasReplica(s, shardID, replicaID) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("failed to locate the replica")
+}
+
+func mustHaveNonVotingReplica(t *testing.T,
+	s *store, shardID uint64, replicaID uint64) {
+	for i := 0; i < 100; i++ {
+		if hasNonVotingReplica(s, shardID, replicaID) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -940,4 +1068,238 @@ func TestDeleteCNStore(t *testing.T) {
 		assert.Equal(t, 0, len(state.CNState.Stores))
 	}
 	runStoreTest(t, fn)
+}
+
+func TestManagedHAKeeperClient_UpdateNonVotingReplicaNum(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		var num uint64 = 5
+		err := store.updateNonVotingReplicaNum(ctx, num)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.Equal(t, num, state.NonVotingReplicaNum)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestManagedHAKeeperClient_UpdateNonVotingLocality(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		locality := pb.Locality{
+			Value: map[string]string{
+				"k1": "v1",
+				"k2": "v2",
+			},
+		}
+		err := store.updateNonVotingLocality(ctx, locality)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.Equal(t, locality, state.NonVotingLocality)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestGetLatestLsn(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		index, err := store.getLatestLsn(ctx, 1)
+		assert.Equal(t, uint64(0), index)
+		assert.NoError(t, err)
+		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		_, err = store.append(ctx, 1, cmd)
+		assert.NoError(t, err)
+		index, err = store.getLatestLsn(ctx, 1)
+		assert.Equal(t, uint64(4), index)
+		assert.NoError(t, err)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestRequiredLsn(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout*5)
+			defer cancel()
+			for i := 0; i < 10; i++ {
+				_, err := store.append(ctx, 1, cmd)
+				assert.NoError(t, err)
+			}
+		}()
+		assert.NoError(t, store.setRequiredLsn(ctx, 1, 8))
+		lsn, err := store.getRequiredLsn(ctx, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(8), lsn)
+
+		assert.NoError(t, store.setRequiredLsn(ctx, 1, 800))
+		lsn, err = store.getRequiredLsn(ctx, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(800), lsn)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestGetLeaderID(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		leaderID, err := store.leaderID(1)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), leaderID)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestAddLogShard(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+
+		assert.NoError(t, store.addLogShard(ctx, pb.AddLogShard{
+			ShardID: 1,
+		}))
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(state.LogState.Shards))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestCheckHealth(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	checkFn := func(startHAKeeper, heartbeat, tickTimeout, ok bool) func(*testing.T, *store) {
+		return func(t *testing.T, store *store) {
+			store.cfg.HAKeeperConfig.LogStoreTimeout = toml.Duration{Duration: time.Second * 2}
+			if startHAKeeper {
+				peers := make(map[uint64]dragonboat.Target)
+				peers[1] = store.id()
+				assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+				store.hakeeperTick()
+				if heartbeat {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+					defer cancel()
+					_, err := store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+					assert.NoError(t, err)
+				}
+				if tickTimeout {
+					for i := 0; i < 30; i++ {
+						store.hakeeperTick()
+					}
+				}
+			}
+
+			ticker := time.NewTicker(time.Millisecond * 100)
+			defer ticker.Stop()
+			timer := time.NewTimer(time.Second * 1)
+			defer timer.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if err := store.checkHealth(1); err != nil {
+						t.Logf("check health failed: %v", err)
+					} else {
+						t.Log("check health successfully")
+						return
+					}
+
+				case <-timer.C:
+					if ok {
+						t.Fatal("check health timed out")
+					} else {
+						t.Log("check health timed out")
+					}
+					return
+				}
+			}
+		}
+	}
+
+	t.Run("hakeeper not start", func(t *testing.T) {
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+		defer vfs.ReportLeakedFD(cfg.FS, t)
+		store, err := getTestStore(genCfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, store.close())
+		}()
+		checkFn(false, true, false, false)(t, store)
+	})
+
+	t.Run("log store no heartbeat", func(t *testing.T) {
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+		defer vfs.ReportLeakedFD(cfg.FS, t)
+		store, err := getTestStore(genCfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, store.close())
+		}()
+		checkFn(true, false, false, false)(t, store)
+	})
+
+	t.Run("tick timeout", func(t *testing.T) {
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+		defer vfs.ReportLeakedFD(cfg.FS, t)
+		store, err := getTestStore(genCfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, store.close())
+		}()
+		checkFn(true, true, true, false)(t, store)
+	})
+
+	t.Run("replica not start", func(t *testing.T) {
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			return cfg
+		}
+		defer vfs.ReportLeakedFD(cfg.FS, t)
+		store, err := getTestStore(genCfg, false, nil)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, store.close())
+		}()
+		checkFn(true, true, false, false)(t, store)
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		runStoreTest(t, checkFn(true, true, false, true))
+	})
 }

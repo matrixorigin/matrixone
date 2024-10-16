@@ -226,7 +226,6 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
-	srv.storeEngine = pu.StorageEngine
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
@@ -695,6 +694,12 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						} else if txn.Options.InRollback {
 							v2.TxnInRollbackCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else if txn.Options.InIncrStmt {
+							v2.TxnInIncrStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in incr statement", fields...)
+						} else if txn.Options.InRollbackStmt {
+							v2.TxnInRollbackStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback statement", fields...)
 						} else {
 							v2.TxnLeakCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
@@ -759,6 +764,7 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
+		s.cfg.UUID,
 		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,

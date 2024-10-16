@@ -2545,7 +2545,18 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 				[]byte("txn1"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			require.True(t, l1.validGroupTable(0, 0))
+			// Actually, txn1 and txn2 are executed concurrently.
+			// it should use a loop check.
+			for {
+				if l1.validGroupTable(0, 0) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					require.True(t, false)
+				default:
+				}
+			}
 			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l2.Unlock(
@@ -2973,6 +2984,24 @@ func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			require.NoError(t, err)
+		},
+	)
+}
+
+func TestCannotCommit(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			orphanTxn := pb.OrphanTxn{
+				Service: "s1",
+				Txn:     [][]byte{[]byte("testTxn")},
+			}
+			alloc.AddCannotCommit([]pb.OrphanTxn{orphanTxn})
+			// a.cleanCommitState(context.Background())
+
+			_, err := alloc.Valid("s1", []byte("testTxn"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
 		},
 	)
 }

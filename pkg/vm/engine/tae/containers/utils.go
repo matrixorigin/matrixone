@@ -17,6 +17,7 @@ package containers
 import (
 	"bytes"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,11 +35,13 @@ type IBatchBuffer interface {
 }
 
 type OneSchemaBatchBuffer struct {
-	sizeCap  int
-	currSize int
-	attrs    []string
-	typs     []types.Type
-	buffer   []*batch.Batch
+	sync.Mutex
+	sizeCap   int
+	currSize  int
+	highWater int
+	attrs     []string
+	typs      []types.Type
+	buffer    []*batch.Batch
 }
 
 func NewOneSchemaBatchBuffer(
@@ -58,10 +61,14 @@ func NewOneSchemaBatchBuffer(
 }
 
 func (bb *OneSchemaBatchBuffer) Len() int {
+	bb.Lock()
+	defer bb.Unlock()
 	return len(bb.buffer)
 }
 
 func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
 	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
 		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",
 			bb.attrs, bb.typs, attrs, types))
@@ -84,6 +91,8 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 }
 
 func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
 	if len(bb.buffer) == 0 {
 		return batch.NewWithSchema(false, bb.attrs, bb.typs)
 	}
@@ -94,6 +103,8 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 }
 
 func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
 	if bat == nil || bat.Vecs == nil {
 		return
 	}
@@ -107,12 +118,25 @@ func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 
 	bb.buffer = append(bb.buffer, bat)
 	bb.currSize = newSize
+	if newSize > bb.highWater {
+		bb.highWater = newSize
+	}
+}
+
+func (bb *OneSchemaBatchBuffer) Usage() (int, int) {
+	bb.Lock()
+	defer bb.Unlock()
+	return bb.currSize, bb.highWater
 }
 
 func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
-	for i, bat := range bb.buffer {
-		bat.Clean(mp)
-		bb.buffer[i] = nil
+	bb.Lock()
+	defer bb.Unlock()
+	for i := range bb.buffer {
+		if bb.buffer[i] != nil {
+			bb.buffer[i].Clean(mp)
+			bb.buffer[i] = nil
+		}
 	}
 	bb.buffer = nil
 }
@@ -120,7 +144,7 @@ func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
 // ### Shallow copy Functions
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
-	cnBat := batch.New(true, tnBat.Attrs)
+	cnBat := batch.New(tnBat.Attrs)
 	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
@@ -329,7 +353,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	if length%cnt == 0 {
 		bats := make([]*batch.Batch, 0, cnt)
 		for i := 0; i < cnt; i++ {
-			newBat := batch.New(true, bat.Attrs)
+			newBat := batch.New(bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
 				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
 				newBat.Vecs[j] = window
@@ -357,7 +381,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	start := 0
 	bats := make([]*batch.Batch, 0, cnt)
 	for _, row := range rowArray {
-		newBat := batch.New(true, bat.Attrs)
+		newBat := batch.New(bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
 			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
 			newBat.Vecs[j] = window
@@ -958,11 +982,11 @@ func ForeachWindowVarlen(
 				}
 			}
 		} else {
-			for i, v := range slice {
+			for i := range slice {
 				var val []byte
 				isNull := vec.IsNull(uint64(i + start))
 				if !isNull {
-					val = v.GetByteSlice(area)
+					val = slice[i].GetByteSlice(area)
 				}
 				if op != nil {
 					if err = op(val, isNull, i+start); err != nil {

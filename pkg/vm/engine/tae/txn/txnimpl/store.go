@@ -303,7 +303,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 	return db.Append(ctx, id, data)
 }
 
-func (store *txnStore) AddObjsWithMetaLoc(
+func (store *txnStore) AddDataFiles(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -313,7 +313,7 @@ func (store *txnStore) AddObjsWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddObjsWithMetaLoc(ctx, tid, stats)
+	return db.AddDataFiles(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
@@ -340,7 +340,7 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 	return db.DeleteByPhyAddrKeys(id, rowIDVec, pkVec, dt)
 }
 
-func (store *txnStore) TryDeleteByStats(
+func (store *txnStore) AddPersistedTombstoneFile(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
 	store.IncreateWriteCnt()
@@ -348,7 +348,7 @@ func (store *txnStore) TryDeleteByStats(
 	if err != nil {
 		return
 	}
-	return db.TryDeleteByStats(id, stats)
+	return db.AddPersistedTombstoneFile(id, stats)
 }
 
 func (store *txnStore) GetByFilter(ctx context.Context, dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -723,7 +723,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) Freeze() (err error) {
+func (store *txnStore) Freeze(ctx context.Context) (err error) {
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {
@@ -731,7 +731,7 @@ func (store *txnStore) Freeze() (err error) {
 			}
 			delete(store.dbs, db.entry.GetID())
 		}
-		if err = db.Freeze(); err != nil {
+		if err = db.Freeze(ctx); err != nil {
 			return
 		}
 	}

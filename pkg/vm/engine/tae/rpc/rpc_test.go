@@ -73,7 +73,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 		objNames = append(objNames, name)
-		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil)
+		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil, false)
 		assert.Nil(t, err)
 		for j := 0; j < 50; j++ {
 			_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[offset+j]))
@@ -221,7 +221,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write taeBats[0], taeBats[1] two blocks into file service
 	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(fs, objName1, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(fs, objName1, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
 	for i, bat := range taeBats {
@@ -240,7 +240,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write taeBats[3] into file service
 	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(fs, objName2, 0, nil)
+	writer, err = blockio.NewBlockWriterNew(fs, objName2, 0, nil, false)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
 	_, err = writer.WriteBatch(containers.ToCNBatch(taeBats[3]))
@@ -430,14 +430,13 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//write deleted row ids into FS
 	objName3 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil)
+	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil, true)
 	assert.Nil(t, err)
-	writer.SetDataType(objectio.SchemaTombstone)
 	writer.SetPrimaryKeyWithType(uint16(objectio.TombstonePrimaryKeyIdx), index.HBF,
 		index.ObjectPrefixFn,
 		index.BlockPrefixFn)
 	for _, view := range physicals {
-		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
+		bat := batch.New([]string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
 		bat.Vecs[0], _ = view.Vecs[0].GetDownstreamVector().Window(0, 5)
 		bat.Vecs[1], _ = view.Vecs[1].GetDownstreamVector().Window(0, 5)
 		_, err := writer.WriteBatch(bat)
@@ -703,7 +702,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer cv.Close()
 
 	assert.NoError(t, txn.Commit(context.Background()))
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0], _ = cv.Vecs[0].GetDownstreamVector().Window(0, 20)
 	delBat.Vecs[1], _ = cv.Vecs[1].GetDownstreamVector().Window(0, 20)
 
@@ -969,7 +968,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 	defer cv.Close()
 
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = cv.Vecs[0].GetDownstreamVector()
 	delBat.Vecs[1] = cv.Vecs[1].GetDownstreamVector()
 
@@ -1289,7 +1288,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defer v.Close()
 
 	_ = it.Close()
-	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+	delBat := batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
 	delBat.Vecs[1] = v.Vecs[1].GetDownstreamVector()
 
@@ -1638,7 +1637,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 		defer v.Close()
 
-		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
+		delBat = batch.New([]string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 		delBat.Vecs[0] = v.Vecs[0].GetDownstreamVector()
 		delBat.Vecs[1] = v.Vecs[1].GetDownstreamVector()
 

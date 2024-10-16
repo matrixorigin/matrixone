@@ -85,10 +85,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 		if config.EnableMetrics != nil && *config.EnableMetrics {
 			allocator = NewMetricsAllocator(
 				allocator,
-				metric.MallocCounterAllocateBytes,
-				metric.MallocGaugeInuseBytes,
-				metric.MallocCounterAllocateObjects,
-				metric.MallocGaugeInuseObjects,
+				metric.MallocCounter.WithLabelValues("allocate"),
+				metric.MallocGauge.WithLabelValues("inuse"),
+				metric.MallocCounter.WithLabelValues("allocate-objects"),
+				metric.MallocGauge.WithLabelValues("inuse-objects"),
 			)
 		}
 		return allocator
@@ -103,10 +103,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(
 						ret,
-						metric.MallocCounterAllocateBytes,
-						metric.MallocGaugeInuseBytes,
-						metric.MallocCounterAllocateObjects,
-						metric.MallocGaugeInuseObjects,
+						metric.MallocCounter.WithLabelValues("allocate"),
+						metric.MallocGauge.WithLabelValues("inuse"),
+						metric.MallocCounter.WithLabelValues("allocate-objects"),
+						metric.MallocGauge.WithLabelValues("inuse-objects"),
 					)
 				}
 				return ret
@@ -123,10 +123,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(
 						ret,
-						metric.MallocCounterAllocateBytes,
-						metric.MallocGaugeInuseBytes,
-						metric.MallocCounterAllocateObjects,
-						metric.MallocGaugeInuseObjects,
+						metric.MallocCounter.WithLabelValues("allocate"),
+						metric.MallocGauge.WithLabelValues("inuse"),
+						metric.MallocCounter.WithLabelValues("allocate-objects"),
+						metric.MallocGauge.WithLabelValues("inuse-objects"),
 					)
 				}
 				return ret

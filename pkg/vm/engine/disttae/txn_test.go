@@ -41,7 +41,9 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 	objectSlice := objectio.ObjectStatsSlice{}
 
-	require.NoError(t, txn.getUncommittedS3Tombstone(&objectSlice))
+	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
+		objectSlice.Append(stats[:])
+	}))
 	require.Equal(t, len(statsList), objectSlice.Len())
 
 	for i, ss := range txn.cn_flushed_s3_tombstone_object_stats_list.data {

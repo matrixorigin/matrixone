@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,6 +177,7 @@ func testS3FS(
 
 		entries, err := fs.List(ctx, "")
 		assert.Nil(t, err)
+
 		assert.True(t, len(entries) > 0)
 		assert.True(t, counterSet.FileService.S3.List.Load() > 0)
 		assert.True(t, counterSet2.FileService.S3.List.Load() > 0)
@@ -427,7 +429,7 @@ func TestS3FSMinioServer(t *testing.T) {
 	exePath, err := exec.LookPath("minio")
 	if errors.Is(err, exec.ErrNotFound) {
 		// minio not found in machine
-		return
+		t.Skip("minio executable not found")
 	}
 
 	// start minio
@@ -1071,4 +1073,95 @@ func TestNewS3NoDefaultCredential(t *testing.T) {
 	)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	assert.True(t, strings.Contains(err.Error(), "no valid credentials"))
+}
+
+func TestS3FSIOMerger(t *testing.T) {
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			DiskPath:       ptrTo(t.TempDir()),
+			DiskCapacity:   ptrTo(toml.ByteSize(10 * (1 << 20))),
+			CheckOverlaps:  false,
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close()
+
+	var counterSet perfcounter.CounterSet
+	ctx := perfcounter.WithCounterSet(context.Background(), &counterSet)
+
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo",
+		Policy:   SkipDiskCache, // skip disk cache
+		Entries: []IOEntry{
+			{
+				Data: []byte("foo"),
+				Size: 3,
+			},
+		},
+	})
+	assert.Nil(t, err)
+
+	nThreads := 256
+	wg := new(sync.WaitGroup)
+	wg.Add(nThreads)
+	for range nThreads {
+		go func() {
+			defer wg.Done()
+			vec := &IOVector{
+				FilePath: "foo",
+				Entries: []IOEntry{
+					{
+						Size:        3,
+						ToCacheData: CacheOriginalData,
+					},
+				},
+			}
+			err := fs.Read(ctx, vec)
+			assert.Nil(t, err)
+			assert.Equal(t, []byte("foo"), vec.Entries[0].CachedData.Bytes())
+			vec.Release()
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(1), counterSet.FileService.S3.Put.Load())
+	assert.True(t, counterSet.FileService.S3.Get.Load() < int64(nThreads))
+
+}
+
+func BenchmarkS3FSAllocateCacheData(b *testing.B) {
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    b.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(b, err)
+	defer fs.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			data := fs.AllocateCacheData(42)
+			data.Release()
+		}
+	})
 }

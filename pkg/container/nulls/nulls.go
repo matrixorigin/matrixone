@@ -26,6 +26,7 @@ import (
 )
 
 type Bitmap = Nulls
+type Grouping = Nulls
 
 type Nulls struct {
 	np bitmap.Bitmap
@@ -56,6 +57,10 @@ func NewWithSize(size int) *Nulls {
 
 func (nsp *Nulls) Reset() {
 	nsp.np.Reset()
+}
+
+func (nsp *Nulls) Clear() {
+	nsp.np.Clear()
 }
 
 func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
@@ -397,6 +402,12 @@ func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 	return nil
 }
 
+func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
+	if m != nil && !m.IsEmpty() {
+		nsp.np.Or(m)
+	}
+}
+
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
 	if m != nil && !m.np.EmptyByFlag() {
@@ -422,11 +433,11 @@ func (nsp *Nulls) ToArray() []uint64 {
 	return nsp.np.ToArray()
 }
 
-func (nsp *Nulls) ToI64Arrary() []int64 {
+func (nsp *Nulls) ToI64Array() []int64 {
 	if nsp == nil || nsp.np.EmptyByFlag() {
 		return []int64{}
 	}
-	return nsp.np.ToI64Arrary()
+	return nsp.np.ToI64Array()
 }
 
 func (nsp *Nulls) GetCardinality() int {

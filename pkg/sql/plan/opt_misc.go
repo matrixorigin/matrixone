@@ -31,7 +31,6 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
-	increaseRefCntForExprList(node.GroupingSet, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 	for i := range node.OrderBy {
@@ -116,6 +115,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 func increaseRefCntForExprList(exprs []*plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
 		increaseRefCnt(expr, inc, colRefCnt)
 	}
 }
@@ -164,7 +166,6 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.OnList, projMap)
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
-	replaceColumnsForExprList(node.GroupingSet, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	for i := range node.OrderBy {
@@ -174,6 +175,9 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 
 func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
 	for i, expr := range exprList {
+		if expr == nil {
+			continue
+		}
 		exprList[i] = replaceColumnsForExpr(expr, projMap)
 	}
 }
@@ -328,7 +332,6 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
-	increaseTagCntForExprList(node.GroupingSet, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
 	for i := range node.OrderBy {
@@ -361,7 +364,6 @@ END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
-	increaseTagCntForExprList(node.GroupingSet, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
 	for i := range node.OrderBy {
@@ -373,6 +375,9 @@ END:
 
 func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
 	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
 		increaseTagCnt(expr, inc, tagCnt)
 	}
 }
@@ -473,12 +478,15 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
-func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
+func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) (float64, bool) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_JOIN {
-		return 1
+		return 1, true
 	}
-	result := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+	result, ok := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+	if !ok {
+		return 1, false
+	}
 
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
@@ -510,18 +518,18 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	}
 
 	if len(hashCols) == 0 {
-		return 0.0001
+		return 1, false
 	}
 
 	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
 	if tableDef == nil {
-		return 0.0001
+		return 1, false
 	}
 	hashColPos := make([]int32, len(hashCols))
 	for i := range hashCols {
 		hashColPos[i] = hashCols[i].ColPos
 	}
-	return builder.getColNDVRatio(hashColPos, tableDef) * result
+	return builder.getColNDVRatio(hashColPos, tableDef) * result, true
 }
 
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {

@@ -551,12 +551,12 @@ func (ms *mockShardService) Read(cxt context.Context, req shardservice.ReadReque
 	return nil
 }
 
-func (ms *mockShardService) HasLocalReplica(tableID, shardID uint64) bool {
-	return true
+func (ms *mockShardService) HasLocalReplica(tableID, shardID uint64) (bool, error) {
+	return true, nil
 }
 
-func (ms *mockShardService) HasAllLocalReplicas(tableID uint64) bool {
-	return false
+func (ms *mockShardService) HasAllLocalReplicas(tableID uint64) (bool, error) {
+	return false, nil
 }
 
 func (ms *mockShardService) GetShardInfo(table uint64) (uint64, pb.Policy, bool, error) {
@@ -581,6 +581,10 @@ func (ms *mockShardService) TableReplicaCount(tableID uint64) int64 {
 
 func (ms *mockShardService) Close() error {
 	return nil
+}
+
+func (ms *mockShardService) GetTableShards(tableID uint64) (pb.ShardsMetadata, []pb.TableShard, error) {
+	return pb.ShardsMetadata{}, nil, nil
 }
 
 var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)
@@ -611,6 +615,9 @@ func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice
 func (ha *testHAKeeperClient) GetClusterState(ctx context.Context) (logservice2.CheckerState, error) {
 	return logservice2.CheckerState{}, nil
 }
+func (ha *testHAKeeperClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
 
 func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
 	return nil, nil
@@ -618,4 +625,12 @@ func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error)
 
 func (ha *testHAKeeperClient) SendCNHeartbeat(ctx context.Context, hb logservice2.CNStoreHeartbeat) (logservice2.CommandBatch, error) {
 	return logservice2.CommandBatch{}, nil
+}
+
+func (ha *testHAKeeperClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	return nil
+}
+
+func (ha *testHAKeeperClient) UpdateNonVotingLocality(ctx context.Context, locality logservice2.Locality) error {
+	return nil
 }

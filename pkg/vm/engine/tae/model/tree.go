@@ -488,7 +488,7 @@ func (stree *ObjectTree) Merge(ot *ObjectTree) {
 	if ot == nil {
 		return
 	}
-	if !stree.ID.Eq(*ot.ID) {
+	if !stree.ID.EQ(ot.ID) {
 		panic(fmt.Sprintf("Cannot merge 2 different obj tree: %d, %d", stree.ID, ot.ID))
 	}
 }
@@ -499,7 +499,7 @@ func (stree *ObjectTree) Equal(o *ObjectTree) bool {
 	} else if stree == nil || o == nil {
 		return false
 	}
-	return stree.ID.Eq(*o.ID)
+	return stree.ID.EQ(o.ID)
 }
 
 func (stree *ObjectTree) WriteTo(w io.Writer) (n int64, err error) {

@@ -1556,6 +1556,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newImplPrefixIn().doPrefixIn
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_tuple},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newImplPrefixIn().doPrefixIn
+				},
+			},
 		},
 	},
 
@@ -4417,6 +4427,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToTime
 				},
 			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToTime
+				},
+			},
 		},
 	},
 
@@ -4964,6 +4984,52 @@ var supportedControlBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TriggerFaultPoint
+				},
+			},
+		},
+	},
+
+	// function `MO_WIN_TRUNCATE`
+	{
+		functionId: MO_WIN_TRUNCATE,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_datetime, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Truncate
+				},
+			},
+		},
+	},
+
+	// function `MO_WIN_DIVISOR`
+	{
+		functionId: MO_WIN_DIVISOR,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_int64, types.T_int64, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Divisor
 				},
 			},
 		},
@@ -5829,7 +5895,7 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `mo_show_col_qunique`
 	{
-		functionId: MO_SHOW_COL_QUNIQUE,
+		functionId: MO_SHOW_COL_UNIQUE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -6631,8 +6697,34 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+  
+  // function 'grouping'
+	{
+		functionId: GROUPING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) >= 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
 
-	// function `LLM_EMBEDDING`
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GroupingFunc
+				},
+			},
+		},
+	},
+  
+  // function `LLM_EMBEDDING`
 	{
 		functionId: LLM_EMBEDDING,
 		class:      plan.Function_STRICT,

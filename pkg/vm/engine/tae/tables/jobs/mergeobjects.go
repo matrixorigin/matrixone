@@ -242,7 +242,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 	}
 	task.nMergedBlk[objIdx]++
 
-	bat := batch.New(true, task.attrs)
+	bat := batch.New(task.attrs)
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
@@ -324,7 +324,7 @@ func (task *mergeObjectsTask) DoTransfer() bool {
 }
 
 func (task *mergeObjectsTask) Name() string {
-	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.tableEntry.GetID(), task.schema.Name)
+	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.tid, task.schema.Name)
 }
 
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
@@ -351,7 +351,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-	if task.rt.LockMergeService.IsLockedByUser(task.tableEntry.GetID()) {
+	if task.rt.LockMergeService.IsLockedByUser(task.tid, task.schema.Name) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"

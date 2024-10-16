@@ -29,134 +29,151 @@ func (s *service) Read(
 	req ReadRequest,
 	opts ReadOptions,
 ) error {
-	var cache *readCache
-	var err error
-	for {
-		cache, err = s.getShards(req.TableID)
-		if err != nil {
-			return err
-		}
-		if opts.shardID == 0 ||
-			cache.hasShard(req.TableID, opts.shardID) {
-			break
-		}
-
-		// remove old read cache
-		s.removeReadCache(req.TableID)
-
-		// shards updated, create new allocated
-		s.createC <- req.TableID
-
-		// wait shard created
-		err = s.waitShardCreated(
-			ctx,
-			req.TableID,
-			opts.shardID,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	selected := newSlice()
-	defer selected.close()
-
-	cache.selectReplicas(
-		req.TableID,
-		func(
-			metadata pb.ShardsMetadata,
-			shard pb.TableShard,
-			replica pb.ShardReplica,
-		) bool {
-			if opts.filter(metadata, shard, replica) {
-				shard.Replicas = []pb.ShardReplica{replica}
-				selected.values = append(selected.values, shard)
+	fn := func() (bool, error) {
+		var cache *readCache
+		var err error
+		for {
+			cache, err = s.getShards(req.TableID)
+			if err != nil {
+				return false, err
 			}
-			return true
-		},
-	)
+			if opts.shardID == 0 ||
+				cache.hasShard(req.TableID, opts.shardID) {
+				break
+			}
 
-	futures := newFutureSlice()
-	defer futures.close()
+			// remove old read cache
+			s.removeReadCache(req.TableID)
 
-	local := 0
-	remote := 0
-	for i, shard := range selected.values {
-		if s.isLocalReplica(shard.Replicas[0]) {
-			selected.local = append(selected.local, i)
-			local++
-			continue
+			// shards updated, create new allocated
+			s.createC <- req.TableID
+
+			// wait shard created
+			err = s.waitShardCreated(
+				ctx,
+				req.TableID,
+				opts.shardID,
+			)
+			if err != nil {
+				return false, err
+			}
 		}
 
-		remote++
-		if opts.adjust != nil {
-			opts.adjust(&shard)
+		selected := newSlice()
+		defer selected.close()
+
+		cache.selectReplicas(
+			req.TableID,
+			func(
+				metadata pb.ShardsMetadata,
+				shard pb.TableShard,
+				replica pb.ShardReplica,
+			) bool {
+				if opts.filter(metadata, shard, replica) {
+					shard.Replicas = []pb.ShardReplica{replica}
+					selected.values = append(selected.values, shard)
+				}
+				return true
+			},
+		)
+
+		futures := newFutureSlice()
+		defer futures.close()
+
+		local := 0
+		remote := 0
+		for i, shard := range selected.values {
+			if s.isLocalReplica(shard.Replicas[0]) {
+				selected.local = append(selected.local, i)
+				local++
+				continue
+			}
+
+			remote++
+			if opts.adjust != nil {
+				opts.adjust(&shard)
+			}
+			f, e := s.remote.client.AsyncSend(
+				ctx,
+				s.newReadRequest(
+					shard,
+					req.Method,
+					req.Param,
+					opts.readAt,
+				),
+			)
+			if e != nil {
+				s.maybeRemoveReadCache(req.TableID, e)
+				if i == 0 {
+					return true, e
+				}
+
+				err = errors.Join(err, e)
+				continue
+			}
+			futures.values = append(futures.values, f)
 		}
-		f, e := s.remote.client.AsyncSend(
-			ctx,
-			s.newReadRequest(
-				shard,
+
+		v2.ReplicaLocalReadCounter.Add(float64(local))
+		v2.ReplicaRemoteReadCounter.Add(float64(remote))
+
+		var buffer *morpc.Buffer
+		for _, i := range selected.local {
+			if opts.adjust != nil {
+				opts.adjust(&selected.values[i])
+			}
+
+			if buffer == nil {
+				buffer = morpc.NewBuffer()
+				defer buffer.Close()
+			}
+
+			v, e := s.doRead(
+				ctx,
+				selected.values[i],
+				opts.readAt,
 				req.Method,
 				req.Param,
-				opts.readAt,
-			),
-		)
-		if e != nil {
-			err = errors.Join(err, e)
-			continue
-		}
-		futures.values = append(futures.values, f)
-	}
-
-	v2.ReplicaLocalReadCounter.Add(float64(local))
-	v2.ReplicaRemoteReadCounter.Add(float64(remote))
-
-	var buffer *morpc.Buffer
-	for _, i := range selected.local {
-		if opts.adjust != nil {
-			opts.adjust(&selected.values[i])
-		}
-
-		if buffer == nil {
-			buffer = morpc.NewBuffer()
-			defer buffer.Close()
-		}
-
-		v, e := s.doRead(
-			ctx,
-			selected.values[i],
-			opts.readAt,
-			req.Method,
-			req.Param,
-			buffer,
-		)
-		if e == nil {
-			req.Apply(v)
-			continue
-		}
-		s.maybeRemoveReadCache(req.TableID, e)
-		err = errors.Join(err, e)
-		continue
-	}
-
-	var resp *pb.Response
-	for _, f := range futures.values {
-		v, e := f.Get()
-		if e == nil {
-			resp = v.(*pb.Response)
-			resp, e = s.unwrapError(resp, e)
-		}
-		if e == nil {
-			req.Apply(resp.ShardRead.Payload)
-			s.remote.pool.ReleaseResponse(resp)
-		} else {
+				buffer,
+			)
+			if e == nil {
+				req.Apply(v)
+				continue
+			}
 			s.maybeRemoveReadCache(req.TableID, e)
 			err = errors.Join(err, e)
+			continue
 		}
 
-		f.Close()
+		var resp *pb.Response
+		for _, f := range futures.values {
+			v, e := f.Get()
+			if e == nil {
+				resp = v.(*pb.Response)
+				resp, e = s.unwrapError(resp, e)
+			}
+			if e == nil {
+				req.Apply(resp.ShardRead.Payload)
+				s.remote.pool.ReleaseResponse(resp)
+			} else {
+				s.maybeRemoveReadCache(req.TableID, e)
+				err = errors.Join(err, e)
+			}
+
+			f.Close()
+		}
+		return false, err
 	}
-	return err
+
+	for {
+		canRetry, err := fn()
+		if err == nil {
+			return nil
+		}
+		if !canRetry {
+			return err
+		}
+	}
 }
 
 func (s *service) doRead(

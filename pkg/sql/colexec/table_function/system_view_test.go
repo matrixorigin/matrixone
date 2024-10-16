@@ -560,8 +560,20 @@ func (m *mockHKClient) GetClusterState(ctx context.Context) (pb.CheckerState, er
 	return pb.CheckerState{}, nil
 }
 
+func (c *mockHKClient) CheckLogServiceHealth(_ context.Context) error {
+	return nil
+}
+
 func (m *mockHKClient) GetBackupData(ctx context.Context) ([]byte, error) {
 	return nil, nil
+}
+
+func (m *mockHKClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	return nil
+}
+
+func (m *mockHKClient) UpdateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+	return nil
 }
 
 func (m *mockHKClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {

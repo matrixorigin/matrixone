@@ -17,6 +17,8 @@ package backup
 import (
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 	"path"
 	"sync"
 	"testing"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,8 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
-	"github.com/panjf2000/ants/v2"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,13 +141,21 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
 	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
+
 }
 
 func Test_saveTaeFilesList(t *testing.T) {
@@ -411,7 +418,7 @@ func Test_backupConfigFile(t *testing.T) {
 	}
 }
 
-var _ logservice.CNHAKeeperClient = new(dumpHakeeper)
+var _ logservice.BRHAKeeperClient = new(dumpHakeeper)
 
 const (
 	backupData = "backup_data"
@@ -425,38 +432,8 @@ func (d *dumpHakeeper) Close() error {
 	panic("implement me")
 }
 
-func (d *dumpHakeeper) AllocateID(ctx context.Context) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (d *dumpHakeeper) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (d *dumpHakeeper) GetBackupData(ctx context.Context) ([]byte, error) {
 	return []byte(backupData), nil
-}
-
-func (d *dumpHakeeper) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
-	//TODO implement me
-	panic("implement me")
 }
 
 func Test_backupHakeeper(t *testing.T) {

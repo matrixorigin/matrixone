@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -46,10 +47,10 @@ import (
 
 type inspectContext struct {
 	db     *db.DB
-	acinfo *db.AccessInfo
+	acinfo *cmd_util.AccessInfo
 	args   []string
 	out    io.Writer
-	resp   *db.InspectResp
+	resp   *cmd_util.InspectResp
 }
 
 // impl Pflag.Value interface
@@ -426,7 +427,7 @@ func (c *objectPruneArg) Run() error {
 		total++
 
 		createTs := obj.GetCreatedAt()
-		if createTs.GreaterEq(&ago) {
+		if createTs.GE(&ago) {
 			continue
 		}
 		stale++
@@ -720,9 +721,6 @@ func (c *infoArg) String() string {
 
 func (c *infoArg) Run() error {
 	b := &bytes.Buffer{}
-	if c.tbl != nil {
-		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
-	}
 	if c.obj != nil {
 		b.WriteRune('\n')
 		// b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
@@ -757,7 +755,7 @@ type mergePolicyArg struct {
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
 
-	disableDeltaLocMerge bool
+	stopMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -772,32 +770,53 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
-	policyCmd.Flags().BoolP("disableDeltaLocMerge", "d", merge.DisableDeltaLocMerge.Load(), "enable merging based on delta location")
+	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
 	return policyCmd
 }
 
-func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) error {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
-	address, _ := cmd.Flags().GetString("target")
+	address, err := cmd.Flags().GetString("target")
+	if err != nil {
+		return err
+	}
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
-	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
-	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
-	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
-	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
-	c.disableDeltaLocMerge, _ = cmd.Flags().GetBool("disableDeltaLocMerge")
+	c.maxMergeObjN, err = cmd.Flags().GetInt32("maxMergeObjN")
+	if err != nil {
+		return err
+	}
+	c.maxOsizeObject, err = cmd.Flags().GetInt32("maxOsizeObject")
+	if err != nil {
+		return err
+	}
+	c.minOsizeQualified, err = cmd.Flags().GetInt32("minOsizeQualified")
+	if err != nil {
+		return err
+	}
+	c.cnMinMergeSize, err = cmd.Flags().GetInt32("minCNMergeSize")
+	if err != nil {
+		return err
+	}
 	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
 		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
 	}
-	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
+	hints, err := cmd.Flags().GetInt32Slice("mergeHints")
+	if err != nil {
+		return err
+	}
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
 			return moerr.NewInvalidArgNoCtx("unspported hint %v", h)
 		}
 		c.hints = append(c.hints, api.MergeHint(h))
+	}
+	c.stopMerge, err = cmd.Flags().GetBool("stopMerge")
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -817,8 +836,6 @@ func (c *mergePolicyArg) Run() error {
 	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
 	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
 	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
-
-	merge.DisableDeltaLocMerge.Store(c.disableDeltaLocMerge)
 
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
@@ -846,6 +863,19 @@ func (c *mergePolicyArg) Run() error {
 		})
 		if err != nil {
 			return err
+		}
+		if c.stopMerge {
+			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
+			if err != nil {
+				return err
+			}
+		} else {
+			if c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name) {
+				err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false)
+				if err != nil {
+					return err
+				}
+			}
 		}
 		c.ctx.resp.Payload = []byte("success")
 	}
@@ -974,7 +1004,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEnt
 	return oentry, bn, nil
 }
 
-func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
+func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
 	if address == "*" {
 		return nil, nil
 	}
@@ -1063,7 +1093,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 //
 // the history of all
 // mo_ctl("dn", "inspect", "storage_usage -t *");
-func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageDetail(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	accId uint64, dbId uint64, tblId uint64, err error) {
 	strs := strings.Split(expr, ".")
 
@@ -1136,7 +1166,7 @@ func subString(src string, pos1, pos2 int) (string, error) {
 //
 // no limit, show all request trace info
 // select mo_ctl("dn", "inspect", "-t ");
-func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageTrace(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	tStart, tEnd time.Time, accounts map[uint64]struct{}, err error) {
 
 	var str string

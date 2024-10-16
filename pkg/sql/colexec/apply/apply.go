@@ -94,6 +94,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 			if ctr.inbat.IsEmpty() {
+				ctr.inbat = nil
 				continue
 			}
 			ctr.batIdx = 0
@@ -137,6 +138,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
 			err = ap.TableFunction.ApplyStart(i, proc)
+			ctr.tfNull = true
 			if err != nil {
 				return err
 			}
@@ -148,9 +150,22 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				return err
 			}
 			if tfResult.Batch.IsDone() {
+				if ap.ApplyType == OUTER && ctr.tfNull {
+					for j, rp := range ap.Result {
+						if rp.Rel == 0 {
+							err = ctr.rbat.Vecs[j].UnionOne(ctr.inbat.Vecs[rp.Pos], int64(i), proc.Mp())
+						} else {
+							err = vector.AppendAny(ctr.rbat.Vecs[j], nil, true, proc.Mp())
+						}
+						if err != nil {
+							return err
+						}
+					}
+				}
 				ctr.tfFinish = true
 				break
 			}
+			ctr.tfNull = false
 			rowCountIncrease := tfResult.Batch.RowCount()
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {

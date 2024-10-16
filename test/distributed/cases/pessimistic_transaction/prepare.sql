@@ -65,3 +65,11 @@ execute s1 using @a;
 select * from t1;
 -- @session}
 commit;
+
+delete from t1;
+insert into t1 values (1,1);
+prepare s1 from insert into t1 values (?,1) on duplicate key update b = ?;
+set @a=1;
+set @b=10;
+execute s1 using @a, @b;
+select * from t1;

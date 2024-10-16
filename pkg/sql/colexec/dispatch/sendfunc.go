@@ -16,7 +16,7 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -103,14 +103,9 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 					err = errEncode
 					break
 				}
-				if remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
+				if _, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
 					err = errSend
 					break
-				} else {
-					if remove {
-						err = moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
-						break
-					}
 				}
 			}
 		}
@@ -147,12 +142,8 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				if errEncode != nil {
 					return errEncode
 				}
-				if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if _, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
-				} else {
-					if remove {
-						return moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
-					}
 				}
 			}
 		}

@@ -68,7 +68,7 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -86,7 +86,7 @@ func NewFileReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -116,7 +116,7 @@ func (r *BlockReader) LoadColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if IoModel == AsyncIo {
 		proc := fetchParams{
 			idxes:  cols,
@@ -129,7 +129,7 @@ func (r *BlockReader) LoadColumns(
 		if v, err = r.aio.Fetch(ctx, proc); err != nil {
 			return
 		}
-		ioVectors = v.(*fileservice.IOVector)
+		ioVectors = v.(fileservice.IOVector)
 	} else {
 		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, typs, blk, m)
 		if err != nil {
@@ -137,9 +137,7 @@ func (r *BlockReader) LoadColumns(
 		}
 	}
 	release = func() {
-		if ioVectors != nil {
-			objectio.ReleaseIOVector(ioVectors)
-		}
+		objectio.ReleaseIOVector(&ioVectors)
 	}
 	defer func() {
 		if err != nil {
@@ -171,14 +169,14 @@ func (r *BlockReader) LoadSubColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors []*fileservice.IOVector
+	var ioVectors []fileservice.IOVector
 	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
 	if err != nil {
 		return
 	}
 	releases = func() {
 		for _, vec := range ioVectors {
-			objectio.ReleaseIOVector(vec)
+			objectio.ReleaseIOVector(&vec)
 		}
 	}
 	bats = make([]*batch.Batch, 0)
@@ -213,7 +211,7 @@ func (r *BlockReader) LoadOneSubColumns(
 	}
 	ioVector, err := r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
 	release = func() {
-		objectio.ReleaseIOVector(ioVector)
+		objectio.ReleaseIOVector(&ioVector)
 	}
 	if err != nil {
 		return
@@ -260,9 +258,7 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	defer func() {
 		if err != nil {
-			if ioVectors != nil {
-				objectio.ReleaseIOVector(ioVectors)
-			}
+			objectio.ReleaseIOVector(&ioVectors)
 		}
 	}()
 	for y := 0; y < int(dataMeta.BlockCount()); y++ {
@@ -278,7 +274,7 @@ func (r *BlockReader) LoadAllColumns(
 		}
 		bats = append(bats, bat)
 	}
-	return bats, func() { objectio.ReleaseIOVector(ioVectors) }, nil
+	return bats, func() { objectio.ReleaseIOVector(&ioVectors) }, nil
 }
 
 func (r *BlockReader) LoadZoneMaps(

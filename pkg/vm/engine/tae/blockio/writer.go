@@ -29,18 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-// ConstructTombstoneWriter withHidden: true for add hidden columns `commitTs` and `abort`
-// object file created by `CN` with `withHidden` is false
+// ConstructTombstoneWriter hiddenSelection: true for add hidden columns `commitTs` and `abort`
+// object file created by `CN` with `hiddenSelection` is false
 func ConstructTombstoneWriter(
-	withHidden bool,
+	hiddenSelection objectio.HiddenColumnSelection,
 	fs fileservice.FileService,
 ) *BlockWriter {
-	var seqnums []uint16
-	if withHidden {
-		seqnums = objectio.TombstoneSeqnums_DN_Created
-	} else {
-		seqnums = objectio.TombstoneSeqnums_CN_Created
-	}
+	seqnums := objectio.GetTombstoneSeqnums(hiddenSelection)
 	sortkeyPos := objectio.TombstonePrimaryKeyIdx
 	sortkeyIsPK := true
 	isTombstone := true
@@ -63,7 +58,13 @@ func ConstructWriter(
 	fs fileservice.FileService,
 ) *BlockWriter {
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := NewBlockWriterNew(fs, name, ver, seqnums)
+	writer, err := NewBlockWriterNew(
+		fs,
+		name,
+		ver,
+		seqnums,
+		isTombstone,
+	)
 	if err != nil {
 		panic(err) // it is impossible
 	}
@@ -98,9 +99,7 @@ type BlockWriter struct {
 	name           objectio.ObjectName
 	prefix         []index.PrefixFn
 
-	// schema data
-	// schema tombstone
-	dataType objectio.DataMetaType
+	isTombstone bool
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -117,22 +116,29 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 }
 
 // seqnums is the column's seqnums of the batch written by `WriteBatch`. `WriteBatchWithoutIndex` will ignore the seqnums
-func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, schemaVer uint32, seqnums []uint16) (*BlockWriter, error) {
+func NewBlockWriterNew(
+	fs fileservice.FileService,
+	name objectio.ObjectName,
+	schemaVer uint32,
+	seqnums []uint16,
+	isTombstone bool,
+) (*BlockWriter, error) {
 	writer, err := objectio.NewObjectWriter(name, fs, schemaVer, seqnums)
 	if err != nil {
 		return nil, err
 	}
 	return &BlockWriter{
-		writer:     writer,
-		isSetPK:    false,
-		sortKeyIdx: math.MaxUint16,
-		nameStr:    name.String(),
-		name:       name,
+		writer:      writer,
+		isSetPK:     false,
+		sortKeyIdx:  math.MaxUint16,
+		nameStr:     name.String(),
+		name:        name,
+		isTombstone: isTombstone,
 	}, nil
 }
 
-func (w *BlockWriter) SetDataType(typ objectio.DataMetaType) {
-	w.dataType = typ
+func (w *BlockWriter) SetTombstone() {
+	w.isTombstone = true
 }
 
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
@@ -181,7 +187,8 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
 
-		if w.dataType != objectio.SchemaTombstone {
+		// PXU TODO: change this logic
+		if !w.isTombstone {
 			// only skip SchemaData type
 			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 				continue

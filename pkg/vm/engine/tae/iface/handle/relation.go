@@ -41,7 +41,7 @@ type Relation interface {
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
 	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt DeleteType) error
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
-	TryDeleteByStats(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
+	AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error)
 	GetByFilter(ctx context.Context, filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16, skipCheckDelete bool) (any, bool, error)
 	GetValueByFilter(ctx context.Context, filter *Filter, col int) (any, bool, error)
@@ -50,7 +50,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(ctx context.Context, data *containers.Batch) error
-	AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) error
+	AddDataFiles(ctx context.Context, stats containers.Vector) error
 
 	GetMeta() any
 	CreateObject(bool) (Object, error)

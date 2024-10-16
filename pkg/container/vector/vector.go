@@ -54,7 +54,8 @@ type Vector struct {
 	capacity int
 	length   int
 
-	nsp *nulls.Nulls // nulls list
+	nsp nulls.Nulls    // nulls list
+	gsp nulls.Grouping // grouping list
 
 	cantFreeData bool
 	cantFreeArea bool
@@ -63,6 +64,8 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+
+	offHeap bool
 }
 
 type typedSlice struct {
@@ -115,7 +118,8 @@ func (v *Vector) Reset(typ types.Type) {
 	}
 
 	v.length = 0
-	v.nsp.Reset()
+	v.nsp.Clear()
+	v.gsp.Clear()
 	v.sorted = false
 	v.col.reset()
 	v.setupFromData()
@@ -127,6 +131,7 @@ func (v *Vector) ResetWithSameType() {
 	}
 	v.length = 0
 	v.nsp.Reset()
+	v.gsp.Reset()
 	v.sorted = false
 }
 
@@ -142,7 +147,8 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp = &nulls.Nulls{}
+	v.nsp.Clear()
+	v.gsp.Clear()
 	v.length = 0
 	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
@@ -191,24 +197,44 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
+func (v *Vector) SetOffHeap(offHeap bool) {
+	v.offHeap = offHeap
+}
+
 func (v *Vector) SetTypeScale(scale int32) {
 	v.typ.Scale = scale
 }
 
 func (v *Vector) GetNulls() *nulls.Nulls {
-	return v.nsp
+	return &v.nsp
+}
+
+func (v *Vector) GetGrouping() *nulls.Nulls {
+	return &v.gsp
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
-	if nsp != nil {
-		v.nsp.InitWith(nsp)
-	} else {
-		v.nsp.Reset()
+	v.nsp.Clear()
+	if nsp == nil {
+		return
 	}
+	v.nsp.Or(nsp)
+}
+
+func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
+	v.gsp.Clear()
+	if gsp == nil {
+		return
+	}
+	v.gsp.Or(gsp)
 }
 
 func (v *Vector) HasNull() bool {
 	return v.IsConstNull() || !v.nsp.IsEmpty()
+}
+
+func (v *Vector) HasGrouping() bool {
+	return !v.gsp.IsEmpty()
 }
 
 func (v *Vector) AllNull() bool {
@@ -278,7 +304,8 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp.Reset()
+	v.nsp.Clear()
+	v.gsp.Clear()
 	v.sorted = false
 }
 
@@ -319,7 +346,18 @@ func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
 	vec.class = FLAT
+	return vec
+}
 
+func NewOffHeapVecWithType(typ types.Type) *Vector {
+	vec := NewVec(typ)
+	vec.offHeap = true
+	return vec
+}
+
+func NewOffHeapVec() *Vector {
+	vec := NewVecFromReuse()
+	vec.offHeap = true
 	return vec
 }
 
@@ -339,6 +377,16 @@ func NewVecWithData(
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
+	vec.typ = typ
+	vec.class = CONSTANT
+	vec.length = length
+
+	return vec
+}
+
+func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
+	vec := NewVecFromReuse()
+	vec.gsp.AddRange(0, uint64(length))
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
@@ -385,6 +433,10 @@ func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp 
 
 func (v *Vector) IsConst() bool {
 	return v.class == CONSTANT
+}
+
+func (v *Vector) IsGrouping() bool {
+	return v.length > 0 && v.length == v.gsp.Count()
 }
 
 func (v *Vector) SetClass(class int) {
@@ -485,6 +537,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeArea = false
 
 	v.nsp.Reset()
+	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
 
@@ -628,7 +681,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	dataLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if dataLen > 0 {
-		v.data, err = mp.Alloc(dataLen)
+		v.data, err = mp.Alloc(dataLen, v.offHeap)
 		if err != nil {
 			return err
 		}
@@ -641,7 +694,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	areaLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if areaLen > 0 {
-		v.area, err = mp.Alloc(areaLen)
+		v.area, err = mp.Alloc(areaLen, v.offHeap)
 		if err != nil {
 			return err
 		}
@@ -721,7 +774,7 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+extraAreaSize)
+	area1, err = mp.Grow(area1, voff+extraAreaSize, v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -762,7 +815,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area)); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), v.offHeap); err != nil {
 			return nil, err
 		}
 		copy(w.area, v.area)
@@ -1049,7 +1102,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1075,7 +1131,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1101,7 +1160,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1127,7 +1189,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1153,7 +1218,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1179,7 +1247,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1205,7 +1276,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1231,7 +1305,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1257,7 +1334,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1283,7 +1363,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1309,7 +1392,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1335,7 +1421,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1361,7 +1450,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1387,7 +1479,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1413,7 +1508,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1439,7 +1537,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1465,7 +1566,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1491,7 +1595,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1517,7 +1624,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1543,7 +1653,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1569,7 +1682,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1595,7 +1711,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1623,7 +1742,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz)
+				area, err := mp.Grow(v.area, sz, v.offHeap)
 				if err != nil {
 					return err
 				}
@@ -1636,8 +1755,11 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			bm := w.nsp.GetBitmap()
 			if bm != nil && !bm.EmptyByFlag() {
 				for i := range ws {
+					if w.gsp.Contains(uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					if bm.Contains(uint64(i)) {
-						nulls.Add(v.nsp, uint64(v.length))
+						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
 						if err != nil {
@@ -1676,7 +1798,10 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if w.nsp.Any() {
-				unionNsp(v.nsp, w.nsp, v.length, w.length)
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
@@ -1975,14 +2100,17 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length++
+	if nulls.Contains(&w.gsp, uint64(sel)) {
+		nulls.Add(&v.gsp, uint64(oldLen))
+	}
 	if w.IsConst() {
 		if w.IsConstNull() {
-			nulls.Add(v.nsp, uint64(oldLen))
+			nulls.Add(&v.nsp, uint64(oldLen))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(w.nsp, uint64(sel)) {
-		nulls.Add(v.nsp, uint64(oldLen))
+	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+		nulls.Add(&v.nsp, uint64(oldLen))
 		return nil
 	}
 
@@ -2031,14 +2159,17 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.length += cnt
+	if nulls.Contains(&w.gsp, uint64(sel)) {
+		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
+	}
 	if w.IsConst() {
 		if w.IsConstNull() {
-			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+cnt))
+			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(w.nsp, uint64(sel)) {
-		nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+cnt))
+	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+		nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 		return nil
 	}
 
@@ -2102,8 +2233,11 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	oldLen := v.length
 	v.length += len(sels)
 	if w.IsConst() {
+		if w.IsGrouping() {
+			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
+		}
 		if w.IsConstNull() {
-			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
+			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
@@ -2135,8 +2269,11 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		ToSliceNoTypeCheck(w, &wCol)
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
+				if w.gsp.Contains(uint64(sel)) {
+					nulls.Add(&v.gsp, uint64(oldLen+i))
+				}
 				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(v.nsp, uint64(oldLen+i))
+					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
@@ -2157,8 +2294,11 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
 			for i, sel := range sels {
+				if w.gsp.Contains(uint64(sel)) {
+					nulls.Add(&v.gsp, uint64(oldLen+i))
+				}
 				if w.nsp.Contains(uint64(sel)) {
-					nulls.Add(v.nsp, uint64(oldLen+i))
+					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
 				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
@@ -2219,8 +2359,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if w.IsConst() {
 		oldLen := v.length
 		v.length += addCnt
+		if w.IsGrouping() {
+			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
+		}
 		if w.IsConstNull() {
-			nulls.AddRange(v.nsp, uint64(oldLen), uint64(v.length))
+			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
@@ -2253,8 +2396,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(v.nsp, uint64(v.length))
+						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
@@ -2268,8 +2414,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(v.nsp, uint64(v.length))
+						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
@@ -2282,6 +2431,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
@@ -2292,6 +2444,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
+					}
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
@@ -2306,8 +2461,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(v.nsp, uint64(v.length))
+						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
@@ -2318,8 +2476,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
+					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(v.nsp, uint64(v.length))
+						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
@@ -2334,6 +2495,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
+					}
+					if w.gsp.Contains(uint64(offset) + uint64(i)) {
+						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					v.length++
@@ -2398,7 +2562,7 @@ func (v *Vector) String() string {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
+			if nulls.Contains(&v.nsp, 0) {
 				return "null"
 			} else {
 				return col[0]
@@ -2414,7 +2578,7 @@ func (v *Vector) String() string {
 		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
 		col := MustArrayCol[float32](v)
 		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
+			if nulls.Contains(&v.nsp, 0) {
 				return "null"
 			} else {
 				return types.ArrayToString[float32](col[0])
@@ -2430,7 +2594,7 @@ func (v *Vector) String() string {
 		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
 		col := MustArrayCol[float64](v)
 		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
+			if nulls.Contains(&v.nsp, 0) {
 				return "null"
 			} else {
 				return types.ArrayToString[float64](col[0])
@@ -2716,7 +2880,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	length := vec.length
 	vec.length++
 	if isNull {
-		nulls.Add(vec.nsp, uint64(length))
+		nulls.Add(&vec.nsp, uint64(length))
 	} else {
 		var col []T
 		ToSliceNoTypeCheck(vec, &col)
@@ -2778,7 +2942,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	length := vec.length
 	vec.length += cnt
 	if isNull {
-		nulls.AddRange(vec.nsp, uint64(length), uint64(length+cnt))
+		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		var col []T
 		ToSlice(vec, &col)
@@ -2798,7 +2962,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	length := vec.length
 	vec.length += cnt
 	if isNull {
-		nulls.AddRange(vec.nsp, uint64(length), uint64(length+cnt))
+		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		var col []types.Varlena
 		ToSliceNoTypeCheck(vec, &col)
@@ -2822,7 +2986,7 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	col := MustFixedColWithTypeCheck[T](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(vec.nsp, uint64(length+i))
+			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			col[length+i] = w
 		}
@@ -2840,7 +3004,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(vec.nsp, uint64(length+i))
+			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &w, mp)
 			if err != nil {
@@ -2862,7 +3026,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(vec.nsp, uint64(length+i))
+			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := []byte(w)
 			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &bs, mp)
@@ -2886,7 +3050,7 @@ func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []boo
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
-			nulls.Add(vec.nsp, uint64(length+i))
+			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := w
 			err = BuildVarlenaFromArray[T](vec, &col[length+i], &bs, mp)
@@ -2904,7 +3068,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
-		nulls.Filter(v.nsp, sels, false)
+		nulls.Filter(&v.gsp, sels, false)
+		nulls.Filter(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
@@ -2923,7 +3088,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 				sel = sels[selIdx]
 			}
 		}
-		nulls.Filter(v.nsp, sels, true)
+		nulls.Filter(&v.gsp, sels, true)
+		nulls.Filter(&v.nsp, sels, true)
 		v.length -= len(sels)
 	}
 }
@@ -2938,7 +3104,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 			vs[idx] = vs[itr.Next()]
 			idx++
 		}
-		nulls.FilterByMask(v.nsp, sels, false)
+		nulls.FilterByMask(&v.gsp, sels, false)
+		nulls.FilterByMask(&v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next()
@@ -2957,7 +3124,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 				sel = itr.Next()
 			}
 		}
-		nulls.FilterByMask(v.nsp, sels, true)
+		nulls.FilterByMask(&v.gsp, sels, true)
+		nulls.FilterByMask(&v.nsp, sels, true)
 		v.length -= length
 	}
 }
@@ -2969,7 +3137,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
-	data, err := mp.Alloc(ns * v.GetType().TypeSize())
+	data, err := mp.Alloc(ns*v.GetType().TypeSize(), v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -2979,7 +3147,8 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ToSliceNoTypeCheck(v, &ws)
 	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	nulls.Filter(v.nsp, sels, false)
+	nulls.Filter(&v.gsp, sels, false)
+	nulls.Filter(&v.nsp, sels, false)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
@@ -2993,7 +3162,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 func vecToString[T types.FixedSizeT](v *Vector) string {
 	col := MustFixedColWithTypeCheck[T](v)
 	if len(col) == 1 {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return fmt.Sprintf("%v", col[0])
@@ -3030,7 +3199,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	if start == end {
 		return w, nil
 	}
-	nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
+	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
 	w.setupFromData()
@@ -3103,7 +3272,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			return nil
 		}
 	}
-	nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
+	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
 		w.data = make([]byte, length)
@@ -3127,7 +3296,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			ToSliceNoTypeCheck(v, &vCol)
 			ToSliceNoTypeCheck(w, &wCol)
 			for i := start; i < end; i++ {
-				if !nulls.Contains(v.nsp, uint64(i)) {
+				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
 					err = BuildVarlenaFromByteSlice(w, &wCol[i-start], &bs, mp)
 					if err != nil {
@@ -3399,10 +3568,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					minVal, maxVal = col[i], col[i]
 					first = false
 				} else {
-					if col[i].Less(&minVal) {
+					if col[i].LT(&minVal) {
 						minVal = col[i]
 					}
-					if maxVal.Less(&col[i]) {
+					if maxVal.LT(&col[i]) {
 
 						maxVal = col[i]
 					}
@@ -3411,10 +3580,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
-				if col[i].Less(&minVal) {
+				if col[i].LT(&minVal) {
 					minVal = col[i]
 				}
-				if maxVal.Less(&col[i]) {
+				if maxVal.LT(&col[i]) {
 					maxVal = col[i]
 				}
 			}
@@ -3520,6 +3689,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 // InplaceSortAndCompact @todo optimization in the future
 func (v *Vector) InplaceSortAndCompact() {
+	cleanDataNotResetArea := func() {
+		if v.data != nil {
+			v.length = 0
+		}
+		v.nsp.Reset()
+		v.sorted = true
+	}
+
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
@@ -3756,7 +3933,7 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(&col[j])
+			return col[i].LT(&col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
 			return a.Equal(&b)
@@ -3802,49 +3979,47 @@ func (v *Vector) InplaceSortAndCompact() {
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
+
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 	}
@@ -3969,7 +4144,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(&col[j])
+			return col[i].LT(&col[j])
 		})
 
 	case types.T_uuid:
@@ -4029,7 +4204,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 		return nil
 	}
 	var err error
-	area1, err = m.Grow2(area1, *bs, voff+vlen)
+	area1, err = m.Grow2(area1, *bs, voff+vlen, vec.offHeap)
 	if err != nil {
 		return err
 	}
@@ -4047,7 +4222,7 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 	if voff+vlen > cap(area1) && m != nil {
 		// Pass nil to Grow2, we can grow area1 to voff+vlen without
 		// copy bytejson data.
-		area1, err = m.Grow2(area1, nil, voff+vlen)
+		area1, err = m.Grow2(area1, nil, voff+vlen, vec.offHeap)
 		if err != nil {
 			return err
 		}
