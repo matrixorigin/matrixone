@@ -1835,7 +1835,11 @@ func (node *FullTextMatchExpr) Valid() error {
 
 func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
-	return &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}, nil
+	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
+	if err := e.Valid(); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
