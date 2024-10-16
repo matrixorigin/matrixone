@@ -231,6 +231,12 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
+				if err2 != nil {
+					err = err2
+				}
+			}
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
 		}
@@ -359,6 +365,12 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
+				if err2 != nil {
+					err = err2
+				}
+			}
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
 		}
@@ -776,10 +788,6 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	err = checkGCTS(ctx, p.start, p.fs)
-	if err != nil {
-		return
-	}
 	if time.Since(p.lastPrint) > LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
@@ -1102,10 +1110,6 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 }
 
 func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
-	therhold := time.Now().UTC().UnixNano() - time.Hour.Nanoseconds()
-	if ts.Physical() > therhold {
-		return nil
-	}
 	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
 	if err != nil {
 		return
