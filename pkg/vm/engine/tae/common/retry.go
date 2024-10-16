@@ -47,7 +47,7 @@ func RetryWithIntervalAndTimeout(
 			if suppressTimout {
 				return moerr.GetOkExpectedEOB()
 			}
-			return moerr.NewInternalError(ctx, "timeout")
+			return moerr.AttachCause(ctx, moerr.NewInternalError(ctx, "timeout"))
 		case <-ticker.C:
 			ok, err = op()
 			if ok {

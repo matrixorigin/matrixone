@@ -121,7 +121,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,
@@ -142,7 +142,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,
@@ -163,7 +163,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,

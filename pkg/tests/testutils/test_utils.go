@@ -73,7 +73,7 @@ func CreateTestDatabase(
 		fmt.Sprintf("create database %s", name),
 		executor.Options{},
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 	res.Close()
 
 	WaitDatabaseCreated(t, name, cn)
@@ -138,7 +138,7 @@ func ExecSQL(
 		executor.Options{}.WithDatabase(db),
 	)
 
-	require.NoError(t, err, sql)
+	require.NoError(t, moerr.AttachCause(ctx, err), sql)
 	return txnOp.Txn().CommitTS
 }
 
@@ -174,7 +174,7 @@ func ExecSQLWithMinCommittedTS(
 		executor.Options{}.WithDatabase(db).WithMinCommittedTS(min),
 	)
 
-	require.NoError(t, err, sql)
+	require.NoError(t, moerr.AttachCause(ctx, err), sql)
 	return txnOp.Txn().CommitTS
 }
 
@@ -230,7 +230,7 @@ func DBExists(
 		"show databases",
 		executor.Options{},
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 
 	return HasName(name, res)
 }
@@ -250,7 +250,7 @@ func TableExists(
 		"show tables",
 		executor.Options{}.WithDatabase(db),
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 
 	return HasName(name, res)
 }
@@ -270,7 +270,7 @@ func WaitClusterAppliedTo(
 					ctx,
 					ts,
 				)
-				require.NoError(t, err)
+				require.NoError(t, moerr.AttachCause(ctx, err))
 			}
 			return true
 		},

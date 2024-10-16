@@ -77,7 +77,7 @@ func handleRemoveRemoteLockTable(
 
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		total += int(resp.RemoveRemoteLockTable.Count)
 		qt.Release(resp)
@@ -129,7 +129,7 @@ func handleGetLatestBind(
 
 	resp, err := qt.SendMessage(ctx, addr, req)
 	if err != nil {
-		return Result{}, err
+		return Result{}, moerr.AttachCause(ctx, err)
 	}
 	defer qt.Release(resp)
 

@@ -281,7 +281,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
-					return "", err
+					return "", moerr.AttachCause(ctx, err)
 				}
 
 				for i, part := range indexDef.Parts {
@@ -359,7 +359,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			cancelFunc()
 			if err != nil {
-				return "", err
+				return "", moerr.AttachCause(ctx, err)
 			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				for i, colName := range def.Pkey.Names {

@@ -56,7 +56,7 @@ func handleCoreDump(proc *process.Process, service serviceType,
 		req.CoreDumpConfig = &querypb.CoreDumpConfigRequest{Action: param}
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		qt.Release(resp)
 	}

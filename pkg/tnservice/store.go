@@ -440,7 +440,7 @@ func (s *store) initHAKeeperClient() error {
 	defer cancel()
 	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	s.hakeeperClient = client
 	s.initClusterService()

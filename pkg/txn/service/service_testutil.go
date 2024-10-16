@@ -215,7 +215,7 @@ func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 		resp := txn.TxnResponse{}
 		h := s.router[s.getRouteKey(req.Method, req.GetTargetTN())]
 		if err := h(ctx, &req, &resp); err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		responses = append(responses, resp)
 	}

@@ -88,7 +88,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if len(tasks) != 1 {
 		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
@@ -107,7 +107,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	tk.LastHeartbeat = nowTime
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	ar := t.task.activeRoutine.Load()
@@ -135,7 +135,7 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if len(tasks) != 1 {
 		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
@@ -154,7 +154,7 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	tk.LastHeartbeat = nowTime
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	ar := t.task.activeRoutine.Load()
@@ -182,7 +182,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if len(tasks) != 1 {
 		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
@@ -192,7 +192,7 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	tk.TaskStatus = task.TaskStatus_Paused
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	if t.runner.exists(tk.ID) {
@@ -225,7 +225,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if len(tasks) != 1 {
 		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
@@ -236,7 +236,7 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	tk.EndAt = time.Now()
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
@@ -385,6 +385,7 @@ func (r *taskRunner) queryDaemonTasks(ctx context.Context, c ...Condition) []tas
 	defer cancel()
 	t, err := r.service.QueryDaemonTask(ctx, c...)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		r.logger.Error("failed to get tasks", zap.Error(err))
 		return nil
 	}
@@ -424,6 +425,7 @@ func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
 			defer cancel()
 			state, err := hakeeperClient.GetClusterState(ctx2)
 			if err != nil {
+				err = moerr.AttachCause(ctx2, err)
 				r.logger.Error("failed to get cluster state", zap.Error(err))
 			} else {
 				var ok bool

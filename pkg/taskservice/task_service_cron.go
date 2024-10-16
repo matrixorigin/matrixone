@@ -90,6 +90,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 		}
 		c, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseFetchCronTasks)
 		tasks, err := s.QueryCronTask(c)
+		err = moerr.AttachCause(c, err)
 		cancel()
 		if err != nil {
 			s.rt.Logger().Error("query cron tasks failed",
@@ -261,6 +262,7 @@ func (j *cronJob) doRun() {
 
 	_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.DebugString()),
 			zap.Error(err))
@@ -278,6 +280,7 @@ func (j *cronJob) checkConcurrency() bool {
 		WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
 	if err != nil ||
 		uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
+		err = moerr.AttachCause(ctx, err)
 		j.s.rt.Logger().Debug("cron task not triggered",
 			zap.String("cause", "reach max concurrency"),
 			zap.String("task", j.task.DebugString()),

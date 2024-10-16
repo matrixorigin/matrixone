@@ -184,9 +184,8 @@ func (s *sqlStore) Allocate(
 					defer cancel()
 					ok, err := s.ls.IsOrphanTxn(ctx2, txnOp.Txn().ID)
 					if ok || err != nil {
-						err = moerr.AttachCause(ctx2, err)
 						retry = true
-						return moerr.NewTxnNeedRetryNoCtx()
+						return moerr.AttachCause(ctx2, moerr.NewTxnNeedRetryNoCtx())
 					}
 
 					accountID, err := defines.GetAccountId(ctx)

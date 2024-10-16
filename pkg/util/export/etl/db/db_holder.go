@@ -176,6 +176,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		DBConnErrCount.Add(1)
 		return 0, err
 	}

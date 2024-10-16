@@ -62,7 +62,7 @@ func handleGetProtocolVersion(proc *process.Process,
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		versions = append(versions, fmt.Sprintf("%s:%d", nodeIds[i], resp.GetProtocolVersion.Version))
 		qt.Release(resp)
@@ -170,6 +170,7 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 				Version: version,
 			}
 			resp, err = qt.SendMessage(ctx, addr, req)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		})
 	if err != nil {
@@ -197,6 +198,7 @@ func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *q
 			defer cancel()
 
 			resp, err = qt.SendMessage(ctx, cn.QueryAddress, req)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		})
 	if err != nil {

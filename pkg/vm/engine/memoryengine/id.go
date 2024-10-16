@@ -103,7 +103,7 @@ func (h *HakeeperIDGenerator) NewID(ctx context.Context) (ID, error) {
 	defer cancel()
 	id, err := h.generator.AllocateID(ctx)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	return ID(id), nil
 }
@@ -113,7 +113,7 @@ func (h *HakeeperIDGenerator) NewIDByKey(ctx context.Context, key string) (ID, e
 	defer cancel()
 	id, err := h.generator.AllocateIDByKey(ctx, key)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	return ID(id), nil
 }

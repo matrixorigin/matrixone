@@ -218,7 +218,7 @@ func Shutdown(ctx context.Context) error {
 	defer cancel()
 	for _, p := range GetTracerProvider().spanProcessors {
 		if err := p.Shutdown(shutdownCtx); err != nil {
-			return err
+			return moerr.AttachCause(shutdownCtx, err)
 		}
 	}
 	logutil.Info("Shutdown trace complete.")

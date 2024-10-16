@@ -80,6 +80,7 @@ func NewTestConfig(sid string, ccfg *logservice.ClientConfig) *Config {
 	cfg.ClientFactory = func() (logservice.Client, error) {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), cfg.NewClientDuration, moerr.CauseNewTestConfig)
 		logserviceClient, err := logservice.NewClient(ctx, sid, *ccfg)
+		err = moerr.AttachCause(ctx, err)
 		cancel()
 		return logserviceClient, err
 	}

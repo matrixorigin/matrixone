@@ -469,6 +469,7 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 		for {
 			_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
 			if err != nil {
+				err = moerr.AttachCause(ctx, err)
 				// If the error is moerr.ErrWaiterPaused, retry to get the timestamp,
 				// but not FATAL immediately.
 				if moerr.IsMoErrCode(err, moerr.ErrWaiterPaused) {

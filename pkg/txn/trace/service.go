@@ -439,7 +439,7 @@ func (s *service) watch(ctx context.Context) {
 			executor.Options{}.
 				WithDatabase(DebugDB).
 				WithDisableTrace())
-		return features, states, err
+		return features, states, moerr.AttachCause(ctx, err)
 	}
 
 	for {
@@ -509,7 +509,7 @@ func (s *service) updateState(feature, state string) error {
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			res, err := txn.Exec(
@@ -529,6 +529,7 @@ func (s *service) updateState(feature, state string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) newFileName() string {

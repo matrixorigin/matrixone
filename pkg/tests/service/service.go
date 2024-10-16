@@ -338,17 +338,17 @@ func (c *testCluster) Start() error {
 	c.mu.running = true
 	// start log services first
 	if err := c.startLogServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	// start tn services
 	if err := c.startTNServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	// start cn services
 	if err := c.startCNServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	return nil
@@ -616,7 +616,7 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for hakeeper leader",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s ", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -638,7 +638,7 @@ func (c *testCluster) WaitHAKeeperState(
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for hakeeper state",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -661,7 +661,7 @@ func (c *testCluster) WaitTNShardsReported(ctx context.Context) {
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for all tn shards reported",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)

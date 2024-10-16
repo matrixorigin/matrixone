@@ -173,8 +173,9 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), waitNotifyTimeout, moerr.CauseWaitRemoteRegsReady)
 		select {
 		case <-timeoutCtx.Done():
+			err := moerr.AttachCause(timeoutCtx, moerr.NewInternalErrorNoCtx("wait notify message timeout"))
 			timeoutCancel()
-			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+			return false, err
 
 		case <-proc.Ctx.Done():
 			timeoutCancel()

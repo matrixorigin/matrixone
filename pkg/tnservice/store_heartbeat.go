@@ -78,6 +78,7 @@ func (s *store) heartbeat(ctx context.Context) {
 
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	if err != nil {
+		err = moerr.AttachCause(ctx2, err)
 		v2.TNHeartbeatFailureCounter.Inc()
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
 		return

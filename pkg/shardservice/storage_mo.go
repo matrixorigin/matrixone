@@ -152,7 +152,7 @@ func (s *storage) Get(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return 0, pb.ShardsMetadata{}, err
+		return 0, pb.ShardsMetadata{}, moerr.AttachCause(ctx, err)
 	}
 	if metadata.IsEmpty() {
 		shardTableID = 0
@@ -208,7 +208,7 @@ func (s *storage) GetChanged(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	s.logger.Info("get sharding metadata",
@@ -362,6 +362,7 @@ func (s *storage) Unsubscribe(
 	var err error
 	for _, tid := range tables {
 		if e := s.engine.UnsubscribeTable(ctx, 0, tid); e != nil {
+			e = moerr.AttachCause(ctx, e)
 			err = errors.Join(err, e)
 		}
 	}

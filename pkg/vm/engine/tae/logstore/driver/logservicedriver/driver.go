@@ -39,7 +39,7 @@ func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn boo
 	for {
 		select {
 		case <-ctx.Done():
-			return ErrRetryTimeOut
+			return moerr.AttachCause(ctx, ErrRetryTimeOut)
 		default:
 			if fn() {
 				return nil

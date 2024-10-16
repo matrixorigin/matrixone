@@ -101,11 +101,13 @@ func DoTxnRequest[
 	if isRead {
 		result, err = txnOperator.Read(ctx, requests)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			return
 		}
 	} else {
 		result, err = txnOperator.Write(ctx, requests)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			return
 		}
 	}

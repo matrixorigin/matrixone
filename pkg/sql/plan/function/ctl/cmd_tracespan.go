@@ -176,6 +176,7 @@ func transferRequest2OtherCNs(
 			defer cancel()
 
 			resp, err = proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		},
 	)

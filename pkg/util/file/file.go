@@ -37,6 +37,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 		},
 	}
 	if err := fs.Read(ctx, vec); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, nil
 		}
@@ -60,5 +61,6 @@ func WriteFile(fs fileservice.ReplaceableFileService, file string, data []byte) 
 			},
 		},
 	}
-	return fs.Replace(ctx, vec)
+	err := fs.Replace(ctx, vec)
+	return moerr.AttachCause(ctx, err)
 }

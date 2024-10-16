@@ -120,7 +120,6 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 			defer cancel()
 			resp, err := r.client.SendMessage(ctx, target, req)
 			if err != nil {
-				err = moerr.AttachCause(ctx, err)
 				// Do not return error here to read data from local storage.
 				return
 			}

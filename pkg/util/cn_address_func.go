@@ -51,7 +51,7 @@ func AddressFunc(
 		}
 		details, err := getClient().GetClusterDetails(ctx)
 		if err != nil {
-			return "", err
+			return "", moerr.AttachCause(ctx, err)
 		}
 		cns := make([]pb.CNStore, 0, len(details.CNStores))
 		labeled_cns := make([]pb.CNStore, 0, len(details.CNStores))

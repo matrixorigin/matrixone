@@ -422,7 +422,6 @@ func (s *service) destroyTables(ctx context.Context) {
 			for _, dc := range deletes {
 				ctx, cancel := context.WithTimeoutCause(defines.AttachAccountId(ctx, dc.accountID), time.Second*30, moerr.CauseDestroyTables)
 				if err := s.store.Delete(ctx, dc.tableID); err == nil {
-					err = moerr.AttachCause(ctx, err)
 					s.mu.Lock()
 					delete(s.mu.destroyed, dc.tableID)
 					s.mu.Unlock()

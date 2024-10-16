@@ -46,6 +46,7 @@ func NewTransferTable[T PageT[T]](ctx context.Context, fs fileservice.FileServic
 	for _, dir := range list {
 		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseNewTransferTable)
 		err := fs.Delete(ctx, path.Join("transfer", dir.Name))
+		err = moerr.AttachCause(ctx, err)
 		cancel()
 		if err != nil {
 			return nil, err

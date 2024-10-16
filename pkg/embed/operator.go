@@ -478,7 +478,7 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"),moerr.CauseWaitHAKeeperReadyLocked2
+			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
 		default:
 			client, err := getClient()
 			if err == nil {

@@ -470,6 +470,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 			}
 
 			if _, err := s.storage.Commit(ctx, txnMeta); err != nil {
+				err = moerr.AttachCause(ctx, err)
 				s.logger.Fatal("commit failed after prepared",
 					util.TxnIDFieldWithID(txnMeta.ID),
 					zap.Error(err))

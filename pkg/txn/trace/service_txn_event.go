@@ -821,7 +821,7 @@ func (s *service) AddTxnFilter(method, value string) error {
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			r, err := txn.Exec(addTxnFilterSQL(method, value), executor.StatementOption{})
@@ -836,6 +836,7 @@ func (s *service) AddTxnFilter(method, value string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) ClearTxnFilters() error {
@@ -862,7 +863,7 @@ func (s *service) ClearTxnFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	return s.RefreshTxnFilters()
@@ -903,7 +904,7 @@ func (s *service) RefreshTxnFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	filters = append(filters, &disableFilter{})
@@ -992,6 +993,7 @@ func (s *service) doAddTxnError(
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		s.logger.Error("exec txn error trace failed",
 			zap.String("sql", sql),
 			zap.Error(err))

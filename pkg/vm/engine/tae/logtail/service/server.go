@@ -515,6 +515,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 	var closeCB func()
 	moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
 		tail, closeCB, subErr = s.logtailer.TableLogtail(sendCtx, table, from, to)
+		subErr = moerr.AttachCause(sendCtx, subErr)
 	})
 	if subErr != nil {
 		// if error occurs, just send the error immediately.
@@ -525,6 +526,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 		if err := sub.session.SendErrorResponse(
 			sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
 		); err != nil {
+			err = moerr.AttachCause(sendCtx, err)
 			s.logger.Error("fail to send error response", zap.Error(err))
 		}
 		return nil, subErr
@@ -544,6 +546,7 @@ func (s *LogtailServer) sendSubscription(ctx context.Context, p1, p2 *LogtailPha
 	tail, cb := newLogtailMerger(p1, p2).Merge()
 	// send subscription response
 	if err := sub.session.SendSubscriptionResponse(sendCtx, tail, cb); err != nil {
+		err = moerr.AttachCause(sendCtx, err)
 		s.logger.Error("fail to send subscription response", zap.Error(err))
 		sub.session.Unregister(sub.tableID)
 		return

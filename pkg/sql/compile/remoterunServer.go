@@ -146,6 +146,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
+			err = moerr.AttachCause(timeLimit, err)
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
@@ -527,8 +528,9 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout ti
 		select {
 		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
+			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
 			tcancel()
-			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			return nil, nil, err
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)

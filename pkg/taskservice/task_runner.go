@@ -361,7 +361,7 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	newTasks := tasks[:0]
 	r.runningTasks.Lock()

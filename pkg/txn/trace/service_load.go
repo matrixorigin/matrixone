@@ -34,7 +34,7 @@ func (s *service) writeToMO(
 ) error {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseWriteToMO)
 	defer cancel()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			res, err := txn.Exec(e.sql, executor.StatementOption{})
@@ -47,6 +47,7 @@ func (s *service) writeToMO(
 		executor.Options{}.
 			WithDatabase(DebugDB).
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) writeToS3(
@@ -82,7 +83,8 @@ func (s *service) writeToS3(
 		zap.String("s3", s3),
 		zap.String("size", getFileSize(stat.Size())),
 	)
-	return s.options.fs.Write(ctx, writeVec)
+	err = s.options.fs.Write(ctx, writeVec)
+	return moerr.AttachCause(ctx, err)
 }
 
 func getFileSize(value int64) string {

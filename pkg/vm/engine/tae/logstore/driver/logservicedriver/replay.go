@@ -200,11 +200,13 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	record.ResizePayload(size)
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd)
 	_, err := c.c.Append(ctx, c.record)
+	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(r.d.config.RetryTimeout, func() (shouldReturn bool) {
 			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd2)
 			_, err := c.c.Append(ctx, c.record)
+			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err == nil
 		})

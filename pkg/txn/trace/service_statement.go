@@ -77,7 +77,7 @@ func (s *service) AddStatementFilter(
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			r, err := txn.Exec(addStatementFilterSQL(method, value), executor.StatementOption{})
@@ -92,6 +92,7 @@ func (s *service) AddStatementFilter(
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) ClearStatementFilters() error {
@@ -118,7 +119,7 @@ func (s *service) ClearStatementFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	return s.RefreshTableFilters()
@@ -159,7 +160,7 @@ func (s *service) RefreshStatementFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	for i, method := range methods {

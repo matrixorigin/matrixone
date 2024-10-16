@@ -553,6 +553,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 
 	resp := c.subscriber.receiveResponse(ctx)
 	if resp.err != nil {
+		resp.err = moerr.AttachCause(ctx, resp.err)
 		// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
 		logutil.Errorf("%s receive an error from log tail client, err: %s", logTag, resp.err)
 		return resp.err
@@ -563,6 +564,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 	if res := resp.response.GetSubscribeResponse(); res != nil { // consume subscribe response
 		v2.LogtailSubscribeReceivedCounter.Inc()
 		if err := dispatchSubscribeResponse(ctx, e, res, c.receiver, receiveAt); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("%s dispatch subscribe response failed, err: %s", logTag, err)
 			return err
 		}
@@ -574,6 +576,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		}
 
 		if err := dispatchUpdateResponse(ctx, e, res, c.receiver, receiveAt); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("%s dispatch update response failed, err: %s", logTag, err)
 			return err
 		}
@@ -581,6 +584,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		v2.LogtailUnsubscribeReceivedCounter.Inc()
 
 		if err := dispatchUnSubscribeResponse(ctx, e, unResponse, c.receiver, receiveAt); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("%s dispatch unsubscribe response failed, err: %s", logTag, err)
 			return err
 		}
@@ -1441,9 +1445,11 @@ func (s *logTailSubscriber) subscribeTable(
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseSubscribeTable)
 		_ = cancel
-		return s.logTailClient.Subscribe(newCtx, tblId)
+		err := s.logTailClient.Subscribe(newCtx, tblId)
+		return moerr.AttachCause(ctx, err)
 	}
-	return s.logTailClient.Subscribe(ctx, tblId)
+	err := s.logTailClient.Subscribe(ctx, tblId)
+	return moerr.AttachCause(ctx, err)
 }
 
 // can't call this method directly.
@@ -1453,9 +1459,11 @@ func (s *logTailSubscriber) unSubscribeTable(
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseUnSubscribeTable)
 		_ = cancel
-		return s.logTailClient.Unsubscribe(newCtx, tblId)
+		err := s.logTailClient.Unsubscribe(newCtx, tblId)
+		return moerr.AttachCause(ctx, err)
 	}
-	return s.logTailClient.Unsubscribe(ctx, tblId)
+	err := s.logTailClient.Unsubscribe(ctx, tblId)
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTailSubscriberResponse {

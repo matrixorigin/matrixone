@@ -160,9 +160,13 @@ func (s *service) send(
 	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseSend)
 	defer cancel()
 
-	return s.unwrapError(
+	resp, err := s.unwrapError(
 		s.remote.client.Send(ctx, req),
 	)
+	if err != nil {
+		return nil, moerr.AttachCause(ctx, err)
+	}
+	return resp, nil
 }
 
 func (s *service) unwrapError(

@@ -130,7 +130,6 @@ func (s *service) canClaimDaemonTask(taskAccount string) bool {
 
 	state, err := s._hakeeperClient.GetClusterState(ctx)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
 		return false
 	}
 	stores := state.CNState.Stores

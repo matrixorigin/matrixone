@@ -272,6 +272,7 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	defer cancel()
 	err := page.fs.Read(ctx, &ioVector)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
 		return nil
 	}
@@ -302,6 +303,7 @@ func (page *TransferHashPage) ClearPersistTable() {
 	defer cancel()
 	err := page.fs.Delete(ctx, page.path.Name)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] clear transfer table %v: %v", page.path.Name, err)
 	}
 }

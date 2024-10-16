@@ -254,7 +254,7 @@ func newMessageSenderOnClient(
 	}
 
 	v2.PipelineMessageSenderCounter.Inc()
-	return sender, err
+	return sender, moerr.AttachCause(ctx, err)
 }
 
 func (sender *messageSenderOnClient) sendPipeline(

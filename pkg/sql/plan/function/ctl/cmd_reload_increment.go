@@ -55,7 +55,7 @@ func handleReloadAutoIncrementCache(
 		req.ReloadAutoIncrementCache = &querypb.ReloadAutoIncrementCacheRequest{TableID: tableID}
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		qt.Release(resp)
 	}

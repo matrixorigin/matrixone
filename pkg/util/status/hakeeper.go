@@ -52,6 +52,7 @@ func (s *HAKeeperStatus) fill(client logservice.ClusterHAKeeperClient) {
 	defer cancel()
 	details, err := client.GetClusterDetails(ctx)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		s.ErrMsg = err.Error()
 		return
 	}

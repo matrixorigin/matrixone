@@ -752,6 +752,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	ctx1, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseObjGetArgGetData)
 	defer cancel()
 	if meta, err = c.reader.ReadAllMeta(ctx1, m); err != nil {
+		err = moerr.AttachCause(ctx1, err)
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}

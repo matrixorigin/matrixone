@@ -82,6 +82,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("append failed: %v", err)
 	}
 	cancel()
@@ -94,6 +95,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 				trace.WithProfileCpuSecs(time.Second*10))
 			defer timeoutSpan.End()
 			lsn, err = a.client.c.Append(ctx, record)
+			err = moerr.AttachCause(ctx, err)
 			cancel()
 			if err != nil {
 				logutil.Errorf("append failed: %v", err)
