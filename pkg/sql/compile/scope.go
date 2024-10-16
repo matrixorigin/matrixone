@@ -761,7 +761,8 @@ func (s *Scope) replace(c *Compile) error {
 		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
 		sql = c.sql[:idx]
 	} else {
-		sql = "insert " + c.sql[7:]
+		removed := removeStringBetween(c.sql, "/*", "*/")
+		sql = "insert " + strings.TrimSpace(removed)[7:]
 	}
 	result, err := c.runSqlWithResult(sql, NoAccountId)
 	if err != nil {
@@ -769,6 +770,20 @@ func (s *Scope) replace(c *Compile) error {
 	}
 	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
+}
+
+func removeStringBetween(s, start, end string) string {
+	startIndex := strings.Index(s, start)
+	for startIndex != -1 {
+		endIndex := strings.Index(s, end)
+		if endIndex == -1 || startIndex > endIndex {
+			return s
+		}
+
+		s = s[:startIndex] + s[endIndex+len(end):]
+		startIndex = strings.Index(s, start)
+	}
+	return s
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
