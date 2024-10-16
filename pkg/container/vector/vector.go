@@ -2617,7 +2617,7 @@ func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, 0))
@@ -2637,7 +2637,7 @@ func implTimestampRowToString(v *Vector, idx int) string {
 
 	loc := time.Local
 	if v.IsConst() {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return GetFixedAtNoTypeCheck[types.Timestamp](v, 0).String2(loc, v.typ.Scale)
@@ -2656,7 +2656,7 @@ func implDatetimeRowToString(v *Vector, idx int) string {
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return GetFixedAtNoTypeCheck[types.Datetime](v, 0).String2(v.typ.Scale)
@@ -2675,7 +2675,7 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return GetFixedAtNoTypeCheck[T](v, 0).Format(v.typ.Scale)
@@ -2694,7 +2694,7 @@ func implArrayRowToString[T types.RealNumbers](v *Vector, idx int) string {
 	}
 
 	if v.IsConst() {
-		if nulls.Contains(v.nsp, 0) {
+		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
 			return types.ArrayToString(GetArrayAt[T](v, 0))
@@ -2758,7 +2758,7 @@ func (v *Vector) RowToString(idx int) string {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
 		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
-			if nulls.Contains(v.nsp, 0) {
+			if nulls.Contains(&v.nsp, 0) {
 				return "null"
 			} else {
 				return col[0].UnsafeGetString(v.area)
