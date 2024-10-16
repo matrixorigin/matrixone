@@ -294,7 +294,10 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	startLock := time.Now()
-	defer statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
+	defer func() {
+		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
+	}()
+
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
