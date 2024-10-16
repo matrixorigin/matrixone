@@ -1,0 +1,399 @@
+set experimental_fulltext_index=1;
+create table src (id bigint primary key, body varchar, title text);
+insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
+(4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
+(5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
+(6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短篇小說'),
+(7, '59個簡單的英文和中文短篇小說', '適合初學者'),
+(8, NULL, 'NOT INCLUDED'),
+(9, 'NOT INCLUDED BODY', NULL),
+(10, NULL, NULL);
+create fulltext index ftidx on src (body, title);
+select * from src where match(body) against('red');
+not supported: fulltext_match() not implemented yet.  Please create FULLTEXT INDEX.
+select match(body) against('red') from src;
+not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+alter table src add fulltext index ftidx2 (body);
+select * from src where match(body, title) against('red');
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select *, match(body, title) against('is red' in natural language mode) as score from src;
+id    body    title    score
+0    color is red    t1    0.74115014
+3    blue is not red    colorful    0.74115014
+1    car is yellow    crazy car    0.19301322
+2    sky is blue    no limit    0.19301322
+select * from src where match(body, title) against('教學指引');
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+select * from src where match(body, title) against('彩圖' in natural language mode);
+id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('遠東' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('版一、二冊' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
+id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
+id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+select * from src where match(body, title) against('+red blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('re*' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -blue' in boolean mode);
+id    body    title
+0    color is red    t1
+select * from src where match(body, title) against('+red +blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red ~blue' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('"is not red"' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select src.*, match(body, title) against('blue') from src;
+id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.5481369
+3    blue is not red    colorful    0.5481369
+select count(*) from src where match(title, body) against('red');
+count(*)
+2
+explain select match(body, title) against('red') from src where match(body, title) against('red');
+TP QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: mo_fulltext_alias_0.score DESC
+        ->  Join
+              Join Type: INNER
+              Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              ->  Table Scan on fulltext.src
+              ->  Table Function on fulltext_index_scan
+                    ->  Values Scan "*VALUES*" 
+delete from src;
+select * from src where match(body) against('red');
+id    body    title
+select * from src where match(body, title) against('red');
+id    body    title
+insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
+(4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
+(5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
+(6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短>篇小說'),
+(7, '59個簡單的英文和中文短篇小說', '適合初學者'),
+(8, NULL, 'NOT INCLUDED'),
+(9, 'NOT INCLUDED BODY', NULL),
+(10, NULL, NULL);
+select * from src where match(body) against('red');
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select match(body) against('red') from src;
+MATCH (body) AGAINST (red)
+0.5481369
+0.5481369
+select * from src where match(body, title) against('red');
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select *, match(body, title) against('is red' in natural language mode) as score from src;
+id    body    title    score
+0    color is red    t1    0.74115014
+3    blue is not red    colorful    0.74115014
+1    car is yellow    crazy car    0.19301322
+2    sky is blue    no limit    0.19301322
+select * from src where match(body, title) against('教學指引');
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說
+select * from src where match(body, title) against('彩圖' in natural language mode);
+id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('遠東' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('版一、二冊' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
+id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
+id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.337995
+select * from src where match(body, title) against('+red blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('re*' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -blue' in boolean mode);
+id    body    title
+0    color is red    t1
+select * from src where match(body, title) against('+red +blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red ~blue' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('"is not red"' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select src.*, match(body, title) against('blue') from src;
+id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.5481369
+3    blue is not red    colorful    0.5481369
+select count(*) from src where match(title, body) against('red');
+count(*)
+2
+explain select match(body, title) against('red') from src where match(body, title) against('red');
+TP QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: mo_fulltext_alias_0.score DESC
+        ->  Join
+              Join Type: INNER
+              Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              ->  Table Scan on fulltext.src
+              ->  Table Function on fulltext_index_scan
+                    ->  Values Scan "*VALUES*" 
+drop table src;
+create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
+insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
+create fulltext index ftidx2 on src2 (body, title);
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
+select src2.*, match(body, title) against('blue') from src2;
+id1    id2    body    title    MATCH (body, title) AGAINST (blue)
+id2    2    blue    t3    0.09061906
+id3    3    blue red    t4    0.09061906
+update src2 set body = 'orange' where id1='id0';
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id3    3    blue red    t4
+delete from src2 where id1='id3';
+select * from src2 where match(body, title) against('t4');
+id1    id2    body    title
+insert into src2 values ('id4', 4, 'light brown', 't5');
+select * from src2 where match(body, title) against('t5');
+id1    id2    body    title
+id4    4    light brown    t5
+drop table src2;
+create table src (id bigint primary key, json1 json, json2 json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+create fulltext index ftidx on src (json1) with parser json;
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+drop table src;
+create table src (id bigint primary key, json1 text, json2 varchar);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+create fulltext index ftidx on src (json1) with parser json;
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
+0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
+0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+drop table src;
+create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
+insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
+(4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
+(5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
+(6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短篇小說
+'),
+(7, '59個簡單的英文和中文短篇小說', '適合初學者'),
+(8, NULL, 'NOT INCLUDED'),
+(9, 'NOT INCLUDED BODY', NULL),
+(10, NULL, NULL);
+select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
+not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+select * from src where match(body, title) against('red');
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select *, match(body, title) against('is red' in natural language mode) as score from src;
+id    body    title    score
+0    color is red    t1    0.74115014
+3    blue is not red    colorful    0.74115014
+1    car is yellow    crazy car    0.19301322
+2    sky is blue    no limit    0.19301322
+select * from src where match(body, title) against('教學指引');
+id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
+select * from src where match(body, title) against('彩圖' in natural language mode);
+id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('遠東' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+select * from src where match(body, title) against('版一、二冊' in natural language mode);
+id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
+id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    5.4813685
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+select * from src where match(body, title) against('+red blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('re*' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -blue' in boolean mode);
+id    body    title
+0    color is red    t1
+select * from src where match(body, title) against('+red +blue' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red ~blue' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+0    color is red    t1
+select * from src where match(body, title) against('"is not red"' in boolean mode);
+id    body    title
+3    blue is not red    colorful
+select src.*, match(body, title) against('blue') from src;
+id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.5481369
+3    blue is not red    colorful    0.5481369
+select count(*) from src where match(title, body) against('red');
+count(*)
+2
+explain select match(body, title) against('red') from src where match(body, title) against('red');
+TP QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: mo_fulltext_alias_0.score DESC
+        ->  Join
+              Join Type: INNER
+              Join Cond: (src.id = mo_fulltext_alias_0.doc_id)
+              ->  Table Scan on fulltext.src
+              ->  Table Function on fulltext_index_scan
+                    ->  Values Scan "*VALUES*" 
+update src set body='color is brown' where id=0;
+select * from src where match(body, title) against('brown');
+id    body    title
+0    color is brown    t1
+delete from src where id = 0;
+select * from src where match(body, title) against('brown');
+id    body    title
+insert into src (id, body) values (11, 'color is brown');
+select * from src where match(body, title) against('brown');
+id    body    title
+update src set title='a good title' where id=11;
+select * from src where match(body, title) against('brown');
+id    body    title
+11    color is brown    a good title
+delete from src;
+select count(*) from src;
+count(*)
+0
+drop table src;
+create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title));
+insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
+select src2.*, match(body, title) against('blue') from src2;
+id1    id2    body    title    MATCH (body, title) AGAINST (blue)
+id2    2    blue    t3    0.09061906
+id3    3    blue red    t4    0.09061906
+drop table src2;
+create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
+0    {"a": 1, "b": "red"}    {"d": "happy birthday", "f": "winter"}
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+drop table src;
+create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
+select * from src where match(json1) against('red' in boolean mode);
+id    json1    json2
+0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
+select * from src where match(json1) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+create fulltext index ftidx2 on src (json1, json2) with parser json;
+select * from src where match(json1, json2) against('+red +winter' in boolean mode);
+id    json1    json2
+0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}
+select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+id    json1    json2
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+drop table src;
