@@ -271,8 +271,10 @@ func (s *serverConn) Close() error {
 			s.mysqlProto.Close()
 		}
 	})
-	// Un-track the connection.
-	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	if s.rebalancer != nil {
+		// Un-track the connection.
+		s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	}
 	return nil
 }
 
