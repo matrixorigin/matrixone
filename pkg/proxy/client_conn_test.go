@@ -206,6 +206,7 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 	}
 	return func() {
 		_ = tu.Close()
+		_ = sc.Close()
 	}
 }
 
