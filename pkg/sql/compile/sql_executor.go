@@ -361,6 +361,7 @@ func (exec *txnExecutor) Exec(
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),
+			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
 	}

@@ -38,12 +38,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-)
-
-const (
-	SMALL = iota
-	NORMAL
-	LARGE
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 // -----------------------------------------------------------------
@@ -230,12 +225,10 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	scanType   int
-	cacheBatch *batch.Batch
-}
+	readBlockCnt uint64
 
-func (r *reader) SetScanType(typ int) {
-	r.scanType = typ
+	// cacheVectors is used for vector reuse
+	cacheVectors containers.Vectors
 }
 
 type mergeReader struct {
@@ -370,12 +363,10 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
-	if r.cacheBatch != nil {
-		if r.cacheBatch.Allocated() > 0 {
-			logutil.Fatal("cache batch is not empty")
-		}
-		r.cacheBatch = nil
+	if r.cacheVectors.Allocated() > 0 {
+		logutil.Fatal("cache vector is not empty")
 	}
+	r.cacheVectors = nil
 	return nil
 }
 
@@ -443,13 +434,13 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.scanType == LARGE || r.scanType == NORMAL {
+	if r.readBlockCnt > 100 {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+	r.readBlockCnt++
 
-	if r.cacheBatch == nil {
-		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)
-		r.cacheBatch = &cacheBatch
+	if len(r.cacheVectors) == 0 {
+		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
 
 	err = blockio.BlockDataRead(
@@ -466,7 +457,7 @@ func (r *reader) Read(
 		policy,
 		r.name,
 		outBatch,
-		r.cacheBatch,
+		r.cacheVectors,
 		mp,
 		r.fs,
 	)
