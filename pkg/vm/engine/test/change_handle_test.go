@@ -16,10 +16,12 @@ package test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,9 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -788,7 +792,6 @@ func TestChangesHandle6(t *testing.T) {
 	}
 }
 
-
 func TestChangesHandleStaleFiles1(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -821,6 +824,11 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	require.Nil(t, rel.Append(ctx, bat))
 	require.Nil(t, txn.Commit(ctx))
 
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, schema.Name)
+	obj := testutil2.GetOneBlockMeta(rel)
+	txn.Commit(ctx)
+	assert.NoError(t, err)
+
 	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
 	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
@@ -828,54 +836,130 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
 
-	// check partition state, before flush
+	fs := taeHandler.GetDB().Runtime.Fs
+	deleteFileName := obj.ObjectStats.ObjectName().String()
+	err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+	assert.NoError(t, err)
+	gcTS := taeHandler.GetDB().TxnMgr.Now()
+	gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
+	assert.NoError(t, err)
+	_, err = writer.Write(containers.ToCNBatch(bat))
+	assert.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	assert.NoError(t, err)
+
 	{
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
-		assert.NoError(t, err)
-		totalRows := 0
-		for {
-			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if data == nil && tombstone == nil {
-				break
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
-			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
-			checkInsertBatch(bat, data, t)
-			assert.NotEqual(t, data.Vecs[0].Length(), 0)
-			totalRows += data.Vecs[0].Length()
-		}
-		assert.Equal(t, totalRows, 9)
-		assert.NoError(t, handle.Close())
+		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead))
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
-		assert.NoError(t, err)
+	}
+}
+func TestChangesHandleStaleFiles2(t *testing.T) {
+	var (
+		err          error
+		txn          client.TxnOperator
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
 
-		ts:=taeHandler.GetDB().TxnMgr.Now()
-		err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx,ts,time.Minute,time.Microsecond)
-		assert.NoError(t,err)
-		taeHandler.GetDB().DiskCleaner.GC(ctx)
-		
-		for {
-			data, tombstone, hint, err := handle.Next(ctx, mp)
-			if data == nil && tombstone == nil {
-				break
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
-			t.Log(tombstone.Attrs)
-			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			tombstone.Clean(mp)
-			t.Log(data.Attrs)
-			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 10)
-			data.Clean(mp)
+		primaryKeyIdx int = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	dir := testutil.GetDefaultTestPath("test", t)
+	os.RemoveAll(dir)
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, dir)
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeEngine.GetDB().TxnMgr.Now()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	blockCnt := 10
+	rowsCount := objectio.BlockMaxRows * blockCnt
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bats := bat.Split(blockCnt)
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		for idx := 0; idx < blockCnt; idx++ {
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
 		}
-		assert.NoError(t, handle.Close())
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+	dnTxn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+	id := dnRel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
+	assert.NoError(t, dnTxn.Commit(ctx))
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	// check partition state, before flush
+	{
+
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		{
+			txn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
+			iter := dnRel.MakeObjectItOnSnap(false)
+			objs := make([]*catalog2.ObjectEntry, 0)
+			for iter.Next() {
+				obj := iter.GetObject().GetMeta().(*catalog2.ObjectEntry)
+				if obj.ObjectStats.GetCNCreated() {
+					objs = append(objs, obj)
+				}
+			}
+			assert.NoError(t, txn.Commit(ctx))
+			fs := taeEngine.GetDB().Runtime.Fs
+			for _, obj := range objs {
+				deleteFileName := obj.ObjectStats.ObjectName().String()
+				err = fs.DelFiles(ctx, []string{string(deleteFileName)})
+				assert.NoError(t, err)
+			}
+			gcTS := taeEngine.GetDB().TxnMgr.Now()
+			gcTSFileName := blockio.EncodeCompactedMetadataFileName(checkpoint.CheckpointDir, checkpoint.PrefixMetadata, types.TS{}, gcTS)
+			writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, gcTSFileName, fs.Service)
+			assert.NoError(t, err)
+			_, err = writer.Write(containers.ToCNBatch(bat))
+			assert.NoError(t, err)
+			_, err = writer.WriteEnd(ctx)
+			assert.NoError(t, err)
+		}
+		data, tombstone, _, err := handle.Next(ctx, mp)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead))
+		assert.Nil(t, tombstone)
+		assert.Nil(t, data)
 	}
 }
