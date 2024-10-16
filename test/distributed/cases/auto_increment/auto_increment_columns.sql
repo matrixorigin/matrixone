@@ -472,3 +472,15 @@ select last_insert_id();
 insert into t1 values(7);
 insert into t1 values();
 select last_insert_id();
+
+Drop table if exists auto_increment02;
+Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
+Select * from auto_increment02;
+select last_insert_id();
+Insert into auto_increment02 values();
+Select * from auto_increment02;
+select last_insert_id();
+Insert into auto_increment02 values(10);
+Select * from auto_increment02;
+select last_insert_id();
+Drop table auto_increment02;

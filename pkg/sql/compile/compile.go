@@ -998,11 +998,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
-			return ss, nil
-		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
+			return ss, nil
+		} else if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns, anyDistinctAgg))))

@@ -45,6 +45,7 @@ const (
 	CheckpointTask
 	GCTask
 	IOTask
+	FlushTableTailTask
 )
 
 var taskNames = map[TaskType]string{
@@ -54,6 +55,7 @@ var taskNames = map[TaskType]string{
 	CheckpointTask:     "Checkpoint",
 	GCTask:             "GC",
 	IOTask:             "IO",
+	FlushTableTailTask: "FlushTableTail",
 }
 
 func RegisterType(t TaskType, name string) {
