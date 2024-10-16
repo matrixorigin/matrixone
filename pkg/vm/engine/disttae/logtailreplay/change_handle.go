@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -693,14 +694,24 @@ type ChangeHandler struct {
 	updateDuration, totalDuration time.Duration
 	dataLength, tombstoneLength   int
 	lastPrint                     time.Time
+
+	start, end types.TS
+	fs         fileservice.FileService
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
 	if state.minTS.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
 	}
+	err = checkGCTS(ctx, start, fs)
+	if err != nil {
+		return
+	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
+		start:        start,
+		end:          end,
+		fs:           fs,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -765,6 +776,10 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	err = checkGCTS(ctx, p.start, p.fs)
+	if err != nil {
+		return
+	}
 	if time.Since(p.lastPrint) > LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
@@ -1084,4 +1099,28 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
+}
+
+func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
+	therhold := time.Now().UTC().UnixNano() - time.Hour.Nanoseconds()
+	if ts.Physical() > therhold {
+		return nil
+	}
+	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
+	if err != nil {
+		return
+	}
+	maxGCTS := types.TS{}
+	for _, dir := range dirs {
+		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		if ext == blockio.CompactedExt {
+			if end.GT(&maxGCTS) {
+				maxGCTS = end
+			}
+		}
+	}
+	if ts.LT(&maxGCTS) {
+		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
+	}
+	return nil
 }
