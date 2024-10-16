@@ -232,7 +232,8 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	if c.IsTpQuery() && !c.hasMergeOp {
-		for i := range s.PreScopes {
+		lenPrescopes := len(s.PreScopes)
+		for i := lenPrescopes - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
 				return err

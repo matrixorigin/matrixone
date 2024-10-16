@@ -450,6 +450,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
+	//c.printPipeline()
 	var wg sync.WaitGroup
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
