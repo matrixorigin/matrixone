@@ -751,6 +751,12 @@ func (h *Handle) HandleWrite(
 		}
 	case cmd_util.FullSkipWorkspaceDedup:
 		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
+	case cmd_util.SkipAllDedup:
+		if h.db.Opts.IncrementalDedup {
+			txn.SetDedupType(txnif.DedupPolicy_SkipAll)
+		} else {
+			txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
+		}
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",

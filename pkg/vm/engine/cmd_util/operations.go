@@ -141,11 +141,12 @@ const (
 type PKCheckType int32
 
 const (
+	SkipAllDedup PKCheckType = 0
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.
-	IncrementalDedup PKCheckType = 0
+	IncrementalDedup PKCheckType = 1
 	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
-	FullSkipWorkspaceDedup PKCheckType = 1
-	FullDedup              PKCheckType = 2
+	FullSkipWorkspaceDedup PKCheckType = 2
+	FullDedup              PKCheckType = 3
 )
 
 type LocationKey struct{}
@@ -159,8 +160,8 @@ type WriteReq struct {
 	TableName    string
 	Schema       *catalog2.Schema
 	Batch        *batch.Batch
-	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
-	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
+	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup|SkipAllDedup], default is SkipAllDedup.
+	//If incremental-dedup in dn.toml is false, IncrementalDedup&SkipAllDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.
 	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
 	PkCheck PKCheckType
