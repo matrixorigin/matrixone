@@ -145,6 +145,18 @@ create fulltext index ftidx2 on src2 (body, title);
 select * from src2 where match(body, title) against('red');
 select src2.*, match(body, title) against('blue') from src2;
 
+update src2 set body = 'orange' where id1='id0';
+
+select * from src2 where match(body, title) against('red');
+
+delete from src2 where id1='id3';
+
+select * from src2 where match(body, title) against('t4');
+
+insert into src2 values ('id4', 4, 'light brown', 't5');
+
+select * from src2 where match(body, title) against('t5');
+
 drop table src2;
 
 -- bytejson parser

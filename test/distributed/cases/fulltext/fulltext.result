@@ -197,6 +197,17 @@ select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
+update src2 set body = 'orange' where id1='id0';
+select * from src2 where match(body, title) against('red');
+id1    id2    body    title
+id3    3    blue red    t4
+delete from src2 where id1='id3';
+select * from src2 where match(body, title) against('t4');
+id1    id2    body    title
+insert into src2 values ('id4', 4, 'light brown', 't5');
+select * from src2 where match(body, title) against('t5');
+id1    id2    body    title
+id4    4    light brown    t5
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
