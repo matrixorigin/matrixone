@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func removeIf[T any](data []T, pred func(t T) bool) []T {
@@ -62,7 +63,7 @@ func ReadDataByFilter(
 	colTypes []types.Type,
 	ts types.TS,
 	searchFunc objectio.ReadFilterSearchFuncType,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (sels []int64, err error) {
@@ -76,7 +77,7 @@ func ReadDataByFilter(
 		info,
 		ts,
 		fileservice.Policy(0),
-		cacheBat,
+		cacheVectors,
 		mp,
 		fs,
 	)
@@ -130,7 +131,7 @@ func BlockDataReadNoCopy(
 		}
 	}()
 
-	cacheBat := batch.EmptyBatchWithSize(len(columns) + 1)
+	cacheVectors := containers.NewVectors(len(columns) + 1)
 
 	phyAddrColumnPos := -1
 	for i := range columns {
@@ -142,7 +143,7 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if loaded, deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, phyAddrColumnPos, info, ts, policy, &cacheBat, mp, fs,
+		ctx, columns, colTypes, phyAddrColumnPos, info, ts, policy, cacheVectors, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
@@ -203,7 +204,7 @@ func BlockDataRead(
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) error {
@@ -230,7 +231,7 @@ func BlockDataRead(
 			filterColTypes,
 			snapshotTS,
 			searchFunc,
-			cacheBat,
+			cacheVectors,
 			mp,
 			fs,
 		); err != nil {
@@ -257,7 +258,7 @@ func BlockDataRead(
 		sels,
 		policy,
 		bat,
-		cacheBat,
+		cacheVectors,
 		mp,
 		fs,
 	)
@@ -278,23 +279,28 @@ func BlockCompactionRead(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
-	cacheBat := batch.EmptyBatchWithSize(len(seqnums))
+	cacheVectors := containers.NewVectors(len(seqnums))
 
 	release, err := LoadColumns(
-		ctx, seqnums, colTypes, fs, location, &cacheBat, mp, fileservice.Policy(0),
+		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 	if len(deletes) == 0 {
-		return cacheBat.Slice(0, len(seqnums)), nil
+		result := batch.NewWithSize(len(seqnums))
+		for i := range cacheVectors {
+			result.Vecs[i] = &cacheVectors[i]
+		}
+		result.SetRowCount(result.Vecs[0].Length())
+		return result, nil
 	}
 	result := batch.NewWithSize(len(seqnums))
-	for i, col := range cacheBat.Vecs {
+	for i, col := range cacheVectors {
 		typ := *col.GetType()
 		result.Vecs[i] = vector.NewVec(typ)
-		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], &col); err != nil {
 			break
 		}
 		result.Vecs[i].Shrink(deletes, true)
@@ -384,7 +390,7 @@ func BlockDataReadInner(
 	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
 	policy fileservice.Policy,
 	bat *batch.Batch,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
@@ -404,7 +410,7 @@ func BlockDataReadInner(
 		info,
 		ts,
 		policy,
-		cacheBat,
+		cacheVectors,
 		mp,
 		fs,
 	); err != nil {
@@ -540,7 +546,7 @@ func readBlockData(
 	info *objectio.BlockInfo,
 	ts types.TS,
 	policy fileservice.Policy,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 ) (
@@ -552,7 +558,7 @@ func readBlockData(
 
 	idxes, typs := excludePhyAddrColumn(colIndexes, colTypes, phyAddrColumnPos)
 
-	readColumns := func(cols []uint16, cacheBat2 *batch.Batch) (result *batch.Batch, err error) {
+	readColumns := func(cols []uint16, cacheVectors2 containers.Vectors) (result *batch.Batch, err error) {
 		if len(cols) == 0 && phyAddrColumnPos >= 0 {
 			// only read rowid column on non appendable block, return early
 			result = batch.NewWithSize(1)
@@ -562,7 +568,7 @@ func readBlockData(
 		}
 
 		if release, err = LoadColumns(
-			ctx, cols, typs, fs, info.MetaLocation(), cacheBat2, m, policy,
+			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		); err != nil {
 			return
 		}
@@ -570,7 +576,7 @@ func readBlockData(
 		result = batch.NewWithSize(len(colTypes))
 		for i := range colTypes {
 			if i != phyAddrColumnPos {
-				result.Vecs[i] = cacheBat2.Vecs[colPos]
+				result.Vecs[i] = &cacheVectors2[colPos]
 				colPos++
 			}
 		}
@@ -580,7 +586,7 @@ func readBlockData(
 		return
 	}
 
-	readABlkColumns := func(cols []uint16, cacheBat2 *batch.Batch) (
+	readABlkColumns := func(cols []uint16, cacheVectors2 containers.Vectors) (
 		result *batch.Batch, deletes objectio.Bitmap, err error,
 	) {
 		// appendable block should be filtered by committs
@@ -588,7 +594,7 @@ func readBlockData(
 		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
 
 		// no need to add typs, the two columns won't be generated
-		if result, err = readColumns(cols, cacheBat2); err != nil {
+		if result, err = readColumns(cols, cacheVectors2); err != nil {
 			return
 		}
 
@@ -596,7 +602,7 @@ func readBlockData(
 
 		t0 := time.Now()
 		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedColWithTypeCheck[types.TS](cacheBat2.Vecs[len(cols)-1])
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
 		for i := 0; i < len(commits); i++ {
 			if commits[i].GT(&ts) {
 				deletes.Add(uint64(i))
@@ -609,9 +615,9 @@ func readBlockData(
 	}
 
 	if info.IsAppendable() {
-		bat, deleteMask, err = readABlkColumns(idxes, cacheBat)
+		bat, deleteMask, err = readABlkColumns(idxes, cacheVectors)
 	} else {
-		bat, err = readColumns(idxes, cacheBat)
+		bat, err = readColumns(idxes, cacheVectors)
 	}
 
 	return
@@ -622,7 +628,7 @@ func ReadDeletes(
 	deltaLoc objectio.Location,
 	fs fileservice.FileService,
 	isPersistedByCN bool,
-	cacheBat *batch.Batch,
+	cacheVectors containers.Vectors,
 ) (objectio.ObjectDataMeta, func(), error) {
 
 	var cols []uint16
@@ -636,7 +642,7 @@ func ReadDeletes(
 		typs = []types.Type{objectio.RowidType, objectio.TSType}
 	}
 	return LoadTombstoneColumns(
-		ctx, cols, typs, fs, deltaLoc, cacheBat, nil, fileservice.Policy(0),
+		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 	)
 }
 
@@ -746,23 +752,23 @@ func IsRowDeletedByLocation(
 	}
 
 	attrs := objectio.GetTombstoneAttrs(hidden)
-	data := batch.EmptyBatchWithAttrs(attrs)
-	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, &data)
+	data := containers.NewVectors(len(attrs))
+	_, release, err := ReadDeletes(ctx, location, fs, createdByCN, data)
 	if err != nil {
 		return
 	}
 	defer release()
-	if data.RowCount() == 0 {
+	if data.Rows() == 0 {
 		return
 	}
-	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[0])
+	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](&data[0])
 	idx := sort.Search(len(rowids), func(i int) bool {
 		return rowids[i].GE(row)
 	})
 	if createdByCN {
 		deleted = (idx < len(rowids)) && (rowids[idx].EQ(row))
 	} else {
-		tss := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[1])
+		tss := vector.MustFixedColNoTypeCheck[types.TS](&data[1])
 		for i := idx; i < len(rowids); i++ {
 			if !rowids[i].EQ(row) {
 				break
@@ -799,21 +805,21 @@ func FillBlockDeleteMask(
 	}
 
 	attrs := objectio.GetTombstoneAttrs(hidden)
-	persistedDeletes := batch.EmptyBatchWithAttrs(attrs)
+	persistedDeletes := containers.NewVectors(len(attrs))
 
 	if meta, release, err = ReadDeletes(
-		ctx, location, fs, createdByCN, &persistedDeletes,
+		ctx, location, fs, createdByCN, persistedDeletes,
 	); err != nil {
 		return
 	}
 	defer release()
 
 	if createdByCN {
-		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, persistedDeletes.Vecs[0])
+		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
 	} else {
 		deleteMask = EvalDeleteMaskFromDNCreatedTombstones(
-			persistedDeletes.Vecs[0],
-			persistedDeletes.Vecs[1],
+			&persistedDeletes[0],
+			&persistedDeletes[1],
 			meta.GetBlockMeta(uint32(location.ID())),
 			snapshotTS,
 			blockId,

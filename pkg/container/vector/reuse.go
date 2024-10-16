@@ -16,14 +16,12 @@ package vector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 func init() {
 	reuse.CreatePool[Vector](
 		func() *Vector {
 			res := new(Vector)
-			res.nsp = &nulls.Nulls{}
 			return res
 		},
 		func(v *Vector) {
@@ -46,8 +44,6 @@ func (v Vector) TypeName() string {
 func NewVecFromReuse() *Vector {
 	//v := reuse.Alloc[Vector](nil)
 	v := new(Vector)
-	v.nsp = &nulls.Nulls{}
-	v.gsp = &nulls.Nulls{}
 	// if v.OnUsed {
 	// 	panic("alloc onused vector")
 	// }
