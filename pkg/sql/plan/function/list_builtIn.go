@@ -6697,7 +6697,8 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
-	// function 'grouping'
+  
+  // function 'grouping'
 	{
 		functionId: GROUPING,
 		class:      plan.Function_STRICT,
@@ -6718,6 +6719,37 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return GroupingFunc
+				},
+			},
+		},
+	},
+  
+  // function `LLM_EMBEDDING`
+	{
+		functionId: LLM_EMBEDDING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingOp
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingDatalinkOp
 				},
 			},
 		},
