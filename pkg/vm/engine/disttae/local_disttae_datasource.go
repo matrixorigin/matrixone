@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -356,6 +358,17 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	if ls.category != engine.ShardingLocalDataSource {
 		if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
 			return err
+		}
+		//TODO::add debug for #19202, remove it later.
+		if ls.category == engine.ShardingRemoteDataSource {
+			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(ls.table.tableName) {
+				logutil.Infof("xxxx IterateInmemData, txn:%s, table name:%s, tid:%v, outBatch:%s",
+					ls.table.db.op.Txn().DebugString(),
+					ls.table.tableName,
+					ls.table.tableId,
+					common.MoBatchToString(outBatch, 10),
+				)
+			}
 		}
 	}
 
