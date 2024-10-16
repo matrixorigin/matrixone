@@ -5,8 +5,9 @@ show table_number from mo_task;
 show table_number from information_schema;
 show table_number from mysql;
 show table_number from mo_catalog;
-show table_number from system_metrics;
+-- @bvt:issue#14293
 show table_number from system;
+-- @bvt:issue
 
 
 -- test system tables column_number

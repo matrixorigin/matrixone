@@ -66,8 +66,8 @@ func (txn *smallTxn) GetLSN() uint64 {
 
 type summary struct {
 	hasCatalogChanges bool
+	tids              map[uint64]struct{}
 	// TODO
-	// table ids
 	// maxLsn
 }
 
@@ -207,10 +207,14 @@ func (blk *txnBlock) Close() {
 
 func (blk *txnBlock) trySumary() {
 	summary := new(summary)
+	summary.tids = make(map[uint64]struct{}, 8)
 	for _, row := range blk.rows {
-		if row.GetMemo().HasCatalogChanges() {
+		memo := row.GetMemo()
+		if !summary.hasCatalogChanges && memo.HasCatalogChanges() {
 			summary.hasCatalogChanges = true
-			break
+		}
+		for k := range memo.Tree.Tables {
+			summary.tids[k] = struct{}{}
 		}
 	}
 	blk.summary.CompareAndSwap(nil, summary)
@@ -235,11 +239,11 @@ func (blk *txnBlock) ForeachRowInBetween(
 	for _, row := range rows {
 		readRows += 1
 		ts := row.GetPrepareTS()
-		if ts.IsEmpty() || ts.Greater(&to) {
+		if ts.IsEmpty() || ts.GT(&to) {
 			outOfRange = true
 			return
 		}
-		if ts.Less(&from) {
+		if ts.LT(&from) {
 			continue
 		}
 
@@ -264,12 +268,12 @@ type TxnTable struct {
 }
 
 func (blk *txnBlock) Less(b BlockT) bool {
-	return blk.bornTS.Less(&b.bornTS)
+	return blk.bornTS.LT(&b.bornTS)
 }
 
 func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	return func(b BlockT) bool {
-		return b.bornTS.GreaterEq(&ts)
+		return b.bornTS.GE(&ts)
 	}
 }
 
@@ -336,7 +340,7 @@ func (table *TxnTable) ForeachRowInBetween(
 
 	// from is smaller than the very first block and it is not special like 0-0, 0-1, 1-0
 	ts := types.BuildTS(1, 1)
-	if outOfLeft && from.Greater(&ts) {
+	if outOfLeft && from.GT(&ts) {
 		minTs := types.TS{}
 		snapshot.Ascend(&txnBlock{}, func(blk *txnBlock) bool {
 			minTs = blk.bornTS
@@ -345,13 +349,13 @@ func (table *TxnTable) ForeachRowInBetween(
 		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
-		if blk.bornTS.Greater(&to) {
+		if blk.bornTS.GT(&to) {
 			return false
 		}
 
 		if skipBlkOp != nil && skipBlkOp(blk) {
 			prepareTS := blk.rows[len(blk.rows)-1].GetPrepareTS()
-			return prepareTS.LessEq(&to)
+			return prepareTS.LE(&to)
 		}
 		outOfRange, cnt := blk.ForeachRowInBetween(
 			from,

@@ -521,7 +521,7 @@ drop table Enrollments;
 drop table students;
 select * from StudentCoursesView;
 SQL parser error: table "students" does not exist
-restore account acc01 database test02 table students from snapshot sp07 to account acc02;
+restore account acc01 from snapshot sp07 to account acc02;
 use test02;
 select * from Students;
 studentid    name    grade
@@ -529,25 +529,38 @@ studentid    name    grade
 2    Bob    3.00
 3    Charlie    3.70
 select * from Enrollments;
-SQL parser error: table "enrollments" does not exist
+studentid    courseid    enrollmentdate
+1    101    2024-01-10
+2    102    2024-01-15
+1    103    2024-01-20
+3    101    2024-02-01
 select * from StudentCoursesView;
-SQL parser error: table "studentcoursesview" does not exist
-restore account acc01 database test02 table Enrollments from snapshot sp07 to account acc02;
-no such table test02.courses
+studentname    coursetitle    teacher    enrollmentdate
+Alice    Chemistry    Ms. Lee    2024-01-20
+Alice    Mathematics    Mr. Smith    2024-01-10
+Bob    Physics    Dr. Johnson    2024-01-15
+Charlie    Mathematics    Mr. Smith    2024-02-01
+restore account acc01 from snapshot sp07 to account acc02;
 use test02;
 select * from Enrollments;
-SQL parser error: table "enrollments" does not exist
+studentid    courseid    enrollmentdate
+1    101    2024-01-10
+2    102    2024-01-15
+1    103    2024-01-20
+3    101    2024-02-01
 select * from StudentCoursesView;
-SQL parser error: table "studentcoursesview" does not exist
+studentname    coursetitle    teacher    enrollmentdate
+Alice    Chemistry    Ms. Lee    2024-01-20
+Alice    Mathematics    Mr. Smith    2024-01-10
+Bob    Physics    Dr. Johnson    2024-01-15
+Charlie    Mathematics    Mr. Smith    2024-02-01
 show create view StudentCoursesView;
-invalid input: show view 'studentcoursesview' is not a valid view
+View    Create View    character_set_client    collation_connection
+studentcoursesview    create view StudentCoursesView as\nselect\ns.Name as StudentName,\nc.Title as CourseTitle,\nc.Teacher,\ne.EnrollmentDate\nfrom\nStudents s\njoin\nEnrollments e on s.StudentID = e.StudentID\njoin\nCourses c on e.CourseID = c.CourseID\norder by\ns.Name, c.Title;    utf8mb4    utf8mb4_general_ci
 drop view StudentCoursesView;
-invalid view 'test02.studentcoursesview'
 drop table Enrollments;
-no such table test02.enrollments
 drop table students;
 drop table Courses;
-no such table test02.courses
 drop database test02;
 drop database test02;
 drop snapshot sp07;

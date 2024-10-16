@@ -33,7 +33,7 @@ func (w *StoreImpl) Replay(h ApplyHandle) error {
 		panic(err)
 	}
 	w.StoreInfo.onCheckpoint()
-	w.driverCheckpointed = lsn
+	w.driverCheckpointed.Store(lsn)
 	w.driverCheckpointing.Store(lsn)
 	for g, lsn := range w.syncing {
 		w.walCurrentLsn[g] = lsn
@@ -44,11 +44,11 @@ func (w *StoreImpl) Replay(h ApplyHandle) error {
 			w.walCurrentLsn[g] = ckped
 			w.synced[g] = ckped
 		}
-		if w.minLsn[g] <= w.driverCheckpointed {
+		if w.minLsn[g] <= w.driverCheckpointed.Load() {
 			minLsn := w.minLsn[g]
 			for ; minLsn <= ckped+1; minLsn++ {
 				drLsn, err := w.getDriverLsn(g, minLsn)
-				if err == nil && drLsn > w.driverCheckpointed {
+				if err == nil && drLsn > w.driverCheckpointed.Load() {
 					break
 				}
 			}

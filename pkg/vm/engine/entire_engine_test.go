@@ -62,6 +62,31 @@ var _ Engine = new(testEngine)
 type testOperator struct {
 }
 
+func (o *testOperator) EnterIncrStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) ExitIncrStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) EnterRollbackStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) ExitRollbackStmt() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) SetFootPrints(id int, enter bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestEntireEngineNew(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
@@ -325,11 +350,14 @@ func (e *testEngine) GetService() string {
 	return ""
 }
 
+func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
 
-func (o *testOperator) SetFootPrints(prints [][2]uint32) {}
 func (o *testOperator) AddWorkspace(_ client.Workspace) {
 }
 
@@ -399,6 +427,10 @@ func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.Se
 
 func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
+}
+
+func (o *testOperator) HasLockTable(table uint64) bool {
+	return true
 }
 
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {

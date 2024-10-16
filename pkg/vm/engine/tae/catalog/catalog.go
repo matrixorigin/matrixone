@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -35,25 +34,16 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_TID            = "table_id"
-	SnapshotAttr_DBID           = "db_id"
-	ObjectAttr_ID               = "id"
-	ObjectAttr_CreateAt         = "create_at"
-	ObjectAttr_SegNode          = "seg_node"
-	SnapshotAttr_BlockMaxRow    = "block_max_row"
-	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
-	SnapshotAttr_SchemaExtra    = "schema_extra"
-	ObjectAttr_ObjectStats      = "object_stats"
-	ObjectAttr_State            = "state"
-	ObjectAttr_Sorted           = "sorted"
-	EntryNode_CreateAt          = "create_at"
-	EntryNode_DeleteAt          = "delete_at"
+	SnapshotAttr_TID       = "table_id"
+	SnapshotAttr_DBID      = "db_id"
+	ObjectAttr_ObjectStats = "object_stats"
+	EntryNode_CreateAt     = "create_at"
+	EntryNode_DeleteAt     = "delete_at"
 )
 
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
 	MakeObjectFactory() ObjectDataFactory
-	MakeTombstoneFactory() TombstoneFactory
 }
 
 type Catalog struct {
@@ -149,27 +139,18 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.ObjectFn = func(se *ObjectEntry) error {
-		needGC := se.DeleteBefore(ts) && !se.InMemoryDeletesExistedLocked()
-		needGC = needGC && se.IsDeletesFlushedBefore(ts)
+		needGC := se.DeleteBefore(ts)
 		if needGC {
 			tbl := se.table
 			tbl.RemoveEntry(se)
 		}
 		return nil
 	}
-	processor.TombstoneFn = func(t data.Tombstone) error {
-		obj := t.GetObject().(*ObjectEntry).GetLatestNode()
-		var needGC bool
-		if obj == nil {
-			needGC = true
-			obj = t.GetObject().(*ObjectEntry)
-		} else {
-			needGC = obj.DeleteBefore(ts) && !obj.InMemoryDeletesExistedLocked()
-			needGC = needGC && obj.IsDeletesFlushedBefore(ts)
-		}
+	processor.TombstoneFn = func(obj *ObjectEntry) error {
+		needGC := obj.DeleteBefore(ts)
 		if needGC {
 			tbl := obj.table
-			tbl.GCTombstone(*obj.ID())
+			tbl.RemoveEntry(obj)
 		}
 		return nil
 	}
@@ -179,7 +160,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	catalog.gcTS = ts
 }
-
 func (catalog *Catalog) Close() error {
 	return nil
 }

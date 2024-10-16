@@ -50,7 +50,6 @@ func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 		min = ptrTo(int64(math.MaxInt))
 		max = ptrTo(int64(0))
 		for _, entry := range i.Entries {
-			entry := entry
 			if entry.done {
 				continue
 			}

@@ -23,6 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,9 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	dto "github.com/prometheus/client_model/go"
 )
 
 const (
@@ -275,20 +276,20 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	createSql := SingleMetricTable.ToCreateSql(ctx, true)
 	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
 		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
-		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+		return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
 	}
 
 	createSql = SqlStatementCUTable.ToCreateSql(ctx, true)
 	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
 		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
-		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+		return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
 	}
 
 	for desc := range descChan {
 		view := getView(ctx, desc)
 		sql := view.ToCreateSql(ctx, true)
 		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
-			return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
+			return moerr.NewInternalErrorf(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
 		}
 	}
 	createCost = time.Since(instant)
@@ -381,7 +382,7 @@ type InitOptions struct {
 	// internalGatherInterval, handle metric.SubSystemMO gather interval
 	internalGatherInterval time.Duration
 	// frontendServerStarted, function return bool, represent server started or not
-	frontendServerStarted func() bool
+	frontendServerStarted func(string) bool
 }
 
 type InitOption func(*InitOptions)
@@ -427,7 +428,7 @@ func WithInternalGatherInterval(interval time.Duration) InitOption {
 	})
 }
 
-func WithFrontendServerStarted(f func() bool) InitOption {
+func WithFrontendServerStarted(f func(string) bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.frontendServerStarted = f
 	})
@@ -451,7 +452,7 @@ var SingleMetricTable = &table.Table{
 	Table:            `metric`,
 	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
-	ClusterBy:        []table.Column{metricCollectTimeColumn, metricNameColumn, metricAccountColumn},
+	ClusterBy:        []table.Column{metricAccountColumn, metricNameColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
 	Comment:          `metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
@@ -472,7 +473,7 @@ var SqlStatementCUTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `sql_statement_cu metric data`,
+	Comment:          `sql_statement_cu metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn
@@ -515,7 +516,7 @@ func NewMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *ta
 		}
 	}
 	if subSystem == nil {
-		panic(moerr.NewNotSupported(ctx, "metric unknown SubSystem: %s", tbl))
+		panic(moerr.NewNotSupportedf(ctx, "metric unknown SubSystem: %s", tbl))
 	}
 	options = append(options, table.SupportUserAccess(subSystem.SupportUserAccess))
 	// construct columns

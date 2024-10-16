@@ -16,11 +16,12 @@ package aggexec
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func testAggExecSerialize(exec AggFuncExec, checkFn func(src, dst AggFuncExec) error) error {
@@ -441,8 +442,8 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 					return moerr.NewInternalErrorNoCtx("groupData length not equal.")
 				}
 
-				vs1 := vector.MustFixedCol[int32](s1.groups[i])
-				vs2 := vector.MustFixedCol[int32](s2.groups[i])
+				vs1 := vector.MustFixedColWithTypeCheck[int32](s1.groups[i])
+				vs2 := vector.MustFixedColWithTypeCheck[int32](s2.groups[i])
 				for n := 0; n < len(vs1); n++ {
 					if vs1[n] != vs2[n] {
 						return moerr.NewInternalErrorNoCtx("groupData item not equal.")

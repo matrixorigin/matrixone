@@ -351,6 +351,7 @@ func TestNewClientWithMOCluster(t *testing.T) {
 					LockServiceAddress: testSockets,
 				},
 			}))
+	defer cluster.Close()
 	var newClientFailed bool
 	func() {
 		defer func() {
@@ -408,6 +409,7 @@ func runRPCTests(
 								LockServiceAddress: testSockets,
 							},
 						}))
+				defer cluster.Close()
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 				s, err := NewServer(sid, testSockets, morpc.Config{}, opts...)
@@ -462,6 +464,7 @@ func runRPCServerNoCloseTests(
 							LockServiceAddress: testSockets,
 						},
 					}))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 			s, err := NewServer(sid, testSockets, morpc.Config{}, opts...)

@@ -5,8 +5,11 @@
 package mock_frontend
 
 import (
+	"bytes"
 	context "context"
 	reflect "reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -231,17 +234,29 @@ func (mr *MockComputationWrapperMockRecorder) Plan() *gomock.Call {
 }
 
 // RecordExecPlan mocks base method.
-func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RecordExecPlan", ctx)
+	ret := m.ctrl.Call(m, "RecordExecPlan", ctx, phyPlan)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RecordExecPlan indicates an expected call of RecordExecPlan.
-func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}) *gomock.Call {
+func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx, phyPlan interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx, phyPlan)
+}
+
+// SetExplainBuffer mocks base method.
+func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetExplainBuffer", buf)
+}
+
+// SetExplainBuffer indicates an expected call of SetExplainBuffer.
+func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
 }
 
 // ResetPlanAndStmt mocks base method.
@@ -378,6 +393,21 @@ func NewMockExecResult(ctrl *gomock.Controller) *MockExecResult {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockExecResult) EXPECT() *MockExecResultMockRecorder {
 	return m.recorder
+}
+
+// ColumnIsNull mocks base method.
+func (m *MockExecResult) ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ColumnIsNull", ctx, rindex, cindex)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ColumnIsNull indicates an expected call of ColumnIsNull.
+func (mr *MockExecResultMockRecorder) ColumnIsNull(ctx, rindex, cindex interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ColumnIsNull", reflect.TypeOf((*MockExecResult)(nil).ColumnIsNull), ctx, rindex, cindex)
 }
 
 // GetInt64 mocks base method.
@@ -580,78 +610,16 @@ func (mr *MockBackgroundExecMockRecorder) GetExecResultSet() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultSet", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultSet))
 }
 
-// MockoutputPool is a mock of outputPool interface.
-type MockoutputPool struct {
-	ctrl     *gomock.Controller
-	recorder *MockoutputPoolMockRecorder
-}
-
-// MockoutputPoolMockRecorder is the mock recorder for MockoutputPool.
-type MockoutputPoolMockRecorder struct {
-	mock *MockoutputPool
-}
-
-// NewMockoutputPool creates a new mock instance.
-func NewMockoutputPool(ctrl *gomock.Controller) *MockoutputPool {
-	mock := &MockoutputPool{ctrl: ctrl}
-	mock.recorder = &MockoutputPoolMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockoutputPool) EXPECT() *MockoutputPoolMockRecorder {
-	return m.recorder
-}
-
-// flush mocks base method.
-func (m *MockoutputPool) flush() error {
+// Service mocks base method.
+func (m *MockBackgroundExec) Service() string {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "flush")
-	ret0, _ := ret[0].(error)
+	ret := m.ctrl.Call(m, "Service")
+	ret0, _ := ret[0].(string)
 	return ret0
 }
 
-// flush indicates an expected call of flush.
-func (mr *MockoutputPoolMockRecorder) flush() *gomock.Call {
+// Service indicates an expected call of Service.
+func (mr *MockBackgroundExecMockRecorder) Service() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "flush", reflect.TypeOf((*MockoutputPool)(nil).flush))
-}
-
-// getEmptyRow mocks base method.
-func (m *MockoutputPool) getEmptyRow() ([]interface{}, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "getEmptyRow")
-	ret0, _ := ret[0].([]interface{})
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// getEmptyRow indicates an expected call of getEmptyRow.
-func (mr *MockoutputPoolMockRecorder) getEmptyRow() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "getEmptyRow", reflect.TypeOf((*MockoutputPool)(nil).getEmptyRow))
-}
-
-// reset mocks base method.
-func (m *MockoutputPool) reset() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "reset")
-}
-
-// reset indicates an expected call of reset.
-func (mr *MockoutputPoolMockRecorder) reset() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "reset", reflect.TypeOf((*MockoutputPool)(nil).reset))
-}
-
-// resetLineStr mocks base method.
-func (m *MockoutputPool) resetLineStr() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "resetLineStr")
-}
-
-// resetLineStr indicates an expected call of resetLineStr.
-func (mr *MockoutputPoolMockRecorder) resetLineStr() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resetLineStr", reflect.TypeOf((*MockoutputPool)(nil).resetLineStr))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Service", reflect.TypeOf((*MockBackgroundExec)(nil).Service))
 }

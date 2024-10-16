@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -42,6 +43,10 @@ type Table struct {
 }
 
 var _ engine.Relation = new(Table)
+
+func (t *Table) CollectChanges(_ context.Context, from, to types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+	panic("not support")
+}
 
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	return nil, nil
@@ -550,6 +555,10 @@ func (t *Table) ApproxObjectsNum(ctx context.Context) int {
 	return 0
 }
 
-func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+	return nil, nil
+}
+
+func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
 }

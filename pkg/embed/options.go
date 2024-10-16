@@ -37,3 +37,9 @@ func WithCNCount(
 		c.options.cn = cn
 	}
 }
+
+func WithTesting() Option {
+	return func(c *cluster) {
+		c.options.testing = true
+	}
+}

@@ -22,7 +22,6 @@ import (
 
 func (bf *BloomFilter) Clean() {
 	bf.bitmap.Reset()
-	bf.bitmap = nil
 	bf.hashSeed = nil
 	bf.keys = nil
 	bf.states = nil
@@ -124,10 +123,11 @@ func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 
 	var i, j, n, k, idx int
 	getIdxVal := func(v uint64) uint64 {
-		if v >= bitSize {
+		if bitSize == 0 || v < bitSize {
+			return v
+		} else {
 			return v % bitSize
 		}
-		return v
 	}
 
 	// The reason we need to distinguish whether an operator is an Add or not is

@@ -17,17 +17,16 @@ package disttae
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/stretchr/testify/require"
 )
 
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
 
-	subscribeRecord.m = make(map[SubTableID]SubTableStatus)
+	subscribeRecord.m = make(map[uint64]SubTableStatus)
 	subscribeRecord.eng = &Engine{
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{
@@ -76,5 +75,17 @@ func TestBlockInfoSlice(t *testing.T) {
 	data = []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	data1 = data[:0]
 	require.Equal(t, 0, len(data1))
+
+}
+
+func TestDca(t *testing.T) {
+	pClient := &PushClient{}
+
+	signalCnt := 0
+	require.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
+	require.True(t, pClient.dcaTryDelay(false, func() { signalCnt++ })) // delay
+	pClient.dcaConfirmAndApply()
+	require.Equal(t, 1, signalCnt)
+	require.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
 
 }

@@ -15,7 +15,9 @@
 package message
 
 import (
+	"bytes"
 	"context"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +28,46 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
+const selsDivideLength = 1024
+
+type JoinSels struct {
+	sels [][][]int32
+}
+
+func (js *JoinSels) InitSel(len int) {
+	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
+}
+
+func (js *JoinSels) Free() {
+	js.sels = nil
+}
+
+func (js *JoinSels) InsertSel(k, v int32) {
+	i := k / selsDivideLength
+	j := k % selsDivideLength
+	if len(js.sels) <= int(i) {
+		if i == 0 {
+			js.sels = append(js.sels, make([][]int32, 16))
+		} else {
+			s := make([][]int32, selsDivideLength)
+			js.sels = append(js.sels, s)
+		}
+	}
+	if len(js.sels[i]) <= int(j) {
+		js.sels[i] = append(js.sels[i], make([]int32, 0))
+	}
+	if js.sels[i][j] == nil {
+		js.sels[i][j] = make([]int32, 0)
+	}
+	js.sels[i][j] = append(js.sels[i][j], v)
+}
+
+func (js *JoinSels) GetSels(k int32) []int32 {
+	i := k / selsDivideLength
+	j := k % selsDivideLength
+	return js.sels[i][j]
+}
+
 // JoinMap is used for join
 type JoinMap struct {
 	runtimeFilter_In bool
@@ -35,11 +77,11 @@ type JoinMap struct {
 	shm              *hashmap.StrHashMap
 	ihm              *hashmap.IntHashMap
 	mpool            *mpool.MPool
-	multiSels        [][]int32
+	multiSels        JoinSels
 	batches          []*batch.Batch
 }
 
-func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
+func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
 		shm:       shm,
 		ihm:       ihm,
@@ -61,6 +103,13 @@ func (jm *JoinMap) SetRowCount(cnt int64) {
 	jm.rowcnt = cnt
 }
 
+func (jm *JoinMap) GetRefCount() int64 {
+	if jm == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&jm.refCnt)
+}
+
 func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
@@ -76,8 +125,12 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 	return jm.runtimeFilter_In
 }
 
-func (jm *JoinMap) Sels() [][]int32 {
-	return jm.multiSels
+func (jm *JoinMap) HashOnUnique() bool {
+	return jm.multiSels.sels == nil
+}
+
+func (jm *JoinMap) GetSels(k uint64) []int32 {
+	return jm.multiSels.GetSels(int32(k))
 }
 
 func (jm *JoinMap) NewIterator() hashmap.Iterator {
@@ -96,24 +149,27 @@ func (jm *JoinMap) IsValid() bool {
 	return jm.valid
 }
 
-func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
-		return
-	}
-	for i := range jm.multiSels {
-		jm.multiSels[i] = nil
-	}
-	jm.multiSels = nil
+func (jm *JoinMap) FreeMemory() {
+	jm.multiSels.Free()
 	if jm.ihm != nil {
 		jm.ihm.Free()
-	} else {
+		jm.ihm = nil
+	} else if jm.shm != nil {
 		jm.shm.Free()
+		jm.shm = nil
 	}
 	for i := range jm.batches {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
 	jm.valid = false
+}
+
+func (jm *JoinMap) Free() {
+	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
+		return
+	}
+	jm.FreeMemory()
 }
 
 func (jm *JoinMap) Size() int64 {
@@ -147,20 +203,44 @@ func (t JoinMapMsg) NeedBlock() bool {
 	return true
 }
 
+func (t JoinMapMsg) Destroy() {
+	if t.JoinMapPtr != nil {
+		t.JoinMapPtr.FreeMemory()
+	}
+}
+
 func (t JoinMapMsg) GetMsgTag() int32 {
 	return t.Tag
+}
+
+func (t JoinMapMsg) DebugString() string {
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	buf.WriteString("joinmap message, tag:" + strconv.Itoa(int(t.Tag)) + "\n")
+	if t.IsShuffle {
+		buf.WriteString("shuffle index " + strconv.Itoa(int(t.ShuffleIdx)) + "\n")
+	}
+	if t.JoinMapPtr != nil {
+		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
+	} else {
+		buf.WriteString("joinmapPtr is nil \n")
+	}
+	return buf.String()
 }
 
 func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
 }
 
-func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) *JoinMap {
+func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) (*JoinMap, error) {
 	msgReceiver := NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb)
 	for {
-		msgs, ctxDone := msgReceiver.ReceiveMessage(true, ctx)
+		msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, ctx)
+		if err != nil {
+			return nil, err
+		}
 		if ctxDone {
-			return nil
+			return nil, nil
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -174,12 +254,12 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 			}
 			jm := msg.JoinMapPtr
 			if jm == nil {
-				return nil
+				return nil, nil
 			}
 			if !jm.IsValid() {
 				panic("join receive a joinmap which has been freed!")
 			}
-			return jm
+			return jm, nil
 		}
 	}
 }

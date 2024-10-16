@@ -27,7 +27,13 @@ const (
 	GTNoop
 	GTCKp
 	GTInternal
-	GTCustomizedStart
+
+	// GTFiles is used to store files, and the scenario is master-slave synchronization.
+	// The logservice will read the files required for checkpoint and gc in GTFiles,
+	// and then transfer them to the follower.
+	GTFiles
+
+	GTCustomized uint32 = 11
 )
 
 type Desc interface {

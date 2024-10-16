@@ -37,7 +37,7 @@ func GetTNHandlerFunc(method api.OpCode,
 		parameter string,
 		sender requestSender) (Result, error) {
 		if service != tn {
-			return Result{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
+			return Result{}, moerr.NewNotSupportedf(proc.Ctx, "service %s not supported", service)
 		}
 		targetTNs, err := whichTN(parameter)
 		if err != nil {

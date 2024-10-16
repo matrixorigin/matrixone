@@ -245,7 +245,7 @@ func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, al
 			} else {
 				names := strings.Split(name, ".")
 				if len(names) != 2 {
-					return FailMatched(), moerr.NewInternalError(ctx, "special name %s ", name)
+					return FailMatched(), moerr.NewInternalErrorf(ctx, "special name %s ", name)
 				}
 				colName := names[1]
 				if ref == colName {
@@ -303,7 +303,7 @@ func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases UnorderedMa
 	}
 
 	if len(checkedExprs) > 1 {
-		return nil, moerr.NewInternalError(context.Background(),
+		return nil, moerr.NewInternalErrorf(context.Background(),
 			"expr %s matches multiple assignments",
 			matcher.Sql,
 		)

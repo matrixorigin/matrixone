@@ -25,7 +25,7 @@ import (
 
 func fillStringGroupStr(keys [][]byte, vec *vector.Vector, n int, start int) {
 	area := vec.GetArea()
-	vs := vector.MustFixedCol[types.Varlena](vec)
+	vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			keys[i] = append(keys[i], byte(0))

@@ -64,7 +64,7 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 	for _, pair := range arguments {
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
-			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+			return moerr.NewInvalidInputNoCtxf("invalid S3 argument: %s", pair)
 		}
 
 		switch strings.ToLower(key) {
@@ -122,7 +122,7 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.SessionToken = value
 
 		default:
-			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
+			return moerr.NewInvalidInputNoCtxf("invalid S3 argument: %s", pair)
 		}
 
 	}

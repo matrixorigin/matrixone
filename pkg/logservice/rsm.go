@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -37,15 +38,7 @@ type leaseHolderIDQuery struct{}
 type indexQuery struct{}
 type truncatedLsnQuery struct{}
 type leaseHistoryQuery struct{ lsn uint64 }
-
-func getAppendCmd(cmd []byte, replicaID uint64) []byte {
-	if len(cmd) < headerSize+8 {
-		panic("cmd too small")
-	}
-	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(cmd[headerSize:], replicaID)
-	return cmd
-}
+type requiredLsnQuery struct{}
 
 func parseCmdTag(cmd []byte) pb.UpdateType {
 	return pb.UpdateType(binaryEnc.Uint32(cmd))
@@ -60,6 +53,10 @@ func parseLeaseHolderID(cmd []byte) uint64 {
 }
 
 func parseTsoUpdateCmd(cmd []byte) uint64 {
+	return binaryEnc.Uint64(cmd[headerSize:])
+}
+
+func parseRequiredLsn(cmd []byte) uint64 {
 	return binaryEnc.Uint64(cmd[headerSize:])
 }
 
@@ -81,6 +78,13 @@ func getTsoUpdateCmd(count uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint32(cmd, uint32(pb.TSOUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], count)
+	return cmd
+}
+
+func getSetRequiredLsnCmd(lsn uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint32(cmd, uint32(pb.RequiredLSNUpdate))
+	binaryEnc.PutUint64(cmd[headerSize:], lsn)
 	return cmd
 }
 
@@ -148,11 +152,15 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 // sm.Result value with the Value field set to the current leaseholder ID
 // to indicate rejection by mismatched leaseholder ID.
 func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
-	if s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
-		data := make([]byte, 8)
-		binaryEnc.PutUint64(data, s.state.LeaseHolderID)
-		return sm.Result{Data: data}
-	}
+	// TODO(volgariver6): no need to check leaseholder if there is only one TN replica.
+	// If there are multiple TN replicas, do the check.
+
+	// if the leaseholder is reserved, skip the check, as it is the RSM of standby shard.
+	// if s.state.LeaseHolderID != 0 && s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
+	// 	data := make([]byte, 8)
+	// 	binaryEnc.PutUint64(data, s.state.LeaseHolderID)
+	// 	return sm.Result{Data: data}
+	// }
 	return sm.Result{Value: s.state.Index}
 }
 
@@ -161,6 +169,15 @@ func (s *stateMachine) handleTsoUpdate(cmd []byte) sm.Result {
 	result := sm.Result{Value: s.state.Tso}
 	s.state.Tso += count
 	return result
+}
+
+func (s *stateMachine) handleSetRequiredLsn(cmd []byte) sm.Result {
+	lsn := parseRequiredLsn(cmd)
+	if lsn > s.state.RequiredLsn {
+		s.state.RequiredLsn = lsn
+		return sm.Result{}
+	}
+	return sm.Result{Value: s.state.RequiredLsn}
 }
 
 func (s *stateMachine) Close() error {
@@ -180,8 +197,10 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUserUpdate(cmd), nil
 	case pb.TSOUpdate:
 		return s.handleTsoUpdate(cmd), nil
+	case pb.RequiredLSNUpdate:
+		return s.handleSetRequiredLsn(cmd), nil
 	default:
-		panic("unknown entry type")
+		panic(fmt.Sprintf("unknown entry type %d", parseCmdTag(cmd)))
 	}
 }
 
@@ -195,6 +214,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	} else if v, ok := query.(leaseHistoryQuery); ok {
 		lease, _ := s.getLeaseHistory(v.lsn)
 		return lease, nil
+	} else if _, ok := query.(requiredLsnQuery); ok {
+		return s.state.RequiredLsn, nil
 	}
 	panic("unknown lookup command type")
 }

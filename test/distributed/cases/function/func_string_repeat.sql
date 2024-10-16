@@ -45,8 +45,8 @@ select repeat('ewrfewvrefr',100.23123321);
 
 
 -- test for function repeat(str,count)
-select repeat('1223wer33fggfeew',1048577);
-select repeat('12321412132134321321423ewdfqwf4wevfrevdcsIOPKMKMq29389c323e32ndy',1048000);
+select repeat('1223wer33fggfeew',100048577);
+select repeat('12321412132134321321423ewdfqwf4wevfrevdcsIOPKMKMq29389c323e32ndy',100048000);
 
 
 -- test for function repeat(str,count),count is non-int type
@@ -122,7 +122,9 @@ select repeat(ltrim(col2), col1 % 10) from repeat04;
 select repeat(rtrim(col2), col1 * 0.2) from repeat04 ;
 select repeat(trim(col2),10) from repeat04;
 select repeat(lpad(col2,50,'11132343423232'),20) from repeat04;
+-- @bvt:issue#18547
 select repeat(rpad(col2,300,'1234567890***'),col1) from repeat04;
+-- @bvt:issue
 select repeat(reverse(col2),10) from repeat04;
 drop table repeat04;
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const chanCapConst = 10000
@@ -299,6 +300,7 @@ func (bc *BaseBatchPipe[T, B]) batchWorker(ctx context.Context) {
 				quitMsg = quitChannelClose
 				return
 			}
+			v2.TraceCollectorMetricQueueLength.Set(float64(len(bc.batchCh)))
 			f(batch)
 		}
 	}
@@ -326,6 +328,7 @@ func (bc *BaseBatchPipe[T, B]) mergeWorker(ctx context.Context) {
 	doFlush := func(name string, itembuf ItemBuffer[T, B]) {
 		batch := itembuf.GetBatch(ctx, batchbuf)
 		bc.batchCh <- batch
+		v2.TraceCollectorMetricQueueLength.Set(float64(len(bc.batchCh)))
 		itembuf.Reset()
 		itembuf.RemindReset()
 		registry.Reset(name, itembuf.RemindNextAfter())

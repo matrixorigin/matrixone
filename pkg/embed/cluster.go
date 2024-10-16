@@ -15,12 +15,17 @@
 package embed
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -32,9 +37,20 @@ const (
 	started = state(1)
 )
 
+var (
+	minPort = uint64(10000)
+	maxPort = uint64(60000)
+
+	basePort     = getInitValue("mo-test.port")
+	basePortStep = uint64(20)
+
+	clusterID = getInitValue("mo-test.cluster")
+)
+
 type cluster struct {
 	sync.RWMutex
 
+	id       uint64
 	state    state
 	files    []string
 	services []*operator
@@ -44,11 +60,13 @@ type cluster struct {
 		cn        int
 		withProxy bool
 		preStart  func(ServiceOperator)
+		testing   bool
 	}
 
-	gen struct {
-		basePort         int
-		baseFrontendPort int
+	ports struct {
+		servicePort int
+		raftPort    int
+		gossipPort  int
 	}
 }
 
@@ -56,6 +74,7 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
+		id:    atomic.AddUint64(&clusterID, 1),
 		state: stopped,
 	}
 	for _, opt := range opts {
@@ -63,10 +82,18 @@ func NewCluster(
 	}
 	c.adjust()
 
-	if err := c.createServiceOperators(); err != nil {
+	if err := c.initConfigs(); err != nil {
+		return nil, err
+	}
+
+	if err := c.createServiceOperators(0); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+func (c *cluster) ID() uint64 {
+	return c.id
 }
 
 func (c *cluster) Start() error {
@@ -77,13 +104,19 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
+	c.doStartLocked(0)
+	c.state = started
+	return nil
+}
+
+func (c *cluster) doStartLocked(from int) {
 	var wg sync.WaitGroup
 	errC := make(chan error, 1)
 	defer close(errC)
-	for _, s := range c.services {
+	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := s.Start(); err != nil {
-				return err
+				panic(err)
 			}
 			continue
 		}
@@ -92,25 +125,12 @@ func (c *cluster) Start() error {
 		go func(s *operator) {
 			defer wg.Done()
 			if err := s.Start(); err != nil {
-				select {
-				case errC <- err:
-					return
-				default:
-				}
-				return
+				panic(err)
 			}
 		}(s)
 	}
 
 	wg.Wait()
-	select {
-	case err := <-errC:
-		return err
-	default:
-	}
-
-	c.state = started
-	return nil
 }
 
 func (c *cluster) Close() error {
@@ -188,39 +208,70 @@ func (c *cluster) GetCNService(
 	return v, nil
 }
 
-func (c *cluster) adjust() {
-	c.gen.baseFrontendPort = 6001
-	c.gen.basePort = 18000
+func (c *cluster) StartNewCNService(n int) error {
+	c.Lock()
+	defer c.Unlock()
 
+	if c.state != started {
+		panic("cannot start cn services in stopped cluster")
+	}
+
+	serviceFrom := len(c.services)
+	cnFrom := c.options.cn
+	c.options.cn += n
+
+	if err := c.initCNConfigs(cnFrom); err != nil {
+		return err
+	}
+	if err := c.createServiceOperators(serviceFrom); err != nil {
+		return err
+	}
+
+	c.doStartLocked(serviceFrom)
+	return nil
+}
+
+func (c *cluster) adjust() {
 	if c.options.cn == 0 {
 		c.options.cn = 1
 	}
 	if c.options.dataPath == "" {
 		c.options.dataPath = filepath.Join(
 			os.TempDir(),
-			fmt.Sprintf("%d", time.Now().Nanosecond()),
+			fmt.Sprintf("mo-cluster-test-%d", time.Now().Nanosecond()),
 		)
 		if err := os.MkdirAll(c.options.dataPath, 0755); err != nil {
 			panic(err)
 		}
 	}
-
-	if c.options.withProxy ||
-		c.options.cn > 1 {
-		c.gen.baseFrontendPort = 16001
-	}
+	c.ports.servicePort = getNextBasePort()
+	c.ports.raftPort = getNextBasePort()
+	c.ports.gossipPort = getNextBasePort()
 }
 
-func (c *cluster) createServiceOperators() error {
-	if err := c.initConfigs(); err != nil {
-		return err
-	}
-
-	for i, f := range c.files {
-		s, err := newService(f, i)
+func (c *cluster) createServiceOperators(from int) error {
+	for i, f := range c.files[from:] {
+		s, err := newService(
+			f,
+			i,
+			func(o *operator) {
+				if o.serviceType == metadata.ServiceType_LOG {
+					o.cfg.LogService.UpdateAddresses(
+						"127.0.0.1",
+						c.ports.servicePort,
+						c.ports.raftPort,
+						c.ports.gossipPort,
+					)
+					o.cfg.LogService.UUID = uuid.NewString()
+					o.cfg.LogService.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + o.cfg.LogService.UUID}
+				}
+			},
+			c.options.testing,
+		)
 		if err != nil {
 			return err
 		}
+
 		if c.options.preStart != nil {
 			c.options.preStart(s)
 		}
@@ -230,10 +281,6 @@ func (c *cluster) createServiceOperators() error {
 }
 
 func (c *cluster) initConfigs() error {
-	if len(c.files) > 0 {
-		return nil
-	}
-
 	if err := c.initLogServiceConfig(); err != nil {
 		return err
 	}
@@ -242,17 +289,29 @@ func (c *cluster) initConfigs() error {
 		return err
 	}
 
-	if c.options.withProxy {
-		if err := c.initProxyServiceConfig(); err != nil {
+	return c.initCNConfigs(0)
+}
+
+func (c *cluster) initCNConfigs(from int) error {
+	for i := from; i < c.options.cn; i++ {
+		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
+		c.files = append(c.files, file)
+		err := genConfig(
+			file,
+			genConfigText(
+				cnConfig,
+				templateArgs{
+					I:           i,
+					ID:          c.id,
+					DataDir:     c.options.dataPath,
+					ServicePort: c.ports.servicePort,
+				},
+			),
+		)
+		if err != nil {
 			return err
 		}
-
 	}
-
-	if err := c.initCNServiceConfig(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -261,10 +320,15 @@ func (c *cluster) initLogServiceConfig() error {
 	c.files = append(c.files, file)
 	return genConfig(
 		file,
-		fmt.Sprintf(
+		genConfigText(
 			logConfig,
-			c.options.dataPath,
-		))
+			templateArgs{
+				ID:          c.id,
+				DataDir:     c.options.dataPath,
+				ServicePort: c.ports.servicePort,
+			},
+		),
+	)
 }
 
 func (c *cluster) initTNServiceConfig() error {
@@ -272,61 +336,19 @@ func (c *cluster) initTNServiceConfig() error {
 	c.files = append(c.files, file)
 	return genConfig(
 		file,
-		fmt.Sprintf(
+		genConfigText(
 			tnConfig,
-			c.options.dataPath,
-			c.options.dataPath,
-			c.options.dataPath,
-			c.getNextBasePort(),
-		))
+			templateArgs{
+				ID:          c.id,
+				DataDir:     c.options.dataPath,
+				ServicePort: c.ports.servicePort,
+			},
+		),
+	)
 }
 
-func (c *cluster) initCNServiceConfig() error {
-	for i := 0; i < c.options.cn; i++ {
-		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
-		c.files = append(c.files, file)
-		err := genConfig(
-			file,
-			fmt.Sprintf(
-				cnConfig,
-				c.options.dataPath,
-				c.options.dataPath,
-				c.options.dataPath,
-				i,
-				c.getNextBasePort(),
-				i,
-				c.getNextFrontPort(),
-				c.options.dataPath,
-				i,
-			))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *cluster) initProxyServiceConfig() error {
-	return genConfig(
-		filepath.Join(c.options.dataPath, "proxy.toml"),
-		fmt.Sprintf(
-			proxyConfig,
-			c.options.dataPath,
-			c.options.dataPath,
-			c.options.dataPath,
-		))
-}
-
-func (c *cluster) getNextBasePort() int {
-	v := c.gen.basePort
-	c.gen.basePort += 100
-	return v
-}
-
-func (c *cluster) getNextFrontPort() int {
-	v := c.gen.baseFrontendPort
-	c.gen.baseFrontendPort++
-	return v
+func getNextBasePort() int {
+	return int(atomic.AddUint64(&basePort, basePortStep))
 }
 
 func genConfig(
@@ -347,4 +369,84 @@ func genConfig(
 		return err
 	}
 	return nil
+}
+
+func getInitValue(name string) uint64 {
+	if name == "" {
+		panic("name cannot be empty")
+	}
+
+	fileName := filepath.Join(
+		os.TempDir(),
+		name,
+	)
+
+	fl := flock.New(fmt.Sprintf("%s.lock", fileName))
+	if err := fl.Lock(); err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := fl.Unlock(); err != nil {
+			panic(err)
+		}
+	}()
+
+	exists := true
+	f, err := os.Open(fileName)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			panic(err)
+		}
+		exists = false
+	} else {
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}
+
+	flag := os.O_RDWR
+	if !exists {
+		flag |= os.O_CREATE
+	}
+	file, err := os.OpenFile(fileName, flag, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	data := make([]byte, 8)
+	n, err := file.Read(data)
+	if err != nil && err != io.EOF {
+		panic(err)
+	}
+	value := minPort
+	if n > 0 {
+		value = binary.BigEndian.Uint64(data)
+	}
+	if value > maxPort {
+		value = minPort
+	}
+	binary.BigEndian.PutUint64(data, value+1000)
+
+	if _, err = file.Seek(0, 0); err != nil {
+		panic(err)
+	}
+
+	_, err = file.Write(data)
+	if err != nil {
+		panic(err)
+	}
+	if err := file.Sync(); err != nil {
+		panic(err)
+	}
+
+	dir, err := os.Open(filepath.Dir(fileName))
+	if err != nil {
+		panic(err)
+	}
+	if err := dir.Sync(); err != nil {
+		panic(err)
+	}
+
+	return uint64(value)
 }

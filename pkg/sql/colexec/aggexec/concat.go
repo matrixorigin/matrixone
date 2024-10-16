@@ -24,10 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	groupConcatMaxLen = 1024
-)
-
 // group_concat is a special string aggregation function.
 type groupConcatExec struct {
 	multiAggInfo
@@ -51,7 +47,7 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *groupConcatExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result []byte, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
@@ -117,9 +113,6 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	exec.ret.groupToSet = groupIndex
 	exec.ret.setGroupNotEmpty(groupIndex)
 	r := exec.ret.aggGet()
-	if len(r) > groupConcatMaxLen {
-		return nil
-	}
 	if len(r) > 0 {
 		r = append(r, exec.separator...)
 	}
@@ -130,10 +123,7 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 			return err
 		}
 	}
-	if err = exec.ret.aggSet(r); err != nil {
-		return err
-	}
-	return nil
+	return exec.ret.aggSet(r)
 }
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -158,7 +148,7 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 	return nil
 }
 
-func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex int) error {
+func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error {
 	// todo: too bad here.
 	exec.separator = partialResult.([]byte)
 	return nil
@@ -170,20 +160,19 @@ func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error
 	if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
 		return err
 	}
+	empty1, empty2 := exec.ret.groupIsEmpty(idx1), other.ret.groupIsEmpty(idx2)
 
-	v1 := exec.ret.aggGet()
-	v2 := other.ret.aggGet()
-	if len(v2) == 0 || len(v1) > groupConcatMaxLen {
+	if empty2 {
 		return nil
 	}
-	if len(v1) > 0 && len(v2) > 0 {
-		v1 = append(v1, exec.separator...)
-		v1 = append(v1, v2...)
-		return exec.ret.aggSet(v1)
-	}
-	if len(v1) == 0 {
+	exec.ret.mergeEmpty(other.ret.basicResult, idx1, idx2)
+	v2 := other.ret.aggGet()
+	if empty1 {
 		return exec.ret.aggSet(v2)
 	}
+	v1 := exec.ret.aggGet()
+	v1 = append(v1, exec.separator...)
+	v1 = append(v1, v2...)
 	return exec.ret.aggSet(v1)
 }
 
@@ -227,18 +216,18 @@ func IsGroupConcatSupported(t types.Type) bool {
 }
 
 var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, error){
-	types.T_bit:           concatFixed[uint64],
-	types.T_bool:          concatFixed[bool],
-	types.T_int8:          concatFixed[int8],
-	types.T_int16:         concatFixed[int16],
-	types.T_int32:         concatFixed[int32],
-	types.T_int64:         concatFixed[int64],
-	types.T_uint8:         concatFixed[uint8],
-	types.T_uint16:        concatFixed[uint16],
-	types.T_uint32:        concatFixed[uint32],
-	types.T_uint64:        concatFixed[uint64],
-	types.T_float32:       concatFixed[float32],
-	types.T_float64:       concatFixed[float64],
+	types.T_bit:           concatFixedTypeChecked[uint64],
+	types.T_bool:          concatFixedTypeChecked[bool],
+	types.T_int8:          concatFixedTypeChecked[int8],
+	types.T_int16:         concatFixedTypeChecked[int16],
+	types.T_int32:         concatFixedTypeChecked[int32],
+	types.T_int64:         concatFixedTypeChecked[int64],
+	types.T_uint8:         concatFixedTypeChecked[uint8],
+	types.T_uint16:        concatFixedTypeChecked[uint16],
+	types.T_uint32:        concatFixedTypeChecked[uint32],
+	types.T_uint64:        concatFixedTypeChecked[uint64],
+	types.T_float32:       concatFixedTypeChecked[float32],
+	types.T_float64:       concatFixedTypeChecked[float64],
 	types.T_decimal64:     concatDecimal64,
 	types.T_decimal128:    concatDecimal128,
 	types.T_date:          concatTime[types.Date],
@@ -254,16 +243,16 @@ var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, err
 	types.T_binary:        concatVar,
 	types.T_json:          concatVar,
 	types.T_enum:          concatVar,
-	types.T_interval:      concatFixed[types.IntervalType],
-	types.T_TS:            concatFixed[types.TS],
-	types.T_Rowid:         concatFixed[types.Rowid],
-	types.T_Blockid:       concatFixed[types.Blockid],
+	types.T_interval:      concatFixedTypeChecked[types.IntervalType],
+	types.T_TS:            concatFixedTypeChecked[types.TS],
+	types.T_Rowid:         concatFixedTypeChecked[types.Rowid],
+	types.T_Blockid:       concatFixedTypeChecked[types.Blockid],
 	types.T_array_float32: concatVar,
 	types.T_array_float64: concatVar,
 }
 
-func concatFixed[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[T](v, row)
+func concatFixedTypeChecked[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := vector.GetFixedAtNoTypeCheck[T](v, row)
 	return fmt.Appendf(src, "%v", value), nil
 }
 
@@ -277,16 +266,16 @@ func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
 }
 
 func concatDecimal64(v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[types.Decimal64](v, row)
+	value := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
 	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
 }
 
 func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[types.Decimal128](v, row)
+	value := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
 	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
 }
 
 func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAt[T](v, row)
+	value := vector.GetFixedAtNoTypeCheck[T](v, row)
 	return fmt.Appendf(src, "%v", value.String()), nil
 }

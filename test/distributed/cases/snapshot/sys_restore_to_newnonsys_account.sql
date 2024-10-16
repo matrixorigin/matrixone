@@ -364,3 +364,5 @@ drop database test01;
 
 drop account acc01;
 drop account acc02;
+-- @ignore:1
+show snapshots;

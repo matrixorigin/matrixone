@@ -32,7 +32,7 @@ const (
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false, m)
+	mp, err := NewStrMap(false)
 	itr := mp.NewIterator()
 	require.NoError(t, err)
 	ts := []types.Type{
@@ -59,7 +59,7 @@ func TestInsert(t *testing.T) {
 func TestIterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(false, m)
+		mp, err := NewStrMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -84,7 +84,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true, m)
+		mp, err := NewStrMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -109,7 +109,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true, m)
+		mp, err := NewStrMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -201,7 +201,7 @@ func newVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return newStringVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 

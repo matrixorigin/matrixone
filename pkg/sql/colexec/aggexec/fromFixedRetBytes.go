@@ -303,7 +303,7 @@ func (exec *singleAggFuncExecNew2[from]) Fill(
 	err := exec.fill(
 		exec.execContext.getGroupContext(group),
 		exec.execContext.getCommonContext(),
-		vector.MustFixedCol[from](vectors[0])[row],
+		vector.MustFixedColWithTypeCheck[from](vectors[0])[row],
 		exec.ret.groupIsEmpty(group),
 		exec.ret.aggGet, exec.ret.aggSet)
 	exec.ret.setGroupNotEmpty(group)
@@ -331,7 +331,7 @@ func (exec *singleAggFuncExecNew2[from]) BulkFill(
 		err := exec.fills(
 			groupContext,
 			commonContext,
-			vector.MustFixedCol[from](vectors[0])[0],
+			vector.MustFixedColWithTypeCheck[from](vectors[0])[0],
 			length, exec.ret.groupIsEmpty(group),
 			getter, setter)
 		exec.ret.setGroupNotEmpty(group)
@@ -375,7 +375,7 @@ func (exec *singleAggFuncExecNew2[from]) distinctBulkFill(
 		if need, err := exec.distinctHash.fill(group, vectors, 0); !need || err != nil {
 			return err
 		}
-		err := exec.fill(groupContext, commonContext, vector.MustFixedCol[from](vectors[0])[0], exec.ret.groupIsEmpty(group), getter, setter)
+		err := exec.fill(groupContext, commonContext, vector.MustFixedColWithTypeCheck[from](vectors[0])[0], exec.ret.groupIsEmpty(group), getter, setter)
 		exec.ret.setGroupNotEmpty(group)
 		return err
 	}
@@ -430,7 +430,7 @@ func (exec *singleAggFuncExecNew2[from]) BatchFill(
 	bs := exec.ret.basicResult.empty
 
 	if vectors[0].IsConst() {
-		value := vector.MustFixedCol[from](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[from](vectors[0])[0]
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				idx := int(group - 1)
@@ -494,7 +494,7 @@ func (exec *singleAggFuncExecNew2[from]) distinctBatchFill(
 	}
 
 	if vectors[0].IsConst() {
-		value := vector.MustFixedCol[from](vectors[0])[0]
+		value := vector.MustFixedColWithTypeCheck[from](vectors[0])[0]
 		for i, group := range groups {
 			if needs[i] && group != GroupNotMatched {
 				idx := int(group - 1)

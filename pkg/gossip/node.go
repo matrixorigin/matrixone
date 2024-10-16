@@ -16,9 +16,12 @@ package gossip
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -119,11 +122,38 @@ func (n *Node) Create() error {
 
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
-		return moerr.NewInternalError(n.ctx, "CN gossip create node failed: %s", err)
+		return moerr.NewInternalErrorf(n.ctx, "CN gossip create node failed: %s", err)
 	}
 	n.list = ml
 	n.created = true
 	return nil
+}
+
+func (n *Node) ResetAddr() {
+	svcPort := getRandomPort()
+	cachePort := getRandomPort()
+	n.SetListenAddrFn(func() string {
+		return fmt.Sprintf("127.0.0.1:%d", svcPort)
+	})
+	n.SetServiceAddrFn(func() string {
+		return fmt.Sprintf("127.0.0.1:%d", svcPort)
+	})
+	n.SetCacheServerAddrFn(func() string {
+		return fmt.Sprintf("127.0.0.1:%d", cachePort)
+	})
+}
+
+func (n *Node) CreateWithRetry() error {
+	for {
+		if err := n.Create(); err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				n.ResetAddr()
+				continue
+			}
+			return err
+		}
+		return nil
+	}
 }
 
 func (n *Node) Join(existing []string) error {
@@ -208,4 +238,9 @@ func parseAddress(addr string) (string, int, error) {
 		return "", 0, err
 	}
 	return host, int(port), nil
+}
+
+func getRandomPort() int {
+	rand.New(rand.NewSource(time.Now().UnixNano()))
+	return rand.Intn(65535-21024) + 21024
 }

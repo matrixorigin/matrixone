@@ -285,7 +285,7 @@ func (rpb *rangePartitionBuilder) makePartitionSubTableDef(ctx context.Context, 
 	//there is no foreign key for the partition table
 	mainTableName := tableDef.Name
 	if !util.IsValidNameForPartitionTable(mainTableName) {
-		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
+		return moerr.NewInvalidInputf(ctx, "invalid main table name %s", mainTableName)
 	}
 
 	// common properties
@@ -313,7 +313,7 @@ func (rpb *rangePartitionBuilder) makePartitionSubTableDef(ctx context.Context, 
 		part := alterAddPartition[i]
 		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
 		if !ok {
-			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
+			return moerr.NewInvalidInputf(ctx, "invalid partition table name %s", partitionTableName)
 		}
 
 		// save the table name for a partition

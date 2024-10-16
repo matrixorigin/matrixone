@@ -105,11 +105,11 @@ alter table atomic_table_12 add index key1(c1);
 alter table atomic_table_12 alter index key1 visible;
 show create table atomic_table_12;
 Table    Create Table
-atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL\n)
+atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
 commit;
 show create table atomic_table_12;
 Table    Create Table
-atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
+atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
 show index from atomic_table_12;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 atomic_table_12    1    key1    1    c1    A    0    NULL    NULL    YES                    YES    NULL
@@ -122,11 +122,11 @@ alter table atomic_table_12_1 add index key1(c1);
 alter table atomic_table_12_1 alter index key1 visible;
 show create table atomic_table_12_1;
 Table    Create Table
-atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL\n)
+atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
 rollback;
 show create table atomic_table_12_1;
 Table    Create Table
-atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL\n)
+atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
 show index from atomic_table_12_1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 use transaction_enhance;
@@ -140,7 +140,7 @@ begin;
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_2(c1);
 show create table atomic_table_12_2;
 Table    Create Table
-atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 c1    c2
@@ -153,7 +153,7 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 commit;
 show create table atomic_table_13;
 Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`),\n  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`),\n  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop table if exists atomic_table_12_3;
 drop table if exists atomic_table_13;
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
@@ -173,7 +173,7 @@ c1    c2
 commit;
 show create table atomic_table_13;
 Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 drop table if exists atomic_table_12_4;
 drop table if exists atomic_table_13;
 create table atomic_table_12_4(c1 int primary key,c2 varchar(25));
@@ -193,7 +193,7 @@ c1    c2
 rollback ;
 show create table atomic_table_13;
 Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`),\n  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_4` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`),\n  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_4` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -203,7 +203,7 @@ begin;
 alter table atomic_table_12_5 drop index key1;
 show create table atomic_table_12_5;
 Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
+atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
 select * from atomic_table_12_5;
 c1    c2
 3    a
@@ -299,11 +299,11 @@ alter table atomic_table_18 add index key1(c1);
 alter table atomic_table_18 alter index key1 visible;
 show create table atomic_table_18;
 Table    Create Table
-atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL\n)
+atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
 rollback;
 show create table atomic_table_18;
 Table    Create Table
-atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` INT DEFAULT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL\n)
+atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
 show index from atomic_table_18;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 truncate table atomic_table_18;

@@ -16,17 +16,16 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
@@ -68,75 +67,101 @@ func (is *itemSet) Clear() {
 	*is = old[:0]
 }
 
-func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
-	rowids := vector.MustFixedCol[types.Rowid](vec)
-	blkids := make(map[types.Blockid]struct{})
-	for _, rowid := range rowids {
-		blkID := *rowid.BorrowBlockID()
-		blkids[blkID] = struct{}{}
-	}
-	return blkids
-}
-
-func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error {
-	if len(req.DeltaLocs) == 0 {
+func (h *Handle) prefetchDeleteRowID(
+	_ context.Context,
+	req *cmd_util.WriteReq,
+	txnMeta *txn.TxnMeta,
+) error {
+	if len(req.TombstoneStats) == 0 {
 		return nil
 	}
-	//for loading deleted rowid.
-	columnIdx := 0
-	pkIdx := 1
+
 	//start loading jobs asynchronously,should create a new root context.
-	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
-	if err != nil {
-		return err
-	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
-	if err != nil {
-		return err
-	}
-	for _, key := range req.DeltaLocs {
-		var location objectio.Location
-		location, err = blockio.EncodeLocationFromString(key)
+	for _, stats := range req.TombstoneStats {
+		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
+		err := blockio.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
 		if err != nil {
 			return err
 		}
-		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
-	return blockio.PrefetchWithMerged(h.db.Opts.SID, pref)
+
+	logCNCommittedObjects(txnMeta, true, req.TableID, req.TableName, req.TombstoneStats)
+
+	return nil
 }
 
-func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, error) {
-	if len(req.MetaLocs) == 0 {
-		return 0, nil
+func (h *Handle) prefetchMetadata(
+	_ context.Context,
+	req *cmd_util.WriteReq,
+	txnMeta *txn.TxnMeta,
+) error {
+	if len(req.DataObjectStats) == 0 {
+		return nil
 	}
+
 	//start loading jobs asynchronously,should create a new root context.
-	objCnt := 0
-	var objectName objectio.ObjectNameShort
-	for _, meta := range req.MetaLocs {
-		loc, err := blockio.EncodeLocationFromString(meta)
+	for _, stats := range req.DataObjectStats {
+		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
+		err := blockio.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
 		if err != nil {
-			return 0, err
-		}
-		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
-			err := blockio.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs.Service, loc)
-			if err != nil {
-				return 0, err
-			}
-			objCnt++
-			objectName = *loc.Name().Short()
+			return err
 		}
 	}
-	logutil.Info(
-		"CN-COMMIT-S3",
-		zap.Int("table-id", int(req.TableID)),
-		zap.String("table-name", req.TableName),
-		zap.Int("obj-cnt", objCnt),
-	)
-	return objCnt, nil
+
+	logCNCommittedObjects(txnMeta, false, req.TableID, req.TableName, req.DataObjectStats)
+
+	return nil
 }
 
-// TryPrefechTxn only prefecth data written by CN, do not change the state machine of TxnEngine.
-func (h *Handle) TryPrefechTxn(ctx context.Context, meta txn.TxnMeta) error {
+func logCNCommittedObjects(
+	txnMeta *txn.TxnMeta,
+	isTombstone bool,
+	tableId uint64,
+	tableName string,
+	statsList []objectio.ObjectStats,
+) {
+
+	totalBlkCnt := 0
+	totalRowCnt := 0
+	totalOSize := 0
+	totalCSize := 0
+	maxPrintObjCnt := 100
+	if len(statsList) < maxPrintObjCnt {
+		maxPrintObjCnt = len(statsList)
+	}
+	var objNames = make([]string, 0, maxPrintObjCnt)
+	for _, stats := range statsList {
+		totalBlkCnt += int(stats.BlkCnt())
+		totalRowCnt += int(stats.Rows())
+		totalCSize += int(stats.Size())
+		totalOSize += int(stats.OriginSize())
+		if len(objNames) >= maxPrintObjCnt {
+			continue
+		}
+		objNames = append(objNames, stats.ObjectName().ObjectId().ShortStringEx())
+	}
+
+	hint := "CN-COMMIT-S3-Data"
+	if isTombstone {
+		hint = "CN-COMMIT-S3-Tombstone"
+	}
+
+	logutil.Info(
+		hint,
+		zap.String("txn-id", txnMeta.DebugString()),
+		zap.Int("table-id", int(tableId)),
+		zap.String("table-name", tableName),
+		zap.Int("obj-cnt", len(statsList)),
+		zap.String("obj-osize", common.HumanReadableBytes(totalOSize)),
+		zap.String("obj-size", common.HumanReadableBytes(totalCSize)),
+		zap.Int("blk-cnt", totalBlkCnt),
+		zap.Int("row-cnt", totalRowCnt),
+		zap.Strings("names", objNames),
+	)
+}
+
+// TryPrefetchTxn only prefetch data written by CN, do not change the state machine of TxnEngine.
+func (h *Handle) TryPrefetchTxn(ctx context.Context, meta *txn.TxnMeta) error {
 	txnCtx, _ := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 
 	metaLocCnt := 0
@@ -153,19 +178,18 @@ func (h *Handle) TryPrefechTxn(ctx context.Context, meta txn.TxnMeta) error {
 	}()
 
 	for _, e := range txnCtx.reqs {
-		if r, ok := e.(*db.WriteReq); ok && r.FileName != "" {
-			if r.Type == db.EntryDelete {
+		if r, ok := e.(*cmd_util.WriteReq); ok && r.FileName != "" {
+			if r.Type == cmd_util.EntryDelete {
 				// start to load deleted row ids
-				deltaLocCnt += len(r.DeltaLocs)
-				if err := h.prefetchDeleteRowID(ctx, r); err != nil {
+				deltaLocCnt += len(r.TombstoneStats)
+				if err := h.prefetchDeleteRowID(ctx, r, meta); err != nil {
 					return err
 				}
-			} else if r.Type == db.EntryInsert {
-				objCnt, err := h.prefetchMetadata(ctx, r)
-				if err != nil {
+			} else if r.Type == cmd_util.EntryInsert {
+				metaLocCnt += len(r.DataObjectStats)
+				if err := h.prefetchMetadata(ctx, r, meta); err != nil {
 					return err
 				}
-				metaLocCnt += objCnt
 			}
 		}
 	}
@@ -198,12 +222,12 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 				continue
 			}
 
-			objIt := tblEntry.MakeObjectIt(true)
+			objIt := tblEntry.MakeTombstoneObjectIt()
 			for objIt.Next() {
 				objEntry := objIt.Item()
 				// PXU TODO
 				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
-					insUsage.Size += uint64(objEntry.GetCompSize())
+					insUsage.Size += uint64(objEntry.Size())
 				}
 			}
 			objIt.Release()

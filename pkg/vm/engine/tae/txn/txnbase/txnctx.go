@@ -114,19 +114,20 @@ func (ctx *TxnCtx) Repr() string {
 func (ctx *TxnCtx) SameTxn(txn txnif.TxnReader) bool { return ctx.ID == txn.GetID() }
 func (ctx *TxnCtx) CommitBefore(startTs types.TS) bool {
 	commitTS := ctx.GetCommitTS()
-	return commitTS.Less(&startTs)
+	return commitTS.LT(&startTs)
 }
 func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 	commitTS := ctx.GetCommitTS()
-	return commitTS.Greater(&startTs)
+	return commitTS.GT(&startTs)
 }
 
 func (ctx *TxnCtx) String() string            { return ctx.Repr() }
 func (ctx *TxnCtx) GetID() string             { return ctx.ID }
-func (ctx *TxnCtx) HasSnapshotLag() bool      { return ctx.SnapshotTS.Less(&ctx.StartTS) }
+func (ctx *TxnCtx) HasSnapshotLag() bool      { return ctx.SnapshotTS.LT(&ctx.StartTS) }
 func (ctx *TxnCtx) GetSnapshotTS() types.TS   { return ctx.SnapshotTS }
 func (ctx *TxnCtx) SetSnapshotTS(ts types.TS) { ctx.SnapshotTS = ts }
 func (ctx *TxnCtx) GetStartTS() types.TS      { return ctx.StartTS }
+func (ctx *TxnCtx) SetStartTS(ts types.TS)    { ctx.StartTS = ts }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
@@ -215,7 +216,7 @@ func (ctx *TxnCtx) IsVisible(o txnif.TxnReader) bool {
 	ostart := o.GetStartTS()
 	ctx.RLock()
 	defer ctx.RUnlock()
-	return ostart.LessEq(&ctx.StartTS)
+	return ostart.LE(&ctx.StartTS)
 }
 
 func (ctx *TxnCtx) IsActiveLocked() bool {
@@ -223,7 +224,7 @@ func (ctx *TxnCtx) IsActiveLocked() bool {
 }
 
 func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
-	if ts.LessEq(&ctx.StartTS) {
+	if ts.LE(&ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	// if !ctx.CommitTS.Equal(txnif.UncommitTS) {
@@ -289,7 +290,7 @@ func (ctx *TxnCtx) ToRollbacking(ts types.TS) error {
 }
 
 func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
-	if ts.Less(&ctx.StartTS) {
+	if ts.LT(&ctx.StartTS) {
 		panic(fmt.Sprintf("commit ts %d should not be less than start ts %d", ts, ctx.StartTS))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
@@ -305,13 +306,13 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.Is2PC() {
 		if ctx.State != txnif.TxnStatePrepared &&
 			ctx.State != txnif.TxnStateRollbacking {
-			return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
+			return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
 		}
 		ctx.State = txnif.TxnStateRollbacked
 		return nil
 	}
 	if ctx.State != txnif.TxnStateRollbacking {
-		return moerr.NewTAERollbackNoCtx("state %s", txnif.TxnStrState(ctx.State))
+		return moerr.NewTAERollbackNoCtxf("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

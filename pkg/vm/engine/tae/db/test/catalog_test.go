@@ -43,13 +43,13 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	obj, err := rel.CreateNonAppendableObject(nil)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-	sobj, err := rel.GetObject(obj.GetID())
+	sobj, err := rel.GetObject(obj.GetID(), false)
 	assert.Nil(t, err)
 	t.Log(sobj.String())
 
@@ -59,7 +59,7 @@ func TestCatalog1(t *testing.T) {
 
 	{
 		_, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-		it := rel.MakeObjectIt()
+		it := rel.MakeObjectIt(false)
 		cnt := 0
 		for it.Next() {
 			object := it.GetObject()
@@ -158,9 +158,9 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn.Commit(context.Background())
 	assert.Nil(t, err)
-	schema.BlockMaxRows = 10
+	schema.Extra.BlockMaxRows = 10
 	batchCnt := 10
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows)*batchCnt)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows)*batchCnt)
 	bats := bat.Split(batchCnt)
 
 	pool, _ := ants.NewPool(20)

@@ -619,3 +619,5 @@ count(*)
 drop account test_account;
 drop account test_account_01;
 drop snapshot snapshot_01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

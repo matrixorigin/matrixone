@@ -34,11 +34,11 @@ func (s *taeStorage) Write(
 	case uint32(apipb.OpCode_OpCommitMerge):
 		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandleCommitMerge)
 	default:
-		return nil, moerr.NewNotSupported(ctx, "unknown write op: %v", op)
+		return nil, moerr.NewNotSupportedf(ctx, "unknown write op: %v", op)
 	}
 }
 
-func HandleWrite[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
+func HandleWrite[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
 	ctx context.Context,
 	meta txn.TxnMeta,
 	payload []byte,

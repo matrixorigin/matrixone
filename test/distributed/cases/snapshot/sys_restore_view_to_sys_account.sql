@@ -309,6 +309,8 @@ create snapshot sp06 for account sys;
 
 restore account sys from snapshot sp05;
 
+select * from partition01;
+select * from partition01 {snapshot = 'sp05'};
 select * from view01;
 select * from view01{snapshot = 'sp05'};
 
@@ -318,6 +320,8 @@ select * from view01{snapshot = 'sp05'};
 
 restore account sys from snapshot sp06;
 select * from view01;
+select * from partition01;
+select * from partition01 {snapshot = 'sp06'};
 select * from view01{snapshot = 'sp06'};
 
 drop view view01;
@@ -601,5 +605,5 @@ drop database test03;
 drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
-
-
+-- @ignore:1
+show snapshots;

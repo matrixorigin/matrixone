@@ -16,20 +16,15 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,17 +34,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -128,7 +124,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid, HandleNotifyTimeout)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -150,7 +146,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
-		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
 		case <-dispatchProc.Ctx.Done():
@@ -177,7 +173,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
-		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -185,37 +180,26 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(runCompile, s)
-		s.SetContextRecursively(runCompile.proc.Ctx)
 
+		runCompile.scopes = []*Scope{s}
+		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
-			runCompile.proc.FreeVectors()
-			runCompile.proc.CleanValueScanBatchs()
-			runCompile.proc.Base.AnalInfos = nil
-			runCompile.anal.analInfos = nil
-
+			runCompile.clear()
 			runCompile.Release()
-			s.release()
 		}()
-		err = s.ParallelRun(runCompile)
-		if err == nil {
-			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
-			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
-		} else {
-			// there are 3 situations to release analyzeInfo
-			// 1 is free analyzeInfo of Local CN when release analyze
-			// 2 is free analyzeInfo of remote CN before transfer back
-			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-			// this is situation 3
-			for i := range runCompile.proc.Base.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
-			}
+		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
+
+		// running pipeline.
+		GetCompileService().recordRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+		defer func() {
+			GetCompileService().removeRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+		}()
+
+		err = s.MergeRun(runCompile)
+		if err == nil {
+			runCompile.GenPhyPlan(runCompile)
+			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
 		return err
 
@@ -257,16 +241,16 @@ type cnInformation struct {
 
 // information to rebuild a process.
 type processHelper struct {
-	id               string
-	lim              process.Limitation
-	unixTime         int64
-	accountId        uint32
-	txnOperator      client.TxnOperator
-	txnClient        client.TxnClient
-	sessionInfo      process.SessionInfo
-	analysisNodeList []int32
-	StmtId           uuid.UUID
-	prepareParams    *vector.Vector
+	id          string
+	lim         process.Limitation
+	unixTime    int64
+	accountId   uint32
+	txnOperator client.TxnOperator
+	txnClient   client.TxnClient
+	sessionInfo process.SessionInfo
+	//analysisNodeList []int32
+	StmtId        uuid.UUID
+	prepareParams *vector.Vector
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -290,7 +274,7 @@ type messageReceiverOnServer struct {
 	needNotReply bool
 
 	// result.
-	finalAnalysisInfo []*process.AnalyzeInfo
+	phyPlan *models.PhyPlan
 }
 
 func newMessageReceiverOnServer(
@@ -370,13 +354,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
 	// required deadline.
-	deadline, ok := receiver.messageCtx.Deadline()
-	if !ok {
-		return nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
-	}
-
-	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
-	proc := process.New(
+	runningCtx := defines.AttachAccountId(receiver.messageCtx, pHelper.accountId)
+	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
 		pHelper.txnClient,
@@ -387,37 +366,27 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	proc.Cancel = runningCancel
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	proc.SetPrepareParams(pHelper.prepareParams)
-	for i := range proc.Base.AnalInfos {
-		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
-	}
-	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.anal = newAnalyzeModule()
-	c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 
 	// a method to send back.
-	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
@@ -495,20 +464,12 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
 
-	analysisInfo := receiver.finalAnalysisInfo
-	if len(analysisInfo) > 0 {
-		anas := &pipeline.AnalysisList{
-			List: make([]*plan.AnalyzeInfo, len(analysisInfo)),
-		}
-		for i, a := range analysisInfo {
-			anas.List[i] = convertToPlanAnalyzeInfo(a)
-		}
-		data, err := anas.Marshal()
-		if err != nil {
-			return err
-		}
-		message.SetAnalysis(data)
+	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
+	if err != nil {
+		return err
 	}
+	message.SetAnalysis(jsonData)
+
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
@@ -518,17 +479,13 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
-	if len(procInfo.GetAnalysisNodeList()) == 0 {
-		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
-	}
 
 	result := processHelper{
-		id:               procInfo.Id,
-		lim:              process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:         procInfo.UnixTime,
-		accountId:        procInfo.AccountId,
-		txnClient:        cli,
-		analysisNodeList: procInfo.GetAnalysisNodeList(),
+		id:        procInfo.Id,
+		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:  procInfo.UnixTime,
+		accountId: procInfo.AccountId,
+		txnClient: cli,
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(
@@ -561,32 +518,31 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
-	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-	var opProc *process.Process
-	var ok bool
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	tout, tcancel := context.WithTimeout(context.Background(), timeout)
 
 	for {
 		select {
-		case <-getCtx.Done():
+		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			tcancel()
+			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, nil
+			tcancel()
+			return nil, nil, nil
 
 		default:
-			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
-				// it's bad to call the Gosched() here.
-				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
-				runtime.Gosched()
-			} else {
-				getCancel()
-				return opProc, nil
+			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
+			if ok {
+				tcancel()
+				return dispatchProc, notifyChannel, nil
 			}
+
+			// it's very bad to call the runtime.Gosched() here.
+			// get a process receive channel first, and listen to it may be a better way.
+			runtime.Gosched()
 		}
 	}
 }

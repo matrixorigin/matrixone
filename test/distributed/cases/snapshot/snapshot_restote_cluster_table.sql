@@ -37,3 +37,5 @@ drop snapshot if exists snapshot2;
 drop table if exists cluster_table_1;
 
 drop account if exists acc01;
+-- @ignore:1
+show snapshots;

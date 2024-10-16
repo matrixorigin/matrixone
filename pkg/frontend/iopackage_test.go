@@ -15,8 +15,9 @@
 package frontend
 
 import (
-	"github.com/smartystreets/goconvey/convey"
 	"testing"
+
+	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestBasicIOPackage_WriteUint8(t *testing.T) {
@@ -214,7 +215,7 @@ func TestBasicIOPackage_ReadUint64(t *testing.T) {
 }
 
 func Test_AppendUint(t *testing.T) {
-	convey.Convey("AppendUint succ", t, func() {
+	convey.Convey("AppendUint succ bigEndian", t, func() {
 		var io IOPackageImpl
 		var data, data2 = []byte{'a'}, []byte{'a', 'b'}
 		var value uint8 = 'b'
@@ -243,6 +244,41 @@ func Test_AppendUint(t *testing.T) {
 		convey.So(b, convey.ShouldEqual, false)
 
 		io.endian = true
+		pos = 0
+		_, i, b = io.ReadUint64(data, pos)
+		convey.So(i, convey.ShouldEqual, 8)
+		convey.So(b, convey.ShouldEqual, true)
+	})
+	convey.Convey("AppendUint succ littleEndian", t, func() {
+		var io IOPackageImpl
+		io.endian = true
+		var data, data2 = []byte{'a'}, []byte{'a', 'b'}
+		var value uint8 = 'b'
+		data = io.AppendUint8(data, value)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value2 uint16 = 'c'
+		data = io.AppendUint16(data, value2)
+		data2 = append(data2, []byte{'c', 0}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value3 uint32 = 'd'
+		data = io.AppendUint32(data, value3)
+		data2 = append(data2, []byte{'d', 0, 0, 0}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value4 uint64 = 'e'
+		data = io.AppendUint64(data, value4)
+		data2 = append(data2, []byte{'e', 0, 0, 0, 0, 0, 0, 0}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var pos = 9
+		u, i, b := io.ReadUint64(data, pos)
+		convey.So(u, convey.ShouldEqual, 0)
+		convey.So(i, convey.ShouldEqual, 0)
+		convey.So(b, convey.ShouldEqual, false)
+
+		io.endian = false
 		pos = 0
 		_, i, b = io.ReadUint64(data, pos)
 		convey.So(i, convey.ShouldEqual, 8)

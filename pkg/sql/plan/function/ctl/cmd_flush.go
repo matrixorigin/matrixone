@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,32 +50,33 @@ func handleFlush() handleFunc {
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: table id parse fail")
 				}
-				payload, err := types.Encode(&db.FlushTable{TableID: tblId})
+				payload, err := types.Encode(&cmd_util.FlushTable{TableID: tblId})
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
 				}
 				return payload, nil
 			}
 
+			ctx := proc.Ctx
 			if len(parameters) == 3 {
 				accId, err := strconv.ParseUint(parameters[2], 0, 32)
 				if err != nil {
 					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: invalid account id")
 				}
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
 
-			database, err := proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
+			database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, parameters[0], txnOp)
 			if err != nil {
 				return nil, err
 			}
-			rel, err := database.Relation(proc.Ctx, parameters[1], nil)
+			rel, err := database.Relation(ctx, parameters[1], nil)
 			if err != nil {
 				return nil, err
 			}
-			payload, err := types.Encode(&db.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
+			payload, err := types.Encode(&cmd_util.FlushTable{TableID: rel.GetTableID(proc.Ctx)})
 			if err != nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				return nil, moerr.NewInternalError(ctx, "payload encode err")
 			}
 			return payload, nil
 		},

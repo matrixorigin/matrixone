@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,7 +121,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -139,6 +140,7 @@ type memHdr struct {
 	allocSz      int32
 	fixedPoolIdx int8
 	guard        [3]uint8
+	offHeap      bool
 }
 
 func init() {
@@ -336,8 +338,8 @@ type MPool struct {
 }
 
 const (
-	NoFixed = 1
-	NoLock  = 2
+	NoFixed = 1 << iota
+	NoLock
 )
 
 const (
@@ -409,10 +411,10 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too small", cap)
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too big, global cap %d", cap, globalCap.Load())
+			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too big, global cap %d", cap, globalCap.Load())
 		}
 	}
 
@@ -465,11 +467,6 @@ func MustNewNoFixed(tag string) *MPool {
 
 func MustNewZeroNoFixed() *MPool {
 	return MustNewNoFixed("must_new_zero_no_fixed")
-}
-
-func (mp *MPool) Report() string {
-	ret := fmt.Sprintf("    mpool stats: %s", mp.Stats().Report("        "))
-	return ret
 }
 
 func (mp *MPool) ReportJson() string {
@@ -545,11 +542,11 @@ func sizeToIdx(size int) int {
 	return NumFixedPool
 }
 
-func (mp *MPool) Alloc(sz int) ([]byte, error) {
+func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
 		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
-		return nil, moerr.NewInternalErrorNoCtx("Invalid alloc size %d", sz)
+		return nil, moerr.NewInternalErrorNoCtxf("Invalid alloc size %d", sz)
 	}
 
 	if sz == 0 {
@@ -557,7 +554,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	}
 
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		return nil, moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool %s unavailable for alloc", mp.tag)
 	}
 
 	// update in use count
@@ -583,7 +580,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if mycurr > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, tempSize)
 		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 
 	// from fixed pool
@@ -595,7 +592,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
 
-	return alloc(sz, requiredSpaceWithoutHeader, mp), nil
+	return alloc(sz, requiredSpaceWithoutHeader, mp, offHeap), nil
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -610,7 +607,7 @@ func (mp *MPool) Free(bs []byte) {
 		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
 	}
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for free", mp.tag))
+		panic(moerr.NewInternalErrorNoCtxf("mpool %s unavailable for free", mp.tag))
 	}
 
 	// if cross pool free.
@@ -618,7 +615,7 @@ func (mp *MPool) Free(bs []byte) {
 		crossPoolFreeCounter.Add(1)
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
+			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
 		}
 		(otherPool.(*MPool)).Free(bs)
 		return
@@ -646,14 +643,20 @@ func (mp *MPool) Free(bs []byte) {
 		if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 		}
+		if pHdr.offHeap {
+			allocator().Deallocate(
+				unsafe.Slice((*byte)(hdr), 1),
+				malloc.NoHints,
+			)
+		}
 	}
 }
 
-func (mp *MPool) reAlloc(old []byte, sz int) ([]byte, error) {
+func (mp *MPool) reAlloc(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if sz <= cap(old) {
 		return old[:sz], nil
 	}
-	ret, err := mp.Alloc(sz)
+	ret, err := mp.Alloc(sz, offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -691,16 +694,16 @@ func roundupsize(size int) int {
 
 // Grow is like reAlloc, but we try to be a little bit more aggressive on growing
 // the slice.
-func (mp *MPool) Grow(old []byte, sz int) ([]byte, error) {
+func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if sz < len(old) {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow actually shrinks, %d, %d", len(old), sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
 	}
 	if sz <= cap(old) {
 		return old[:sz], nil
 	}
 	newCap := calculateNewCap(cap(old), sz)
 
-	ret, err := mp.reAlloc(old, newCap)
+	ret, err := mp.reAlloc(old, newCap, offHeap)
 	if err != nil {
 		return old, err
 	}
@@ -730,13 +733,13 @@ func calculateNewCap(oldCap int, requiredSize int) int {
 	return newcap
 }
 
-func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
+func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, error) {
 	len1 := len(old)
 	len2 := len(old2)
 	if sz < len1+len2 {
-		return nil, moerr.NewInternalErrorNoCtx("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
+		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
-	ret, err := mp.Grow(old, sz)
+	ret, err := mp.Grow(old, sz, offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -768,10 +771,10 @@ func (mp *MPool) Decrease(nb int64) {
 }
 */
 
-func MakeSliceWithCap[T any](n, cap int, mp *MPool) ([]T, error) {
+func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.Alloc(int(tsz) * cap)
+	bs, err := mp.Alloc(int(tsz)*cap, offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -781,12 +784,12 @@ func MakeSliceWithCap[T any](n, cap int, mp *MPool) ([]T, error) {
 	return ret[:n:cap], nil
 }
 
-func MakeSlice[T any](n int, mp *MPool) ([]T, error) {
-	return MakeSliceWithCap[T](n, n, mp)
+func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
+	return MakeSliceWithCap[T](n, n, mp, offHeap)
 }
 
-func MakeSliceArgs[T any](mp *MPool, args ...T) ([]T, error) {
-	ret, err := MakeSlice[T](len(args), mp)
+func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
+	ret, err := MakeSlice[T](len(args), mp, offHeap)
 	if err != nil {
 		return ret, err
 	}

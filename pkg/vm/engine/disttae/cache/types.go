@@ -16,14 +16,19 @@ package cache
 
 import (
 	"bytes"
+	"encoding/hex"
+	"fmt"
 	"sync"
+	"unsafe"
+
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/tidwall/btree"
 )
 
 const (
@@ -92,6 +97,15 @@ type DatabaseItem struct {
 	CPKey     []byte
 }
 
+func (item *DatabaseItem) String() string {
+	return fmt.Sprintln(
+		"item ptr", uintptr(unsafe.Pointer(item)),
+		"item pk",
+		hex.EncodeToString(item.CPKey),
+		"accId",
+		item.AccountId, item.Name, item.Id, item.Ts, item.deleted)
+}
+
 type TableItem struct {
 	// table key
 	AccountId  uint32
@@ -107,7 +121,6 @@ type TableItem struct {
 	Version      uint32
 	DatabaseName string
 
-	Rowid types.Rowid
 	CPKey []byte
 
 	// table def
@@ -119,12 +132,22 @@ type TableItem struct {
 	Partition      string
 	CreateSql      string
 	CatalogVersion uint32
+	ExtraInfo      *api.SchemaExtra
 
 	// primary index
 	PrimaryIdx    int
 	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
+}
+
+func (item *TableItem) String() string {
+	return fmt.Sprintln(
+		"item ptr", uintptr(unsafe.Pointer(item)),
+		"item pk",
+		hex.EncodeToString(item.CPKey),
+		"accId",
+		item.AccountId, item.DatabaseName, item.DatabaseId, item.Name, item.Id, item.Ts, item.deleted)
 }
 
 type noSliceTs struct {
@@ -266,7 +289,7 @@ func copyTableItem(dst, src *TableItem) {
 	dst.ClusterByIdx = src.ClusterByIdx
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
-	copy(dst.Rowid[:], src.Rowid[:])
+	dst.ExtraInfo = api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(src.ExtraInfo))
 }
 
 func copyDatabaseItem(dest, src *DatabaseItem) {

@@ -136,7 +136,7 @@ var (
 		case types.T_decimal128:
 			return types.New(types.T_decimal128, 38, typs[0].Scale)
 		}
-		panic(moerr.NewInternalErrorNoCtx("unsupported type '%v' for sum", typs[0]))
+		panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
 	}
 )
 

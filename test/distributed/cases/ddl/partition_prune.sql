@@ -205,4 +205,71 @@ select * from employees where store_id > 15;
 --无分区裁剪
 select * from employees where store_id = 10 or id = 10004;
 
+--------------------------------------------------------------------------------------
+drop table if exists employees;
+CREATE TABLE employees (
+                           id INT NOT NULL,
+                           fname VARCHAR(30),
+                           lname VARCHAR(30),
+                           hired DATE NOT NULL DEFAULT '1970-01-01',
+                           separated DATE NOT NULL DEFAULT '9999-12-31',
+                           job_code INT,
+                           store_id INT
+) PARTITION BY HASH(store_id) PARTITIONS 4;
+
+
+INSERT INTO employees VALUES
+                          (10001, 'Georgi', 'Facello', '1953-09-02','1986-06-26',120, 1),
+                          (10002, 'Bezalel', 'Simmel', '1964-06-02','1985-11-21',150, 7),
+                          (10003, 'Parto', 'Bamford', '1959-12-03','1986-08-28',140, 3),
+                          (10004, 'Chirstian', 'Koblick', '1954-05-01','1986-12-01',150, 3),
+                          (10005, 'Kyoichi', 'Maliniak', '1955-01-21','1989-09-12',150, 18),
+                          (10006, 'Anneke', 'Preusig', '1953-04-20','1989-06-02',150, 15),
+                          (10007, 'Tzvetan', 'Zielinski', '1957-05-23','1989-02-10',110, 6),
+                          (10008, 'Saniya', 'Kalloufi', '1958-02-19','1994-09-15',170, 10),
+                          (10009, 'Sumant', 'Peac', '1952-04-19','1985-02-18',110, 13),
+                          (10010, 'Duangkaew', 'Piveteau', '1963-06-01','1989-08-24',160, 10),
+                          (10011, 'Mary', 'Sluis', '1953-11-07','1990-01-22',120, 8),
+                          (10012, 'Patricio', 'Bridgland', '1960-10-04','1992-12-18',120, 7),
+                          (10013, 'Eberhardt', 'Terkki', '1963-06-07','1985-10-20',160, 17),
+                          (10014, 'Berni', 'Genin', '1956-02-12','1987-03-11',120, 15),
+                          (10015, 'Guoxiang', 'Nooteboom', '1959-08-19','1987-07-02',140, 8),
+                          (10016, 'Kazuhito', 'Cappelletti', '1961-05-02','1995-01-27',140, 2),
+                          (10017, 'Cristinel', 'Bouloucos', '1958-07-06','1993-08-03',170, 10),
+                          (10018, 'Kazuhide', 'Peha', '1954-06-19','1987-04-03',170, 2),
+                          (10019, 'Lillian', 'Haddadi', '1953-01-23','1999-04-30',170, 13),
+                          (10020, 'Mayuko', 'Warwick', '1952-12-24','1991-01-26',120, 1),
+                          (10021, 'Ramzi', 'Erde', '1960-02-20','1988-02-10',120, 9),
+                          (10022, 'Shahaf', 'Famili', '1952-07-08','1995-08-22',130, 10),
+                          (10023, 'Bojan', 'Montemayor', '1953-09-29','1989-12-17',120, 5),
+                          (10024, 'Suzette', 'Pettey', '1958-09-05','1997-05-19',130, 4),
+                          (10025, 'Prasadram', 'Heyers', '1958-10-31','1987-08-17',180, 8),
+                          (10026, 'Yongqiao', 'Berztiss', '1953-04-03','1995-03-20',170, 4),
+                          (10027, 'Divier', 'Reistad', '1962-07-10','1989-07-07',180, 10),
+                          (10028, 'Domenick', 'Tempesti', '1963-11-26','1991-10-22',110, 11),
+                          (10029, 'Otmar', 'Herbst', '1956-12-13','1985-11-20',110, 12),
+                          (10030, 'Elvis', 'Demeyer', '1958-07-14','1994-02-17',110, 1),
+                          (10031, 'Karsten', 'Joslin', '1959-01-27','1991-09-01',110, 10),
+                          (10032, 'Jeong', 'Reistad', '1960-08-09','1990-06-20',120, 19),
+                          (10033, 'Arif', 'Merlo', '1956-11-14','1987-03-18',120, 14),
+                          (10034, 'Bader', 'Swan', '1962-12-29','1988-09-21',130, 16),
+                          (10035, 'Alain', 'Chappelet', '1953-02-08','1988-09-05',130, 3),
+                          (10036, 'Adamantios', 'Portugali', '1959-08-10','1992-01-03',130, 14),
+                          (10037, 'Pradeep', 'Makrucki', '1963-07-22','1990-12-05',140, 12),
+                          (10038, 'Huan', 'Lortz', '1960-07-20','1989-09-20',140, 7),
+                          (10039, 'Alejandro', 'Brender', '1959-10-01','1988-01-19',110, 20),
+                          (10040, 'Weiyi', 'Meriste', '1959-09-13','1993-02-14',140, 17);
+
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+insert into employees select * from employees;
+delete from employees where store_id = (select min(store_id) from employees);
+
 drop database db1;

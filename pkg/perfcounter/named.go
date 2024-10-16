@@ -59,8 +59,6 @@ func LogNodeCacheStats(uuid string) {
 	logutil.Debug("cache stats",
 		zap.Any("node", uuid),
 		zap.Any("type", "memory"),
-		zap.Any("used", counter.FileService.Cache.Memory.Used.Load()),
-		zap.Any("free", counter.FileService.Cache.Memory.Available.Load()),
 		zap.Any("hit ratio", float64(counter.FileService.Cache.Memory.Hit.Load())/
 			float64(counter.FileService.Cache.Memory.Read.Load())),
 	)
@@ -109,8 +107,6 @@ func GetCacheStats(callback func(info []*query.CacheInfo)) {
 				NodeType:  nodeType,
 				NodeId:    nodeId,
 				CacheType: "memory",
-				Used:      uint64(ptr.FileService.Cache.Memory.Used.Load()),
-				Free:      uint64(ptr.FileService.Cache.Memory.Available.Load()),
 				HitRatio:  float32(ptr.FileService.Cache.Memory.Hit.Load()) / float32(read1),
 			}
 

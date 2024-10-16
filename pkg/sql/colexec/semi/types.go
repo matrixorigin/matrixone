@@ -15,9 +15,9 @@
 package semi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -34,17 +34,11 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
-	state int
-
-	batches       []*batch.Batch
-	batchRowCount int64
-	rbat          *batch.Batch
+	state    int
+	itr      hashmap.Iterator
+	eligible []int64
+	rbat     *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -54,8 +48,8 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     []*vector.Vector
 
 	mp        *message.JoinMap
 	skipProbe bool
@@ -64,9 +58,8 @@ type container struct {
 }
 
 type SemiJoin struct {
-	ctr        *container
+	ctr        container
 	Result     []int32
-	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
@@ -76,6 +69,7 @@ type SemiJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
@@ -110,21 +104,44 @@ func (semiJoin *SemiJoin) Release() {
 }
 
 func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	semiJoin.Free(proc, pipelineFailed, err)
+	ctr := &semiJoin.ctr
+	ctr.itr = nil
+	ctr.eligible = ctr.eligible[:0]
+	ctr.resetExecutor()
+	ctr.resetExprExecutor()
+	ctr.cleanHashMap()
+	ctr.state = Build
+	ctr.skipProbe = false
+
+	if semiJoin.ProjectList != nil {
+		if semiJoin.OpAnalyzer != nil {
+			semiJoin.OpAnalyzer.Alloc(semiJoin.ProjectAllocSize + semiJoin.ctr.maxAllocSize)
+		}
+
+		semiJoin.ctr.maxAllocSize = 0
+		semiJoin.ResetProjection(proc)
+	} else {
+		if semiJoin.OpAnalyzer != nil {
+			semiJoin.OpAnalyzer.Alloc(semiJoin.ctr.maxAllocSize)
+		}
+		semiJoin.ctr.maxAllocSize = 0
+	}
 }
 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := semiJoin.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc)
-		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
-		ctr.cleanExprExecutor()
+	ctr := &semiJoin.ctr
 
-		anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-		anal.Alloc(ctr.maxAllocSize)
+	ctr.eligible = nil
+	ctr.cleanExecutor()
+	ctr.cleanExprExecutor()
+	ctr.cleanBatch(proc)
 
-		semiJoin.ctr = nil
+	semiJoin.FreeProjection(proc)
+}
+
+func (ctr *container) resetExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.ResetForNextQuery()
 	}
 }
 
@@ -136,18 +153,14 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
 	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
+		ctr.rbat.Clean(proc.Mp())
 	}
 	if ctr.joinBat1 != nil {
-		proc.PutBatch(ctr.joinBat1)
-		ctr.joinBat1 = nil
+		ctr.joinBat1.Clean(proc.Mp())
 	}
 	if ctr.joinBat2 != nil {
-		proc.PutBatch(ctr.joinBat2)
-		ctr.joinBat2 = nil
+		ctr.joinBat2.Clean(proc.Mp())
 	}
 }
 
@@ -158,12 +171,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+func (ctr *container) resetExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].ResetForNextQuery()
 		}
-		ctr.evecs[i].vec = nil
 	}
-	ctr.evecs = nil
+}
+
+func (ctr *container) cleanExecutor() {
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
+		}
+	}
 }

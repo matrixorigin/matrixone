@@ -186,7 +186,16 @@ func NewGlobalStats(
 	return s
 }
 
-func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
+// shouldTrigger returns true only if key already exists in the map.
+func (gs *GlobalStats) shouldTrigger(key pb.StatsInfoKey) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	_, ok := gs.mu.statsInfoMap[key]
+	return ok
+}
+
+// checkTriggerCond checks the condition that if we should trigger the stats update.
+func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
@@ -262,6 +271,15 @@ func (gs *GlobalStats) RemoveTid(tid uint64) {
 	delete(gs.logtailUpdate.mu.updated, tid)
 }
 
+// clearTables clears the tables in the map if there are any tables in it.
+func (gs *GlobalStats) clearTables() {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	if len(gs.logtailUpdate.mu.updated) > 0 {
+		gs.logtailUpdate.mu.updated = make(map[uint64]struct{})
+	}
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	select {
 	case gs.tailC <- tail:
@@ -319,15 +337,17 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key, false)
+		if gs.shouldTrigger(key) {
+			gs.triggerUpdate(key, false)
+		}
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
-			if logtailreplay.IsBlkTable(cmd.TableName) ||
-				logtailreplay.IsObjTable(cmd.TableName) ||
-				logtailreplay.IsMetaTable(cmd.TableName) {
+			if logtailreplay.IsMetaEntry(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key, false)
+				if gs.shouldTrigger(key) {
+					gs.triggerUpdate(key, false)
+				}
 				break
 			}
 		}
@@ -336,9 +356,11 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
+		if !triggered && gs.checkTriggerCond(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key, false)
+			if gs.shouldTrigger(key) {
+				gs.triggerUpdate(key, false)
+			}
 		}
 	}
 }
@@ -527,7 +549,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	}
 
 	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
-	approxObjectNum := int64(partitionState.ApproxObjectsNum())
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return
@@ -676,7 +698,7 @@ func updateInfoFromZoneMap(
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
@@ -746,10 +768,24 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 			}
 			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
+				if plan2.GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
+					if info.ColumnNDVs[idx] < 50000 && info.ColumnNDVs[idx] > 500 {
+						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.2)
+					}
+				} else if info.ColumnNDVs[idx] > 500 { //sorted column, need to adjust ndv up
+					info.ColumnNDVs[idx] *= math.Pow(info.ColumnNDVs[idx], 0.2)
+					if info.ColumnSize[idx] > 0 {
+						info.ColumnNDVs[idx] *= math.Pow(float64(info.ColumnSize[idx]), 0.2)
+					}
+				}
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
 				info.ColumnNDVs[idx] = ndvUsingZonemap
+			}
+
+			if info.ColumnNDVs[idx] < 3 {
+				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
 			}
 
 			if info.ColumnNDVs[idx] > info.TableCnt {

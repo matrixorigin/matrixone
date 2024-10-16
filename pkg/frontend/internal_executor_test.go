@@ -15,17 +15,17 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func mockResultSet() *MysqlResultSet {
@@ -46,7 +46,7 @@ func TestIe(t *testing.T) {
 		func(rt runtime.Runtime) {
 			ctx := context.TODO()
 			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-			setGlobalPu(pu)
+			setPu("", pu)
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
@@ -62,9 +62,9 @@ func TestIe(t *testing.T) {
 }
 
 func TestIeProto(t *testing.T) {
-	setGlobalPu(config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	// Mock autoIncrCaches
-	setGlobalAicm(&defines.AutoIncrCacheManager{})
+	setAicm("", &defines.AutoIncrCacheManager{})
 
 	executor := NewInternalExecutor("")
 	p := executor.proto
@@ -133,28 +133,4 @@ func TestIeResult(t *testing.T) {
 	v, e := result.Value(context.TODO(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
-	v, e = result.ValueByName(context.TODO(), 0, "test")
-	require.NoError(t, e)
-	require.Equal(t, 42, v.(int))
-	str, e := result.StringValueByName(context.TODO(), 0, "test")
-	require.NoError(t, e)
-	require.Equal(t, "42", str)
-	str, e = result.StringValueByName(context.TODO(), 0, "tet")
-	require.Error(t, e)
-	require.Equal(t, "", str)
-}
-
-func DebugPrintInternalResult(ctx context.Context, res ie.InternalExecResult) string {
-	buf := &bytes.Buffer{}
-	for i := uint64(0); i < res.ColumnCount(); i++ {
-		col, _, _, _ := res.Column(context.TODO(), i)
-		buf.WriteString(col + ": ")
-		for j := uint64(0); j < res.RowCount(); j++ {
-			s, _ := res.StringValueByName(ctx, j, col)
-			buf.WriteString(" | ")
-			buf.WriteString(s)
-		}
-		buf.WriteString("\n")
-	}
-	return buf.String()
 }

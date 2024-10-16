@@ -17,7 +17,7 @@ Database    Create Database
 test_db    CREATE DATABASE `test_db`
 /* cloud_user */ show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 /* cloud_user */ show create view test_view;
 View    Create View    character_set_client    collation_connection
 test_view    /* cloud_user */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
@@ -91,7 +91,7 @@ col1    col2
 /* cloud_user */ create table test_01(a int, b varchar);
 /* cloud_user */ show create table test_01;
 Table    Create Table
-test_01    CREATE TABLE `test_01` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(65535) DEFAULT NULL\n)
+test_01    CREATE TABLE `test_01` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
 /* cloud_user */ insert into test_01 values (1,'a');
 /* cloud_user */ insert into test_01 values (2,'b');
 /* cloud_user */ update test_01 set a=100 where b='b';

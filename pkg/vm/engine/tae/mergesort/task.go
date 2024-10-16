@@ -19,13 +19,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -83,40 +83,26 @@ func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*
 	return newBat, releaseF
 }
 
-func GetNewWriter(
-	fs fileservice.FileService,
-	ver uint32, seqnums []uint16,
-	sortkeyPos int, sortkeyIsPK bool,
-) *blockio.BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
-	if err != nil {
-		panic(err) // it is impossible
-	}
-	// has sortkey
-	if sortkeyPos >= 0 {
-		if sortkeyIsPK {
-			writer.SetPrimaryKey(uint16(sortkeyPos))
-		} else { // cluster by
-			writer.SetSortKey(uint16(sortkeyPos))
-		}
-	}
-	return writer
-}
-
 func DoMergeAndWrite(
 	ctx context.Context,
 	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
+	isTombstone bool,
 ) (err error) {
 	now := time.Now()
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
+	fromSize := uint32(0)
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
+		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+			obj.ObjectName().ObjectId().ShortStringEx(),
+			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
+			obj.Rows())
+		fromSize += obj.OriginSize()
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -124,7 +110,8 @@ func DoMergeAndWrite(
 		common.AnyField("txn-info", txnInfo),
 		common.AnyField("host", mergehost.HostHintName()),
 		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
-		common.AnyField("objs", fromObjsDesc),
+		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
 	defer func() {
 		if err != nil {
@@ -142,7 +129,7 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos, isTombstone); err != nil {
 			return err
 		}
 	} else {
@@ -152,18 +139,22 @@ func DoMergeAndWrite(
 	}
 
 	toObjsDesc := ""
+	toSize := uint32(0)
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
-		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
 			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		toSize += obj.OriginSize()
 	}
 
 	logutil.Info(
 		"[MERGE-END]",
 		zap.String("task", mergehost.Name()),
 		common.AnyField("to-objs", toObjsDesc),
+		common.AnyField("to-size", units.BytesSize(float64(toSize))),
 		common.DurationField(time.Since(now)),
 	)
 	return nil
@@ -177,31 +168,30 @@ func CleanTransMapping(b api.TransferMaps) {
 	}
 }
 
-func AddSortPhaseMapping(b api.TransferMaps, idx int, originRowCnt int, mapping []int64) {
-	// TODO: remove panic check
-	if mapping != nil {
-		if len(mapping) != originRowCnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
+func AddSortPhaseMapping(m api.TransferMap, rowCnt int, mapping []int64) {
+	if mapping == nil {
+		for i := range rowCnt {
+			m[uint32(i)] = api.TransferDestPos{RowIdx: uint32(i)}
 		}
-		// mapping sortedVec[i] = originalVec[sortMapping[i]]
-		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
-		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
-		// TODO: use a more efficient way to transpose, in place
-		transposedMapping := make([]int64, len(mapping))
-		for sortedPos, originalPos := range mapping {
-			transposedMapping[originalPos] = int64(sortedPos)
-		}
-		mapping = transposedMapping
+		return
 	}
-	targetMapping := b[idx]
-	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if mapping == nil {
-			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(origRow)}
-		} else {
-			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(mapping[origRow])}
-		}
+
+	if len(mapping) != rowCnt {
+		panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), rowCnt))
+	}
+
+	// mapping sortedVec[i] = originalVec[sortMapping[i]]
+	// transpose it, sortedVec[sortMapping[i]] = originalVec[i]
+	// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+	// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
+	// TODO: use a more efficient way to transpose, in place
+	transposedMapping := make([]uint32, len(mapping))
+	for sortedPos, originalPos := range mapping {
+		transposedMapping[originalPos] = uint32(sortedPos)
+	}
+
+	for i := range rowCnt {
+		m[uint32(i)] = api.TransferDestPos{RowIdx: transposedMapping[i]}
 	}
 }
 

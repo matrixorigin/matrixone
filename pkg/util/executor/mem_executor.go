@@ -53,7 +53,16 @@ func (e *memExecutor) ExecTxn(
 }
 
 type memTxnExecutor struct {
-	mocker func(sql string) (Result, error)
+	mocker      func(sql string) (Result, error)
+	txnOperator client.TxnOperator
+}
+
+// NewMemTxnExecutor used to testing
+func NewMemTxnExecutor(mocker func(sql string) (Result, error), txnOperator client.TxnOperator) TxnExecutor {
+	return &memTxnExecutor{
+		mocker:      mocker,
+		txnOperator: txnOperator,
+	}
 }
 
 func (te *memTxnExecutor) Exec(sql string, _ StatementOption) (Result, error) {
@@ -69,7 +78,7 @@ func (te *memTxnExecutor) LockTable(table string) error {
 }
 
 func (te *memTxnExecutor) Txn() client.TxnOperator {
-	return nil
+	return te.txnOperator
 }
 
 // MemResult used to test. Construct a Result from memory.
@@ -87,6 +96,10 @@ func NewMemResult(
 
 func (m *MemResult) NewBatch() {
 	m.res.Batches = append(m.res.Batches, newBatch(m.cols))
+}
+
+func (m *MemResult) NewBatchWithRowCount(rowcount int) {
+	m.res.Batches = append(m.res.Batches, newBatchWithRowCount(m.cols, rowcount))
 }
 
 func (m *MemResult) GetResult() Result {
@@ -111,6 +124,12 @@ func AppendFixedRows[T any](m *MemResult, col int, values []T) error {
 func newBatch(cols int) *batch.Batch {
 	bat := batch.NewWithSize(cols)
 	bat.SetRowCount(cols)
+	return bat
+}
+
+func newBatchWithRowCount(cols int, rowcout int) *batch.Batch {
+	bat := batch.NewWithSize(cols)
+	bat.SetRowCount(rowcout)
 	return bat
 }
 

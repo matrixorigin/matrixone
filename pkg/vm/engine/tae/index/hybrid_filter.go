@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+type HybridBloomFilter = hybridFilter
+
 type hybridFilter struct {
 	prefixLevel1 prefixBloomFilter
 	prefixLevel2 prefixBloomFilter

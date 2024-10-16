@@ -21,12 +21,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
@@ -372,6 +377,105 @@ func TestCalculateAggrMemoryBytes(t *testing.T) {
 			val1 := mustDecimal128(convertFloat64ToDecimal128(tt.fields.dividend))
 			gotVal := calculateAggrMemoryBytes(val1, tt.fields.divisor)
 			require.Equal(t, tt.want, gotVal)
+		})
+	}
+}
+
+func TestStatementInfo_Key(t *testing.T) {
+
+	now := time.Now()
+	nowSub5sec := now.Add(-5 * time.Second)
+	dummyError := moerr.NewInternalError(context.TODO(), "dummy test errmsg")
+	type fields struct {
+		SessionID     [16]byte
+		SqlSourceType string
+		StatementType string
+		Status        StatementInfoStatus
+		Error         error
+		ResponseAt    time.Time
+	}
+	type args struct {
+		duration time.Duration
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   table.WindowKey
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				SessionID:     NilSesID,
+				SqlSourceType: "source_01",
+				StatementType: "stmt_type_01",
+				Status:        StatementStatusSuccess,
+				Error:         nil,
+				ResponseAt:    now,
+			},
+			args: args{duration: 5 * time.Second},
+			want: Key{
+				SessionID:     NilSesID,
+				StatementType: "stmt_type_01",
+				Window:        now.Truncate(5 * time.Second),
+				Status:        StatementStatusSuccess,
+				SqlSourceType: "source_01",
+				Error:         "",
+			},
+		},
+		{
+			name: "error",
+			fields: fields{
+				SessionID:     NilSesID,
+				SqlSourceType: "source_01",
+				StatementType: "stmt_type_01",
+				Status:        StatementStatusFailed,
+				Error:         moerr.GetOkExpectedEOF(),
+				ResponseAt:    nowSub5sec,
+			},
+			args: args{duration: 5 * time.Second},
+			want: Key{
+				SessionID:     NilSesID,
+				StatementType: "stmt_type_01",
+				Window:        nowSub5sec.Truncate(5 * time.Second),
+				Status:        StatementStatusFailed,
+				SqlSourceType: "source_01",
+				Error:         moerr.GetOkExpectedEOF().Error(),
+			},
+		},
+		{
+			name: "error_InternalError",
+			fields: fields{
+				SessionID:     NilSesID,
+				SqlSourceType: "source_01",
+				StatementType: "stmt_type_01",
+				Status:        StatementStatusFailed,
+				Error:         dummyError,
+				ResponseAt:    nowSub5sec,
+			},
+			args: args{duration: 5 * time.Second},
+			want: Key{
+				SessionID:     NilSesID,
+				StatementType: "stmt_type_01",
+				Window:        nowSub5sec.Truncate(5 * time.Second),
+				Status:        StatementStatusFailed,
+				SqlSourceType: "source_01",
+				Error:         dummyError.Error(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &StatementInfo{
+				SessionID:     tt.fields.SessionID,
+				SqlSourceType: tt.fields.SqlSourceType,
+				StatementType: tt.fields.StatementType,
+				Status:        tt.fields.Status,
+				Error:         tt.fields.Error,
+				ResponseAt:    tt.fields.ResponseAt,
+			}
+			assert.Equalf(t, tt.want, s.Key(tt.args.duration), "Key(%v)", tt.args.duration)
+			t.Logf("error: %v", tt.want.(Key).Error)
 		})
 	}
 }

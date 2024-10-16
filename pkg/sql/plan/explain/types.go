@@ -17,8 +17,10 @@ package explain
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -106,7 +108,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	logutil.Debugf(buf.Lines[buf.CurrentLine])
+	logutil.Debug(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 
@@ -116,7 +118,7 @@ func (buf *ExplainDataBuffer) PushPlanTitle(title string) {
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, title)
-	logutil.Infof(buf.Lines[buf.CurrentLine])
+	logutil.Info(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 
@@ -139,10 +141,11 @@ const (
 )
 
 type ExplainOptions struct {
-	Verbose  bool
-	Analyze  bool
-	Format   ExplainFormat
-	NodeType plan.Node_NodeType
+	Verbose    bool
+	Analyze    bool
+	Format     ExplainFormat
+	NodeType   plan.Node_NodeType
+	CmpContext plan2.CompilerContext
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {

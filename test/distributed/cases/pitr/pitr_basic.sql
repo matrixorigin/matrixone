@@ -172,3 +172,127 @@ select * from mo_catalog.mo_pitr;
 drop account if exists acc02;
 -- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
+
+
+drop pitr if exists pitr01;
+create pitr pitr01 range 1 'h';
+drop pitr if exists pitr02;
+create pitr pitr02 range 1 'd';
+drop pitr if exists pitr03;
+create pitr pitr03 range 1 'mo';
+drop pitr if exists pitr04;
+create pitr pitr04 range 1 'y';
+-- @ignore:1,2
+show pitr;
+-- @ignore:1,2
+show pitr where ACCOUNT_NAME = 'sys';
+-- @ignore:1,2
+show pitr where ACCOUNT_NAME = 'sys' AND CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > 1;
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(1, 'h');
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) >= CAST_RANGE_VALUE_UNIT(29, 'd');
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(30, 'd');
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) >= CAST_RANGE_VALUE_UNIT(30, 'd');
+-- @ignore:1,2
+show pitr where CAST_RANGE_VALUE_UNIT(PITR_LENGTH, PITR_UNIT) > CAST_RANGE_VALUE_UNIT(11, 'mo');
+drop pitr if exists pitr01;
+drop pitr if exists pitr02;
+drop pitr if exists pitr03;
+drop pitr if exists pitr04;
+-- @ignore:1,2
+show pitr;
+
+drop pitr if exists pitr05;
+create pitr pitr05 for cluster range 1 'h';
+drop pitr if exists pitr06;
+create pitr pitr06 for cluster range 1 'd';
+
+
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+drop pitr if exists pitr11;
+create pitr pitr11 for database db01 range 1 'd';
+
+create table db01.table01 (col1 int);
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 table table01 range 1 'h';
+drop pitr if exists pitr13;
+create pitr pitr13 for database db01 table table01 range 1 'd';
+
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop pitr if exists pitr14;
+create pitr pitr14 for account acc01 range 1 'h';
+drop pitr if exists pitr15;
+create pitr pitr15 for account acc01 range 1 'd';
+
+drop database if exists db01;
+drop account if exists acc01;
+drop pitr if exists pitr05;
+drop pitr if exists pitr06;
+drop pitr if exists pitr10;
+drop pitr if exists pitr11;
+drop pitr if exists pitr12;
+drop pitr if exists pitr13;
+drop pitr if exists pitr14;
+drop pitr if exists pitr15;
+-- @ignore:1,2
+show pitr;
+
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+-- @session:id=3&user=acc01:test_account&password=111
+drop pitr if exists pitr01;
+create pitr pitr01 range 1 'h';
+drop pitr if exists pitr02;
+create pitr pitr02 range 1 'd';
+
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+drop pitr if exists pitr11;
+create pitr pitr11 for database db01 range 1 'd';
+
+create table db01.table01 (col1 int);
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 table table01 range 1 'h';
+drop pitr if exists pitr13;
+create pitr pitr13 for database db01 table table01 range 1 'd';
+
+drop pitr if exists pitr01;
+drop pitr if exists pitr02;
+drop pitr if exists pitr10;
+drop pitr if exists pitr11;
+drop pitr if exists pitr12;
+drop pitr if exists pitr13;
+
+drop database if exists db01;
+-- @session
+drop account if exists acc01;
+
+drop pitr if exists pitr111;
+create pitr pitr111 range 1 'h';
+drop pitr if exists pitr122;
+create pitr pitr122 range 1 'd';
+drop pitr if exists pitr111;
+drop pitr if exists pitr122;
+
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+drop pitr if exists pitr11;
+create pitr pitr11 for database db01 range 1 'd';
+drop database if exists db01;
+create database db01;
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 range 1 'd';
+drop pitr if exists pitr10;
+drop pitr if exists pitr11;
+drop pitr if exists pitr12;
+drop database if exists db01;

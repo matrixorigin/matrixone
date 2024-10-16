@@ -15,7 +15,6 @@
 package hashmap
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -74,7 +73,6 @@ type Iterator interface {
 type StrHashMap struct {
 	hasNull bool
 	rows    uint64
-	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
 }
 
@@ -84,12 +82,10 @@ type StrHashMap struct {
 type IntHashMap struct {
 	hasNull bool
 	rows    uint64
-	m       *mpool.MPool
 	hashMap *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {
-	m      *mpool.MPool
 	mp     *StrHashMap
 	keys   [][]byte
 	values []uint64
@@ -99,7 +95,6 @@ type strHashmapIterator struct {
 }
 
 type intHashMapIterator struct {
-	m       *mpool.MPool
 	mp      *IntHashMap
 	keys    []uint64
 	keyOffs []uint32

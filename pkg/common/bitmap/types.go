@@ -14,26 +14,16 @@
 
 package bitmap
 
-import "sync/atomic"
-
 type Iterator interface {
 	HasNext() bool
 	Next() uint64
 	PeekNext() uint64
 }
 
-const (
-	kEmptyFlagEmpty    = 1
-	kEmptyFlagNotEmpty = -1
-	kEmptyFlagUnknown  = 0
-)
-
-// Bitmap represents line numbers of tuple's is null
 type Bitmap struct {
-	emptyFlag atomic.Int32 //default 0, not sure  when set to 1, must be empty. when set to -1, must be not empty
-	// len represents the size of bitmap
-	len  int64
-	data []uint64
+	count int64 //in version 1, we use emptyFlag with type int32 to indicate whether it is empty
+	len   int64
+	data  []uint64
 }
 
 type BitmapIterator struct {

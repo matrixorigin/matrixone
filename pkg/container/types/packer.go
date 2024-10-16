@@ -277,9 +277,19 @@ func (p *Packer) EncodeStringType(e []byte) {
 	p.encodeBytes(bytesCode, e)
 }
 
+func (p *Packer) EncodeStringTypeMax() {
+	p.putByte(stringTypeCode)
+	p.putByte(bytesMaxCode)
+}
+
 func (p *Packer) EncodeBit(e uint64) {
 	p.putByte(bitCode)
 	p.encodeUint(e)
+}
+
+func (p *Packer) EncodeUuid(e Uuid) {
+	p.putByte(uuidCode)
+	p.putBytes(e[:])
 }
 
 func (p *Packer) GetBuf() []byte {

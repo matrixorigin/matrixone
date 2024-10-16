@@ -37,6 +37,12 @@ func (source *Source) OpType() vm.OpType {
 }
 
 func (source *Source) Prepare(proc *process.Process) error {
+	if source.OpAnalyzer == nil {
+		source.OpAnalyzer = process.NewAnalyzer(source.GetIdx(), source.IsFirst, source.IsLast, "source scan")
+	} else {
+		source.OpAnalyzer.Reset()
+	}
+
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 
@@ -60,6 +66,12 @@ func (source *Source) Prepare(proc *process.Process) error {
 		}
 	}
 
+	if source.ProjectList != nil {
+		err := source.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -68,11 +80,15 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	analyzer := source.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 
 	if source.ctr.buf != nil {
-		proc.PutBatch(source.ctr.buf)
+		source.ctr.buf.Clean(proc.GetMPool())
 		source.ctr.buf = nil
 	}
 	result := vm.NewCallResult()
@@ -92,5 +108,9 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 
-	return result, nil
+	if source.ProjectList != nil {
+		result.Batch, err = source.EvalProjection(result.Batch, proc)
+	}
+	analyzer.Output(result.Batch)
+	return result, err
 }

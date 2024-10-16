@@ -28,12 +28,11 @@ import (
 var _ vm.Operator = new(Fill)
 
 const (
-	receiveBat    = 0
-	withoutNewBat = 1
-	findNull      = 2
-	findValue     = 3
-	fillValue     = 4
-	findNullPre   = 5
+	receiveBat  = 0
+	findNull    = 2
+	findValue   = 3
+	fillValue   = 4
+	findNullPre = 5
 )
 
 type container struct {
@@ -52,7 +51,6 @@ type container struct {
 	curRow    int
 	status    int
 	subStatus int
-	colIdx    int
 	idx       int
 	buf       *batch.Batch
 
@@ -62,17 +60,19 @@ type container struct {
 	exes    []colexec.ExpressionExecutor
 	done    bool
 
-	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
+	process func(ctr *container, ap *Fill, proc *process.Process, anal process.Analyzer) (vm.CallResult, error)
 }
 
 type Fill struct {
-	ctr *container
+	ctr container
 
 	ColLen   int
 	FillType plan.Node_FillType
 	FillVal  []*plan.Expr
 	AggIds   []int32
+
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (fill *Fill) GetOperatorBase() *vm.OperatorBase {
@@ -107,20 +107,37 @@ func (fill *Fill) Release() {
 }
 
 func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	fill.Free(proc, pipelineFailed, err)
-}
+	ctr := &fill.ctr
+	ctr.resetCtrParma()
+	ctr.resetExes()
+	if ctr.buf != nil {
+		ctr.buf.CleanOnlyData()
+	}
+	for _, b := range ctr.bats {
+		if b != nil {
+			b.Clean(proc.GetMPool())
+		}
+	}
+	ctr.bats = ctr.bats[:0]
 
-func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := fill.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanExes()
-
-		fill.ctr = nil
+	if fill.ProjectList != nil {
+		if fill.OpAnalyzer != nil {
+			fill.OpAnalyzer.Alloc(fill.ProjectAllocSize)
+		}
+		fill.ResetProjection(proc)
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &fill.ctr
+	ctr.freeBatch(proc.Mp())
+	ctr.freeExes()
+	ctr.freeVectors(proc.Mp())
+
+	fill.FreeProjection(proc)
+}
+
+func (ctr *container) freeBatch(mp *mpool.MPool) {
 	for _, b := range ctr.bats {
 		if b != nil {
 			b.Clean(mp)
@@ -132,11 +149,33 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanExes() {
+func (ctr *container) freeVectors(mp *mpool.MPool) {
+	for _, vec := range ctr.prevVecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.prevVecs = nil
+}
+
+func (ctr *container) freeExes() {
 	for i := range ctr.exes {
 		if ctr.exes[i] != nil {
 			ctr.exes[i].Free()
 		}
 	}
 	ctr.exes = nil
+}
+
+func (ctr *container) resetExes() {
+	for i := range ctr.exes {
+		if ctr.exes[i] != nil {
+			ctr.exes[i].ResetForNextQuery()
+		}
+	}
+}
+
+func (ctr *container) resetCtrParma() {
+	ctr.initIndex()
+	ctr.done = false
 }

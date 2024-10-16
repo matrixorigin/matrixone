@@ -25,6 +25,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -51,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -65,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -85,7 +87,11 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
-	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
+
+	options = append(options, WithBootstrapOptions(
+		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
+		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
+	))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -138,13 +144,11 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := srv.initQueryService(); err != nil {
+	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
 
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
-	if err := srv.initMetadata(); err != nil {
+	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
 
@@ -175,7 +179,8 @@ func NewService(
 	var udfServices []udf.Service
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		var pc *pythonservice.Client
+		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
@@ -221,26 +226,6 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
-	srv.storeEngine = pu.StorageEngine
-
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryClient qclient.QueryClient,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
-	}
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
@@ -449,7 +434,8 @@ func (s *service) handleRequest(
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
-		err := s.requestHandler(ctx,
+		// there is no need to handle the return error, because the error will be logged in the function.
+		_ = s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -462,11 +448,6 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
-		if err != nil {
-			logutil.Infof("error occurred while handling the pipeline message, "+
-				"msg is %v, error is %v",
-				req, err)
-		}
 	}()
 	return nil
 }
@@ -513,7 +494,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return moerr.NewInternalError(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -638,7 +619,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
+				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
@@ -713,6 +694,12 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						} else if txn.Options.InRollback {
 							v2.TxnInRollbackCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else if txn.Options.InIncrStmt {
+							v2.TxnInIncrStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in incr statement", fields...)
+						} else if txn.Options.InRollbackStmt {
+							v2.TxnInRollbackStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback statement", fields...)
 						} else {
 							v2.TxnLeakCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
@@ -733,12 +720,13 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.PkDedupCount > 0 {
 			opts = append(opts, client.WithCheckDup())
 		}
+		traceService := trace.GetService(s.cfg.UUID)
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
 			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
 				func(op client.TxnOperator) {
-					trace.GetService(s.cfg.UUID).TxnCreated(op)
+					traceService.TxnCreated(op)
 				},
 			}),
 		)
@@ -776,6 +764,7 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
+		s.cfg.UUID,
 		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
@@ -786,15 +775,20 @@ func (s *service) initShardService() {
 			shardservice.ReadApproxObjectsNum:         disttae.HandleShardingReadApproxObjectsNum,
 			shardservice.ReadRanges:                   disttae.HandleShardingReadRanges,
 			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
-			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
+			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
+			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
+			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
+			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
 		},
 		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		shardservice.WithWaitCNReported(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,
@@ -808,6 +802,17 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 
 func (s *service) GetBootstrapService() bootstrap.Service {
 	return s.bootstrapService
+}
+
+func (s *service) GetTimestampWaiter() client.TimestampWaiter {
+	return s.timestampWaiter
+}
+func (s *service) GetEngine() engine.Engine {
+	return s.storeEngine
+}
+
+func (s *service) GetClock() clock.Clock {
+	return runtime.ServiceRuntime(s.cfg.UUID).Clock()
 }
 
 // put the waiting-next type msg into client session's cache and return directly

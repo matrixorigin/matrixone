@@ -44,7 +44,7 @@ a
 1
 show create table xx;
 Table    Create Table
-xx    CREATE TABLE `xx` (\n  `a` INT NOT NULL,\n  PRIMARY KEY (`a`)\n)
+xx    CREATE TABLE `xx` (\n  `a` int NOT NULL,\n  PRIMARY KEY (`a`)\n)
 drop table xx;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,

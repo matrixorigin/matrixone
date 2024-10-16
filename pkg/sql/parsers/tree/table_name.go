@@ -31,9 +31,7 @@ func (tn TableName) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(string(tn.ObjectName))
 	if tn.AtTsExpr != nil {
-		ctx.WriteString("{")
 		tn.AtTsExpr.Format(ctx)
-		ctx.WriteString("}")
 	}
 }
 
@@ -80,9 +78,11 @@ type AtTimeStamp struct {
 }
 
 func (node *AtTimeStamp) Format(ctx *FmtCtx) {
+	ctx.WriteString("{")
 	ctx.WriteString(node.Type.String())
 	ctx.WriteString(" = ")
 	node.Expr.Format(ctx)
+	ctx.WriteString("}")
 }
 
 type ATTimeStampType int

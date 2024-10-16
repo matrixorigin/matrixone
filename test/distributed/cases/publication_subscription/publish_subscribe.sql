@@ -150,8 +150,8 @@ drop database sub_db1;
 create database db4;
 use db4;
 create table t4(a int);
-create publication pubname4 database db4 comment 'publication to all tenant';
-create publication pubname4_1 database db4 comment 'publication to all tenant';
+create publication pubname4 database db4 account all comment 'publication to all tenant';
+create publication pubname4_1 database db4 account all comment 'publication to all tenant';
 
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 create database sub_db4 from sys publication pubname4;
@@ -183,7 +183,6 @@ show tables;
 -- @session:id=5&user=test_tenant_4:test_account&password=111
 create database sub_db4 from sys publication pubname4;
 create database sub_db4_1 from sys publication pubname4;
-create database sub_db4_2 from sys publication pubname4;
 show databases;
 use sub_db4;
 show tables;
@@ -271,8 +270,6 @@ show databases;
 
 -- @session:id=5&user=test_tenant_4:test_account&password=111
 drop database sub_db4;
-drop database sub_db4_1;
-drop database sub_db4_2;
 show databases;
 -- @session
 
@@ -282,7 +279,7 @@ create database db1;
 create publication pubname5 database db1 account sys comment 'publication to sys tenant';
 -- @session
 create database sub_db5 from test_tenant_1 publication pubname5;
-create publication test_pubname database sub_db5 comment 'publication to all tenant';
+create publication test_pubname database sub_db5 account all comment 'publication to all tenant';
 
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 drop publication pubname5;
@@ -290,20 +287,12 @@ drop publication pubname5;
 drop database sub_db5;
 
 -- @session:id=2&user=test_tenant_1:test_account&password=111
-create publication pubname5 database db1 comment 'publication to sys tenant';
+create publication pubname5 database db1 account sys comment 'publication to sys tenant';
 -- @session
 create database sub_db5 from test_tenant_1 publication pubname5;
 use sub_db5;
 create table t1 (a int);
 create view test_view as select 1;
-
--- @session:id=3&user=test_tenant_2:test_account&password=111
-create database sub_db5 from test_tenant_1 publication pubname5;
--- @session
-
--- @session:id=4&user=test_tenant_3:test_account&password=111
-create database sub_db5 from test_tenant_1 publication pubname5;
--- @session
 
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 drop publication pubname5;
@@ -312,16 +301,6 @@ show databases;
 -- @session
 drop database sub_db5;
 show databases;
-
--- @session:id=3&user=test_tenant_2:test_account&password=111
-drop database sub_db5;
-show databases;
--- @session
-
--- @session:id=4&user=test_tenant_3:test_account&password=111
-drop database sub_db5;
-show databases;
--- @session
 
 -- test subscription db query
 -- @session:id=2&user=test_tenant_1:test_account&password=111
@@ -362,11 +341,11 @@ show databases;
 create database db6;
 create publication pubname6 database db6 account test_tenant_1 comment 'publication to test_tenant_1';
 show create publication pubname6;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 create database sub_db6 from sys publication pubname6;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 show create database sub_db6;
 -- @session
@@ -407,7 +386,7 @@ create database db100;
 -- @session
 
 
-create publication pubname8 database db100 commment 'publication failed';
+create publication pubname8 database db100 account all commment 'publication failed';
 
 -- @teardown
 -- @session:id=2&user=test_tenant_1:test_account&password=111
@@ -438,44 +417,44 @@ create publication test_pubname database mo_catalog account test_account comment
 
 
 create database db5;
-create publication pubname5 database db5 comment 'publication to all tenant';
+create publication pubname5 database db5 account all comment 'publication to all tenant';
 create database sub_db5 from sys publication pubname5;
 drop publication pubname5;
 drop database db5;
 
 -- @teardown
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session:id=2&user=test_tenant_1:test_account&password=111
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 -- @session:id=3&user=test_tenant_2:test_account&password=111
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 -- @session:id=4&user=test_tenant_3:test_account&password=111
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 -- @session:id=5&user=test_tenant_4:test_account&password=111
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 -- @session:id=6&user=test_tenant_5:test_account&password=111
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 

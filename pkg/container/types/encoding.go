@@ -105,6 +105,7 @@ func EncodeFixed[T FixedSizeT](v T) []byte {
 	sz := unsafe.Sizeof(v)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), sz)
 }
+
 func DecodeFixed[T FixedSizeT](v []byte) T {
 	return *(*T)(unsafe.Pointer(&v[0]))
 }
@@ -532,7 +533,7 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		default:
-			panic(moerr.NewInternalErrorNoCtx("%T:%v not supported", v, v))
+			panic(moerr.NewInternalErrorNoCtxf("%T:%v not supported", v, v))
 		}
 	}
 	return

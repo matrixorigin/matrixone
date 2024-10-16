@@ -26,6 +26,7 @@ import (
 )
 
 type Bitmap = Nulls
+type Grouping = Nulls
 
 type Nulls struct {
 	np bitmap.Bitmap
@@ -58,6 +59,10 @@ func (nsp *Nulls) Reset() {
 	nsp.np.Reset()
 }
 
+func (nsp *Nulls) Clear() {
+	nsp.np.Clear()
+}
+
 func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 	return &nsp.np
 }
@@ -81,6 +86,7 @@ func (nsp *Nulls) Build(size int, rows ...uint64) {
 	nsp.InitWithSize(size)
 	Add(nsp, rows...)
 }
+
 func Build(size int, rows ...uint64) *Nulls {
 	var n Nulls
 	n.Build(size, rows...)
@@ -107,7 +113,7 @@ func Size(nsp *Nulls) int {
 	if nsp == nil {
 		return 0
 	}
-	return int(nsp.np.Size())
+	return nsp.np.Size()
 }
 
 func String(nsp *Nulls) string {
@@ -130,16 +136,16 @@ func Contains(nsp *Nulls, row uint64) bool {
 	return nsp.Contains(row)
 }
 
-func (nsp *Nulls) Add(rows ...uint64) {
-	if nsp == nil || len(rows) == 0 {
+func (nsp *Nulls) Add(sels ...uint64) {
+	if nsp == nil || len(sels) == 0 {
 		return
 	}
-	TryExpand(nsp, int(rows[len(rows)-1])+1)
-	nsp.np.AddMany(rows)
+	TryExpand(nsp, int(sels[len(sels)-1])+1)
+	nsp.np.AddMany(sels)
 }
 
-func Add(nsp *Nulls, rows ...uint64) {
-	nsp.Add(rows...)
+func Add(nsp *Nulls, sels ...uint64) {
+	nsp.Add(sels...)
 }
 
 func (nsp *Nulls) AddRange(start, end uint64) {
@@ -153,10 +159,10 @@ func AddRange(nsp *Nulls, start, end uint64) {
 	nsp.AddRange(start, end)
 }
 
-func (nsp *Nulls) Del(rows ...uint64) {
+func (nsp *Nulls) Del(sels ...uint64) {
 	if nsp != nil {
-		for _, row := range rows {
-			nsp.np.Remove(row)
+		for _, sel := range sels {
+			nsp.np.Remove(sel)
 		}
 	}
 }
@@ -169,36 +175,36 @@ func (nsp *Nulls) DelI64(rows ...int64) {
 	}
 }
 
-func Del(nsp *Nulls, rows ...uint64) {
-	nsp.Del(rows...)
+func Del(nsp *Nulls, sels ...uint64) {
+	nsp.Del(sels...)
 }
 
 // Set performs union operation on Nulls nsp,m and store the result in nsp
-func Set(nsp, m *Nulls) {
-	if !m.np.EmptyByFlag() {
-		nsp.np.Or(&m.np)
+func Set(nsp, other *Nulls) {
+	if !other.np.EmptyByFlag() {
+		nsp.np.Or(&other.np)
 	}
 }
 
 // FilterCount returns the number count that appears in both nsp and sel
 func FilterCount(nsp *Nulls, sels []int64) int {
-	var cnt int
+	var count int
 	if nsp.np.EmptyByFlag() || len(sels) == 0 {
 		return 0
 	}
 
 	// XXX WTF is this?  convert int64 to uint64?
-	var sp []uint64
+	var idxs []uint64
 	if len(sels) > 0 {
-		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
+		idxs = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 	}
 
-	for _, sel := range sp {
-		if nsp.np.Contains(sel) {
-			cnt++
+	for _, idx := range idxs {
+		if nsp.np.Contains(idx) {
+			count++
 		}
 	}
-	return cnt
+	return count
 }
 
 func RemoveRange(nsp *Nulls, start, end uint64) {
@@ -210,15 +216,15 @@ func RemoveRange(nsp *Nulls, start, end uint64) {
 // Range adds the numbers in nsp starting at start and ending at end to m.
 // `bias` represents the starting offset used for the Range Output
 // Always update in place.
-func Range(nsp *Nulls, start, end, bias uint64, m *Nulls) {
+func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 	if nsp.np.EmptyByFlag() {
 		return
 	}
 
-	m.np.InitWithSize(int64(end + 1 - bias))
+	b.np.InitWithSize(int64(end + 1 - bias))
 	for ; start < end; start++ {
 		if nsp.np.Contains(start) {
-			m.np.Add(start - bias)
+			b.np.Add(start - bias)
 		}
 	}
 }
@@ -255,16 +261,67 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 		}
 		nsp.np.InitWith(&bm)
 	} else {
-		var bm bitmap.Bitmap
-		bm.InitWithSize(int64(len(sels)))
+		var b bitmap.Bitmap
+		b.InitWithSize(int64(len(sels)))
 		upperLimit := int64(nsp.np.Len())
 		for i, sel := range sels {
 			if sel >= upperLimit {
 				continue
 			}
 			if nsp.np.Contains(uint64(sel)) {
-				bm.Add(uint64(i))
+				b.Add(uint64(i))
 			}
+		}
+		nsp.np.InitWith(&b)
+	}
+}
+
+func FilterByMask(nsp *Nulls, sels bitmap.Mask, negate bool) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	length := sels.Count()
+	itr := sels.Iterator()
+	if negate {
+		oldLen := nsp.np.Len()
+		var bm bitmap.Bitmap
+		bm.InitWithSize(oldLen)
+		sel := itr.Next()
+		for oldIdx, newIdx, selIdx := int64(0), 0, 0; oldIdx < oldLen; oldIdx++ {
+			if uint64(oldIdx) != sel {
+				if nsp.np.Contains(uint64(oldIdx)) {
+					bm.Add(uint64(newIdx))
+				}
+				newIdx++
+			} else {
+				selIdx++
+				if !itr.HasNext() {
+					for idx := oldIdx + 1; idx < oldLen; idx++ {
+						if nsp.np.Contains(uint64(idx)) {
+							bm.Add(uint64(newIdx))
+						}
+						newIdx++
+					}
+					break
+				}
+				sel = itr.Next()
+			}
+		}
+		nsp.np.InitWith(&bm)
+	} else {
+		var bm bitmap.Bitmap
+		bm.InitWithSize(int64(length))
+		upperLimit := nsp.np.Len()
+		idx := 0
+		for itr.HasNext() {
+			sel := itr.Next()
+			if sel >= uint64(upperLimit) {
+				continue
+			}
+			if nsp.np.Contains(sel) {
+				bm.Add(uint64(idx))
+			}
+			idx++
 		}
 		nsp.np.InitWith(&bm)
 	}
@@ -311,6 +368,14 @@ func (nsp *Nulls) Show() ([]byte, error) {
 	return nsp.np.Marshal(), nil
 }
 
+// ShowV1 in version 1, bitmap is v1
+func (nsp *Nulls) ShowV1() ([]byte, error) {
+	if nsp.np.EmptyByFlag() {
+		return nil, nil
+	}
+	return nsp.np.MarshalV1(), nil
+}
+
 func (nsp *Nulls) Read(data []byte) error {
 	if len(data) == 0 {
 		// don't we need to reset?   Or we always, Read into a blank Nulls?
@@ -329,9 +394,23 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 	return nil
 }
 
+func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	nsp.np.UnmarshalNoCopyV1(data)
+	return nil
+}
+
+func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
+	if m != nil && !m.IsEmpty() {
+		nsp.np.Or(m)
+	}
+}
+
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
-	if !m.np.EmptyByFlag() {
+	if m != nil && !m.np.EmptyByFlag() {
 		nsp.np.Or(&m.np)
 	}
 }
@@ -354,11 +433,11 @@ func (nsp *Nulls) ToArray() []uint64 {
 	return nsp.np.ToArray()
 }
 
-func (nsp *Nulls) ToI64Arrary() []int64 {
+func (nsp *Nulls) ToI64Array() []int64 {
 	if nsp == nil || nsp.np.EmptyByFlag() {
 		return []int64{}
 	}
-	return nsp.np.ToI64Arrary()
+	return nsp.np.ToI64Array()
 }
 
 func (nsp *Nulls) GetCardinality() int {
@@ -378,15 +457,11 @@ func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 	}
 }
 
-func (nsp *Nulls) Merge(o *Nulls) {
-	if o.Count() == 0 {
+func (nsp *Nulls) Merge(other *Nulls) {
+	if other.Count() == 0 {
 		return
 	}
-	itr := o.np.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		nsp.Add(r)
-	}
+	nsp.np.Or(&other.np)
 }
 
 func (nsp *Nulls) String() string {

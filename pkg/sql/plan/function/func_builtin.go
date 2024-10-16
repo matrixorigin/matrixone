@@ -43,7 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -73,7 +74,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -92,7 +93,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 	scale := int32(6)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
@@ -219,7 +220,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -261,6 +262,49 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 	}
 
 	return nil
+}
+
+func builtInMoShowColUnique(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrStrToFixed[bool](
+		parameters,
+		result,
+		proc,
+		length,
+		moShowColUnique,
+		selectList,
+	)
+}
+
+// p1: constrain
+// p2: column name
+func moShowColUnique(constraintStr string, colName string) bool {
+	c := &engine.ConstraintDef{}
+	err := c.UnmarshalBinary([]byte(constraintStr))
+	if err != nil {
+		return false
+	}
+
+	containsCol := false
+	// get unique constraint
+	for _, ct := range c.Cts {
+		switch k := ct.(type) {
+		case *engine.IndexDef:
+			if k.Indexes != nil {
+				indexs := k.Indexes
+				for _, index := range indexs {
+					parts := index.Parts
+					for _, part := range parts {
+						if part == strings.ToLower(colName) {
+							containsCol = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return containsCol
 }
 
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -599,7 +643,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 
 			found = true
 			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
-			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+			if d := now.Sub(targetTime); d > cmd_util.AllowPruneDuration {
 				d = d / time.Second * time.Second
 				result, err := pruneObj(tbl, d)
 				if err != nil {
@@ -608,7 +652,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
 			} else {
 				// try prune obj 24 hours before
-				_, err := pruneObj(tbl, rpc.AllowPruneDuration)
+				_, err := pruneObj(tbl, cmd_util.AllowPruneDuration)
 				if err != nil {
 					return err
 				}
@@ -621,7 +665,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			break
 		}
 		if !found {
-			return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			return moerr.NewNotSupportedf(proc.Ctx, "purge '%s'", tblName)
 		}
 
 	}
@@ -711,13 +755,11 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-const MaxTgtLen = int64(16 * 1024 * 1024)
-
 func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -736,7 +778,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
-	if tgtLen < 0 || tgtLen > MaxTgtLen {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
 		return "", true
 	} else if int(tgtLen) < srcLen {
 		return string(srcRune[:tgtLen]), false
@@ -762,7 +804,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > MaxTgtLen {
+		if sourceLen*n > types.MaxVarcharLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -979,7 +1021,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		area := vec.GetArea()
-		vs := vector.MustFixedCol[types.Varlena](vec)
+		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -1430,7 +1472,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_enum:
-		s := vector.MustFixedCol[types.Enum](v)
+		s := vector.MustFixedColWithTypeCheck[types.Enum](v)
 		if hasNull {
 			for i, b := range s {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
@@ -1484,6 +1526,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		} else {
 			for i, b := range s {
 				ps[i].EncodeDecimal128(b)
+			}
+		}
+	case types.T_uuid:
+		s := vector.ExpandFixedCol[types.Uuid](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeUuid(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeUuid(b)
 			}
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
@@ -1582,7 +1643,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
-	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+	return moerr.NewInternalErrorf(proc.Ctx, "not supported type %s", resTyp.String())
 
 }
 

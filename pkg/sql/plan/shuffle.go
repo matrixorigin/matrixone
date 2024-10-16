@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"math/bits"
 	"unsafe"
 
@@ -29,14 +30,17 @@ import (
 )
 
 const (
-	threshHoldForRightJoinShuffle   = 120000
-	threshHoldForRangeShuffle       = 240000
+	threshHoldForShuffleGroup       = 64000
+	threshHoldForRightJoinShuffle   = 8192
+	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
-	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
+
+	overlapThreshold = 0.55
+	uniformThreshold = 0.3
 )
 
 const (
@@ -283,6 +287,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		return
 	}
 	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+		//if s.ShuffleRangeMap[colName] != nil {
+		//	logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
+		//}
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
@@ -310,16 +317,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.BuildOnLeft {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
-			return
-		}
-	} else {
-		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
-			return
-		}
-	}
-
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -337,6 +334,19 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		if isEquiCond(n.OnList[i], leftTags, rightTags) {
 			idx = i
 			break
+		}
+	}
+
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		leftchild := builder.qry.Nodes[n.Children[0]]
+		rightchild := builder.qry.Nodes[n.Children[1]]
+		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
+			return
 		}
 	}
 
@@ -406,9 +416,11 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+	factor := 1 / math.Pow((n.Stats.Outcnt/n.Stats.Selectivity/child.Stats.Outcnt), 0.8)
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForShuffleGroup*factor {
 		return
 	}
+
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
 	idx := 0
@@ -454,18 +466,37 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 					}
 				}
 			}
-			// shuffle group can not follow shuffle join, need to reshuffle
-			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
 		}
 	}
 
 }
 
-func GetShuffleDop(cpunum int) (dop int) {
-	if cpunum < MAXShuffleDOP {
-		return cpunum
+func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+	maxret := ncpu * 4
+	if maxret > 64 {
+		maxret = 64 // to avoid a hang bug, fix this in the future
 	}
-	return MAXShuffleDOP
+	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
+	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
+	if ret1 >= maxret {
+		return maxret
+	}
+
+	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
+	if ret2 >= maxret {
+		return ret1
+	}
+
+	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
+	if ret3 >= maxret {
+		return ret2
+	}
+
+	if ret3 <= ncpu {
+		return ncpu
+	}
+
+	return (ret3/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash
@@ -552,7 +583,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
-			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			if parent.NodeType == plan.Node_AGG {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 			}
 		}
@@ -560,23 +591,14 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	if s == nil {
+	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
 		return true
 	}
-	if s.Uniform > 0.3 {
-		return false
-	}
-	if s.Overlap > 0.5 {
-		return true
-	}
-	return true
+	return false
 }
 
 func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
-	if s == nil {
-		return nil
-	}
-	if s.Uniform > 0.3 {
+	if s == nil || math.IsNaN(s.Uniform) || s.Uniform < uniformThreshold {
 		return nil
 	}
 	return s.Result

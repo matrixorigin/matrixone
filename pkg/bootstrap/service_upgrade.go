@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -147,14 +148,25 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 			s.logger.Info("get current mo cluster latest version",
 				zap.String("latest", v.Version),
-				zap.String("final", final.Version))
+				zap.Uint32("latest versionOffset", v.VersionOffset),
+				zap.String("final", final.Version),
+				zap.Uint32("final versionOffset", final.VersionOffset))
 
 			// cluster is upgrading to v1, only v1's cn can start up.
-			if !v.IsReady() && v.Version != final.Version {
-				panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
-					final.Version,
-					v.Version))
+			if !v.IsReady() {
+				if v.Version != final.Version {
+					panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
+						final.Version,
+						v.Version))
+				} else if v.VersionOffset != final.VersionOffset {
+					panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
+						final.Version,
+						final.VersionOffset,
+						v.Version,
+						v.VersionOffset))
+				}
 			}
+
 			// cluster is running at v1, cannot startup a old version to join cluster.
 			if v.IsReady() && versions.Compare(final.Version, v.Version) < 0 {
 				panic(fmt.Sprintf("cannot startup a old version %s to join cluster, current version is %s",
@@ -191,7 +203,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				}
 
 				s.logger.Info("final version added",
-					zap.String("final", final.Version))
+					zap.String("final", final.Version), zap.Uint32("versionOffset", final.VersionOffset))
 
 				latest, err := versions.MustGetLatestReadyVersion(txn)
 				if err != nil {
@@ -423,6 +435,7 @@ func (s *service) doUpgrade(
 	if upgrade.UpgradeCluster == versions.Yes {
 		s.logger.Info("execute upgrade cluster",
 			zap.String("upgrade", upgrade.String()))
+		ctx = context.WithValue(ctx, v2_0_0.KekKey{}, s.upgrade.kek)
 		if err := h.HandleClusterUpgrade(ctx, txn); err != nil {
 			return 0, err
 		}

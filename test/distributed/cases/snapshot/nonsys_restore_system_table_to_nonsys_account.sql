@@ -489,3 +489,5 @@ drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
 -- @session
 drop account acc01;
+-- @ignore:1
+show snapshots;

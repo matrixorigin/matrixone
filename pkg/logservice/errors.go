@@ -97,7 +97,7 @@ func toError(ctx context.Context, resp pb.Response) error {
 		return moerr.NewInternalError(ctx, resp.ErrorMessage)
 	} else {
 		// will logger.Panicf panic?
-		panic(moerr.NewInternalError(ctx, "unknown error code: %d", resp.ErrorCode))
+		panic(moerr.NewInternalErrorf(ctx, "unknown error code: %d", resp.ErrorCode))
 	}
 	// will never reach here
 }

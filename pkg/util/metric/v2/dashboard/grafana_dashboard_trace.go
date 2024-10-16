@@ -22,7 +22,7 @@ import (
 )
 
 func (c *DashboardCreator) initTraceDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
@@ -239,12 +239,36 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_sum", `type="consume_delay"`) + `[$interval:1m]))` +
 					`/` +
-					`sum(delta(mo_trace_collector_status_total[$interval:1m]))`,
+					`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m]))`,
 			},
 			[]string{
 				"{{ type }}",
 			},
 			axis.Unit("s"),
+		),
+
+		c.withMultiGraph(
+			"Collector Queue Length",
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_trace_collector_queue_length", ``) + `) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+		),
+
+		// ------------- next row ------------
+
+		c.withMultiGraph(
+			"Collector Buffer Action",
+			6,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_buffer_action_total", ``) + `[$interval:1m])) by (type)`,
+			},
+			[]string{
+				"{{ type }}",
+			},
 		),
 	)
 }

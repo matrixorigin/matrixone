@@ -69,7 +69,7 @@ func NewFileService(
 	case s3FileServiceBackend:
 		return newS3FileService(ctx, cfg, perfCounterSets)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("file service backend %s not implemented", cfg.Backend)
+		return nil, moerr.NewInternalErrorNoCtxf("file service backend %s not implemented", cfg.Backend)
 	}
 }
 

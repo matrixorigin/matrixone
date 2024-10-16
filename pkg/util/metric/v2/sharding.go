@@ -26,9 +26,14 @@ var (
 			Name:      "schedule_replica_total",
 			Help:      "Total number of replica schedule.",
 		}, []string{"type"})
-	AddReplicaOperatorCounter       = replicaOperatorCounter.WithLabelValues("add")
-	DeleteReplicaOperatorCounter    = replicaOperatorCounter.WithLabelValues("delete")
-	DeleteAllReplicaOperatorCounter = replicaOperatorCounter.WithLabelValues("delete-all")
+	AddReplicaOperatorCounter               = replicaOperatorCounter.WithLabelValues("apply-add")
+	DeleteReplicaOperatorCounter            = replicaOperatorCounter.WithLabelValues("apply-delete")
+	DeleteAllReplicaOperatorCounter         = replicaOperatorCounter.WithLabelValues("apply-delete-all")
+	ReplicaScheduleSkipWithNoCNCounter      = replicaOperatorCounter.WithLabelValues("skip-no-cn")
+	ReplicaScheduleSkipFreezeCNCounter      = replicaOperatorCounter.WithLabelValues("skip-freeze-cn")
+	ReplicaScheduleAllocateReplicaCounter   = replicaOperatorCounter.WithLabelValues("allocate")
+	ReplicaScheduleReAllocateReplicaCounter = replicaOperatorCounter.WithLabelValues("re-allocate")
+	ReplicaScheduleBalanceReplicaCounter    = replicaOperatorCounter.WithLabelValues("balance")
 
 	replicaReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -48,5 +53,13 @@ var (
 			Subsystem: "sharding",
 			Name:      "replica_count",
 			Help:      "Count of running replica.",
+		})
+
+	ReplicaFreezeCNCountGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "sharding",
+			Name:      "schedule_freeze_cn_count",
+			Help:      "Count of freeze cn.",
 		})
 )

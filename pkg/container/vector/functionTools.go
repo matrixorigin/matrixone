@@ -64,7 +64,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			sourceVector: v,
 		}
 	}
-	cols := MustFixedCol[T](v)
+	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
 			typ:          *t,
@@ -87,6 +87,49 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 	}
 }
 
+func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	t := v.GetType()
+	if v.IsConstNull() {
+		r, ok := f.(*FunctionParameterScalarNull[T])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		return true
+	}
+	cols := MustFixedColWithTypeCheck[T](v)
+	if v.IsConst() {
+		r, ok := f.(*FunctionParameterScalar[T])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		r.scalarValue = cols[0]
+		return true
+	}
+	if !v.nsp.IsEmpty() {
+		r, ok := f.(*FunctionParameterNormal[T])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		r.values = cols
+		r.nullMap = v.GetNulls().GetBitmap()
+		return true
+	}
+	r, ok := f.(*FunctionParameterWithoutNull[T])
+	if !ok {
+		return false
+	}
+	r.typ = *t
+	r.sourceVector = v
+	r.values = cols
+	return true
+}
+
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
 	t := v.GetType()
 	if v.IsConstNull() {
@@ -96,7 +139,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		}
 	}
 	var cols []types.Varlena
-	ToSlice(v, &cols)
+	ToSliceNoTypeCheck(v, &cols)
 	if v.IsConst() {
 		return &FunctionParameterScalar[types.Varlena]{
 			typ:          *t,
@@ -136,6 +179,75 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		strValues:    cols,
 		area:         v.area,
 	}
+}
+
+func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
+	t := v.GetType()
+	if v.IsConstNull() {
+		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		return true
+	}
+	var cols []types.Varlena
+	ToSliceNoTypeCheck(v, &cols)
+	if v.IsConst() {
+		r, ok := f.(*FunctionParameterScalar[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		r.scalarValue = cols[0]
+		r.scalarStr = cols[0].GetByteSlice(v.area)
+		return true
+	}
+
+	if !v.nsp.IsEmpty() {
+		if len(v.area) == 0 {
+			r, ok := f.(*FunctionParameterNormalSpecial1[types.Varlena])
+			if !ok {
+				return false
+			}
+			r.typ = *t
+			r.sourceVector = v
+			r.strValues = cols
+			r.nullMap = v.GetNulls().GetBitmap()
+			return true
+		}
+		r, ok := f.(*FunctionParameterNormal[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		r.strValues = cols
+		r.area = v.area
+		r.nullMap = v.GetNulls().GetBitmap()
+		return true
+	}
+	if len(v.area) == 0 {
+		r, ok := f.(*FunctionParameterWithoutNullSpecial1[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.typ = *t
+		r.sourceVector = v
+		r.strValues = cols
+		return true
+	}
+	r, ok := f.(*FunctionParameterWithoutNull[types.Varlena])
+	if !ok {
+		return false
+	}
+	r.typ = *t
+	r.sourceVector = v
+	r.strValues = cols
+	r.area = v.area
+	return true
 }
 
 // FunctionParameterNormal is a wrapper of normal vector which
@@ -357,9 +469,6 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
-	getVectorMethod func(typ types.Type) *Vector
-	putVectorMethod func(vec *Vector)
-
 	isVarlena bool
 	cols      []T
 	length    uint64
@@ -373,17 +482,11 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 }
 
 func newResultFunc[T types.FixedSizeT](
-	v *Vector,
-	getVectorMethod func(typ types.Type) *Vector,
-	putVectorMethod func(vec *Vector),
-	mp *mpool.MPool) *FunctionResult[T] {
+	resultType types.Type, mp *mpool.MPool) *FunctionResult[T] {
 
 	f := &FunctionResult[T]{
-		typ:             *v.GetType(),
-		vec:             v,
-		mp:              mp,
-		getVectorMethod: getVectorMethod,
-		putVectorMethod: putVectorMethod,
+		typ: resultType,
+		mp:  mp,
 	}
 
 	var tempT T
@@ -396,7 +499,7 @@ func newResultFunc[T types.FixedSizeT](
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = fr.getVectorMethod(fr.typ)
+		fr.vec = NewOffHeapVecWithType(fr.typ)
 	}
 
 	oldLength := fr.vec.Length()
@@ -412,7 +515,7 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 		fr.length = 0
 		fr.vec.length = targetSize
 		if targetSize > oldLength {
-			fr.cols = MustFixedCol[T](fr.vec)
+			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
 	return nil
@@ -516,74 +619,69 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[ty
 
 func (fr *FunctionResult[T]) Free() {
 	if fr.vec != nil {
-		fr.putVectorMethod(fr.vec)
+		fr.vec.Free(fr.mp)
 		fr.vec = nil
 	}
 }
 
-func NewFunctionResultWrapper(
-	getVectorMethod func(typ types.Type) *Vector,
-	putVectorMethod func(vec *Vector),
-	typ types.Type,
-	mp *mpool.MPool) FunctionResultWrapper {
-	v := getVectorMethod(typ)
+func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// IF STRING type.
-		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Varlena](typ, mp)
 	case types.T_json:
-		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Varlena](typ, mp)
 	}
 
 	switch typ.Oid {
 	case types.T_bool:
-		return newResultFunc[bool](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[bool](typ, mp)
 	case types.T_bit:
-		return newResultFunc[uint64](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[uint64](typ, mp)
 	case types.T_int8:
-		return newResultFunc[int8](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[int8](typ, mp)
 	case types.T_int16:
-		return newResultFunc[int16](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[int16](typ, mp)
 	case types.T_int32:
-		return newResultFunc[int32](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[int32](typ, mp)
 	case types.T_int64:
-		return newResultFunc[int64](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[int64](typ, mp)
 	case types.T_uint8:
-		return newResultFunc[uint8](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[uint8](typ, mp)
 	case types.T_uint16:
-		return newResultFunc[uint16](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[uint16](typ, mp)
 	case types.T_uint32:
-		return newResultFunc[uint32](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[uint32](typ, mp)
 	case types.T_uint64:
-		return newResultFunc[uint64](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[uint64](typ, mp)
 	case types.T_float32:
-		return newResultFunc[float32](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[float32](typ, mp)
 	case types.T_float64:
-		return newResultFunc[float64](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[float64](typ, mp)
 	case types.T_date:
-		return newResultFunc[types.Date](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Date](typ, mp)
 	case types.T_datetime:
-		return newResultFunc[types.Datetime](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Datetime](typ, mp)
 	case types.T_time:
-		return newResultFunc[types.Time](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Time](typ, mp)
 	case types.T_timestamp:
-		return newResultFunc[types.Timestamp](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Timestamp](typ, mp)
 	case types.T_decimal64:
-		return newResultFunc[types.Decimal64](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Decimal64](typ, mp)
 	case types.T_decimal128:
-		return newResultFunc[types.Decimal128](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Decimal128](typ, mp)
 	case types.T_TS:
-		return newResultFunc[types.TS](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.TS](typ, mp)
 	case types.T_Rowid:
-		return newResultFunc[types.Rowid](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Rowid](typ, mp)
 	case types.T_Blockid:
-		return newResultFunc[types.Blockid](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Blockid](typ, mp)
 	case types.T_uuid:
-		return newResultFunc[types.Uuid](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Uuid](typ, mp)
 	case types.T_enum:
-		return newResultFunc[types.Enum](v, getVectorMethod, putVectorMethod, mp)
+		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

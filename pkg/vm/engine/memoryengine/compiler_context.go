@@ -63,7 +63,7 @@ func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *CompilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -79,6 +79,11 @@ func (c *CompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *
 }
 
 func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -125,7 +130,7 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
+func (*CompilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
 	return nil, nil
 }
 
@@ -133,13 +138,12 @@ func (*CompilerContext) GetStatsCache() *plan.StatsCache {
 	return nil
 }
 
-func (c *CompilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
+func (c *CompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
 	proc := testutil.NewProcess()
-	proc.Ctx = context.Background()
 	return proc
 }
 
@@ -147,11 +151,11 @@ func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	return nil, "", nil
 }
 
-func (c *CompilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+func (c *CompilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -167,11 +171,11 @@ func (c *CompilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	return err == nil
 }
 
-func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+func (c *CompilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) (uint64, error) {
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -185,7 +189,7 @@ func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	}
 	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalErrorf(ctx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
 }
@@ -194,7 +198,7 @@ func (c *CompilerContext) DefaultDatabase() string {
 	return c.defaultDB
 }
 
-func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot plan.Snapshot) (defs []*plan.ColDef) {
+func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *plan.Snapshot) (defs []*plan.ColDef) {
 	attrs, err := c.getTableAttrs(dbName, tableName, snapshot)
 	if err != nil {
 		panic(err)
@@ -228,7 +232,7 @@ func (c *CompilerContext) SetContext(ctx context.Context) {
 	c.ctx = ctx
 }
 
-func (c *CompilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.txnOp, tableId)
 	if dbName == "" || tableName == "" {
 		return nil, nil
@@ -236,7 +240,7 @@ func (c *CompilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
 		schemaName = c.defaultDB
 	}
@@ -286,11 +290,11 @@ func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlob
 	return nil, nil
 }
 
-func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapshot plan.Snapshot) (attrs []*engine.Attribute, err error) {
+func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapshot *plan.Snapshot) (attrs []*engine.Attribute, err error) {
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {

@@ -16,14 +16,12 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -70,7 +68,7 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -88,7 +86,7 @@ func NewFileReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    MustGetPipeline(sid),
+		aio:    GetPipeline(sid),
 	}, nil
 }
 
@@ -118,7 +116,7 @@ func (r *BlockReader) LoadColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors *fileservice.IOVector
+	var ioVectors fileservice.IOVector
 	if IoModel == AsyncIo {
 		proc := fetchParams{
 			idxes:  cols,
@@ -131,7 +129,7 @@ func (r *BlockReader) LoadColumns(
 		if v, err = r.aio.Fetch(ctx, proc); err != nil {
 			return
 		}
-		ioVectors = v.(*fileservice.IOVector)
+		ioVectors = v.(fileservice.IOVector)
 	} else {
 		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, typs, blk, m)
 		if err != nil {
@@ -139,9 +137,7 @@ func (r *BlockReader) LoadColumns(
 		}
 	}
 	release = func() {
-		if ioVectors != nil {
-			objectio.ReleaseIOVector(ioVectors)
-		}
+		objectio.ReleaseIOVector(&ioVectors)
 	}
 	defer func() {
 		if err != nil {
@@ -173,14 +169,14 @@ func (r *BlockReader) LoadSubColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors []*fileservice.IOVector
+	var ioVectors []fileservice.IOVector
 	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
 	if err != nil {
 		return
 	}
 	releases = func() {
 		for _, vec := range ioVectors {
-			objectio.ReleaseIOVector(vec)
+			objectio.ReleaseIOVector(&vec)
 		}
 	}
 	bats = make([]*batch.Batch, 0)
@@ -215,7 +211,7 @@ func (r *BlockReader) LoadOneSubColumns(
 	}
 	ioVector, err := r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
 	release = func() {
-		objectio.ReleaseIOVector(ioVector)
+		objectio.ReleaseIOVector(&ioVector)
 	}
 	if err != nil {
 		return
@@ -262,9 +258,7 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	defer func() {
 		if err != nil {
-			if ioVectors != nil {
-				objectio.ReleaseIOVector(ioVectors)
-			}
+			objectio.ReleaseIOVector(&ioVectors)
 		}
 	}()
 	for y := 0; y < int(dataMeta.BlockCount()); y++ {
@@ -280,7 +274,7 @@ func (r *BlockReader) LoadAllColumns(
 		}
 		bats = append(bats, bat)
 	}
-	return bats, func() { objectio.ReleaseIOVector(ioVectors) }, nil
+	return bats, func() { objectio.ReleaseIOVector(&ioVectors) }, nil
 }
 
 func (r *BlockReader) LoadZoneMaps(
@@ -346,18 +340,8 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 	return r.reader
 }
 
-// The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(
-	sid string,
-	params PrefetchParams,
-) error {
-	return MustGetPipeline(sid).Prefetch(params)
-}
-
 func Prefetch(
 	sid string,
-	idxes []uint16,
-	ids []uint16,
 	service fileservice.FileService,
 	key objectio.Location,
 ) error {
@@ -365,22 +349,7 @@ func Prefetch(
 	if err != nil {
 		return err
 	}
-	params.AddBlock(idxes, ids)
-	return MustGetPipeline(sid).Prefetch(params)
-}
-
-func PrefetchTombstone(
-	sid string,
-	idxes []uint16,
-	ids []uint16,
-	service fileservice.FileService,
-	key objectio.Location,
-) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
+	params.typ = PrefetchFileType
 	return MustGetPipeline(sid).Prefetch(params)
 }
 
@@ -393,29 +362,6 @@ func PrefetchMeta(
 	if err != nil {
 		return err
 	}
+	params.typ = PrefetchMetaType
 	return MustGetPipeline(sid).Prefetch(params)
-}
-
-func PrefetchFile(
-	sid string,
-	service fileservice.FileService,
-	name string,
-) error {
-	reader, err := NewFileReader(sid, service, name)
-	if err != nil {
-		return err
-	}
-	bs, err := reader.LoadAllBlocks(context.Background(), common.DefaultAllocator)
-	if err != nil {
-		return err
-	}
-	params := buildPrefetchParamsByReader(reader)
-	for i := range bs {
-		idxes := make([]uint16, bs[i].GetColumnCount())
-		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
-			idxes[a] = a
-		}
-		params.AddBlock(idxes, []uint16{bs[i].GetID()})
-	}
-	return PrefetchWithMerged(sid, params)
 }

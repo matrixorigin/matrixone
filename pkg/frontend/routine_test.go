@@ -111,10 +111,11 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
+				topCtx := proc.GetTopContext()
 				select {
 				case <-time.After(time.Duration(res.seconds) * time.Second):
 					res.resultX.Store(timeout)
-				case <-proc.Ctx.Done():
+				case <-topCtx.Done():
 					res.resultX.Store(contextCancel)
 				}
 			}
@@ -132,7 +133,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
-	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
+	mcw.EXPECT().RecordExecPlan(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
 	mcw.EXPECT().Clear().AnyTimes()
 	mcw.EXPECT().Free().AnyTimes()
@@ -162,7 +163,8 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	setGlobalPu(pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -198,9 +200,9 @@ func Test_ConnectionCount(t *testing.T) {
 
 	// A mock autoincrcache manager.
 	acim := &defines.AutoIncrCacheManager{}
-	setGlobalAicm(acim)
-	rm, _ := NewRoutineManager(ctx)
-	setGlobalRtMgr(rm)
+	setAicm("", acim)
+	rm, _ := NewRoutineManager(ctx, "")
+	setRtMgr("", rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -209,7 +211,7 @@ func Test_ConnectionCount(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn)
+		mo.handleConn(ctx, serverConn)
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)
@@ -225,7 +227,7 @@ func Test_ConnectionCount(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn2)
+		mo.handleConn(ctx, serverConn2)
 	}()
 
 	registerConn(clientConn2)

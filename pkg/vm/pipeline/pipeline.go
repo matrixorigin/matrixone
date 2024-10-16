@@ -19,27 +19,23 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(tableID uint64, attrs []string, op vm.Operator, reg *process.WaitRegister) *Pipeline {
+func New(tableID uint64, attrs []string, op vm.Operator) *Pipeline {
 	return &Pipeline{
-		reg:     reg,
 		rootOp:  op,
 		attrs:   attrs,
 		tableID: tableID,
 	}
 }
 
-func NewMerge(op vm.Operator, reg *process.WaitRegister) *Pipeline {
+func NewMerge(op vm.Operator) *Pipeline {
 	return &Pipeline{
-		reg:    reg,
 		rootOp: op,
 	}
 }
@@ -52,7 +48,6 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
-	p.waitRegister()
 
 	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
@@ -64,34 +59,12 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 	return p.run(proc)
 }
 
-func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
-	p.waitRegister()
-
-	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
-		pipelineInputBatches := []*batch.Batch{bat}
-		if bat != nil {
-			pipelineInputBatches = append(pipelineInputBatches, nil)
-		}
-		valueScanOperator.Batchs = pipelineInputBatches
-	}
-
+func (p *Pipeline) ConstRun(proc *process.Process) (end bool, err error) {
 	return p.run(proc)
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
-	p.waitRegister()
-
 	return p.run(proc)
-}
-
-func (p *Pipeline) waitRegister() {
-	if p.reg == nil {
-		return
-	}
-	select {
-	case <-p.reg.Ctx.Done():
-	case <-p.reg.Ch:
-	}
 }
 
 func (p *Pipeline) run(proc *process.Process) (end bool, err error) {
@@ -101,7 +74,7 @@ func (p *Pipeline) run(proc *process.Process) (end bool, err error) {
 
 	defer catchPanic(proc.Ctx, &err)
 
-	vm.SetAnalyzeInfo(p.rootOp, proc)
+	vm.ModifyOutputOpNodeIdx(p.rootOp, proc)
 
 	for end := false; !end; {
 		result, err := p.rootOp.Call(proc)

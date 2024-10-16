@@ -501,7 +501,7 @@ func (s *service) updateState(feature, state string) error {
 	switch feature {
 	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement, FeatureTraceTxnWorkspace:
 	default:
-		return moerr.NewNotSupportedNoCtx("feature %s", feature)
+		return moerr.NewNotSupportedNoCtxf("feature %s", feature)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
@@ -650,7 +650,7 @@ func (l *EntryData) createApply(
 	buf *buffer,
 	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
-	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
+	commitTS := vector.MustFixedColWithTypeCheck[types.TS](l.commitVec)
 
 	l.writeToBuf(
 		buf,

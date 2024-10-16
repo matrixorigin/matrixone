@@ -240,7 +240,7 @@ func (s *service) AddTableFilter(name string, columns []string) error {
 
 			var tables []uint64
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				tables = append(tables, vector.MustFixedCol[uint64](cols[0])...)
+				tables = append(tables, vector.MustFixedColWithTypeCheck[uint64](cols[0])...)
 				return true
 			})
 			if len(tables) == 0 {
@@ -314,7 +314,7 @@ func (s *service) RefreshTableFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					id := vector.MustFixedCol[uint64](cols[0])[i]
+					id := vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
 					columns := cols[1].UnsafeGetStringAt(i)
 					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
 				}

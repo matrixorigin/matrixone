@@ -42,6 +42,18 @@ type IterInfo struct {
 	IterID ID
 }
 
+func (t *Table) BuildShardingReaders(
+	ctx context.Context,
+	_ any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	parallel int,
+	_ int,
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+	panic("Not Support")
+}
+
 func (t *Table) BuildReaders(
 	ctx context.Context,
 	_ any,
@@ -49,7 +61,8 @@ func (t *Table) BuildReaders(
 	relData engine.RelData,
 	parallel int,
 	_ int,
-	_ bool) (readers []engine.Reader, err error) {
+	_ bool,
+	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs = relData.GetShardIDList()
@@ -145,15 +158,20 @@ func (t *Table) BuildReaders(
 
 var _ engine.Reader = new(TableReader)
 
-func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
+func (t *TableReader) Read(
+	ctx context.Context,
+	colNames []string,
+	plan *plan.Expr,
+	mp *mpool.MPool,
+	bat *batch.Batch) (bool, error) {
 	if t == nil {
-		return nil, nil
+		return true, nil
 	}
 
 	for {
 
 		if len(t.iterInfos) == 0 {
-			return nil, nil
+			return true, nil
 		}
 
 		resps, err := DoTxnRequest[ReadResp](
@@ -168,7 +186,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 			},
 		)
 		if err != nil {
-			return nil, err
+			return true, err
 		}
 
 		resp := resps[0]
@@ -180,7 +198,12 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 		}
 
 		logutil.Debug(testutil.OperatorCatchBatch("table reader", resp.Batch))
-		return resp.Batch, nil
+		_, err = bat.Append(t.ctx, mp, resp.Batch)
+		resp.Batch.Clean(mp)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
 	}
 
 }
@@ -219,7 +242,11 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+func (t *Table) GetProcess() any {
+	panic("Not Support")
+}
+
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _int, _ int) (engine.RelData, error) {
 	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
@@ -234,7 +261,11 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData
 	return rd, nil
 }
 
-func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (t *Table) CollectTombstones(
+	_ context.Context,
+	_ int,
+	_ engine.TombstoneCollectPolicy,
+) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 
@@ -255,11 +286,11 @@ func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
+func (rd *MemRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 

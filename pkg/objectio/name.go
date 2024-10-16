@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -41,10 +42,10 @@ func BuildObjectName(segid *Segmentid, num uint16) ObjectName {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
 
-func BuildObjectNameWithObjectID(segid *ObjectId) ObjectName {
+func BuildObjectNameWithObjectID(id *ObjectId) ObjectName {
 	var name [ObjectNameLen]byte
-	copy(name[:ObjectIDSize], segid[:])
-	str := fmt.Sprintf("%v_%05d", segid.Segment().String(), segid.Offset())
+	copy(name[:ObjectIDSize], id[:])
+	str := fmt.Sprintf("%v_%05d", id.Segment().String(), id.Offset())
 	copy(name[NameStringOff:NameStringOff+NameStringLen], str)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
@@ -59,6 +60,10 @@ func (s *ObjectNameShort) Num() uint16 {
 
 func (s *ObjectNameShort) Equal(o []byte) bool {
 	return bytes.Equal(s[:], o)
+}
+
+func (o ObjectName) UnsafeString() string {
+	return util.UnsafeBytesToString(o[NameStringOff : NameStringOff+NameStringLen])
 }
 
 func (o ObjectName) String() string {

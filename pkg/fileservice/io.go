@@ -70,3 +70,11 @@ var ioBufferPool = NewPool(
 	nil,
 	nil,
 )
+
+type readerFunc func([]byte) (int, error)
+
+var _ io.Reader = readerFunc(nil)
+
+func (r readerFunc) Read(p []byte) (n int, err error) {
+	return r(p)
+}

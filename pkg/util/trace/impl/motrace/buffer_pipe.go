@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,7 +82,7 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 	handle := func(b any) {
 		req, ok := b.(table.WriteRequest) // see genETLData
 		if !ok {
-			panic(moerr.NewInternalError(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalErrorf(ctx, "batchETLHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if _, err := req.Handle(); err != nil {
 			logutil.Error(fmt.Sprintf("[Trace] failed to write. err: %v", err), logutil.NoReportFiled())
@@ -101,7 +100,7 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 				handle(req)
 			}
 		default:
-			panic(moerr.NewNotSupported(ctx, "unknown batch type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewNotSupportedf(ctx, "unknown batch type: %v", reflect.ValueOf(b).Type()))
 		}
 	}
 	return f
@@ -138,7 +137,7 @@ type WriteFactoryConfig struct {
 func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, factory table.WriterFactory) any {
 	buf.Reset()
 	if len(in) == 0 {
-		return table.NewRowRequest(nil)
+		return table.NewRowRequest(nil, nil)
 	}
 
 	// Initialize aggregator
@@ -210,14 +209,6 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 				panic("not MalCsv, dont support output CSV")
 			}
 
-			stmt, stmt_ok := i.(*StatementInfo)
-			if stmt_ok {
-				if stmt.AggrCount > 1 {
-					stmt.Statement = "/* " + strconv.FormatInt(stmt.AggrCount, 10) + " queries */ \n" + stmt.StmtBuilder.String()
-				}
-				stmt.StmtBuilder.Reset()
-			}
-
 			writeValues(item)
 		}
 		aggregator.Close()
@@ -225,7 +216,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))
 	for _, ww := range writerMap {
-		reqs = append(reqs, table.NewRowRequest(ww))
+		reqs = append(reqs, table.NewRowRequest(ww, nil))
 	}
 
 	return reqs

@@ -13,7 +13,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
 name    type    column_name
 idx1    MULTIPLE    name
@@ -35,7 +35,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx2    1    name    A    0    NULL    NULL    YES                    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx2` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx2` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx2";
 name    type    column_name
 idx2    MULTIPLE    name
@@ -56,7 +56,7 @@ t1    1    idx3    1    id    A    0    NULL    NULL                        YES 
 t1    1    idx3    2    name    A    0    NULL    NULL    YES                    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx3` (`id`,`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx3` (`id`,`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx3";
 name    type    column_name
 idx3    MULTIPLE    id
@@ -78,7 +78,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx4    1    name    A    0    NULL    NULL    YES                    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` VARCHAR(255) NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx4` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` varchar(255) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx4` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx4";
 name    type    column_name
 idx4    MULTIPLE    name
@@ -99,7 +99,7 @@ t1    1    idx5    1    name    A    0    NULL    NULL    YES                   
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` VARCHAR(255) NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx5` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` varchar(255) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx5` (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx5";
 name    type    column_name
 idx5    MULTIPLE    name
@@ -119,7 +119,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YE
 t1    1    idx6    1    a    A    0    NULL    NULL                        YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` DOUBLE NOT NULL,\n  `b` INT DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx6` (`a`)\n)
+t1    CREATE TABLE `t1` (\n  `a` double NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx6` (`a`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx6";
 name    type    column_name
 idx6    MULTIPLE    a
@@ -133,7 +133,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx7    1    name    A    0    NULL    NULL    YES    btree                YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx7` USING btree (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx7` USING btree (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
 name    type    column_name
 idx7    MULTIPLE    name

@@ -15,36 +15,11 @@
 package types
 
 import (
-	"go/constant"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-func ParseValueToBool(num *tree.NumVal) (bool, error) {
-	val := num.Value
-	str := num.String()
-	if !num.Negative() {
-		v, _ := constant.Uint64Val(val)
-		if v == 0 {
-			return false, nil
-		} else if v == 1 {
-			return true, nil
-		}
-	}
-	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", str)
-}
-
-func AppendBoolToByteArray(b bool, arr []byte) []byte {
-	if b {
-		arr = append(arr, '1')
-	} else {
-		arr = append(arr, '0')
-	}
-	return arr
-}
 
 func ParseBool(s string) (bool, error) {
 	s = strings.ToLower(s)
@@ -61,14 +36,5 @@ func ParseBool(s string) (bool, error) {
 			return false, nil
 		}
 	}
-	return false, moerr.NewInvalidInputNoCtx("'%s' is not a valid bool expression", s)
-
-}
-
-// ToIntString print out 1 or 0 as true/false.
-func BoolToIntString(b bool) string {
-	if b {
-		return "1"
-	}
-	return "0"
+	return false, moerr.NewInvalidInputNoCtxf("'%s' is not a valid bool expression", s)
 }

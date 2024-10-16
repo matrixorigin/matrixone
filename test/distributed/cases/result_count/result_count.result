@@ -55,7 +55,7 @@ View    Create View    character_set_client    collation_connection
 v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(65535) DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        

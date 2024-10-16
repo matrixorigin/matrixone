@@ -15,6 +15,8 @@
 package fileservice
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -22,6 +24,8 @@ import (
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
+	deallocated uint32
+	refs        *atomic.Int32
 }
 
 func (b Bytes) Size() int64 {
@@ -34,12 +38,28 @@ func (b Bytes) Bytes() []byte {
 
 func (b Bytes) Slice(length int) fscache.Data {
 	b.bytes = b.bytes[:length]
-	return b
+	return &b
 }
 
-func (b Bytes) Release() {
-	if b.deallocator != nil {
-		b.deallocator.Deallocate(malloc.NoHints)
+func (b Bytes) Retain() {
+	if b.refs != nil {
+		b.refs.Add(1)
+	}
+}
+
+func (b *Bytes) Release() {
+	if b.refs != nil {
+		if n := b.refs.Add(-1); n == 0 {
+			if b.deallocator != nil &&
+				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+				b.deallocator.Deallocate(malloc.NoHints)
+			}
+		}
+	} else {
+		if b.deallocator != nil &&
+			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+			b.deallocator.Deallocate(malloc.NoHints)
+		}
 	}
 }
 
@@ -49,13 +69,16 @@ type bytesAllocator struct {
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
-func (b *bytesAllocator) Alloc(size int) fscache.Data {
+func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
 	slice, dec, err := b.allocator.Allocate(uint64(size), malloc.NoHints)
 	if err != nil {
 		panic(err)
 	}
-	return Bytes{
+	var refs atomic.Int32
+	refs.Store(1)
+	return &Bytes{
 		bytes:       slice,
 		deallocator: dec,
+		refs:        &refs,
 	}
 }

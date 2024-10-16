@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -49,7 +50,7 @@ func TestReplayCatalog1(t *testing.T) {
 	}
 
 	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase("db", "", "")
+	_, err := testutil.CreateDatabase2(ctx, txn, "db")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	createTable := func(schema *catalog.Schema, wg *sync.WaitGroup, forceCkp bool) func() {
@@ -58,7 +59,7 @@ func TestReplayCatalog1(t *testing.T) {
 			txn, _ := tae.StartTxn(nil)
 			db, err := txn.GetDatabase("db")
 			assert.Nil(t, err)
-			_, err = db.CreateRelation(schema)
+			_, err = testutil.CreateRelation2(ctx, txn, db, schema)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit(context.Background()))
 			txn, _ = tae.StartTxn(nil)
@@ -68,7 +69,8 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				obj, err := rel.CreateNonAppendableObject(nil)
+				stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false)
+				obj, err := rel.CreateNonAppendableObject(false, &objectio.CreateObjOpt{Stats: stats})
 				testutil.MockObjectStats(t, obj)
 				assert.Nil(t, err)
 				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
@@ -82,6 +84,9 @@ func TestReplayCatalog1(t *testing.T) {
 			}
 			assert.Nil(t, txn.Commit(context.Background()))
 			if forceCkp || rand.Intn(100) > 80 {
+				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
+				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemTableSchema, false)
+				testutil.CompactBlocks(t, 0, tae, pkgcatalog.MO_CATALOG, catalog.SystemColumnSchema, false)
 				err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 				assert.NoError(t, err)
 			}
@@ -138,7 +143,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateNonAppendableObject(nil)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
@@ -177,7 +182,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	_, err = rel.CreateObject()
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -216,7 +221,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateNonAppendableObject(nil)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
@@ -247,7 +252,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject()
+	obj, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -256,9 +261,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	err = rel.SoftDeleteObject(obj.GetID())
+	err = rel.SoftDeleteObject(obj.GetID(), false)
 	assert.NoError(t, err)
-	obj, err = rel.GetObject(obj.GetID())
+	obj, err = rel.GetObject(obj.GetID(), false)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
@@ -289,8 +294,8 @@ func TestReplay1(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -299,7 +304,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateObject()
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	logutil.Infof("%d,%d", txn.GetStartTS(), txn.GetCommitTS())
@@ -393,28 +398,14 @@ func TestReplay2(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 10000)
 	defer bat.Close()
 	bats := bat.Split(2)
 
-	txn, err := tae.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err := txn.CreateDatabase("db", "", "")
-	assert.Nil(t, err)
-	rel, err := e.CreateRelation(schema)
-	assert.Nil(t, err)
-	err = rel.Append(context.Background(), bats[0])
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit(context.Background()))
-
-	txn, err = tae.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
+	testutil.CreateRelationAndAppend2(t, 0, tae, "db", schema, bats[0], true)
+	txn, rel := testutil.GetRelation(t, 0, tae, "db", schema.Name)
 
 	filter := handle.NewEQFilter(int32(1500))
 	id, row, err := rel.GetByFilter(context.Background(), filter)
@@ -426,18 +417,13 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, err = tae.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
+	txn, rel = testutil.GetRelation(t, 0, tae, "db", schema.Name)
 	blk := testutil.GetOneBlockMeta(rel)
-	obj, err := rel.GetObject(blk.ID())
+	obj, err := rel.GetObject(blk.ID(), false)
 	assert.Nil(t, err)
-	err = rel.SoftDeleteObject(obj.GetID())
+	err = rel.SoftDeleteObject(obj.GetID(), false)
 	assert.NoError(t, err)
-	obj, err = rel.GetObject(obj.GetID())
+	obj, err = rel.GetObject(obj.GetID(), false)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
@@ -461,20 +447,15 @@ func TestReplay2(t *testing.T) {
 	//currTs := tae2.TxnMgr.TsAlloc.Get()
 	//assert.True(t, currTs.GreaterEq(prevTs))
 
-	txn, err = tae2.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	objEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
+	txn, rel = testutil.GetRelation(t, 0, tae2, "db", schema.Name)
+	objEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID(), false)
 	assert.Nil(t, err)
 	assert.True(t, objEntry.HasDropCommitted())
 
 	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
-	_, _, err = rel.GetValue(id, row, 0)
+	_, _, err = rel.GetValue(id, row, 0, false)
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -483,12 +464,7 @@ func TestReplay2(t *testing.T) {
 	err = tae2.BGCheckpointRunner.ForceIncrementalCheckpoint(tae2.TxnMgr.Now(), false)
 	assert.NoError(t, err)
 
-	txn, err = tae2.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
+	txn, rel = testutil.GetRelation(t, 0, tae2, "db", schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -500,18 +476,13 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
 
-	txn, err = tae3.StartTxn(nil)
-	assert.Nil(t, err)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	_, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
+	txn, rel = testutil.GetRelation(t, 0, tae3, "db", schema.Name)
+	_, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID(), false)
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
-	_, _, err = rel.GetValue(id, row, 0)
+	_, _, err = rel.GetValue(id, row, 0, false)
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -537,8 +508,8 @@ func TestReplay3(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -613,8 +584,8 @@ func TestReplayTableRows(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
-	schema.BlockMaxRows = 1000
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 4800)
 	defer bat.Close()
 	bats := bat.Split(3)
@@ -736,9 +707,9 @@ func TestReplay4(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*uint32(schema.Extra.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(4)
 
@@ -801,13 +772,13 @@ func TestReplay5(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*uint32(schema.Extra.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(8)
 
-	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
+	testutil.CreateRelationAndAppend2(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -931,13 +902,13 @@ func TestReplay6(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10-1))
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(4)
 
-	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
+	testutil.CreateRelationAndAppend2(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
 
 	_ = tae.Close()
 	tae, err := db.Open(ctx, tae.Dir, opts)
@@ -993,10 +964,10 @@ func TestReplay7(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 5
 
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*15+1))
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*15+1))
 	defer bat.Close()
 	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, true)
@@ -1022,15 +993,15 @@ func TestReplay8(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
 
-	tae.CreateRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend2(bats[0], true)
 	txn, rel := tae.GetRelation()
 	v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
@@ -1177,10 +1148,10 @@ func TestReplay9(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 3)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+2))
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3+2))
 	defer bat.Close()
 	bats := bat.Split(4)
 
@@ -1274,8 +1245,8 @@ func TestReplay10(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 5
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 5
 	expr := &plan.Expr{}
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
@@ -1295,9 +1266,9 @@ func TestReplay10(t *testing.T) {
 		Expr: nil,
 	})
 
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows))
 	defer bat.Close()
-	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
+	testutil.CreateRelationAndAppend2(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
@@ -1308,7 +1279,7 @@ func TestReplay10(t *testing.T) {
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
-	schema1 := rel.Schema().(*catalog.Schema)
+	schema1 := rel.Schema(false).(*catalog.Schema)
 
 	d1 := &plan.Default{}
 	assert.NoError(t, types.Decode(schema1.ColDefs[1].Default, d1))
@@ -1347,7 +1318,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	obj, err := rel.CreateObject()
+	obj, err := rel.CreateObject(false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -1360,9 +1331,9 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	err = rel.SoftDeleteObject(obj.GetID())
+	err = rel.SoftDeleteObject(obj.GetID(), false)
 	assert.NoError(t, err)
-	obj, err = rel.GetObject(obj.GetID())
+	obj, err = rel.GetObject(obj.GetID(), false)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.NoError(t, err)
@@ -1398,7 +1369,7 @@ func TestReplayDatabaseEntry(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err := txn.CreateDatabase("db", createSqlStr, datypStr)
+	db, err := testutil.CreateDatabase2Ext(ctx, txn, "db", createSqlStr, datypStr)
 	assert.NoError(t, err)
 	dbID := db.GetID()
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -1410,6 +1381,7 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	assert.Equal(t, datypStr, dbEntry.GetDatType())
 	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
 
+	testutil.CompactBlocks(t, 0, tae.DB, pkgcatalog.MO_CATALOG, catalog.SystemDBSchema, false)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.NoError(t, err)
 

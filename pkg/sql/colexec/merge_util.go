@@ -15,168 +15,347 @@
 package colexec
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
-type MergeInterface interface {
+type dataSlice[T any] interface {
+	at(i, j int) T
+	length(i int) int
+	size() int
+}
+
+type fixedDataSlice[T any] struct {
+	cols [][]T
+}
+
+func (f *fixedDataSlice[T]) at(i, j int) T {
+	return f.cols[i][j]
+}
+func (f *fixedDataSlice[T]) length(i int) int {
+	return len(f.cols[i])
+}
+
+func (f *fixedDataSlice[T]) size() int {
+	return len(f.cols)
+}
+
+type varlenaDataSlice struct {
+	cols []struct {
+		data []types.Varlena
+		area []byte
+	}
+}
+
+func (v *varlenaDataSlice) at(i, j int) string {
+	return v.cols[i].data[j].UnsafeGetString(v.cols[i].area)
+}
+
+func (v *varlenaDataSlice) length(i int) int {
+	return len(v.cols[i].data)
+}
+
+func (v *varlenaDataSlice) size() int {
+	return len(v.cols)
+}
+
+type mergeInterface interface {
 	getNextPos() (int, int, int)
 }
 
 type heapElem[T any] struct {
-	data     *T
+	data     T
 	isNull   bool
 	batIndex int
 	rowIndex int
 }
 
-// we will sort by primary key or
+// merge we will sort by primary key or
 // clusterby key, so we just need one
 // vector of every batch.
-type Merge[T any] struct {
+type merge[T comparable] struct {
 	// the number of bacthes
-	size uint64
-	// convert the vecotrs which need to sort
-	// into cols data
-	cols [][]T
+	size int
+
+	// convert the vectors which need to sort
+	// into ds data
+	ds dataSlice[T]
+
 	// pointer is used to specify
-	// which postion we have gotten.
-	// for example, pointers[i] means
-	// we are now at the i-th row for
+	// which position we have gotten.
+	// for example, rowIdx[i] means
+	// we are now at the rowIdx[i]-th row for
 	// cols[i]
-	pointers []int
+	rowIdx []int
 
 	nulls []*nulls.Nulls
 
-	heaps *mergeHeap[T]
+	heap *heapSlice[T]
 }
 
-func newMerge[T any](size int, compLess sort.LessFunc[T], cols [][]T, nulls []*nulls.Nulls) (merge *Merge[T]) {
-	merge = &Merge[T]{
-		size:     uint64(size),
-		cols:     cols,
-		pointers: make([]int, size),
-		nulls:    nulls,
+func newMerge[T comparable](compLess sort.LessFunc[T], ds dataSlice[T], nulls []*nulls.Nulls) mergeInterface {
+	m := &merge[T]{
+		size:   ds.size(),
+		ds:     ds,
+		rowIdx: make([]int, ds.size()),
+		nulls:  nulls,
+		heap:   newHeapSlice(ds.size(), compLess),
 	}
-	merge.heaps = newMergeHeap(uint64(size), compLess)
-	merge.initHeap()
-	return
+	m.initHeap()
+	return m
 }
 
-func (merge *Merge[T]) initHeap() {
-	for i := 0; i < int(merge.size); i++ {
-		if len(merge.cols[i]) == 0 {
-			merge.pointers[i] = -1
-			merge.size--
+func (m *merge[T]) initHeap() {
+	for i := 0; i < m.ds.size(); i++ {
+		if m.ds.length(i) == 0 {
+			m.rowIdx[i] = -1
+			m.size--
 			continue
 		}
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[i][merge.pointers[i]],
-			isNull:   merge.nulls[i].Contains(uint64(merge.pointers[i])),
+		heapPush(m.heap, heapElem[T]{
+			data:     m.ds.at(i, m.rowIdx[i]),
+			isNull:   m.nulls[i].Contains(uint64(m.rowIdx[i])),
 			batIndex: i,
-			rowIndex: merge.pointers[i],
+			rowIndex: m.rowIdx[i],
 		})
-		if merge.pointers[i] >= len(merge.cols[i]) {
-			merge.pointers[i] = -1
-			merge.size--
+		if m.rowIdx[i] >= m.ds.length(i) {
+			m.rowIdx[i] = -1
+			m.size--
 		}
 	}
 }
 
-func (merge *Merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
-	data := merge.pushNext()
+func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
+	data := m.pushNext()
 	if data == nil {
-		// now, merge.size is 0
-		return -1, -1, int(merge.size)
+		// now, m.size is 0
+		return -1, -1, m.size
 	}
-	return data.batIndex, data.rowIndex, int(merge.size)
+	return data.batIndex, data.rowIndex, m.size
 }
 
-func (merge *Merge[T]) pushNext() *heapElem[T] {
-	if merge.size == 0 {
+func (m *merge[T]) pushNext() *heapElem[T] {
+	if m.size == 0 {
 		return nil
 	}
-	data := merge.heaps.pop()
+	data := heapPop(m.heap)
 	batchIndex := data.batIndex
-	merge.pointers[batchIndex]++
-	if merge.pointers[batchIndex] >= len(merge.cols[batchIndex]) {
-		merge.pointers[batchIndex] = -1
-		merge.size--
+	m.rowIdx[batchIndex]++
+	if m.rowIdx[batchIndex] >= m.ds.length(batchIndex) {
+		m.rowIdx[batchIndex] = -1
+		m.size--
 	}
-	if merge.pointers[batchIndex] != -1 {
-		merge.heaps.push(&heapElem[T]{
-			data:     &merge.cols[batchIndex][merge.pointers[batchIndex]],
-			isNull:   merge.nulls[batchIndex].Contains(uint64(merge.pointers[batchIndex])),
+	if m.rowIdx[batchIndex] != -1 {
+		heapPush(m.heap, heapElem[T]{
+			data:     m.ds.at(batchIndex, m.rowIdx[batchIndex]),
+			isNull:   m.nulls[batchIndex].Contains(uint64(m.rowIdx[batchIndex])),
 			batIndex: batchIndex,
-			rowIndex: merge.pointers[batchIndex],
+			rowIndex: m.rowIdx[batchIndex],
 		})
 	}
-	return data
+	return &data
 }
 
-// mergeHeap will take null first rule
-type mergeHeap[T any] struct {
-	cmpLess sort.LessFunc[T]
-	datas   []*heapElem[T]
-	size    uint64
+type heapSlice[T any] struct {
+	lessFunc sort.LessFunc[T]
+	s        []heapElem[T]
 }
 
-func newMergeHeap[T any](cap_size uint64, cmp sort.LessFunc[T]) *mergeHeap[T] {
-	return &mergeHeap[T]{
-		cmpLess: cmp,
-		datas:   make([]*heapElem[T], cap_size+1),
-		size:    0,
+func newHeapSlice[T any](n int, lessFunc sort.LessFunc[T]) *heapSlice[T] {
+	return &heapSlice[T]{
+		lessFunc: lessFunc,
+		s:        make([]heapElem[T], 0, n),
 	}
 }
 
-func (heap *mergeHeap[T]) push(data *heapElem[T]) {
-	heap.datas[heap.size+1] = data
-	heap.size++
-	heap.up(int(heap.size))
+// Push pushes the element x onto the heap.
+// The complexity is Operator(log n) where n = len(h).
+func heapPush[T any](h *heapSlice[T], x heapElem[T]) {
+	h.s = append(h.s, x)
+	up(h, len(h.s)-1)
 }
 
-func (heap *mergeHeap[T]) pop() (data *heapElem[T]) {
-	if heap.size < 1 {
-		return nil
+// Pop removes and returns the minimum element (according to Less) from the heap.
+// The complexity is Operator(log n) where n = len(h).
+// Pop is equivalent to Remove(h, 0).
+func heapPop[T any](h *heapSlice[T]) heapElem[T] {
+	n := len(h.s) - 1
+	(h.s)[0], (h.s)[n] = (h.s)[n], (h.s)[0]
+	down(h, 0, n)
+	res := (h.s)[n]
+	h.s = (h.s)[:n]
+	return res
+}
+
+func up[T any](h *heapSlice[T], j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
 	}
-	data = heap.datas[1]
-	heap.datas[1], heap.datas[heap.size] = heap.datas[heap.size], heap.datas[1]
-	heap.size--
-	heap.down(1)
-	return
 }
 
-func (heap *mergeHeap[T]) compLess(i, j int) bool {
-	if heap.datas[i].isNull {
+func down[T any](h *heapSlice[T], i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+			break
+		}
+		j := j1 // left child
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2 // = 2*i + 2  // right child
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+func (x *heapSlice[T]) Less(i, j int) bool {
+	if x.s[i].isNull {
 		return true
 	}
-	if heap.datas[j].isNull {
+	if x.s[j].isNull {
 		return false
 	}
-	return heap.cmpLess(*heap.datas[i].data, *heap.datas[j].data)
+	return x.lessFunc(x.s[i].data, x.s[j].data)
 }
+func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
+func (x *heapSlice[T]) Len() int      { return len(x.s) }
 
-func (heap *mergeHeap[T]) down(i int) {
-	t := i
-	if i*2 <= int(heap.size) && heap.compLess(i*2, t) {
-		t = i * 2
-	}
-	if i*2+1 <= int(heap.size) && heap.compLess(i*2+1, t) {
-		t = i*2 + 1
-	}
-	if t != i {
-		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-		heap.down(t)
-	}
-}
+type SinkerT func(*batch.Batch) error
 
-func (heap *mergeHeap[T]) up(i int) {
-	t := i
-	if i/2 >= 1 && heap.compLess(t, i/2) {
-		t = i / 2
+func MergeSortBatches(
+	batches []*batch.Batch,
+	sortKeyIdx int,
+	buffer *batch.Batch,
+	sinker SinkerT,
+	mp *mpool.MPool,
+) error {
+	var merge mergeInterface
+	nulls := make([]*nulls.Nulls, len(batches))
+	for i, b := range batches {
+		nulls[i] = b.Vecs[sortKeyIdx].GetNulls()
 	}
-	if t != i {
-		heap.datas[t], heap.datas[i] = heap.datas[i], heap.datas[t]
-		heap.up(t)
+	switch batches[0].Vecs[sortKeyIdx].GetType().Oid {
+	case types.T_bool:
+		ds := &fixedDataSlice[bool]{getFixedCols[bool](batches, sortKeyIdx)}
+		merge = newMerge(sort.BoolLess, ds, nulls)
+	case types.T_bit:
+		ds := &fixedDataSlice[uint64]{getFixedCols[uint64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint64], ds, nulls)
+	case types.T_int8:
+		ds := &fixedDataSlice[int8]{getFixedCols[int8](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int8], ds, nulls)
+	case types.T_int16:
+		ds := &fixedDataSlice[int16]{getFixedCols[int16](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int16], ds, nulls)
+	case types.T_int32:
+		ds := &fixedDataSlice[int32]{getFixedCols[int32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int32], ds, nulls)
+	case types.T_int64:
+		ds := &fixedDataSlice[int64]{getFixedCols[int64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[int64], ds, nulls)
+	case types.T_uint8:
+		ds := &fixedDataSlice[uint8]{getFixedCols[uint8](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint8], ds, nulls)
+	case types.T_uint16:
+		ds := &fixedDataSlice[uint16]{getFixedCols[uint16](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint16], ds, nulls)
+	case types.T_uint32:
+		ds := &fixedDataSlice[uint32]{getFixedCols[uint32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint32], ds, nulls)
+	case types.T_uint64:
+		ds := &fixedDataSlice[uint64]{getFixedCols[uint64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[uint64], ds, nulls)
+	case types.T_float32:
+		ds := &fixedDataSlice[float32]{getFixedCols[float32](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[float32], ds, nulls)
+	case types.T_float64:
+		ds := &fixedDataSlice[float64]{getFixedCols[float64](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[float64], ds, nulls)
+	case types.T_date:
+		ds := &fixedDataSlice[types.Date]{getFixedCols[types.Date](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Date], ds, nulls)
+	case types.T_datetime:
+		ds := &fixedDataSlice[types.Datetime]{getFixedCols[types.Datetime](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Datetime], ds, nulls)
+	case types.T_time:
+		ds := &fixedDataSlice[types.Time]{getFixedCols[types.Time](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Time], ds, nulls)
+	case types.T_timestamp:
+		ds := &fixedDataSlice[types.Timestamp]{getFixedCols[types.Timestamp](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Timestamp], ds, nulls)
+	case types.T_enum:
+		ds := &fixedDataSlice[types.Enum]{getFixedCols[types.Enum](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.Enum], ds, nulls)
+	case types.T_decimal64:
+		ds := &fixedDataSlice[types.Decimal64]{getFixedCols[types.Decimal64](batches, sortKeyIdx)}
+		merge = newMerge(sort.Decimal64Less, ds, nulls)
+	case types.T_decimal128:
+		ds := &fixedDataSlice[types.Decimal128]{getFixedCols[types.Decimal128](batches, sortKeyIdx)}
+		merge = newMerge(sort.Decimal128Less, ds, nulls)
+	case types.T_uuid:
+		ds := &fixedDataSlice[types.Uuid]{getFixedCols[types.Uuid](batches, sortKeyIdx)}
+		merge = newMerge(sort.UuidLess, ds, nulls)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+		ds := &varlenaDataSlice{getVarlenaCols(batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[string], ds, nulls)
+	case types.T_Rowid:
+		ds := &fixedDataSlice[types.Rowid]{getFixedCols[types.Rowid](batches, sortKeyIdx)}
+		merge = newMerge(sort.RowidLess, ds, nulls)
+	default:
+		panic(fmt.Sprintf("invalid type: %s", batches[0].Vecs[sortKeyIdx].GetType()))
 	}
+	var (
+		batchIndex int
+		rowIndex   int
+		lens       int
+	)
+	size := len(batches)
+	buffer.CleanOnlyData()
+	for size > 0 {
+		batchIndex, rowIndex, size = merge.getNextPos()
+		for i := range buffer.Vecs {
+			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
+			if err != nil {
+				return err
+			}
+		}
+		// all data in batches[batchIndex] are used. Clean it.
+		if rowIndex+1 == batches[batchIndex].RowCount() {
+			batches[batchIndex].Clean(mp)
+		}
+		lens++
+		if lens == objectio.BlockMaxRows {
+			lens = 0
+			buffer.SetRowCount(objectio.BlockMaxRows)
+			if err := sinker(buffer); err != nil {
+				return err
+			}
+			// force clean
+			buffer.CleanOnlyData()
+		}
+	}
+	if lens > 0 {
+		buffer.SetRowCount(lens)
+		if err := sinker(buffer); err != nil {
+			return err
+		}
+		buffer.CleanOnlyData()
+	}
+	return nil
 }

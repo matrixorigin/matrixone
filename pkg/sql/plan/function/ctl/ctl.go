@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -74,12 +74,12 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	parameter := functionUtil.QuickBytesToStr(arg2)
 
 	if _, ok := supportedServiceTypes[service]; !ok {
-		return moerr.NewNotSupported(proc.Ctx, "service type %s not supported", service)
+		return moerr.NewNotSupportedf(proc.Ctx, "service type %s not supported", service)
 	}
 
 	f, ok := supportedCmds[command]
 	if !ok {
-		return moerr.NewNotSupported(proc.Ctx, "command %s not supported", command)
+		return moerr.NewNotSupportedf(proc.Ctx, "command %s not supported", command)
 	}
 
 	res, err := f(proc,
@@ -97,7 +97,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		return err
 	}
 	if command == InspectMethod {
-		obj := res.Data.([]any)[0].(*db.InspectResp)
+		obj := res.Data.([]any)[0].(*cmd_util.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
 	}

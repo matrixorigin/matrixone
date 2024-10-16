@@ -17,7 +17,6 @@ package mergerecursive
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,14 +25,16 @@ import (
 var _ vm.Operator = new(MergeRecursive)
 
 type container struct {
-	colexec.ReceiverOperator
 	bats []*batch.Batch
 	buf  *batch.Batch
 	last bool
+
+	freeBats []*batch.Batch
+	i        int
 }
 
 type MergeRecursive struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -70,22 +71,15 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeRecursive.Free(proc, pipelineFailed, err)
+	mergeRecursive.ctr.last = false
+	mergeRecursive.ctr.i = 0
+	for _, bat := range mergeRecursive.ctr.freeBats {
+		bat.Clean(proc.Mp())
+	}
+	mergeRecursive.ctr.freeBats = nil
+	mergeRecursive.ctr.bats = nil
+	mergeRecursive.ctr.buf = nil
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeRecursive.ctr != nil {
-		mergeRecursive.ctr.FreeMergeTypeOperator(pipelineFailed)
-		for _, b := range mergeRecursive.ctr.bats {
-			if b != nil {
-				b.Clean(proc.Mp())
-			}
-			mergeRecursive.ctr.bats = nil
-		}
-		if mergeRecursive.ctr.buf != nil {
-			mergeRecursive.ctr.buf.Clean(proc.Mp())
-			mergeRecursive.ctr.buf = nil
-		}
-		mergeRecursive.ctr = nil
-	}
 }

@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qclient.QueryClient, addr string)) {
+func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *clientConn, addr string)) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -54,8 +55,10 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 				clusterservice.WithDisableRefresh(),
 				clusterservice.WithServices([]metadata.CNService{{
 					ServiceID:    cn.ServiceID,
+					SQLAddress:   cn.SQLAddress,
 					QueryAddress: address,
 				}}, nil))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 			runtime.SetupServiceBasedRuntime(cn.ServiceID, rt)
 
@@ -83,10 +86,25 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 				}
 				return nil
 			}, false)
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				if req.ResetSessionRequest == nil {
+					return moerr.NewInternalError(ctx, "bad request")
+				}
+				resp.ResetSessionResponse = &pb.ResetSessionResponse{
+					AuthString: nil,
+					Success:    true,
+				}
+				return nil
+			}, false)
 			err = qs.Start()
 			assert.NoError(t, err)
 
-			fn(qt, address)
+			cc, closeFn := createNewClientConn(t)
+			defer closeFn()
+			ccc := cc.(*clientConn)
+			ccc.queryClient = qt
+			ccc.moCluster = cluster
+			fn(ccc, cn.SQLAddress)
 
 			err = qs.Close()
 			assert.NoError(t, err)
@@ -97,36 +115,28 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 
 }
 
-func TestQueryServiceMigrateConn(t *testing.T) {
-	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer cancel()
-		req := qc.NewRequest(pb.CmdMethod_MigrateConnFrom)
-		req.MigrateConnFromRequest = &pb.MigrateConnFromRequest{
-			ConnID: 1,
-		}
-		resp, err := qc.SendMessage(ctx, addr, req)
+func TestQueryServiceMigrateFrom(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "127.0.0.1:9000"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+		resp, err := cc.migrateConnFrom(addr)
 		assert.NoError(t, err)
-		defer qc.Release(resp)
-		assert.NotNil(t, resp.MigrateConnFromResponse)
-		assert.Equal(t, "d1", resp.MigrateConnFromResponse.DB)
+		assert.NotNil(t, resp)
+		assert.Equal(t, "d1", resp.DB)
 	})
 }
 
-func TestQueryServiceMigrateFrom(t *testing.T) {
-	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(qc qclient.QueryClient, addr string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer cancel()
-		req := qc.NewRequest(pb.CmdMethod_MigrateConnTo)
-		req.MigrateConnToRequest = &pb.MigrateConnToRequest{
-			ConnID: 1,
-		}
-		resp, err := qc.SendMessage(ctx, addr, req)
+func TestQueryServiceMigrateTo(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+		resp, err := cc.migrateConnFrom(addr)
 		assert.NoError(t, err)
-		defer qc.Release(resp)
-		assert.NotNil(t, resp.MigrateConnToResponse)
-		assert.Equal(t, true, resp.MigrateConnToResponse.Success)
+		assert.NotNil(t, resp)
+		assert.Equal(t, "d1", resp.DB)
+
+		c1, _ := net.Pipe()
+		sc := newMockServerConn(c1)
+		cc.migration.setVarStmts = append(cc.migration.setVarStmts, "set a=1")
+		err = cc.migrateConnTo(sc, resp)
+		assert.NoError(t, err)
 	})
 }

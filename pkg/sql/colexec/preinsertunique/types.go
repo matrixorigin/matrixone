@@ -15,8 +15,6 @@
 package preinsertunique
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -33,8 +31,7 @@ type container struct {
 	buf *batch.Batch
 }
 type PreInsertUnique struct {
-	ctr          *container
-	Ctx          context.Context
+	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packers util.PackerList
@@ -74,17 +71,18 @@ func (preInsertUnique *PreInsertUnique) Release() {
 }
 
 func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	preInsertUnique.Free(proc, pipelineFailed, err)
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.CleanOnlyData()
+	}
+	if preInsertUnique.packers.PackerCount() > 10 {
+		preInsertUnique.packers.Free()
+	}
 }
 
 func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if preInsertUnique.ctr != nil {
-		if preInsertUnique.ctr.buf != nil {
-			preInsertUnique.ctr.buf.Clean(proc.Mp())
-			preInsertUnique.ctr.buf = nil
-		}
-		preInsertUnique.ctr = nil
+	if preInsertUnique.ctr.buf != nil {
+		preInsertUnique.ctr.buf.Clean(proc.Mp())
+		preInsertUnique.ctr.buf = nil
 	}
-
 	preInsertUnique.packers.Free()
 }

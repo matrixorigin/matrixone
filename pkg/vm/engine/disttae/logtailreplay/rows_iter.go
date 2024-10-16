@@ -16,10 +16,12 @@ package logtailreplay
 
 import (
 	"bytes"
+
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -36,20 +38,6 @@ type rowsIter struct {
 	checkBlockID bool
 	blockID      types.Blockid
 	iterDeleted  bool
-}
-
-func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.Copy().Iter()
-	ret := &rowsIter{
-		ts:          ts,
-		iter:        iter,
-		iterDeleted: iterDeleted,
-	}
-	if blockID != nil {
-		ret.checkBlockID = true
-		ret.blockID = *blockID
-	}
-	return ret
 }
 
 var _ RowsIter = new(rowsIter)
@@ -82,11 +70,11 @@ func (p *rowsIter) Next() bool {
 			// no more
 			return false
 		}
-		if entry.Time.Greater(&p.ts) {
+		if entry.Time.GT(&p.ts) {
 			// not visible
 			continue
 		}
-		if entry.RowID.Equal(p.lastRowID) {
+		if entry.RowID.EQ(&p.lastRowID) {
 			// already met
 			continue
 		}
@@ -307,20 +295,15 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	var encoded []byte
 
-	first := true
-	iterateAll := false
-
 	idx := 0
 	vecLen := len(encodes)
 	currentPhase := seek
 
-	match := func(key, ee []byte) bool {
-		if kind == function.PREFIX_IN {
-			return bytes.HasPrefix(key, ee)
-		} else {
-			// in
-			return bytes.Equal(key, ee)
-		}
+	var match func(key, ee []byte) bool
+	if kind == function.PREFIX_IN {
+		match = bytes.HasPrefix
+	} else {
+		match = bytes.Equal
 	}
 
 	var prev []byte = nil
@@ -350,27 +333,9 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{
 		Name: "InKind",
 		Move: func(p *primaryKeyIter) (ret bool) {
-			if first {
-				first = false
-				// each seek may visit height items
-				// we choose to scan all if the seek is more expensive
-				if len(encodes)*p.primaryIndex.Height() > p.primaryIndex.Len() {
-					iterateAll = true
-				}
-			}
-
+			// TODO: optimize the case where len(encodes) >> p.primaryIndex.Len(), refer to the UT TestPrefixIn
 			for {
 				switch currentPhase {
-				case judge:
-					if iterateAll {
-						if !updateEncoded() {
-							return false
-						}
-						currentPhase = scan
-					} else {
-						currentPhase = seek
-					}
-
 				case seek:
 					if !updateEncoded() {
 						// out of vec
@@ -392,24 +357,10 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 						return true
 					}
 					p.iter.Prev()
-					currentPhase = judge
+					currentPhase = seek
 				}
 			}
 		},
-	}
-}
-
-func (p *PartitionState) NewPrimaryKeyIter(
-	ts types.TS,
-	spec PrimaryKeyMatchSpec,
-) *primaryKeyIter {
-	index := p.primaryIndex.Copy()
-	return &primaryKeyIter{
-		ts:           ts,
-		spec:         spec,
-		iter:         index.Iter(),
-		primaryIndex: index,
-		rows:         p.rows.Copy(),
 	}
 }
 
@@ -440,7 +391,7 @@ func (p *primaryKeyIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}
@@ -478,24 +429,6 @@ type primaryKeyDelIter struct {
 	bid types.Blockid
 }
 
-func (p *PartitionState) NewPrimaryKeyDelIter(
-	ts types.TS,
-	spec PrimaryKeyMatchSpec,
-	bid types.Blockid,
-) *primaryKeyDelIter {
-	index := p.primaryIndex.Copy()
-	return &primaryKeyDelIter{
-		primaryKeyIter: primaryKeyIter{
-			ts:           ts,
-			spec:         spec,
-			primaryIndex: index,
-			iter:         index.Iter(),
-			rows:         p.rows.Copy(),
-		},
-		bid: bid,
-	}
-}
-
 var _ RowsIter = new(primaryKeyDelIter)
 
 func (p *primaryKeyDelIter) Next() bool {
@@ -506,7 +439,7 @@ func (p *primaryKeyDelIter) Next() bool {
 
 		entry := p.iter.Item()
 
-		if entry.BlockID.Compare(p.bid) != 0 {
+		if entry.BlockID.Compare(&p.bid) != 0 {
 			continue
 		}
 
@@ -527,7 +460,7 @@ func (p *primaryKeyDelIter) Next() bool {
 				// no more
 				break
 			}
-			if row.Time.Greater(&p.ts) {
+			if row.Time.GT(&p.ts) {
 				// not visible
 				continue
 			}
@@ -548,5 +481,56 @@ func (p *primaryKeyDelIter) Next() bool {
 		}
 
 		return true
+	}
+}
+
+func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
+	iter := p.rows.Copy().Iter()
+	ret := &rowsIter{
+		ts:          ts,
+		iter:        iter,
+		iterDeleted: iterDeleted,
+	}
+	if blockID != nil {
+		ret.checkBlockID = true
+		ret.blockID = *blockID
+	}
+	return ret
+}
+
+func (p *PartitionState) NewPrimaryKeyIter(
+	ts types.TS,
+	spec PrimaryKeyMatchSpec,
+) *primaryKeyIter {
+	index := p.rowPrimaryKeyIndex.Copy()
+	return &primaryKeyIter{
+		ts:           ts,
+		spec:         spec,
+		iter:         index.Iter(),
+		primaryIndex: index,
+		rows:         p.rows.Copy(),
+	}
+}
+
+//type primaryKeyDelIter struct {
+//	primaryKeyIter
+//	bid types.Blockid
+//}
+
+func (p *PartitionState) NewPrimaryKeyDelIter(
+	ts *types.TS,
+	spec PrimaryKeyMatchSpec,
+	bid *types.Blockid,
+) *primaryKeyDelIter {
+	index := p.rowPrimaryKeyIndex.Copy()
+	return &primaryKeyDelIter{
+		primaryKeyIter: primaryKeyIter{
+			ts:           *ts,
+			spec:         spec,
+			primaryIndex: index,
+			iter:         index.Iter(),
+			rows:         p.rows.Copy(),
+		},
+		bid: *bid,
 	}
 }

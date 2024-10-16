@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -116,6 +115,14 @@ func MustGetPipeline(sid string) *IoPipeline {
 	return v.(*IoPipeline)
 }
 
+func GetPipeline(sid string) *IoPipeline {
+	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	if !ok {
+		return nil
+	}
+	return v.(*IoPipeline)
+}
+
 func makeName(location string) string {
 	return fmt.Sprintf("%s-%d", location, time.Now().UTC().Nanosecond())
 }
@@ -144,67 +151,30 @@ func jobFactory(
 }
 
 func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
-	if params.reader != nil {
-		reader = params.reader
-	} else {
-		reader = getReader(params.fs, params.key)
-	}
+	reader = getReader(params.fs, params.key)
 	return
 }
 
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	if params.prefetchFile {
-		return getJob(
-			ctx,
-			makeName(reader.GetName()),
-			JTLoad,
-			func(_ context.Context) (res *tasks.JobResult) {
-				// TODO
-				res = &tasks.JobResult{}
-				var name string
-				if params.reader == nil {
-					name = params.key.Name().String()
-				} else {
-					name = params.reader.GetName()
-				}
-				err := reader.GetFs().PrefetchFile(ctx, name)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				if params.reader == nil {
-					putReader(reader)
-				}
+	return getJob(
+		ctx,
+		makeName(reader.GetName()),
+		JTLoad,
+		func(_ context.Context) (res *tasks.JobResult) {
+			// TODO
+			res = &tasks.JobResult{}
+			err := reader.GetFs().PrefetchFile(ctx, params.key.Name().String())
+			if err != nil {
+				res.Err = err
 				return
-			},
-		)
-	} else {
-		return getJob(
-			ctx,
-			makeName(reader.GetName()),
-			JTLoad,
-			func(_ context.Context) (res *tasks.JobResult) {
-				// TODO
-				res = &tasks.JobResult{}
-				ioVectors, err := reader.ReadMultiBlocks(ctx,
-					params.ids, nil)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				res.Res = nil
-				ioVectors.Release()
-				if params.reader == nil {
-					putReader(reader)
-				}
-				return
-			},
-		)
-	}
+			}
+			// no further reads
+			putReader(reader)
+			return
+		},
+	)
 }
 
 // prefetch metadata job
@@ -266,12 +236,7 @@ type IoPipeline struct {
 	fetchFun     FetchFunc
 	prefetchFunc PrefetchFunc
 
-	sensors struct {
-		prefetchDepth *utils.NumericSensor[int64]
-	}
-
 	stats struct {
-		selectivityStats  *objectio.Stats
 		prefetchDropStats stats.Counter
 	}
 	printer *stopper.Stopper
@@ -322,30 +287,6 @@ func (p *IoPipeline) fillDefaults() {
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
 	}
-
-	if p.stats.selectivityStats == nil {
-		p.stats.selectivityStats = objectio.NewStats()
-	}
-
-	if p.sensors.prefetchDepth == nil {
-		name := utils.MakeSensorName("IO", "PrefetchDepth")
-		sensor := utils.NewNumericSensor[int64](
-			name,
-			utils.WithGetStateSensorOption(
-				func(v int64) utils.SensorState {
-					if float64(v) < 0.6*float64(p.options.queueDepth) {
-						return utils.SensorStateGreen
-					} else if float64(v) < 0.8*float64(p.options.queueDepth) {
-						return utils.SensorStateYellow
-					} else {
-						return utils.SensorStateRed
-					}
-				},
-			),
-		)
-		utils.RegisterSensor(sensor)
-		p.sensors.prefetchDepth = sensor
-	}
 }
 
 func (p *IoPipeline) Start() {
@@ -372,10 +313,6 @@ func (p *IoPipeline) Stop() {
 		p.fetch.scheduler.Stop()
 
 		p.waitQ.Stop()
-		if p.sensors.prefetchDepth != nil {
-			utils.UnregisterSensor(p.sensors.prefetchDepth)
-			p.sensors.prefetchDepth = nil
-		}
 	})
 }
 
@@ -459,29 +396,44 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 
-	processes := make([]PrefetchParams, 0)
+	var metaProcesses, filesProcesses []PrefetchParams
 	for _, item := range items {
 		option := item.(PrefetchParams)
-		if len(option.ids) == 0 {
+		switch option.typ {
+		case PrefetchMetaType:
+			if len(metaProcesses) == 0 {
+				metaProcesses = make([]PrefetchParams, 0)
+			}
+			metaProcesses = append(metaProcesses, option)
 			job := prefetchMetaJob(
 				context.Background(),
 				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
-			continue
+		case PrefetchFileType:
+			if len(filesProcesses) == 0 {
+				filesProcesses = make([]PrefetchParams, 0)
+			}
+			filesProcesses = append(filesProcesses, option)
+		default:
+			logutil.Errorf("unknown prefetch type %v", option.typ)
 		}
-		processes = append(processes, option)
 	}
-	if len(processes) == 0 {
-		return
+	schedulerJobs := func(
+		processes []PrefetchParams,
+		onJob func(context.Context, PrefetchParams) *tasks.Job,
+	) {
+		merged := mergePrefetch(processes)
+		for _, option := range merged {
+			job := onJob(context.Background(), option)
+			p.schedulerPrefetch(job)
+		}
 	}
-	merged := mergePrefetch(processes)
-	for _, option := range merged {
-		job := prefetchJob(
-			context.Background(),
-			option,
-		)
-		p.schedulerPrefetch(job)
+	if len(metaProcesses) > 0 {
+		go schedulerJobs(metaProcesses, prefetchMetaJob)
+	}
+	if len(filesProcesses) > 0 {
+		go schedulerJobs(filesProcesses, prefetchJob)
 	}
 }
 
@@ -502,14 +454,8 @@ func (p *IoPipeline) onWait(jobs ...any) {
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {
-	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
-		logutil.Info(p.stats.selectivityStats.ExportString())
-		// logutil.Info(p.sensors.prefetchDepth.String())
-		// wdrops := p.stats.prefetchDropStats.SwapW(0)
-		// if wdrops > 0 {
-		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
-		// }
-		// logutil.Info(objectio.ExportCacheStats())
+	hb := w.NewHeartBeaterWithFunc(time.Second*40, func() {
+		logutil.Info(objectio.BitmapPoolReport())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

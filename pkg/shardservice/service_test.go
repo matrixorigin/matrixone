@@ -317,7 +317,7 @@ func TestShardCanBeAllocatedToMultiCN(t *testing.T) {
 			s2 := services[1]
 			table := uint64(1)
 			shards := uint32(2)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2)
 
 			waitReplicaCount(table, s1, 1)
 			waitReplicaCount(table, s2, 1)
@@ -369,7 +369,7 @@ func TestBalanceWithSingleTable(t *testing.T) {
 			s3 := services[2]
 			table := uint64(1)
 			shards := uint32(3)
-			mustAddTestShards(t, ctx, s1, table, shards, 1)
+			mustAddTestShards(t, ctx, s1, table, shards, 1, s2, s3)
 			waitReplicaCount(table, s1, 3)
 
 			s2.options.disableHeartbeat.Store(false)
@@ -555,6 +555,11 @@ func TestMoveReplicaFromPauseCN(t *testing.T) {
 			return nil
 		},
 	)
+}
+
+func TestGetReplicaOnDisabledShardServiceCannotPanic(t *testing.T) {
+	var s *service
+	require.Equal(t, int64(0), s.ReplicaCount())
 }
 
 func addTestUncommittedTable(

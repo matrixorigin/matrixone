@@ -48,25 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// Analyze analyzes information for operator
-type Analyze interface {
-	Stop()
-	ChildrenCallStop(time.Time)
-	Start()
-	Alloc(int64)
-	InputBlock()
-	Input(*batch.Batch, bool)
-	Output(*batch.Batch, bool)
-	WaitStop(time.Time)
-	DiskIO(*batch.Batch)
-	S3IOByte(*batch.Batch)
-	S3IOInputCount(int)
-	S3IOOutputCount(int)
-	Network(*batch.Batch)
-	AddScanTime(t time.Time)
-	AddInsertTime(t time.Time)
-}
-
 var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
@@ -88,8 +69,11 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
-	Ctx context.Context
-	Ch  chan *RegisterMessage
+	// Ch2, data receiver's channel for receive-action-signal.
+	Ch2 chan PipelineSignal
+
+	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
+	NilBatchCnt int
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -141,46 +125,6 @@ type SessionInfo struct {
 	SourceInMemScanBatch []*kafka.Message
 	LogLevel             zapcore.Level
 	SessionId            uuid.UUID
-}
-
-// AnalyzeInfo  operatorAnalyzer information for query
-type AnalyzeInfo struct {
-	// NodeId, index of query's node list
-	NodeId int32
-	// InputRows, number of rows accepted by node
-	InputRows int64
-	// OutputRows, number of rows output by node
-	OutputRows int64
-	// TimeConsumed, time taken by the node in milliseconds
-	TimeConsumed int64
-	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
-	WaitTimeConsumed int64
-	// InputSize, data size accepted by node
-	InputSize   int64
-	InputBlocks int64
-	// OutputSize, data size output by node
-	OutputSize int64
-	// MemorySize, memory alloc by node
-	MemorySize int64
-	// DiskIO, data size read from disk
-	DiskIO int64
-	// S3IOByte, data size read from s3
-	S3IOByte int64
-	// S3IOInputCount, count for PUT, COPY, POST and LIST
-	S3IOInputCount int64
-	// S3IOOutputCount, count for GET, SELECT and other
-	S3IOOutputCount int64
-	// NetworkIO, message size send between CN node
-	NetworkIO int64
-	// ScanTime, scan cost time in external scan
-	ScanTime int64
-	// InsertTime, insert cost time in load flow
-	InsertTime int64
-
-	// time consumed by every single parallel
-	mu                     *sync.Mutex
-	TimeConsumedArrayMajor []int64
-	TimeConsumedArrayMinor []int64
 }
 
 type ExecStatus int
@@ -315,14 +259,16 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// the common part of process.
-// each query share only 1 instance of BaseProcess
 type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext QueryBaseContext
+	// atRuntime indicates whether the process is running in runtime.
+	atRuntime bool
+
 	StmtProfile *StmtProfile
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
@@ -330,7 +276,6 @@ type BaseProcess struct {
 	// unix timestamp
 	UnixTime            int64
 	TxnClient           client.TxnClient
-	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
@@ -355,11 +300,14 @@ type BaseProcess struct {
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	Base             *BaseProcess
-	Reg              Register
-	Ctx              context.Context
-	Cancel           context.CancelFunc
-	DispatchNotifyCh chan *WrapCs
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
+	Base *BaseProcess
+	Reg  Register
+
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
+	Cancel context.CancelFunc
 }
 
 type sqlHelper interface {
@@ -368,6 +316,7 @@ type sqlHelper interface {
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
+// WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
 	ReceiverDone bool
@@ -376,6 +325,11 @@ type WrapCs struct {
 	Cs           morpc.ClientSession
 	Err          chan error
 }
+
+// RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
+//
+// remote run Server will use this channel to send information to dispatch operator.
+type RemotePipelineInformationChannel chan *WrapCs
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
 	return proc.Base.messageBoard
@@ -404,43 +358,36 @@ func (proc *Process) InitSeq() {
 	proc.Base.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
+func (proc *Process) SetMPool(mp *mpool.MPool) {
+	proc.Base.mp = mp
+}
+
+func (proc *Process) SetFileService(fs fileservice.FileService) {
+	proc.Base.FileService = fs
+}
+
 func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 	proc.Base.valueScanBatch[key] = batch
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.Base.valueScanBatch[key]
-	if ok {
-		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
-		return bat
-		// delete(proc.valueScanBatch, key)
-	}
-	return bat
+	return proc.Base.valueScanBatch[key]
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.Base.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.Base.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
+	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.Clean(mp)
 		}
+		// todo: why not remake the map after all clean ?
 		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.Base.prepareParams.Length() {
-		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
 		return nil, nil
@@ -495,14 +442,12 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
 }
 
-// Operator Resource Analzyer
-type operatorAnalyzer struct {
-	parallelMajor        bool
-	parallelIdx          int
-	start                time.Time
-	wait                 time.Duration
-	analInfo             *AnalyzeInfo
-	childrenCallDuration time.Duration
+func (proc *Process) GetBaseProcessRunningStatus() bool {
+	return proc.Base.atRuntime
+}
+
+func (proc *Process) SetBaseProcessRunningStatus(status bool) {
+	proc.Base.atRuntime = status
 }
 
 func (si *SessionInfo) GetUser() string {
@@ -540,46 +485,4 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
-}
-
-func (a *AnalyzeInfo) AddNewParallel(major bool) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if major {
-		a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, 0)
-		return len(a.TimeConsumedArrayMajor) - 1
-	} else {
-		a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, 0)
-		return len(a.TimeConsumedArrayMinor) - 1
-	}
-}
-
-func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	pa.TimeConsumedArrayMajor = pa.TimeConsumedArrayMajor[:0]
-	pa.TimeConsumedArrayMajor = append(pa.TimeConsumedArrayMajor, a.TimeConsumedArrayMajor...)
-	pa.TimeConsumedArrayMinor = pa.TimeConsumedArrayMinor[:0]
-	pa.TimeConsumedArrayMinor = append(pa.TimeConsumedArrayMinor, a.TimeConsumedArrayMinor...)
-}
-
-func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, pa.TimeConsumedArrayMajor...)
-	a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, pa.TimeConsumedArrayMinor...)
-}
-
-func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int, t int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if major {
-		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMajor) {
-			a.TimeConsumedArrayMajor[parallelIdx] += t
-		}
-	} else {
-		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMinor) {
-			a.TimeConsumedArrayMinor[parallelIdx] += t
-		}
-	}
 }

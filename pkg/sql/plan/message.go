@@ -26,6 +26,12 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) i
 		if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI {
 			// for now, only support inner join and semi join.
 			// for left join, top operator can directly push down over this
+			if node.Stats.HashmapStats.Shuffle {
+				// don't need to go shuffle join for this
+				node.Stats.HashmapStats.Shuffle = false
+				node.RuntimeFilterProbeList = nil
+				node.RuntimeFilterBuildList = nil
+			}
 			return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
 		}
 	case plan.Node_FILTER:
@@ -70,12 +76,6 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 		panic("orderby in scannode should be nil!")
 	}
 	if orderByCol.Col.RelPos != scanNode.BindingTags[0] {
-		return
-	}
-	if scanNode.Stats.BlockNum < 64 {
-		return
-	}
-	if GetSortOrder(scanNode.TableDef, orderByCol.Col.ColPos) != 0 {
 		return
 	}
 

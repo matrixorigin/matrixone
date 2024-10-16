@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,7 +32,7 @@ const (
 )
 
 type Minus struct {
-	ctr *container
+	ctr container
 
 	vm.OperatorBase
 }
@@ -70,7 +69,6 @@ func (minus *Minus) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator execution stage.
 	state int
@@ -83,17 +81,17 @@ type container struct {
 }
 
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	minus.Free(proc, pipelineFailed, err)
+	minus.ctr.state = buildingHashMap
+	if minus.ctr.bat != nil {
+		minus.ctr.bat.CleanOnlyData()
+	}
+	minus.ctr.cleanHashMap()
 }
 
 func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
-	if minus.ctr != nil {
-		minus.ctr.cleanBatch(mp)
-		minus.ctr.cleanHashMap()
-		minus.ctr.FreeAllReg()
-		minus.ctr = nil
-	}
+	minus.ctr.cleanBatch(mp)
+	minus.ctr.cleanHashMap()
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

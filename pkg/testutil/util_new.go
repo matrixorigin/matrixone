@@ -35,9 +35,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func NewProcess() *process.Process {
+type ProcOptions func(proc *process.Process)
+
+func WithMPool(pool *mpool.MPool) ProcOptions {
+	return func(proc *process.Process) {
+		proc.SetMPool(pool)
+	}
+}
+
+func WithFileService(fs fileservice.FileService) ProcOptions {
+	return func(proc *process.Process) {
+		if proc.GetFileService() != nil {
+			proc.GetFileService().Close()
+		}
+		proc.SetFileService(fs)
+	}
+}
+
+func NewProcess(opts ...ProcOptions) *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	return NewProcessWithMPool("", mp)
+	proc := NewProcessWithMPool("", mp)
+	for _, opt := range opts {
+		opt(proc)
+	}
+	return proc
 }
 
 func SetupAutoIncrService(sid string) {
@@ -56,7 +77,7 @@ func SetupAutoIncrService(sid string) {
 
 func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 	SetupAutoIncrService(sid)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set
@@ -289,7 +310,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewUInt16Vector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 

@@ -31,7 +31,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 	switch vec.GetType().Oid {
 
 	case types.T_bool:
-		s := vector.MustFixedCol[bool](vec)
+		s := vector.MustFixedColNoTypeCheck[bool](vec)
 		for _, v := range s {
 			packer.EncodeBool(v)
 			ret = append(ret, packer.Bytes())
@@ -39,7 +39,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_bit:
-		s := vector.MustFixedCol[uint64](vec)
+		s := vector.MustFixedColNoTypeCheck[uint64](vec)
 		for _, v := range s {
 			packer.EncodeUint64(v)
 			ret = append(ret, packer.Bytes())
@@ -47,7 +47,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_int8:
-		s := vector.MustFixedCol[int8](vec)
+		s := vector.MustFixedColNoTypeCheck[int8](vec)
 		for _, v := range s {
 			packer.EncodeInt8(v)
 			ret = append(ret, packer.Bytes())
@@ -55,7 +55,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_int16:
-		s := vector.MustFixedCol[int16](vec)
+		s := vector.MustFixedColNoTypeCheck[int16](vec)
 		for _, v := range s {
 			packer.EncodeInt16(v)
 			ret = append(ret, packer.Bytes())
@@ -63,7 +63,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_int32:
-		s := vector.MustFixedCol[int32](vec)
+		s := vector.MustFixedColNoTypeCheck[int32](vec)
 		for _, v := range s {
 			packer.EncodeInt32(v)
 			ret = append(ret, packer.Bytes())
@@ -71,7 +71,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_int64:
-		s := vector.MustFixedCol[int64](vec)
+		s := vector.MustFixedColNoTypeCheck[int64](vec)
 		for _, v := range s {
 			packer.EncodeInt64(v)
 			ret = append(ret, packer.Bytes())
@@ -79,7 +79,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_uint8:
-		s := vector.MustFixedCol[uint8](vec)
+		s := vector.MustFixedColNoTypeCheck[uint8](vec)
 		for _, v := range s {
 			packer.EncodeUint8(v)
 			ret = append(ret, packer.Bytes())
@@ -87,7 +87,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_uint16:
-		s := vector.MustFixedCol[uint16](vec)
+		s := vector.MustFixedColNoTypeCheck[uint16](vec)
 		for _, v := range s {
 			packer.EncodeUint16(v)
 			ret = append(ret, packer.Bytes())
@@ -95,7 +95,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_uint32:
-		s := vector.MustFixedCol[uint32](vec)
+		s := vector.MustFixedColNoTypeCheck[uint32](vec)
 		for _, v := range s {
 			packer.EncodeUint32(v)
 			ret = append(ret, packer.Bytes())
@@ -103,7 +103,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_uint64:
-		s := vector.MustFixedCol[uint64](vec)
+		s := vector.MustFixedColNoTypeCheck[uint64](vec)
 		for _, v := range s {
 			packer.EncodeUint64(v)
 			ret = append(ret, packer.Bytes())
@@ -111,7 +111,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_float32:
-		s := vector.MustFixedCol[float32](vec)
+		s := vector.MustFixedColNoTypeCheck[float32](vec)
 		for _, v := range s {
 			packer.EncodeFloat32(v)
 			ret = append(ret, packer.Bytes())
@@ -119,7 +119,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_float64:
-		s := vector.MustFixedCol[float64](vec)
+		s := vector.MustFixedColNoTypeCheck[float64](vec)
 		for _, v := range s {
 			packer.EncodeFloat64(v)
 			ret = append(ret, packer.Bytes())
@@ -127,7 +127,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_date:
-		s := vector.MustFixedCol[types.Date](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		for _, v := range s {
 			packer.EncodeDate(v)
 			ret = append(ret, packer.Bytes())
@@ -135,7 +135,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_time:
-		s := vector.MustFixedCol[types.Time](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Time](vec)
 		for _, v := range s {
 			packer.EncodeTime(v)
 			ret = append(ret, packer.Bytes())
@@ -143,7 +143,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_datetime:
-		s := vector.MustFixedCol[types.Datetime](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		for _, v := range s {
 			packer.EncodeDatetime(v)
 			ret = append(ret, packer.Bytes())
@@ -151,7 +151,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_timestamp:
-		s := vector.MustFixedCol[types.Timestamp](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 		for _, v := range s {
 			packer.EncodeTimestamp(v)
 			ret = append(ret, packer.Bytes())
@@ -159,7 +159,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_enum:
-		s := vector.MustFixedCol[types.Enum](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 		for _, v := range s {
 			packer.EncodeEnum(v)
 			ret = append(ret, packer.Bytes())
@@ -167,7 +167,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_decimal64:
-		s := vector.MustFixedCol[types.Decimal64](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 		for _, v := range s {
 			packer.EncodeDecimal64(v)
 			ret = append(ret, packer.Bytes())
@@ -175,7 +175,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_decimal128:
-		s := vector.MustFixedCol[types.Decimal128](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 		for _, v := range s {
 			packer.EncodeDecimal128(v)
 			ret = append(ret, packer.Bytes())
@@ -183,7 +183,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_uuid:
-		s := vector.MustFixedCol[types.Uuid](vec)
+		s := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 		for _, v := range s {
 			packer.EncodeStringType(v[:])
 			ret = append(ret, packer.Bytes())

@@ -1,8 +1,12 @@
+select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=a' as datalink));
+strconv.Atoi: parsing "a": invalid syntax
+select load_file(cast('file://$resources/file_test/normal.txt?offset=b&size=3' as datalink));
+strconv.Atoi: parsing "b": invalid syntax
 select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
-load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt as datalink))
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt as datalink))
 Hello world!
 select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
-load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
 Hel
 create table t1(a int, b datalink);
 insert into t1 values(1, "wrong datalink url");
@@ -21,3 +25,58 @@ a    load_file(b)
 2    Hello world!
 3    Hel
 4    Hello world!
+create stage filestage URL='file://$resources/file_test/';
+create stage outfilestage URL='file://$resources/into_outfile/';
+select load_file(cast('stage://filestage/normal.txt' as datalink));
+load_file(cast(stage://filestage/normal.txt as datalink))
+Hello world!
+select load_file(cast('stage://filestage/normal.txt?offset=0&size=3' as datalink));
+load_file(cast(stage://filestage/normal.txt?offset=0&size=3 as datalink))
+Hel
+select save_file(cast('stage://outfilestage/datalink/1.txt' as datalink), 'this is a test.');
+save_file(cast(stage://outfilestage/datalink/1.txt as datalink), this is a test.)
+15
+select load_file(cast('stage://outfilestage/datalink/1.txt' as datalink));
+load_file(cast(stage://outfilestage/datalink/1.txt as datalink))
+this is a test.
+select save_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink), 'this is a test.');
+save_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink), this is a test.)
+15
+select load_file(cast('file://$resources/into_outfile/datalink/2.txt' as datalink));
+load_file(cast(file:///Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/datalink/2.txt as datalink))
+this is a test.
+create table t2(a int, b datalink, c varchar);
+insert into t2 values(1, cast('stage://outfilestage/datalink/varchar1.txt' as datalink), 'this is a varchar test 1'),
+(2, cast('stage://outfilestage/datalink/varchar2.txt' as datalink), 'this is a varchar test 2'),
+(3, cast('stage://outfilestage/datalink/varchar3.txt' as datalink), NULL),
+(4, NULL, 'this is a varchar test 4');
+select a, save_file(b, c) from t2;
+a    save_file(b, c)
+1    24
+2    24
+3    null
+4    null
+create table t3(a int, b datalink, c char(128));
+insert into t3 values(1, cast('stage://outfilestage/datalink/char1.txt' as datalink), 'this is a char test 1'),
+(2, cast('stage://outfilestage/datalink/char2.txt' as datalink), 'this is a char test 2'),
+(3, cast('stage://outfilestage/datalink/char3.txt' as datalink), NULL),
+(4, NULL, 'this is a char test 4');
+select a, save_file(b, c) from t3;
+a    save_file(b, c)
+1    21
+2    21
+3    null
+4    null
+create table t4(a int, b datalink, c text);
+insert into t4 values(1, cast('stage://outfilestage/datalink/text1.txt' as datalink), 'this is a text test 1'),
+(2, cast('stage://outfilestage/datalink/text2.txt' as datalink), 'this is a text test 2'),
+(3, cast('stage://outfilestage/datalink/text3.txt' as datalink), NULL),
+(4, NULL, 'this is a text test 4');
+select a, save_file(b, c) from t4;
+a    save_file(b, c)
+1    21
+2    21
+3    null
+4    null
+drop stage filestage;
+drop stage outfilestage;

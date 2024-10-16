@@ -19,7 +19,6 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -146,9 +145,7 @@ func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *a
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}
-	cobjstats := writer.GetObjectStats()[:objectio.SchemaTombstone]
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
+	cobjstats := writer.GetObjectStats()
+	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	return nil
 }

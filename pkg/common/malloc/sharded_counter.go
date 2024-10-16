@@ -19,6 +19,7 @@ import "golang.org/x/sys/cpu"
 type AtomicInteger[T any] interface {
 	Add(T) T
 	Load() T
+	Swap(T) T
 }
 
 type CounterInteger interface {
@@ -58,4 +59,10 @@ func (s *ShardedCounter[T, A, P]) Load() (ret T) {
 		ret += P(&s.shards[i].value).Load()
 	}
 	return ret
+}
+
+func (s *ShardedCounter[T, A, P]) Each(fn func(P)) {
+	for i := 0; i < len(s.shards); i++ {
+		fn(P(&s.shards[i].value))
+	}
 }

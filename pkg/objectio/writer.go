@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"go.uber.org/zap"
 	"math"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,7 +49,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objStats          []ObjectStats
+	objStats          ObjectStats
 	sortKeySeqnum     uint16
 	appendable        bool
 	originSize        uint32
@@ -73,7 +74,13 @@ const (
 	WriterTmp
 )
 
-const ObjectSizeLimit = 3 * mpool.GB
+// make it mutable in ut
+var ObjectSizeLimit = 3 * mpool.GB
+
+// SetObjectSizeLimit set ObjectSizeLimit to limit Bytes
+func SetObjectSizeLimit(limit int) {
+	ObjectSizeLimit = limit
+}
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -126,8 +133,14 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func (w *objectWriterV1) GetObjectStats() []ObjectStats {
-	return w.objStats
+func (w *objectWriterV1) GetObjectStats(opts ...ObjectStatsOptions) (copied ObjectStats) {
+	copied = w.objStats
+
+	for _, opt := range opts {
+		opt(&copied)
+	}
+
+	return copied
 }
 
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
@@ -157,14 +170,18 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 // if an object only has deletes, only the tombstone object stats valid.
 //
 // if an object has both inserts and deletes, both stats are valid.
-func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
-	stats := make([]ObjectStats, 2)
+func (w *objectWriterV1) DescribeObject() (ObjectStats, error) {
+	var stats ObjectStats
+
 	if len(w.blocks[SchemaData]) != 0 {
-		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+		stats = describeObjectHelper(w, w.colmeta, SchemaData)
 	}
 
 	if len(w.blocks[SchemaTombstone]) != 0 {
-		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
+		if !stats.IsZero() {
+			panic("schema data and schema tombstone should not all be valid at the same time")
+		}
+		stats = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
 	}
 
 	return stats, nil
@@ -186,14 +203,6 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	}
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
-	return block, nil
-}
-
-func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error) {
-	denseSeqnums := NewSeqnums(nil)
-	denseSeqnums.InitWithColCnt(len(batch.Vecs))
-	block := NewBlock(denseSeqnums)
-	w.AddTombstone(block, batch, denseSeqnums)
 	return block, nil
 }
 
@@ -412,7 +421,7 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 			size += uint64(len(block.data[idx]))
 		}
 	}
-	if size > ObjectSizeLimit {
+	if size > uint64(ObjectSizeLimit) {
 		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
 	}
 	return nil
@@ -487,8 +496,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			metaHeader.SetDataMetaOffset(idxStart)
 			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
 		} else if i == int(SchemaTombstone) {
-			metaHeader.SetTombstoneMetaOffset(idxStart)
-			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+			if len(w.blocks[i]) != 0 {
+				panic("invalid data meta type")
+			}
 		} else {
 			subMetachIndex.SetSchemaMeta(uint16(i-2), uint16(i-2), uint16(len(w.blocks[i])), idxStart)
 		}
@@ -604,7 +614,7 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 }
 
 func (w *objectWriterV1) GetDataStats() ObjectStats {
-	return w.objStats[SchemaData]
+	return w.objStats
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
@@ -676,18 +686,6 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	defer w.Unlock()
 
 	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
-}
-
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
-	w.Lock()
-	defer w.Unlock()
-	if w.tombstonesColmeta == nil {
-		w.tombstonesColmeta = make([]ColumnMeta, len(bat.Vecs))
-	}
-	for i := range w.tombstonesColmeta {
-		w.tombstonesColmeta[i] = BuildObjectColumnMeta()
-	}
-	return w.addBlock(&w.blocks[SchemaTombstone], blockMeta, bat, seqnums)
 }
 
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {

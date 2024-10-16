@@ -71,6 +71,12 @@ func withRealConn() tunnelOption {
 	}
 }
 
+func withConnCacheEnabled(v bool) tunnelOption {
+	return func(t *tunnel) {
+		t.connCacheEnabled = v
+	}
+}
+
 type transferType int
 
 const (
@@ -100,6 +106,8 @@ type tunnel struct {
 	rebalancer *rebalancer
 	// transferProactive means that the connection transfer is more proactive.
 	rebalancePolicy RebalancePolicy
+	// connCacheEnabled indicates if the connection cache is enabled.
+	connCacheEnabled bool
 	// transferType is the type for transferring: rebalancing and scaling.
 	transferType transferType
 	// realConn indicates the connection in the tunnel is a real network
@@ -121,6 +129,9 @@ type tunnel struct {
 		// inTransfer means a transfer of server connection is in progress.
 		inTransfer bool
 
+		// sc is the server connection which this tunnel holds. when the connection transfer,
+		// close the old one.
+		sc ServerConn
 		// clientConn is the connection between client and proxy.
 		clientConn *MySQLConn
 		// serverConn is the connection between server and proxy.
@@ -166,9 +177,26 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
+		t.mu.sc = sc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
+		t.mu.clientConn = newMySQLConn(
+			connClientName,
+			cc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			cc.ConnID(),
+		)
+		t.mu.serverConn = newMySQLConn(
+			connServerName,
+			sc.RawConn(),
+			0,
+			t.reqC,
+			t.respC,
+			t.connCacheEnabled,
+			sc.ConnID(),
+		)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
@@ -178,10 +206,10 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 	}
 
 	if err := digThrough(); err != nil {
-		return moerr.NewInternalErrorNoCtx("set up tunnel failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("set up tunnel failed: %v", err)
 	}
 	if err := t.kickoff(); err != nil {
-		return moerr.NewInternalErrorNoCtx("kickoff pipe failed: %v", err)
+		return moerr.NewInternalErrorNoCtxf("kickoff pipe failed: %v", err)
 	}
 
 	func() {
@@ -205,6 +233,13 @@ func (t *tunnel) getConns() (*MySQLConn, *MySQLConn) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.mu.clientConn, t.mu.serverConn
+}
+
+// getServerConn returns the ServerConn in the tunnel.
+func (t *tunnel) getServerConn() ServerConn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.mu.sc
 }
 
 // setError tries to set the tunnel error if there is no error.
@@ -241,11 +276,17 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, sync bool) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// close the old ones.
 	_ = t.mu.serverConn.Close()
+	_ = t.mu.sc.Close()
+
+	// set the new ones.
 	t.mu.serverConn = newServerConn
+	t.mu.sc = newSC
 
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
@@ -331,12 +372,12 @@ func (t *tunnel) finishTransfer(start time.Time) {
 }
 
 func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
-	newConn, err := t.getNewServerConn(ctx)
+	newSC, newConn, err := t.getNewServerConn(ctx)
 	if err != nil {
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
-	t.replaceServerConn(newConn, sync)
+	t.replaceServerConn(newConn, newSC, sync)
 	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
@@ -405,9 +446,9 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 
 // getNewServerConn selects a new CN server and connects to it then
 // returns the new connection.
-func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
+func (t *tunnel) getNewServerConn(ctx context.Context) (ServerConn, *MySQLConn, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 	prevAddr := t.mu.serverConn.RemoteAddr().String()
 	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
@@ -417,9 +458,17 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 			zap.String("prev addr", prevAddr),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, nil, err
 	}
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
+	return newConn, newMySQLConn(
+		connServerName,
+		newConn.RawConn(),
+		0,
+		t.reqC,
+		t.respC,
+		t.connCacheEnabled,
+		newConn.ConnID(),
+	), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -438,7 +487,7 @@ func (t *tunnel) Close() error {
 		}
 		// Close the event channels.
 		close(t.reqC)
-		close(t.respC)
+		// close(t.respC)
 
 		cc, sc := t.getConns()
 		// cc.Close() just only close the raw net connection, and it
@@ -447,8 +496,14 @@ func (t *tunnel) Close() error {
 		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
-		if sc != nil {
+		if !t.connCacheEnabled && sc != nil {
 			_ = sc.Close()
+		}
+
+		// close the server connection
+		serverC := t.getServerConn()
+		if serverC != nil {
+			_ = serverC.Close()
 		}
 	})
 	return nil
@@ -534,6 +589,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
+
+	var firstCond bool
+	var currSeq int16
 	var lastSeq int16 = -1
 	var rotated bool
 	prepareNextMessage := func() (terminate bool, err error) {
@@ -564,18 +622,16 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if errors.Is(re, io.EOF) {
 				return false, re
 			}
-			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
+			return false, moerr.NewInternalErrorf(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
+		tempBuf := p.src.readAvailBuf()
 		// set txn status and cmd time within the mutex together.
 		// only server->client pipe need to set the txn status.
 		if p.name == pipeServerToClient {
-			var currSeq int16
-			buf := p.src.readAvailBuf()
-
 			// issue#16042
-			if len(buf) > 3 {
-				currSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				currSeq = int16(tempBuf[3])
 			}
 
 			// last sequence id is 255 and current sequence id is 0, the
@@ -590,7 +646,27 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			inTxn, ok := checkTxnStatus(buf)
+			// seqID is mainly used for server side. It records the sequence ID of
+			// each packet.
+			// In the case of "load data local infile" statement, client sends the
+			// first packet, then server sends response, which is "0xFB + filename",
+			// after that, client sends content of filename and an empty packet, at
+			// last, server sends OK packet. The sequence ID of this OK packet is not
+			// 1, and will cause the session cannot be transferred after this stmt
+			// finished.
+			// So, the solution is: when server sends 0xFB and the sequence ID of
+			// next packet is 3 bigger than last one, the next packet MUST be an
+			// OK packet, and the transfer is allowed.
+			// Related issue: https://github.com/matrixorigin/mo-cloud/issues/4088
+			var mustOK bool
+			if !firstCond {
+				firstCond = isLoadDataLocalInfileRespPacket(tempBuf)
+			} else {
+				mustOK = currSeq-lastSeq == 3
+				firstCond = false
+			}
+
+			inTxn, ok := checkTxnStatus(tempBuf, mustOK)
 			if ok {
 				p.mu.inTxn = inTxn
 			}
@@ -598,11 +674,18 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				peer.wg.Add(1)
 				p.transferred = true
 			}
-			if len(buf) > 3 {
-				lastSeq = int16(buf[3])
+			if len(tempBuf) > 3 {
+				lastSeq = int16(tempBuf[3])
+			}
+			p.mu.lastCmdTime = time.Now()
+		} else {
+			if isEmptyPacket(tempBuf) {
+				p.logger.Warn("there comes an empty packet from client")
+			}
+			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+				p.mu.lastCmdTime = time.Now()
 			}
 		}
-		p.mu.lastCmdTime = time.Now()
 		return false, nil
 	}
 
@@ -632,7 +715,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
+			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
 		}
 	}
 	return ctx.Err()
@@ -728,10 +811,10 @@ func txnStatus(status uint16) bool {
 }
 
 // handleOKPacket handles the OK packet from server to update the txn state.
-func handleOKPacket(msg []byte) bool {
+func handleOKPacket(msg []byte, mustOK bool) bool {
 	var mp *frontend.MysqlProtocolImpl
-	// the sequence ID should be 1 for OK packet.
-	if msg[3] != 1 {
+	// if the mustOK is false, then the sequence ID should be 1 for OK packet.
+	if !mustOK && msg[3] != 1 {
 		return txnStatus(0)
 	}
 	pos := 5
@@ -761,14 +844,14 @@ func handleEOFPacket(msg []byte) bool {
 // the first return value is the txn status, and the second return value
 // indicates if we can get the txn status from the packet. If it is a ERROR
 // packet, the second return value is false.
-func checkTxnStatus(msg []byte) (bool, bool) {
+func checkTxnStatus(msg []byte, mustOK bool) (bool, bool) {
 	ok := true
 	inTxn := true
 	// For the server->client pipe, we get the transaction status from the
 	// OK and EOF packet, which is used in connection transfer. If the session
 	// is in a transaction, a transfer should not start.
 	if isOKPacket(msg) {
-		inTxn = handleOKPacket(msg)
+		inTxn = handleOKPacket(msg, mustOK)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
 	} else if isErrPacket(msg) {

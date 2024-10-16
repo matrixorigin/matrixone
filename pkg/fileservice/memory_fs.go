@@ -24,7 +24,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
 )
@@ -33,7 +32,6 @@ import (
 type MemoryFS struct {
 	name string
 	sync.RWMutex
-	memCache        *MemCache
 	tree            *btree.BTreeG[*_MemFSEntry]
 	caches          []IOVectorCache
 	perfCounterSets []*perfcounter.CounterSet
@@ -49,8 +47,7 @@ func NewMemoryFS(
 ) (*MemoryFS, error) {
 
 	fs := &MemoryFS{
-		name:     name,
-		memCache: NewMemCache(NewMemoryCache(fscache.ConstCapacity(1<<20), true, nil), nil),
+		name: name,
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
@@ -65,7 +62,6 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) Close() {
-	m.memCache.Flush()
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
@@ -187,11 +183,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	for i := range vector.Entries {
-		vector.Entries[i].allocator = m.memCache
-	}
 	for _, cache := range m.caches {
-		cache := cache
 		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}
@@ -266,7 +258,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setCachedData(ctx); err != nil {
+		if err := entry.setCachedData(ctx, DefaultCacheDataAllocator()); err != nil {
 			return err
 		}
 

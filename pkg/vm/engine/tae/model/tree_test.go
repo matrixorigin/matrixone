@@ -27,7 +27,7 @@ func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
 	obj2 := objectio.NewObjectid()
-	tree.AddObject(1, 2, obj2)
+	tree.AddObject(1, 2, obj2, false)
 	t.Log(tree.String())
 	assert.Equal(t, 1, tree.TableCount())
 

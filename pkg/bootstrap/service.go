@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -66,17 +67,6 @@ var (
 		frontend.MoTaskSysAsyncTaskDDL,
 		frontend.MoTaskSysCronTaskDDL,
 		frontend.MoTaskSysDaemonTaskDDL,
-		fmt.Sprintf(`create index idx_task_status on %s.sys_async_task(task_status)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_runner on %s.sys_async_task(task_runner)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_executor on %s.sys_async_task(task_metadata_executor)`,
-			catalog.MOTaskDB),
-
-		fmt.Sprintf(`create index idx_task_epoch on %s.sys_async_task(task_epoch)`,
-			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
 			catalog.MOTaskDB),
@@ -110,6 +100,8 @@ func init() {
 	initSQLs = append(initSQLs, sql)
 
 	initSQLs = append(initSQLs, trace.InitSQLs...)
+
+	initSQLs = append(initSQLs, shardservice.InitSQLs...)
 }
 
 type service struct {
@@ -133,6 +125,7 @@ type service struct {
 		checkUpgradeTenantDuration time.Duration
 		upgradeTenantTasks         int
 		finalVersionCompleted      atomic.Bool
+		kek                        string
 	}
 }
 
@@ -217,6 +210,8 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 	}
+	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
+	//  "show databases cannot find the bootstrappedCheckerDB."
 	return false, nil
 }
 

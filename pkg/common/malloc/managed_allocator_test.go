@@ -64,7 +64,7 @@ func TestManagedAllocator(t *testing.T) {
 
 func BenchmarkManagedAllocator(b *testing.B) {
 
-	newAllocator := func() *ManagedAllocator {
+	newAllocator := func() *ManagedAllocator[Allocator] {
 		return NewManagedAllocator(
 			newUpstreamAllocatorForTest(),
 		)
@@ -99,4 +99,16 @@ func BenchmarkManagedAllocator(b *testing.B) {
 
 	}
 
+}
+
+func BenchmarkManagedAllocatorLargeAmount(b *testing.B) {
+	allocator := NewManagedAllocator(
+		newUpstreamAllocatorForTest(),
+	)
+	for range b.N {
+		_, err := allocator.Allocate(1, NoHints)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

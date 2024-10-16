@@ -52,7 +52,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
 }
@@ -65,7 +65,7 @@ func TestBatch(t *testing.T) {
 		err = types.Decode(data, rbat)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
-			require.Equal(t, vector.MustFixedCol[int8](tc.bat.Vecs[i]), vector.MustFixedCol[int8](vec))
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
 }
@@ -89,7 +89,7 @@ func TestBatch_ReplaceVector(t *testing.T) {
 			v2,
 		},
 	}
-	bat.ReplaceVector(bat.Vecs[0], v3)
+	bat.ReplaceVector(bat.Vecs[0], v3, 0)
 	require.Equal(t, v3, bat.Vecs[0])
 	require.Equal(t, v3, bat.Vecs[1])
 	require.Equal(t, v3, bat.Vecs[2])
@@ -117,7 +117,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 				panic(err)
 			}
 			vec.SetLength(rows)
-			vs := vector.MustFixedCol[int8](vec)
+			vs := vector.MustFixedColWithTypeCheck[int8](vec)
 			for j := range vs {
 				vs[j] = int8(j)
 			}
@@ -125,4 +125,35 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		}
 	}
 	return bat
+}
+
+func TestBatch_UnionOne(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	bat1 := NewWithSize(2)
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	bat2 := NewWithSize(2)
+	bat2.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	for i := 0; i < 100; i++ {
+		vector.AppendFixed[int32](bat2.Vecs[0], int32(i), false, mp)
+		vector.AppendFixed[int32](bat2.Vecs[1], int32(i*2), false, mp)
+	}
+	bat2.SetRowCount(bat2.Vecs[0].Length())
+
+	for i := 0; i < bat2.RowCount(); i++ {
+		require.Nil(t, bat1.UnionOne(bat2, int64(i), mp))
+	}
+
+	require.Equal(t, bat1.RowCount(), bat2.RowCount())
+	row1 := vector.MustFixedColNoTypeCheck[int32](bat1.Vecs[0])
+	row2 := vector.MustFixedColNoTypeCheck[int32](bat2.Vecs[0])
+	require.Equal(t, row1, row2)
+
+	row1 = vector.MustFixedColNoTypeCheck[int32](bat1.Vecs[1])
+	row2 = vector.MustFixedColNoTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, row1, row2)
 }

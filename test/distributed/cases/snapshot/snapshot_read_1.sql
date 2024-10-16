@@ -53,3 +53,5 @@ drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_01'};
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
+-- @ignore:1
+show snapshots;

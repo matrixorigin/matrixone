@@ -103,7 +103,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			currentCN := s.getFinalVersionHandle().Metadata()
 			if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
+				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 
@@ -206,12 +206,12 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 	// Check if the group account name exists
 	var accountId int32 = -1
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountId = vector.GetFixedAt[int32](cols[0], 0)
+		accountId = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
 		return true
 	})
 
 	if accountId == -1 {
-		return -1, moerr.NewInvalidInputNoCtx("The input account name '%s' is invalid, please check input!", accountName)
+		return -1, moerr.NewInvalidInputNoCtxf("The input account name '%s' is invalid, please check input!", accountName)
 	}
 	return accountId, nil
 }

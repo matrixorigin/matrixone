@@ -573,7 +573,7 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_binary, types.T_varbinary, types.T_blob:
 			// well, in cast, we handle binary as if they are string.
 			// However it id deemed too dangerous to do so in json_row.
-			return moerr.NewInvalidInput(proc.Ctx, "binary data not supported json_row: %v", fromType.String())
+			return moerr.NewInvalidInputf(proc.Ctx, "binary data not supported json_row: %v", fromType.String())
 		case types.T_array_float32:
 			// vector of float, we will encode them as json array
 			encodeFloatArray[float32](op, params[i], ulen)
@@ -587,7 +587,7 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 				return err
 			}
 		default:
-			return moerr.NewInvalidInput(proc.Ctx, "unsupported type for json_row: %v", fromType.String())
+			return moerr.NewInvalidInputf(proc.Ctx, "unsupported type for json_row: %v", fromType.String())
 		}
 	}
 

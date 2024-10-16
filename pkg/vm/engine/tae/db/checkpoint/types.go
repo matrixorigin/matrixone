@@ -38,6 +38,7 @@ const (
 	ET_Global EntryType = iota
 	ET_Incremental
 	ET_Backup
+	ET_Compacted
 )
 
 type Runner interface {
@@ -47,7 +48,7 @@ type Runner interface {
 	Stop()
 	String() string
 	EnqueueWait(any) error
-	Replay(catalog.DataFactory) (types.TS, uint64, bool, error)
+	Replay(catalog.DataFactory) *CkpReplayer
 
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 	GCByTS(ctx context.Context, ts types.TS) error

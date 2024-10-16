@@ -162,6 +162,7 @@ message SubscriptionMeta{
 	string db_name = 3; // pubDbName
 	string account_name = 4;// pubAccountName
 	string sub_name = 5; // subName(subscription side db name)
+	string tables = 6; // pubTables (separated by ',')
 }
 
 message Function {
@@ -212,12 +213,19 @@ message Expr {
 		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		LiteralVec	vec	= 14;
+		LiteralVec	vec		= 14;
+		FoldVal		fold	= 15;
 	}
 
-	int32 aux_id = 15;
-	double ndv = 16;
-	double selectivity = 17;
+	int32 aux_id = 16;
+	double ndv = 17;
+	double selectivity = 18;
+}
+
+message FoldVal {
+	int32 id		= 1;
+	bool is_const 	= 2;
+	bytes data		= 3;
 }
 
 message LiteralVec {
@@ -478,7 +486,6 @@ enum ShuffleType {
 enum ShuffleMethod {
 	Normal = 0;
 	Reuse = 1;
-	Reshuffle = 2;
 }
 
 enum ShuffleTypeForMultiCN {
@@ -604,6 +611,16 @@ message OnDuplicateKeyCtx {
 	uint32 table_version			= 10;
 }
 
+message UpdateCtx {
+	ObjectRef obj_ref		= 1;
+	TableDef table_def		= 2;
+	repeated Expr insert_cols		= 3;
+	repeated Expr delete_cols		= 4;
+	repeated uint64 partition_table_ids = 5;
+	repeated string partition_table_names = 6;
+	int32 partition_idx = 7;
+}
+
 message InsertCtx {
 	ObjectRef ref			= 1;
 	bool add_affected_rows 	= 2;
@@ -637,7 +654,7 @@ message AnalyzeInfo {
 	int64 memory_size = 6;
 	int64 wait_time_consumed = 7;
 	int64 diskIO = 8;
-	int64 s3IO_byte = 9;
+	int64 scan_bytes = 9;
 	int64 s3IO_input_count = 10;
 	int64 s3IO_output_count = 11;
 	int64 networkIO = 12;
@@ -707,27 +724,28 @@ message Node {
 		INSERT = 51;
 		DELETE = 52;
 		REPLACE = 53;
-		//
-		LOCK_OP = 54;
-
-		//
-		INTERSECT = 55;
-		INTERSECT_ALL = 56;
-		MINUS = 57;
-		MINUS_ALL = 58;
-
-		//
-		ON_DUPLICATE_KEY = 59;
-		PRE_INSERT = 60;
-		PRE_DELETE = 61;
+		ON_DUPLICATE_KEY = 54;
+		PRE_INSERT = 55;
+		PRE_DELETE = 56;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 62;
-		PRE_INSERT_SK = 63;
+		PRE_INSERT_UK = 57;
+		PRE_INSERT_SK = 58;
+		MULTI_UPDATE = 59;
+
+		LOCK_OP = 60;
 		//
-		TIME_WINDOW = 64;
-		FILL = 65;
-		PARTITION = 66;
-		FUZZY_FILTER = 67;
+		INTERSECT = 61;
+		INTERSECT_ALL = 62;
+		MINUS = 63;
+		MINUS_ALL = 64;
+
+		//
+		//
+		TIME_WINDOW = 65;
+		FILL = 66;
+		PARTITION = 67;
+		FUZZY_FILTER = 68;
+		APPLY = 69;
 	}
 
 	enum JoinType {
@@ -739,9 +757,8 @@ message Node {
 		ANTI	= 5;
 		SINGLE	= 6;
 		MARK	= 7;
-		APPLY	= 8;
-		INDEX = 9;
-		L2 = 10;
+		INDEX = 8;
+		L2 = 9;
 	}
 
 	enum AggMode {
@@ -757,6 +774,11 @@ message Node {
 		NULL = 3;
 		VALUE = 4;
 		LINEAR = 5;
+	}
+
+	enum ApplyType {
+		CROSSAPPLY = 0;
+		OUTERAPPLY = 1;
 	}
 
 	NodeType node_type = 1;
@@ -777,7 +799,7 @@ message Node {
 
 	// AGG
 	repeated Expr group_by = 10;
-	repeated Expr grouping_set = 11;
+	repeated bool grouping_flag = 11;
 	repeated Expr agg_list = 12;
 
 	// WINDOW
@@ -834,23 +856,28 @@ message Node {
 	PreInsertUkCtx pre_insert_sk_ctx = 46;
 	Expr interval = 47;
 	Expr sliding = 48;
+	Expr timestamp = 49;
+	Expr wEnd = 50;
 
-	FillType fill_type = 49;
-	repeated Expr fill_val = 50;
+	FillType fill_type = 51;
+	repeated Expr fill_val = 52;
 
 	// sample function related.
-	SampleFuncSpec sample_func = 51;
+	SampleFuncSpec sample_func = 53;
 
-	int32 window_idx = 52;
-	repeated Expr onUpdateExprs = 53;
-	OriginTableMessageForFuzzy fuzzymessage = 54;
-	bool ifInsertFromUnique = 55;
+	int32 window_idx = 54;
+	repeated Expr onUpdateExprs = 55;
+	OriginTableMessageForFuzzy fuzzymessage = 56;
+	bool ifInsertFromUnique = 57;
 
 	//for message
-	repeated msgHeader send_msg_list = 56;
-	repeated msgHeader recv_msg_list = 57;
-
-	Snapshot scan_snapshot = 58;
+	repeated msgHeader send_msg_list = 58;
+	repeated msgHeader recv_msg_list = 59;
+	
+	repeated UpdateCtx update_ctx_list = 61;
+	Snapshot scan_snapshot = 62;
+	bool recursive_cte = 63;
+	ApplyType apply_type = 64;
 
 }
 
@@ -868,17 +895,24 @@ message SnapshotTenant {
 	uint32 tenantID = 2;
 }
 
+enum ExternType {
+	LOAD 		= 0;
+	EXTERNAL_TB 	= 1;
+	RESULT_SCAN 	= 2;
+}
+
 
 message ExternScan {
     int32 type = 1;
-    string data = 2;
-    string format = 3;
-    uint64 ignored_lines = 4;
-    bytes  enclosed_by = 5;
-    string terminated = 6;
-	string json_type = 7;
-    bytes  escaped_by = 8;
-	map<string, int32> TbColToDataCol = 9;
+    int32 load_type = 2;
+    string data = 3;
+    string format = 4;
+    uint64 ignored_lines = 5;
+    bytes  enclosed_by = 6;
+    string terminated = 7;
+    string json_type = 8;
+    bytes  escaped_by = 9;
+    map<string, int32> TbColToDataCol = 10;
 }
 
 message LockTarget {
@@ -912,6 +946,8 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+	Expr comp_pkey_expr     = 5;
+	Expr cluster_by_expr    = 6;
 }
 
 message RuntimeFilterSpec {
@@ -980,8 +1016,11 @@ message Query {
 	// load Tag
 	bool loadTag = 6;
 
+	// load write S3
+	bool loadWriteS3 = 7;
+
 	//detectSqls are sqls detect fk self refer constraint
-	repeated string detectSqls= 7;
+	repeated string detectSqls= 8;
 }
 
 message TransationControl {
@@ -1096,6 +1135,7 @@ message DataDefinition {
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
+		RENAME_TABLE = 35;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1124,6 +1164,7 @@ message DataDefinition {
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
+		RenameTable rename_table 	    = 21;
 	}
 }
 
@@ -1205,6 +1246,8 @@ message CreateTable {
 	repeated string updateFkSqls = 12;
 	// fks forward reference to me
 	repeated ForeignKeyInfo fksReferToMe = 13;
+
+	int64 retention_deadline = 14;
 }
 
 message AlterTableDrop {
@@ -1282,6 +1325,10 @@ message AlterAddColumn {
 message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
+}
+
+message RenameTable {
+	repeated AlterTable alter_tables = 1;
 }
 
 message AlterTable {

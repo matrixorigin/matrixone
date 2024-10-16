@@ -28,17 +28,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -54,12 +54,12 @@ import (
 func (h *Handle) HandleAddFaultPoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.FaultPoint,
+	req *cmd_util.FaultPoint,
 	resp *api.SyncLogTailResp) (func(), error) {
-	if req.Name == db.EnableFaultInjection {
+	if req.Name == cmd_util.EnableFaultInjection {
 		fault.Enable()
 		return nil, nil
-	} else if req.Name == db.DisableFaultInjection {
+	} else if req.Name == cmd_util.DisableFaultInjection {
 		fault.Disable()
 		return nil, nil
 	}
@@ -68,14 +68,14 @@ func (h *Handle) HandleAddFaultPoint(
 
 func (h *Handle) HandleTraceSpan(ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.TraceSpan,
+	req *cmd_util.TraceSpan,
 	resp *api.SyncLogTailResp) (func(), error) {
 
 	return nil, nil
 }
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	req *cmd_util.StorageUsageReq, resp *cmd_util.StorageUsageResp_V2) (func(), error) {
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
@@ -143,6 +143,13 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
 	//}
 
+	abstract := memo.GatherObjectAbstractForAllAccount()
+	for _, acc := range resp.AccIds {
+		resp.ObjCnts = append(resp.ObjCnts, uint64(abstract[uint64(acc)].TotalObjCnt))
+		resp.BlkCnts = append(resp.BlkCnts, uint64(abstract[uint64(acc)].TotalBlkCnt))
+		resp.RowCnts = append(resp.RowCnts, uint64(abstract[uint64(acc)].TotalRowCnt))
+	}
+
 	resp.Succeed = true
 
 	return nil, nil
@@ -151,7 +158,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.FlushTable,
+	req *cmd_util.FlushTable,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	// We use current TS instead of transaction ts.
@@ -172,7 +179,7 @@ func (h *Handle) HandleFlushTable(
 func (h *Handle) HandleForceGlobalCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -186,7 +193,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -200,7 +207,7 @@ func (h *Handle) HandleForceCheckpoint(
 func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.Checkpoint,
+	req *cmd_util.Checkpoint,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
@@ -228,17 +235,17 @@ func (h *Handle) HandleBackup(
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.DiskCleaner,
+	req *cmd_util.DiskCleaner,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	op := req.Op
 	key := req.Key
 	value := req.Value
-	if op == gc.RemoveChecker {
+	if op == cmd_util.RemoveChecker {
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	}
 	switch key {
-	case gc.CheckerKeyTTL:
+	case cmd_util.CheckerKeyTTL:
 		// Set a ttl, checkpoints whose endTS is less than this ttl can be consumed
 		var ttl time.Duration
 		ttl, err = time.ParseDuration(value)
@@ -256,10 +263,10 @@ func (h *Handle) HandleDiskCleaner(
 				checkpoint := item.(*checkpoint.CheckpointEntry)
 				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
 				endTS := checkpoint.GetEnd()
-				return !endTS.GreaterEq(&ts)
-			}, gc.CheckerKeyTTL)
+				return !endTS.GE(&ts)
+			}, cmd_util.CheckerKeyTTL)
 		return
-	case gc.CheckerKeyMinTS:
+	case cmd_util.CheckerKeyMinTS:
 		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed
 		var ts types.TS
 		var pTime int64
@@ -283,8 +290,8 @@ func (h *Handle) HandleDiskCleaner(
 			func(item any) bool {
 				ckp := item.(*checkpoint.CheckpointEntry)
 				end := ckp.GetEnd()
-				return !end.GreaterEq(&ts)
-			}, gc.CheckerKeyMinTS)
+				return !end.GE(&ts)
+			}, cmd_util.CheckerKeyMinTS)
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
@@ -294,7 +301,7 @@ func (h *Handle) HandleDiskCleaner(
 func (h *Handle) HandleInterceptCommit(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InterceptCommit,
+	req *cmd_util.InterceptCommit,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	name := req.TableName
@@ -305,8 +312,8 @@ func (h *Handle) HandleInterceptCommit(
 func (h *Handle) HandleInspectTN(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InspectTN,
-	resp *db.InspectResp) (cb func(), err error) {
+	req *cmd_util.InspectTN,
+	resp *cmd_util.InspectResp) (cb func(), err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
@@ -338,7 +345,8 @@ func (h *Handle) HandleCommitMerge(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.MergeCommitEntry,
-	resp *db.InspectResp) (err error) {
+	resp *api.TNStringResponse,
+) (err error) {
 
 	defer func() {
 		if err != nil {
@@ -348,7 +356,6 @@ func (h *Handle) HandleCommitMerge(
 				zap.String("start-ts", req.StartTs.DebugString()),
 				zap.String("error", e.Display()))
 		}
-
 	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
@@ -363,19 +370,68 @@ func (h *Handle) HandleCommitMerge(
 	}
 	merge.ActiveCNObj.RemoveActiveCNObj(ids)
 	if req.Err != "" {
-		resp.Message = req.Err
-		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
+		resp.ReturnStr = req.Err
+		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
 		return
 	}
 
 	defer func() {
 		if err != nil {
-			resp.Message = err.Error()
+			resp.ReturnStr = err.Error()
 			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
 		}
 	}()
 
-	var booking api.TransferMaps
+	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs.Service)
+	if err != nil {
+		return err
+	}
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime, false)
+	if err != nil {
+		return
+	}
+	b := new(bytes.Buffer)
+	b.WriteString("merged success\n")
+	for _, o := range req.CreatedObjs {
+		stat := objectio.ObjectStats(o)
+		b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
+			stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
+			common.HumanReadableBytes(int(stat.OriginSize())),
+			common.HumanReadableBytes(int(stat.Size())),
+		))
+		b.WriteByte('\n')
+	}
+	resp.ReturnStr = b.String()
+	return
+}
+
+func (h *Handle) HandleGetLatestCheckpoint(
+	_ context.Context,
+	_ txn.TxnMeta,
+	_ *cmd_util.Checkpoint,
+	resp *api.CheckpointResp,
+) (cb func(), err error) {
+	var locations string
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+		if resp.TruncateLsn < data[i].GetTruncateLsn() {
+			resp.TruncateLsn = data[i].GetTruncateLsn()
+		}
+	}
+	resp.Location = locations
+	return nil, err
+}
+
+func marshalTransferMaps(
+	ctx context.Context,
+	req *api.MergeCommitEntry,
+	sid string,
+	fs fileservice.FileService,
+) (api.TransferMaps, error) {
 	if len(req.BookingLoc) > 0 {
 		// load transfer info from s3
 		if req.Booking != nil {
@@ -383,7 +439,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 
 		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
-		booking = make(api.TransferMaps, blkCnt)
+		booking := make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
 			booking[i] = make(api.TransferMap, rowCnt)
@@ -391,22 +447,22 @@ func (h *Handle) HandleCommitMerge(
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
 		for _, filepath := range locations {
-			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
+			reader, err := blockio.NewFileReader(sid, fs, filepath)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			for _, bat := range bats {
 				for i := range bat.RowCount() {
-					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAt[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAt[uint8](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAt[uint16](bat.Vecs[3], i)
-					destRow := vector.GetFixedAt[uint32](bat.Vecs[4], i)
+					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
+					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
+					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
 
 					booking[srcBlk][srcRow] = api.TransferDestPos{
 						ObjIdx: destObj,
@@ -416,12 +472,13 @@ func (h *Handle) HandleCommitMerge(
 				}
 			}
 			releases()
-			_ = h.db.Runtime.Fs.Service.Delete(ctx, filepath)
+			_ = fs.Delete(ctx, filepath)
 		}
+		return booking, nil
 	} else if req.Booking != nil {
-		booking = make(api.TransferMaps, len(req.Booking.Mappings))
+		booking := make(api.TransferMaps, len(req.Booking.Mappings))
 		for i := range booking {
-			booking[i] = make(api.TransferMap)
+			booking[i] = make(api.TransferMap, len(req.Booking.Mappings[i].M))
 		}
 		for i, m := range req.Booking.Mappings {
 			for r, pos := range m.M {
@@ -432,25 +489,7 @@ func (h *Handle) HandleCommitMerge(
 				}
 			}
 		}
+		return booking, nil
 	}
-
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, booking, h.db.Runtime)
-	if err != nil {
-		return
-	}
-	if err == nil {
-		b := &bytes.Buffer{}
-		b.WriteString("merged success\n")
-		for _, o := range req.CreatedObjs {
-			stat := objectio.ObjectStats(o)
-			b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
-				stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
-				common.HumanReadableBytes(int(stat.OriginSize())),
-				common.HumanReadableBytes(int(stat.Size())),
-			))
-			b.WriteByte('\n')
-		}
-		resp.Message = b.String()
-	}
-	return err
+	return nil, nil
 }

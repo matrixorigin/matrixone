@@ -545,7 +545,7 @@ func (s *ContentReader) ReadLine() ([]string, error) {
 	if s.idx < s.length {
 		idx := s.idx
 		s.idx++
-		if s.content == nil || len(s.content) == 0 {
+		if len(s.content) == 0 {
 			s.logger.Error("ContentReader.ReadLine.nil",
 				logutil.PathField(s.path),
 				zap.Bool("nil", s.content == nil),
@@ -797,7 +797,7 @@ func CreateCronTask(
 // InitCronExpr support min interval 5 min, max 12 hour
 func InitCronExpr(ctx context.Context, duration time.Duration) error {
 	if duration < 0 || duration > 12*time.Hour {
-		return moerr.NewNotSupported(ctx, "export cron expr not support cycle: %v", duration)
+		return moerr.NewNotSupportedf(ctx, "export cron expr not support cycle: %v", duration)
 	}
 	if duration < 5*time.Minute {
 		MergeTaskCronExpr = fmt.Sprintf("@every %.0fs", duration.Seconds())

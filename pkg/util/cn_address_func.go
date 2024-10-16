@@ -31,6 +31,8 @@ type HAKeeperClient interface {
 	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
+	// GetClusterState queries the cluster state
+	GetClusterState(ctx context.Context) (pb.CheckerState, error)
 }
 
 func AddressFunc(

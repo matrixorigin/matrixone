@@ -43,7 +43,7 @@ type TestRunner interface {
 
 	ExistPendingEntryToGC() bool
 	MaxGlobalCheckpoint() *CheckpointEntry
-	MaxCheckpoint() *CheckpointEntry
+	MaxIncrementalCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
 	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
 	GetDirtyCollector() logtail.Collector
@@ -59,13 +59,13 @@ func (r *runner) EnableCheckpoint() {
 }
 
 func (r *runner) CleanPenddingCheckpoint() {
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev == nil {
 		return
 	}
 	if !prev.IsFinished() {
 		r.storage.Lock()
-		r.storage.entries.Delete(prev)
+		r.storage.incrementals.Delete(prev)
 		r.storage.Unlock()
 	}
 	if prev.IsRunning() {
@@ -77,7 +77,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 	}
 	if !prev.IsFinished() {
 		r.storage.Lock()
-		r.storage.entries.Delete(prev)
+		r.storage.incrementals.Delete(prev)
 		r.storage.Unlock()
 	}
 	if prev.IsRunning() {
@@ -90,7 +90,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		versionInterval = r.options.globalVersionInterval
 	}
 	if r.GetPenddingIncrementalCount() != 0 {
-		end = r.MaxCheckpoint().GetEnd()
+		end = r.MaxIncrementalCheckpoint().GetEnd()
 		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 			force:    true,
 			end:      end,
@@ -139,14 +139,14 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 		if global == nil {
 			return false, nil
 		}
-		return global.end.Greater(&prevGlobalEnd), nil
+		return global.end.GT(&prevGlobalEnd), nil
 	}
 	err := common.RetryWithIntervalAndTimeout(
 		op,
 		time.Minute,
 		r.options.forceFlushCheckInterval, false)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "force global checkpoint failed: %v", err)
+		return moerr.NewInternalErrorf(ctx, "force global checkpoint failed: %v", err)
 	}
 	return nil
 }
@@ -184,7 +184,7 @@ func (r *runner) ForceFlushWithInterval(ts types.TS, ctx context.Context, forceD
 		forceDuration,
 		flushInterval, false)
 	if err != nil {
-		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
+		return moerr.NewInternalErrorf(ctx, "force flush failed: %v", err)
 	}
 	_, sarg, _ := fault.TriggerFault("tae: flush timeout")
 	if sarg != "" {
@@ -199,12 +199,12 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	now := time.Now()
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return moerr.NewPrevCheckpointNotFinished()
 	}
 
-	if prev != nil && end.LessEq(&prev.end) {
+	if prev != nil && end.LE(&prev.end) {
 		return nil
 	}
 	var (
@@ -215,7 +215,12 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		fields   []zap.Field
 	)
 
-	if prev != nil {
+	if prev == nil {
+		global := r.MaxGlobalCheckpoint()
+		if global != nil {
+			start = global.end
+		}
+	} else {
 		start = prev.end.Next()
 	}
 
@@ -249,10 +254,11 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	}()
 
 	r.storage.Lock()
-	r.storage.entries.Set(entry)
+	r.storage.incrementals.Set(entry)
 	r.storage.Unlock()
 
-	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
+	var files []string
+	if fields, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return err
 	}
@@ -267,17 +273,18 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		entry.truncateLSN = lsnToTruncate
 	}
 
-	if err = r.saveCheckpoint(
+	var file string
+	if file, err = r.saveCheckpoint(
 		entry.start, entry.end, lsn, lsnToTruncate,
 	); err != nil {
 		errPhase = "save-ckp"
 		return err
 	}
+	files = append(files, file)
 	entry.SetState(ST_Finished)
-
 	if truncate {
 		var e wal.LogEntry
-		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
+		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate, files...); err != nil {
 			errPhase = "wal-ckp"
 			fatal = true
 			return err
@@ -292,7 +299,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 }
 
 func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err error) {
-	prev := r.MaxCheckpoint()
+	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
 	}
@@ -302,10 +309,11 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	entry := NewCheckpointEntry(r.rt.SID(), start, end, ET_Incremental)
 	r.storage.Lock()
-	r.storage.entries.Set(entry)
+	r.storage.incrementals.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
-	if _, err = r.doIncrementalCheckpoint(entry); err != nil {
+	var files []string
+	if _, files, err = r.doIncrementalCheckpoint(entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64
@@ -315,9 +323,11 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	}
 	entry.ckpLSN = lsn
 	entry.truncateLSN = lsnToTruncate
-	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
+	var file string
+	if file, err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		return
 	}
+	files = append(files, file)
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	backup := NewCheckpointEntry(r.rt.SID(), end.Next(), currTs, ET_Incremental)
@@ -326,7 +336,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 		return
 	}
 	entry.SetState(ST_Finished)
-	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
+	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate, files...)
 	if err != nil {
 		panic(err)
 	}

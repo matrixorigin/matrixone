@@ -30,19 +30,31 @@ import (
 )
 
 var (
-	RowidType types.Type
+	VarcharType types.Type
+	RowidType   types.Type
+	TSType      types.Type
+	Uint64Type  types.Type
 )
 
 func init() {
+	VarcharType = types.T_varchar.ToType()
 	RowidType = types.T_Rowid.ToType()
+	TSType = types.T_TS.ToType()
+	Uint64Type = types.T_uint64.ToType()
 }
 
 type CreateObjOpt struct {
-	Id *types.Objectid
+	Stats       *ObjectStats
+	IsTombstone bool
 }
 
-func (o *CreateObjOpt) WithId(id *types.Objectid) *CreateObjOpt {
-	o.Id = id
+func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
+	o.Stats = stats
+	return o
+}
+
+func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
+	o.IsTombstone = tombstone
 	return o
 }
 
@@ -408,7 +420,7 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewEnumVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
 	}
 }
 
@@ -1011,4 +1023,44 @@ func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, 
 		}
 	}
 	return vec
+}
+
+func MockOneObj_MulBlks_Rowids(
+	blkCnt int,
+	rowsPerBlk int,
+	reversed bool,
+	mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	vec = vector.NewVec(RowidType)
+	if err = vec.PreExtend(blkCnt*rowsPerBlk, mp); err != nil {
+		vec = nil
+		return
+	}
+	obj := NewObjectid()
+	for i := 0; i < blkCnt; i++ {
+		var blkId uint16
+		if reversed {
+			blkId = uint16(blkCnt - i - 1)
+		} else {
+			blkId = uint16(i)
+		}
+		bid := NewBlockidWithObjectID(obj, blkId)
+		for j := 0; j < rowsPerBlk; j++ {
+			var row uint32
+			if reversed {
+				row = uint32(rowsPerBlk - j - 1)
+			} else {
+				row = uint32(j)
+			}
+			rid := NewRowid(bid, row)
+			if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		vec.Free(mp)
+		vec = nil
+	}
+	return
 }

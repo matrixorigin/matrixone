@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -70,52 +72,42 @@ func TestString(t *testing.T) {
 	}
 }
 
-/*
-	func TestBuild(t *testing.T) {
-		for _, tc := range tcs[:1] {
-			err := tc.marg.Prepare(tc.proc)
-			require.NoError(t, err)
-			err = tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.arg.SetChildren([]vm.Operator{tc.marg})
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				require.NoError(t, err)
-				require.Equal(t, false, ok.Status == vm.ExecStop)
-				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				//mp.Free()
-				ok.Batch.Clean(tc.proc.Mp())
-				break
-			}
+func TestBuild(t *testing.T) {
+	for _, tc := range tcs[:1] {
+		err := tc.marg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.SetChildren([]vm.Operator{tc.marg})
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+		ok, err := tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, true, ok.Status == vm.ExecStop)
 
-			tc.arg.Reset(tc.proc, false, nil)
-			tc.marg.Reset(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.marg.Reset(tc.proc, false, nil)
+		tc.proc.GetMessageBoard().Reset()
 
-			err = tc.marg.Prepare(tc.proc)
-			require.NoError(t, err)
-			err = tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			for {
-				ok, err := tc.arg.Call(tc.proc)
-				require.NoError(t, err)
-				require.Equal(t, false, ok.Status == vm.ExecStop)
-				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				//mp.Free()
-				ok.Batch.Clean(tc.proc.Mp())
-				break
-			}
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
-			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		}
+		err = tc.marg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
+
+		ok, err = tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, true, ok.Status == vm.ExecStop)
+
+		tc.arg.Free(tc.proc, false, nil)
+		tc.marg.Reset(tc.proc, false, nil)
+		tc.proc.GetMessageBoard().Reset()
 	}
-*/
+}
+
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []buildTestCase{
@@ -128,15 +120,15 @@ func BenchmarkBuild(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, tc.proc.Mp())
 				//mp.Free()
 				ok.Batch.Clean(tc.proc.Mp())
 				break
@@ -162,11 +154,11 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *process.RegisterMessage, 10),
+		Ch2: make(chan process.PipelineSignal, 10),
 	}
 	return buildTestCase{
 		types:  ts,
@@ -174,9 +166,10 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		proc:   proc,
 		cancel: cancel,
 		arg: &HashBuild{
-			Typs:        ts,
-			Conditions:  cs,
-			NeedHashMap: true,
+			JoinMapTag:    1,
+			JoinMapRefCnt: 1,
+			Conditions:    cs,
+			NeedHashMap:   true,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

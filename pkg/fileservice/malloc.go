@@ -37,65 +37,32 @@ func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
 	return allocator
 }
 
-var getMemoryCacheAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.GetDefault(nil)
-			// with metrics
-			allocator = malloc.NewMetricsAllocator(
-				allocator,
-				metric.MallocCounterMemoryCacheAllocateBytes,
-				metric.MallocGaugeMemoryCacheInuseBytes,
-				metric.MallocCounterMemoryCacheAllocateObjects,
-				metric.MallocGaugeMemoryCacheInuseObjects,
-			)
-			// decorate
-			allocator = decorateAllocator(allocator)
-		})
-		return allocator
-	}
-}()
+var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
+	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("memory-cache-allocate"),
+		metric.MallocGauge.WithLabelValues("memory-cache-inuse"),
+		metric.MallocCounter.WithLabelValues("memory-cache-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("memory-cache-inuse-objects"),
+	)
+	// decorate
+	allocator = decorateAllocator(allocator)
+	return allocator
+})
 
-var getBytesAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.GetDefault(nil)
-			// with metrics
-			allocator = malloc.NewMetricsAllocator(
-				allocator,
-				metric.MallocCounterBytesAllocateBytes,
-				metric.MallocGaugeBytesInuseBytes,
-				metric.MallocCounterBytesAllocateObjects,
-				metric.MallocGaugeBytesInuseObjects,
-			)
-			// decorate
-			allocator = decorateAllocator(allocator)
-		})
-		return allocator
-	}
-}()
-
-var getIOAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.GetDefault(nil)
-			// with metrics
-			allocator = malloc.NewMetricsAllocator(
-				allocator,
-				metric.MallocCounterIOAllocateBytes,
-				metric.MallocGaugeIOInuseBytes,
-				metric.MallocCounterIOAllocateObjects,
-				metric.MallocGaugeIOInuseObjects,
-			)
-			// decorate
-			allocator = decorateAllocator(allocator)
-		})
-		return allocator
-	}
-}()
+var ioAllocator = sync.OnceValue(func() malloc.Allocator {
+	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("io-allocate"),
+		metric.MallocGauge.WithLabelValues("io-inuse"),
+		metric.MallocCounter.WithLabelValues("io-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("io-inuse-objects"),
+	)
+	// decorate
+	allocator = decorateAllocator(allocator)
+	return allocator
+})

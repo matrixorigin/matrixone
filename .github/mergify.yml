@@ -2,9 +2,23 @@ queue_rules:
   - name: main
     merge_conditions: []
     checks_timeout: 4h
+    merge_method: squash
+    commit_message_template: |
+        {{ title }} (#{{ number }})
+
+        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+        Approved by: @{{ approved_reviews_by | join(', @') }}
   - name: release-1.2
     merge_conditions: []
     checks_timeout: 4h
+    merge_method: squash
+    commit_message_template: |
+        {{ title }} (#{{ number }})
+
+        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
+        Approved by: @{{ approved_reviews_by | join(', @') }}
 
 pull_request_rules:
   - name: Automatic queue on approval for main
@@ -15,13 +29,6 @@ pull_request_rules:
     actions:
       queue:
         name: main
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
-
-          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-          Approved by: @{{ approved_reviews_by | join(', @') }}
 
   - name: Automatic queue on approval for release-1.2
     conditions:
@@ -32,13 +39,7 @@ pull_request_rules:
     actions:
       queue:
         name: release-1.2
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
 
-          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-          Approved by: @{{ approved_reviews_by | join(', @') }}
 
   - name: Auto update branch
     conditions:

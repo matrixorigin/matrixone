@@ -480,7 +480,7 @@ func Insert(ctx context.Context, aliases UnorderedMap[string, string], k, v stri
 		return nil
 	}
 	if ok {
-		return moerr.NewInternalError(ctx, " %s -> %s already exists", k, ev)
+		return moerr.NewInternalErrorf(ctx, " %s -> %s already exists", k, ev)
 	}
 	aliases.Insert(k, v)
 	return nil

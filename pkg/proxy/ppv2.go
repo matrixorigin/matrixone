@@ -121,8 +121,8 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 	// which makes the body length > address length. So here we consume the entire body and
 	// read address from it.
 	body := make([]byte, header.Length)
-	if _, err := in.Read(body); err != nil {
-		return nil, false, moerr.NewInternalErrorNoCtx("cannot read proxy address, %s", err.Error())
+	if _, err := io.ReadFull(in, body); err != nil {
+		return nil, false, moerr.NewInternalErrorNoCtxf("cannot read proxy address, %s", err.Error())
 	}
 	bodyBuf := bytes.NewBuffer(body)
 	addr := &ProxyAddr{}
@@ -141,7 +141,7 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 		// no address to read
 		return addr, false, nil
 	default:
-		return nil, false, moerr.NewInternalErrorNoCtx("unknown protocol family [%x]", header.ProtocolFamily)
+		return nil, false, moerr.NewInternalErrorNoCtxf("unknown protocol family [%x]", header.ProtocolFamily)
 	}
 }
 

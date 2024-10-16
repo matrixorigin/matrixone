@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -112,7 +113,6 @@ const (
 type Session struct {
 	feSessionImpl
 
-	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -174,6 +174,8 @@ type Session struct {
 	// sentRows used to record rows it sent to client for motrace.StatementInfo.
 	// If there is NO exec_plan, sentRows will be 0.
 	sentRows atomic.Int64
+	// writeBytes count of bytes send back to client.
+	writeBytes int
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
 	// packetCounter count the tcp packet send to client.
@@ -250,12 +252,26 @@ type Session struct {
 	// disableAgg co-operate with RecordStatement
 	// more can see Benchmark_RecordStatement_IsTrue()
 	disableAgg bool
+
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+
+	// create version
+	createVersion string
+}
+
+func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
-	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	var sv *SystemVariables
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
 		return
 	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
 	return
 }
@@ -415,13 +431,15 @@ func (ses *Session) CountPayload(length int) {
 	}
 	ses.payloadCounter += int64(length)
 }
-func (ses *Session) CountPacket(delta int64) {
+
+// CountFlushPackage count the raw conn flush op.
+func (ses *Session) CountFlushPackage(delta int64) {
 	if ses == nil {
 		return
 	}
 	ses.packetCounter.Add(delta)
 }
-func (ses *Session) GetPacketCnt() int64 {
+func (ses *Session) GetFlushPacketCnt() int64 {
 	if ses == nil {
 		return 0
 	}
@@ -433,6 +451,16 @@ func (ses *Session) ResetPacketCounter() {
 	}
 	ses.packetCounter.Store(0)
 	ses.payloadCounter = 0
+	ses.writeBytes = 0
+}
+func (ses *Session) CountOutputBytes(delta int) {
+	if ses == nil {
+		return
+	}
+	ses.writeBytes += delta
+}
+func (ses *Session) GetOutputBytes() int {
+	return ses.writeBytes
 }
 
 // SetTStmt do set the Session.tStmt
@@ -497,10 +525,9 @@ func NewSession(
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	txnHandler := InitTxnHandler(service, getGlobalPu().StorageEngine, connCtx, txnOp)
+	txnHandler := InitTxnHandler(service, getPu(service).StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
-		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -509,6 +536,7 @@ func NewSession(
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 			respr:          NewMysqlResp(proto),
+			service:        service,
 		},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
@@ -534,6 +562,7 @@ func NewSession(
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewV7()
+	pu := getPu(service)
 	if ses.pool == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -542,27 +571,27 @@ func NewSession(
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), pu.SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
-		getGlobalPu().TxnClient,
+		pu.TxnClient,
 		nil,
-		getGlobalPu().FileService,
-		getGlobalPu().LockService,
-		getGlobalPu().QueryClient,
-		getGlobalPu().HAKeeperClient,
-		getGlobalPu().UdfService,
-		getGlobalAic())
+		pu.FileService,
+		pu.LockService,
+		pu.QueryClient,
+		pu.HAKeeperClient,
+		pu.UdfService,
+		getAicm(service))
 
-	ses.proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	ses.proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	ses.proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	ses.proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
@@ -573,8 +602,10 @@ func NewSession(
 	return ses
 }
 
-func (ses *Session) GetService() string {
-	return ses.service
+// ReserveConnAndClose closes the session with the connection is reserved.
+func (ses *Session) ReserveConnAndClose() {
+	ses.ReserveConn()
+	ses.Close()
 }
 
 func (ses *Session) Close() {
@@ -588,7 +619,6 @@ func (ses *Session) Close() {
 	ses.ep = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
-		ses.txnHandler = nil
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.execCtx = nil
@@ -620,28 +650,24 @@ func (ses *Session) Close() {
 		ses.sqlHelper = nil
 	}
 	ses.ClearStmtProfile()
-	//  The mpool cleanup must be placed at the end,
-	// and you must wait for all resources to be cleaned up before you can delete the mpool
-	if ses.proc != nil {
-		ses.proc.FreeVectors()
-		bats := ses.proc.GetValueScanBatchs()
-		for _, bat := range bats {
-			bat.Clean(ses.proc.Mp())
-		}
-		ses.proc = nil
-	}
+
+	ses.proc.Free()
+	ses.proc = nil
+
 	for _, bat := range ses.resultBatches {
 		bat.Clean(ses.pool)
 	}
-
-	pool := ses.GetMemPool()
-	mpool.DeleteMPool(pool)
-	ses.SetMemPool(nil)
 
 	if ses.buf != nil {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	pool := ses.GetMemPool()
+	mpool.DeleteMPool(pool)
+	ses.SetMemPool(nil)
 
 	ses.timestampMap = nil
 	ses.upstream = nil
@@ -712,10 +738,10 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//account info
 	if ses.tenant != nil {
-		sb.WriteString(ses.tenant.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", ses.tenant.GetTenant(), ses.tenant.GetUser()))
 	} else {
 		acc := getDefaultAccount()
-		sb.WriteString(acc.String())
+		sb.WriteString(fmt.Sprintf("account %s:%s", acc.GetTenant(), acc.GetUser()))
 	}
 	sb.WriteByte('|')
 	//go routine id
@@ -752,19 +778,20 @@ func (ses *Session) InvalidatePrivilegeCache() {
 
 // GetBackgroundExec generates a background executor
 func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(99)
-	defer ses.ExitFPrint(99)
+	ses.EnterFPrint(FPGetBackgroundExec)
+	defer ses.ExitFPrint(FPGetBackgroundExec)
 	return NewBackgroundExec(ctx, ses)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	ses.EnterFPrint(102)
-	defer ses.ExitFPrint(102)
+	ses.EnterFPrint(FPGetShareTxnBackgroundExec)
+	defer ses.ExitFPrint(FPGetShareTxnBackgroundExec)
 	var txnOp TxnOperator
-	if ses.GetTxnHandler() != nil {
-		txnOp = ses.GetTxnHandler().GetTxn()
+	txnHandle := ses.GetTxnHandler()
+	if txnHandle != nil {
+		txnOp = txnHandle.GetTxn()
 	}
 
 	var callback outputCallBackFunc
@@ -788,8 +815,8 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
-	ses.EnterFPrint(100)
-	defer ses.ExitFPrint(100)
+	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
+	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
 
 	backSes := newBackSession(ses, nil, "", batchFetcher2)
 	bh := &backExec{
@@ -825,7 +852,7 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep}
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -929,7 +956,7 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
+			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()
@@ -958,7 +985,7 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 		connID = ses.respr.GetU32(CONNID)
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
-	return nil, moerr.NewInvalidState(ctx, "prepared statement '%s' does not exist", name)
+	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
@@ -1027,6 +1054,18 @@ func (ses *Session) GetConfig(ctx context.Context, dbName, varName string) (any,
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
+func (ses *Session) SetCreateVersion(version string) {
+	ses.rwmu.Lock()
+	defer ses.rwmu.Unlock()
+	ses.createVersion = version
+}
+
+func (ses *Session) GetCreateVersion() string {
+	ses.rwmu.RLock()
+	defer ses.rwmu.RUnlock()
+	return ses.createVersion
+}
+
 func (ses *Session) DeleteConfig(ctx context.Context, dbName, varName string) {
 	ses.rwmu.Lock()
 	defer ses.rwmu.Unlock()
@@ -1066,14 +1105,22 @@ func (ses *Session) SetUserName(uname string) {
 func (ses *Session) GetConnectionID() uint32 {
 	protocol := ses.GetResponser()
 	if protocol != nil {
-		return ses.GetResponser().GetU32(CONNID)
+		return protocol.GetU32(CONNID)
 	}
 	return 0
 }
 
+func (ses *Session) SetConnectionID(v uint32) {
+	protocol := ses.GetResponser()
+	if protocol != nil {
+		protocol.SetU32(CONNID, v)
+	}
+}
+
 func (ses *Session) skipAuthForSpecialUser() bool {
-	if ses.GetTenantInfo() != nil {
-		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
+	acc := ses.GetTenantInfo()
+	if acc != nil {
+		ok, _, _ := isSpecialUser(acc.GetUser())
 		return ok
 	}
 	return false
@@ -1090,6 +1137,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	var createVersion string
 
 	//Get tenant info
 	tenant, err = GetTenantInfo(ctx, userInput)
@@ -1123,7 +1171,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
 	}
 
 	//account id
@@ -1138,17 +1186,24 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//account version
+	// account version
 	accountVersion, err = rsset[0].GetUint64(sysTenantCtx, 0, 3)
 	if err != nil {
 		return nil, err
 	}
 
+	// create version
+	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
+	if err != nil {
+		return nil, err
+	}
+
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		logutil.Infof("[set restricted] init session, init account id %d, connection id %d restricted", tenantID, ses.GetConnectionID())
 		ses.getRoutine().setResricted(true)
 	} else {
 		ses.getRoutine().setResricted(false)
@@ -1175,7 +1230,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalError(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
 	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -1225,7 +1280,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -1239,7 +1294,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "the role %s has not been granted to the user %s",
+			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
 				tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
@@ -1260,7 +1315,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalError(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
+			return nil, moerr.NewInternalErrorf(tenantCtx, "get the default role of the user %s failed", tenant.GetUser())
 		}
 
 		defaultRole, err = rsset[0].GetString(tenantCtx, 0, 0)
@@ -1302,6 +1357,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
 	ses.Info(ctx, tenant.String())
+	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
 }
@@ -1384,18 +1440,6 @@ func (ses *Session) GetFromRealUser() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.fromRealUser
-}
-
-func changeVersion(ctx context.Context, ses *Session, db string) error {
-	var err error
-	if _, ok := bannedCatalogDatabases[db]; ok {
-		return err
-	}
-	version, _ := GetVersionCompatibility(ctx, ses, db)
-	if ses.GetTenantInfo() != nil {
-		ses.GetTenantInfo().SetVersion(version)
-	}
-	return err
 }
 
 // getCNLabels returns requested CN labels.
@@ -1503,9 +1547,56 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 	} else if status == tree.AccountStatusOpen.String() {
 		ses.getRoutine().setResricted(false)
 	} else {
-		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+		err = moerr.NewInternalErrorNoCtxf("SetSessionRoutineStatus have invalid status : %s", status)
 	}
 	return err
+}
+
+// reset resets the ses instance and copy some fields of prev, then
+// close the prev.
+func (ses *Session) reset(prev *Session) error {
+	if ses == nil || prev == nil {
+		return nil
+	}
+	// update information in the new session.
+	ses.tenant = prev.tenant.Copy()
+	ses.accountId = prev.accountId
+	ses.label = make(map[string]string, len(prev.label))
+	for k, v := range prev.label {
+		ses.label[k] = v
+	}
+	*ses.timeZone = *prev.timeZone
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for k, v := range prev.requestLabel {
+		ses.requestLabel[k] = v
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for k, v := range prev.timestampMap {
+		ses.timestampMap[k] = v
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+
+	// rollback the transactions in the old session.
+	tempExecCtx := ExecCtx{
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+			zap.Error(err))
+		return err
+	}
+	// close the previous session.
+	prev.ReserveConnAndClose()
+	return nil
 }
 
 func checkPlanIsInsertValues(proc *process.Process,
@@ -1580,8 +1671,8 @@ func newDBMigration(db string) *dbMigration {
 }
 
 func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(90)
-	defer ses.ExitFPrint(90)
+	ses.EnterFPrint(FPMigrateDB)
+	defer ses.ExitFPrint(FPMigrateDB)
 	if d.db == "" {
 		return nil
 	}
@@ -1611,8 +1702,8 @@ func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepar
 }
 
 func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(103)
-	defer ses.ExitFPrint(103)
+	ses.EnterFPrint(FPMigratePrepareStmt)
+	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
@@ -1629,10 +1720,10 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.ResetFPrints()
-	ses.EnterFPrint(89)
-	defer ses.ExitFPrint(89)
+	ses.EnterFPrint(FPMigrate)
+	defer ses.ExitFPrint(FPMigrate)
 	defer ses.ResetFPrints()
-	parameters := getGlobalPu().SV
+	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
@@ -1640,8 +1731,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
 	nodeCtx := cancelRequestCtx
-	if ses.getRoutineManager() != nil && ses.getRoutineManager().baseService != nil {
-		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	rm := ses.getRoutineManager()
+	if rm != nil && rm.baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
 	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
@@ -1718,6 +1810,9 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
@@ -1732,6 +1827,9 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	if ses.logLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = append(fields, zap.String("session_info", ses.debugStr))
+		if ses.tenant != nil {
+			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
+		}
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)

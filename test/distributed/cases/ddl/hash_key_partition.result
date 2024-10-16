@@ -16,7 +16,7 @@ col1    col2    col3
 6    io    88.92
 show create table p_table_01;
 Table    Create Table
-p_table_01    CREATE TABLE `p_table_01` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(25) DEFAULT NULL,\n  `col3` DECIMAL(6,2) DEFAULT NULL\n) partition by key algorithm = 2 (col2) partitions 4
+p_table_01    CREATE TABLE `p_table_01` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` decimal(6,2) DEFAULT NULL\n) partition by key algorithm = 2 (col2) partitions 4
 create table p_table_02(col1 int,col2 char(25),col3 decimal(6,3),primary key(col1,col2))partition by key(col2)partitions 2;
 insert into p_table_02 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
 select * from `%!%p0%!%p_table_02`;
@@ -47,7 +47,7 @@ col1    col2    col3
 6    io    88.92
 show create table p_table_03;
 Table    Create Table
-p_table_03    CREATE TABLE `p_table_03` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(25) NOT NULL,\n  `col3` DECIMAL(4,2) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n) partition by key algorithm = 2 (col2) partitions 4
+p_table_03    CREATE TABLE `p_table_03` (\n  `col1` int NOT NULL,\n  `col2` char(25) NOT NULL,\n  `col3` decimal(4,2) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n) partition by key algorithm = 2 (col2) partitions 4
 create table p_table_04(col1 int,col2 char(25) primary key,col3 decimal(4,2))partition by key()partitions 8;
 insert into p_table_04 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',62.9),(6,'io',88.92);
 Duplicate entry 'mod' for key 'col2'
@@ -206,7 +206,7 @@ col1    col2    col3
 900    1999-09-29    opt1
 show create table p_table_09;
 Table    Create Table
-p_table_09    CREATE TABLE `p_table_09` (\n  `col1` INT DEFAULT NULL,\n  `col2` DATE DEFAULT NULL,\n  `col3` VARCHAR(25) DEFAULT NULL\n) partition by key algorithm = 2 (col1, col2) partitions 4
+p_table_09    CREATE TABLE `p_table_09` (\n  `col1` int DEFAULT NULL,\n  `col2` date DEFAULT NULL,\n  `col3` varchar(25) DEFAULT NULL\n) partition by key algorithm = 2 (col1, col2) partitions 4
 create table p_table_10(col1 int unsigned,col2 date, col3 varchar(25),primary key(col1,col2))partition by key(col1)partitions 4;
 insert into p_table_10 values (72,'1999-09-29','res1'),(60,'1999-10-01','opt1'),(72,'1999-10-02','res2'),(72,'1999-10-03','opt2'), (60,'1999-10-29','oop1'),(206,'1999-10-30','oop1');
 select * from `%!%p0%!%p_table_10`;
@@ -922,7 +922,7 @@ col1    col2    col3    col4
 200    55    2021-08-11    72
 show create table p_hash_table_01;
 Table    Create Table
-p_hash_table_01    CREATE TABLE `p_hash_table_01` (\n  `col1` INT NOT NULL,\n  `col2` VARCHAR(30) DEFAULT NULL,\n  `col3` DATE NOT NULL DEFAULT '1970-01-01',\n  `col4` INT DEFAULT NULL\n) partition by hash (col4) partitions 4
+p_hash_table_01    CREATE TABLE `p_hash_table_01` (\n  `col1` int NOT NULL,\n  `col2` varchar(30) DEFAULT NULL,\n  `col3` date NOT NULL DEFAULT '1970-01-01',\n  `col4` int DEFAULT NULL\n) partition by hash (col4) partitions 4
 create table p_hash_table_02(col1 int not null,col2 varchar(30),col3 date default '1970-01-01',col4 int,primary key(col1,col2))partition by hash(col1) partitions 4;
 insert into p_hash_table_02 values (-120,'78',NULL,90),(84,'334','2021-01-01',34),(20,'55','2021-01-01',72),(-120,'45',NULL,99),(84,'3','2022-11-01',34),(200,'55','2021-08-11',72);
 select * from `%!%p0%!%p_hash_table_02`;
@@ -957,7 +957,7 @@ col1    col2    col3    col4
 200    55    2021-08-11    72
 show create table p_hash_table_03;
 Table    Create Table
-p_hash_table_03    CREATE TABLE `p_hash_table_03` (\n  `col1` BIGINT NOT NULL AUTO_INCREMENT,\n  `col2` VARCHAR(30) DEFAULT NULL,\n  `col3` DATE DEFAULT '1970-01-01',\n  `col4` INT DEFAULT NULL,\n  UNIQUE KEY `k1` (`col1`,`col2`)\n) partition by hash (col1) partitions 4
+p_hash_table_03    CREATE TABLE `p_hash_table_03` (\n  `col1` bigint NOT NULL AUTO_INCREMENT,\n  `col2` varchar(30) DEFAULT NULL,\n  `col3` date DEFAULT '1970-01-01',\n  `col4` int DEFAULT NULL,\n  UNIQUE KEY `k1` (`col1`,`col2`)\n) partition by hash (col1) partitions 4
 create table p_hash_table_04(col1 bigint ,col2 date,col3 varchar(30))partition by hash(year(col2)) partitions 4;
 load data infile '$resources/load_data/key_partition_data.csv' into table p_hash_table_04 fields terminated by ',';
 select * from `%!%p0%!%p_hash_table_04`;

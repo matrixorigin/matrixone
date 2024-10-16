@@ -77,3 +77,5 @@ count(*)
 drop database snapshot_read;
 drop snapshot snapshot_01;
 drop snapshot snapshot_02;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

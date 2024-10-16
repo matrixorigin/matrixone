@@ -656,3 +656,5 @@ drop database test05;
 drop snapshot sp100;
 drop snapshot sp101;
 drop account acc01;
+-- @ignore:1
+show snapshots;

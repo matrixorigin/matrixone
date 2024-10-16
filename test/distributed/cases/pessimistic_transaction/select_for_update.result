@@ -77,7 +77,7 @@ c1    c2    c3
 4    yellow    70
 show create table su_01;
 Table    Create Table
-su_01    CREATE TABLE `su_01` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+su_01    CREATE TABLE `su_01` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 commit;
 begin;
 select * from su_01 where c1=1 for update;
@@ -321,7 +321,7 @@ use select_for_update;
 alter table su_02 drop index u1;
 show create table su_02;
 Table    Create Table
-su_02    CREATE TABLE `su_02` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL\n)
+su_02    CREATE TABLE `su_02` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL\n)
 commit;
 begin;
 select * from su_02 where c3>35 for update;
@@ -412,7 +412,7 @@ use select_for_update;
 alter table su_02_1 drop index u1;
 show create table su_02_1;
 Table    Create Table
-su_02_1    CREATE TABLE `su_02_1` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL\n)
+su_02_1    CREATE TABLE `su_02_1` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL\n)
 commit;
 start transaction;
 select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
@@ -515,7 +515,7 @@ use select_for_update;
 alter table su_03 drop index u1;
 show create table su_03;
 Table    Create Table
-su_03    CREATE TABLE `su_03` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+su_03    CREATE TABLE `su_03` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 commit;
 begin;
 select * from su_03 where c3 in(50,70) for update;
@@ -578,7 +578,7 @@ use select_for_update;
 alter table su_03 drop index u1;
 show create table su_03;
 Table    Create Table
-su_03    CREATE TABLE `su_03` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+su_03    CREATE TABLE `su_03` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
 commit;
 drop table if exists su_03;
 create table su_03_1(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
@@ -707,7 +707,7 @@ use select_for_update;
 alter table su_04 add unique index a1(c1);
 show create table su_04;
 Table    Create Table
-su_04    CREATE TABLE `su_04` (\n  `c1` INT NOT NULL,\n  `c2` VARCHAR(25) DEFAULT NULL,\n  `c3` INT DEFAULT NULL,\n  UNIQUE KEY `a1` (`c1`)\n)
+su_04    CREATE TABLE `su_04` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  `c3` int DEFAULT NULL,\n  UNIQUE KEY `a1` (`c1`)\n)
 commit;
 begin;
 select * from su_04 where c2='results' for update;
@@ -1119,3 +1119,12 @@ drop table su_07;
 select * from su_07;
 SQL parser error: table "su_07" does not exist
 commit;
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+insert into t1 values (1,2),(2,2);
+prepare s1 from select a from t1 where b = ? order by b limit 1 for update;
+set @b=2;
+execute s1 using @b;
+a
+1
+deallocate prepare s1;

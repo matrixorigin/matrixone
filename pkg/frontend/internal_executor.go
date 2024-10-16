@@ -19,6 +19,8 @@ import (
 	"math"
 	"sync"
 
+	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -121,38 +123,30 @@ func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint
 	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
-	return res.resultSet.GetValueByName(ctx, ridx, col)
+func (res *internalExecResult) GetUint64(ctx context.Context, ridx uint64, cidx uint64) (uint64, error) {
+	return res.resultSet.GetUint64(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return "", err
-	} else {
-		return res.resultSet.GetString(ctx, ridx, cidx)
-	}
+func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cidx uint64) (string, error) {
+	return res.resultSet.GetString(ctx, ridx, cidx)
 }
 
-func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
-	if cidx, err := res.resultSet.columnName2Index(ctx, col); err != nil {
-		return 0.0, err
-	} else {
-		return res.resultSet.GetFloat64(ctx, ridx, cidx)
-	}
+func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx uint64) (float64, error) {
+	return res.resultSet.GetFloat64(ctx, ridx, cidx)
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
 		sess.Close()
 	}()
-	sess.EnterFPrint(112)
-	defer sess.ExitFPrint(112)
+	sess.EnterFPrint(FPInternalExecutorExec)
+	defer sess.ExitFPrint(FPInternalExecutorExec)
 	ie.proto.stashResult = false
 	if sql == "" {
 		return
@@ -169,12 +163,12 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
-	sess.EnterFPrint(113)
-	defer sess.ExitFPrint(113)
+	sess.EnterFPrint(FPInternalExecutorQuery)
+	defer sess.ExitFPrint(FPInternalExecutorQuery)
 	ie.proto.stashResult = true
 	sess.Info(ctx, "internalExecutor new session")
 	tempExecCtx := ExecCtx{
@@ -198,7 +192,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	// Session does not have a close call.   We need a Close() call in the Exec/Query method above.
 	//
-	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
+	mp, err := mpool.NewMPool("internal_exec_cmd_session", getPu(ie.service).SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
 		getLogger(ie.service).Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
@@ -229,6 +223,8 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
+
+	sess.initLogger()
 	return sess
 }
 
@@ -250,6 +246,9 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+}
+
+func (ip *internalProtocol) FreeLoadLocal() {
 }
 
 func (ip *internalProtocol) GetStr(id PropertyID) string {
@@ -371,6 +370,11 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (ip *internalProtocol) Read() ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) ReadLoadLocalPacket() ([]byte, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -500,6 +504,9 @@ func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) e
 	defer ip.Unlock()
 	return ip.sendRows(mrs, cnt)
 }
+func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
+	return nil
+}
 
 func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
@@ -508,8 +515,18 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
+func (ip *internalProtocol) Reset(_ *Session) {
+	ip.ResetStatistics()
+	ip.database = ""
+	ip.username = ""
+}
+
 func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
+}
+
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	return nil, nil
 }

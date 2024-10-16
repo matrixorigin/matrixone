@@ -16,11 +16,13 @@ package morpc
 
 import (
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 type Buffer struct {
-	buf *buf.ByteBuf
+	markIdx int
+	buf     *buf.ByteBuf
 }
 
 // NewBuffer creates a new buffer
@@ -33,6 +35,7 @@ func (b Buffer) TypeName() string {
 }
 
 func (b *Buffer) reset() {
+	b.markIdx = 0
 	b.buf.Reset()
 }
 
@@ -82,4 +85,15 @@ func (b *Buffer) EncodeInt(
 		panic(err)
 	}
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b *Buffer) Mark() {
+	b.markIdx = b.buf.GetWriteIndex()
+}
+
+func (b *Buffer) GetMarkedData() []byte {
+	if b.markIdx == b.buf.GetWriteIndex() {
+		return nil
+	}
+	return b.buf.RawSlice(b.markIdx, b.buf.GetWriteIndex())
 }

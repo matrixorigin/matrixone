@@ -15,18 +15,22 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mohae/deepcopy"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -35,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -54,6 +57,8 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+
+	explainBuffer *bytes.Buffer
 }
 
 func InitTxnComputationWrapper(
@@ -146,28 +151,10 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
-		c := new(MysqlColumn)
-		c.SetName(col.Name)
-		c.SetOrgName(col.GetOriginCaseName())
-		c.SetTable(col.TblName)
-		c.SetOrgTable(col.TblName)
-		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(col.DbName)
-		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
+		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
-		setColFlag(c)
-		setColLength(c, col.Typ.Width)
-		setCharacter(c)
-
-		// For binary/varbinary with mysql_type_varchar.Change the charset.
-		if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-			c.SetCharset(0x3f)
-		}
-
-		c.SetDecimal(col.Typ.Scale)
-		convertMysqlTextTypeToBlobType(c)
 		columns[i] = c
 	}
 	return columns, err
@@ -222,22 +209,34 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		}
 	}
 
-	if _, ok := cwft.stmt.(*tree.Execute); ok {
-		executePlan := cwft.plan.GetDcl().GetExecute()
-		retComp, plan, stmt, sql, err := replacePlan(execCtx.reqCtx, cwft.ses.(*Session), cwft, executePlan)
-		if err != nil {
-			return nil, err
-		}
-		if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
-			return nil, err
+	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
+		var retComp *compile.Compile
+		var plan *plan.Plan
+		var stmt tree.Statement
+		var sql string
+		if isTextProtExecute {
+			executePlan := cwft.plan.GetDcl().GetExecute()
+			retComp, plan, stmt, sql, err = initExecuteStmtParam(execCtx.reqCtx, cwft.ses.(*Session), cwft, executePlan, executePlan.GetName())
+			if err != nil {
+				return nil, err
+			}
+			if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+				return nil, err
+			}
+			cwft.plan = plan
+			cwft.stmt.Free()
+			// reset plan & stmt
+			cwft.stmt = stmt
+		} else {
+			// binary protocol execute
+			retComp, _, _, sql, err = initExecuteStmtParam(execCtx.reqCtx, cwft.ses.(*Session), cwft, nil, execCtx.input.stmtName)
+			if err != nil {
+				return nil, err
+			}
 		}
 		originSQL = sql
-		cwft.plan = plan
-
-		cwft.stmt.Free()
-		// reset plan & stmt
-		cwft.stmt = stmt
 		cwft.ifIsExeccute = true
+
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
@@ -256,7 +255,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 			cwft.compile.SetOriginSQL(originSQL)
 		} else {
 			// retComp
-			cwft.proc.Ctx = execCtx.reqCtx
+			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -281,13 +280,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
 	if execCtx != nil && execCtx.reqCtx != nil {
 		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-	}
-	if proc != nil && proc.Ctx != nil {
-		proc.Ctx = attachValue(proc.Ctx, defines.TemporaryTN{}, tempStorage)
+		proc.ReplaceTopCtx(execCtx.reqCtx)
 	}
 }
 
-func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
@@ -296,9 +293,13 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, WithWaitActiveCost(waitActiveCost)))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, WithWaitActiveCost(waitActiveCost)))
 	}
 	return nil
+}
+
+func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	cwft.explainBuffer = buf
 }
 
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
@@ -329,10 +330,12 @@ func getStatementStartAt(ctx context.Context) time.Time {
 	return v.(time.Time)
 }
 
-// replacePlan replaces the plan of the EXECUTE by the plan generated by
+// initExecuteStmtParam replaces the plan of the EXECUTE by the plan generated by
 // the PREPARE and setups the params for the plan.
-func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapper, execPlan *plan.Execute) (*compile.Compile, *plan.Plan, tree.Statement, string, error) {
-	stmtName := execPlan.GetName()
+func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapper, execPlan *plan.Execute, stmtName string) (*compile.Compile, *plan.Plan, tree.Statement, string, error) {
+	if execPlan != nil { // binary protocol, don't have to buildplan, execPlan is nil
+		stmtName = execPlan.GetName()
+	}
 	prepareStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
 		return nil, nil, nil, "", err
@@ -342,20 +345,24 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	for _, obj := range preparePlan.GetSchemas() {
-		newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
-		if newObj == nil {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+		change, err := ses.txnCompileCtx.checkTableDefChange(obj.SchemaName, obj.ObjName, uint64(obj.Obj), uint32(obj.Server))
+		if err != nil {
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
 		}
-		if newObj.Obj != obj.Obj || newTableDef.Version != uint32(obj.Server) {
-			return nil, nil, nil, originSQL, moerr.NewInternalError(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+		if change {
+			return nil, nil, nil, originSQL, moerr.NewInternalErrorf(reqCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
 		}
 	}
 
 	// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
 	//  Convenient to reuse memory next time
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+		for i := 0; i < len(prepareStmt.exprList); i++ {
+			for j := range prepareStmt.exprList[i] {
+				prepareStmt.exprList[i][j].ResetForNextQuery()
+			}
+		}
 		cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 	}
 	numParams := len(preparePlan.ParamTypes)
@@ -364,11 +371,11 @@ func replacePlan(reqCtx context.Context, ses *Session, cwft *TxnComputationWrapp
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
-	} else if len(execPlan.Args) > 0 {
+	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := cwft.proc.GetVector(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType())
 		paramVals := make([]any, numParams)
 		for i, arg := range execPlan.Args {
 			exprImpl := arg.Expr.(*plan.Expr_V)
@@ -407,11 +414,12 @@ func createCompile(
 ) (retCompile *compile.Compile, err error) {
 
 	addr := ""
-	if len(getGlobalPu().ClusterNodes) > 0 {
-		addr = getGlobalPu().ClusterNodes[0].Addr
+	pu := getPu(ses.GetService())
+	if len(pu.ClusterNodes) > 0 {
+		addr = pu.ClusterNodes[0].Addr
 	}
-	proc.Ctx = execCtx.reqCtx
-	proc.Base.FileService = getGlobalPu().FileService
+	proc.ReplaceTopCtx(execCtx.reqCtx)
+	proc.Base.FileService = pu.FileService
 
 	var tenant string
 	tInfo := ses.GetTenantInfo()
@@ -457,6 +465,11 @@ func createCompile(
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(bat *batch.Batch) error { return nil }
 	}
+
+	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
+		fill = func(bat *batch.Batch) error { return nil }
+	}
+
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
 	if err != nil {
 		return

@@ -79,10 +79,14 @@ message Dispatch {
   int32 shuffle_type=6;
   bool  is_sink = 7;
   bool  rec_sink = 8;
+  bool  rec_cte = 9;
 }
 
 message Merge {
   bool sinkScan = 1;
+  bool partial = 2;
+  int32 start_idx = 3;
+  int32 end_idx = 4;
 }
 
 message MultiArguemnt{
@@ -110,6 +114,7 @@ message Group {
   uint64 preAllocSize = 7;
   bytes PartialResults = 8;
   repeated uint32 PartialResultTypes = 9;
+  repeated bool grouping_flag = 10;
 }
 
 message Insert{
@@ -124,6 +129,15 @@ message Insert{
   int32 partition_idx = 8;
   bool is_end         = 9;
   plan.TableDef table_def = 10;
+}
+
+message MultiUpdate {
+  uint64 affected_rows = 1;
+  bool ToWriteS3 = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
+  map<string,int32> SegmentMap = 5;
+  repeated plan.UpdateCtx update_ctx = 6;
 }
 
 message Array{
@@ -160,6 +174,8 @@ message PreInsert {
   bool has_auto_col          = 5;
   bool is_update             = 6;
   int64 estimated_row_count  = 7;
+  plan.Expr comp_pkey_expr   = 8;
+  plan.Expr cluster_by_expr  = 9;
 }
 
 message LockTarget {
@@ -175,7 +191,6 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
-  bool                block   = 2;
 }
 
 message PreInsertUnique {
@@ -217,19 +232,19 @@ message Join {
   bool is_shuffle =9;
   int32 join_map_tag = 10;
   int32 shuffle_idx = 11;
+  int32 join_type = 12;
 }
 
 message AntiJoin{
   repeated int32 result = 1;
   plan.Expr  expr = 2;
-  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  bool hash_on_pk = 6;
-  bool is_shuffle = 7;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
+  repeated plan.Expr left_cond = 3;
+  repeated plan.Expr right_cond = 4;
+  bool hash_on_pk = 5;
+  bool is_shuffle = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
+  int32 join_map_tag = 8;
+  int32 shuffle_idx = 9;
 }
 
 message LeftJoin {
@@ -290,14 +305,13 @@ message RightAntiJoin {
 message SemiJoin {
   repeated int32 result = 1;
   plan.Expr  expr = 2;
-  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
-  bool hash_on_pk = 7;
-  bool is_shuffle = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
+  repeated plan.Expr left_cond = 3;
+  repeated plan.Expr right_cond = 4;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 5;
+  bool hash_on_pk = 6;
+  bool is_shuffle = 7;
+  int32 join_map_tag = 8;
+  int32 shuffle_idx = 9;
 }
 
 message SingleJoin {
@@ -317,36 +331,32 @@ message SingleJoin {
 message MarkJoin {
   repeated int32 result = 1;
   plan.Expr expr = 2;
-  repeated plan.Type types = 3 [(gogoproto.nullable) = false];
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.Expr on_list = 6;
-  bool hash_on_pk = 7;
-  bool is_shuffle = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
+  repeated plan.Expr left_cond = 3;
+  repeated plan.Expr right_cond = 4;
+  repeated plan.Expr on_list = 5;
+  bool hash_on_pk = 6;
+  bool is_shuffle = 7;
+  int32 join_map_tag = 8;
+  int32 shuffle_idx = 9;
 }
 
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
-  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  bool is_shuffle =4;
-  int32 join_map_tag = 5;
+  bool is_shuffle =3;
+  int32 join_map_tag = 4;
 }
 
 message ProductL2 {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
-  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
-  plan.Expr  expr = 4;
-  int32 join_map_tag = 5;
+  plan.Expr  expr = 3;
+  int32 join_map_tag = 4;
 }
 
 message IndexJoin {
   repeated int32 result = 1;
-  repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 2;
 }
 
 message TableFunction {
@@ -377,6 +387,7 @@ message ExternalScan {
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
   map<string, int32> TbColToDataCol = 10;
+  bool strict_sql_mode = 11;
 }
 
 message StreamScan {
@@ -386,15 +397,40 @@ message StreamScan {
 }
 
 message TableScan {
-
+  repeated plan.Type  types = 1 [(gogoproto.nullable) = false];
 }
 
 message ValueScan {
-
+  string batch_block = 1;
 }
 
 message UnionAll {
 
+}
+
+message HashBuild {
+	bool NeedHashMap = 1;
+	bool HashOnPK = 2;
+	bool NeedBatches = 3;
+	bool NeedAllocateSels = 4;
+	repeated plan.Expr Conditions = 5;
+	int32 JoinMapTag = 6;
+	int32 JoinMapRefCnt = 7;
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
+}
+
+message Shufflebuild {
+	bool HashOnPK = 1;
+	bool NeedBatches = 2;
+	bool NeedAllocateSels = 3;
+	repeated plan.Expr Conditions = 4;    
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 5;
+	int32 JoinMapTag = 6;
+	int32 ShuffleIdx = 7;
+}
+
+message Indexbuild {
+	plan.RuntimeFilterSpec RuntimeFilterSpec = 1;
 }
 
 message SampleFunc {
@@ -462,6 +498,10 @@ message Instruction{
   TableScan table_scan = 45;
   ValueScan value_scan = 46;
   UnionAll union_all = 47;
+  HashBuild hash_build = 48;
+  Shufflebuild shuffle_build = 49;
+  Indexbuild index_build = 50;
+  Apply apply = 51;
 }
 
 message AnalysisList {
@@ -512,9 +552,8 @@ message ProcessInfo {
   uint32 account_id = 5;
   txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
-  repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
-  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
+  SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {
@@ -561,15 +600,14 @@ message Pipeline {
   repeated Instruction instruction_list = 6;
 
   bool is_end = 7;
-  bool is_join = 8;
-  bool is_load = 9;
-  NodeInfo node = 10;
-  int32 push_down_info = 11;
-  int32 children_count = 12;
+  bool is_load = 8;
+  NodeInfo node = 9;
+  int32 push_down_info = 10;
+  int32 children_count = 11;
+  repeated int32 channel_buffer_size = 12;
+  repeated int32 nil_batch_cnt = 13;
 
-  repeated UuidToRegIdx uuids_to_reg_idx = 13;
-  int32 build_idx = 14;
-  int32 shuffle_idx = 15;
+  repeated UuidToRegIdx uuids_to_reg_idx = 14;
 }
 
 message WrapNode {
@@ -581,4 +619,11 @@ message UuidToRegIdx {
   int32 idx = 1;
   bytes uuid = 2;
   string from_addr = 3;
+}
+
+message Apply{
+  int32 apply_type = 1;
+  repeated int32 rel_list = 2;
+  repeated int32 col_list = 3;
+  repeated plan.Type types = 4 [(gogoproto.nullable) = false];
 }

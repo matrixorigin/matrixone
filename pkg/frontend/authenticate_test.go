@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/constant"
-	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +25,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,10 +44,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -174,7 +173,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -302,7 +301,7 @@ func Test_initFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -4920,7 +4919,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 			}
 		}
 
-		err := doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		err := doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("grant database, role succ", t, func() {
@@ -5034,7 +5033,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 				}
 			}
 
-			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
 	})
@@ -5168,7 +5167,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 				}
 			}
 
-			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
 	})
@@ -5222,7 +5221,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 			}
 		}
 
-		err := doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		err := doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("revoke database, role succ", t, func() {
@@ -5336,7 +5335,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
-			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
 	})
@@ -5470,7 +5469,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
-			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
 	})
@@ -5870,7 +5869,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
@@ -5879,7 +5878,7 @@ func Test_doInterpretCall(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -5912,14 +5911,14 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -5964,7 +5963,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -5972,7 +5971,7 @@ func Test_doInterpretCall(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc,
 			ses: ses}
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6155,322 +6154,6 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 	})
 }
 
-func TestDoGrantPrivilegeImplicitly(t *testing.T) {
-	convey.Convey("do grant privilege implicitly for create database succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.CreateDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForGrantOwnershipOnDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doGrantPrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("do grant privilege implicitly for create table succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.CreateTable{}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForGrantOwnershipOnTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doGrantPrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-	convey.Convey("do grant privilege implicitly for create database succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.CreateDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForGrantOwnershipOnDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doGrantPrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("do grant privilege implicitly for create table succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.CreateTable{}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForGrantOwnershipOnTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doGrantPrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func TestDoRevokePrivilegeImplicitly(t *testing.T) {
-	convey.Convey("do revoke privilege implicitly for drop database succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.DropDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForRevokeOwnershipFromDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doRevokePrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("do grant privilege implicitly for drop table succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.DropTable{
-			Names: tree.TableNames{
-				tree.NewTableName(tree.Identifier("test1"), tree.ObjectNamePrefix{}, nil),
-			},
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForRevokeOwnershipFromTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doRevokePrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("do revoke privilege implicitly for drop database succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.DropDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForRevokeOwnershipFromDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doRevokePrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("do grant privilege implicitly for drop table succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.DropTable{
-			Names: tree.TableNames{
-				tree.NewTableName(tree.Identifier("test1"), tree.ObjectNamePrefix{}, nil),
-			},
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForRevokeOwnershipFromTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doRevokePrivilegeImplicitly(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-}
-
 func TestGetSessionSysVar(t *testing.T) {
 	convey.Convey("get session system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6645,8 +6328,8 @@ func TestSetGlobalSysVar(t *testing.T) {
 
 		// new session, both GetSession/GlobalSysVar equal 0
 		ses2 := newSes(nil, ctrl)
-		ses2.sesSysVars.sysVars["autocommit"] = 0
-		ses2.gSysVars.sysVars["autocommit"] = 0
+		ses2.sesSysVars.mp["autocommit"] = 0
+		ses2.gSysVars.mp["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
@@ -6660,14 +6343,14 @@ func TestSetGlobalSysVar(t *testing.T) {
 }
 
 func boxExprStr(s string) tree.Expr {
-	return tree.NewNumValWithType(constant.MakeString(s), s, false, tree.P_char)
+	return tree.NewNumVal(s, s, false, tree.P_char)
 }
 
 func mustUnboxExprStr(e tree.Expr) string {
 	if e == nil {
 		return ""
 	}
-	return e.(*tree.NumVal).OrigString()
+	return e.(*tree.NumVal).String()
 }
 
 func Test_doAlterUser(t *testing.T) {
@@ -6711,7 +6394,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6766,7 +6449,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6816,7 +6499,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6891,7 +6574,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6945,7 +6628,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -6999,7 +6682,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7049,7 +6732,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7100,7 +6783,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7147,7 +6830,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7201,7 +6884,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7245,7 +6928,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7293,7 +6976,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7341,7 +7024,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7399,7 +7082,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7407,9 +7090,10 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{
-			{0, "0", "open", 0},
+		sql := getAccountIdNamesSql
+		mrs := newMrsForGetAllAccounts([][]interface{}{
+			{uint64(0), "sys", "open", uint64(1), nil},
+			{uint64(1), "acc", "open", uint64(1), nil},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -7419,6 +7103,12 @@ func Test_doDropAccount(t *testing.T) {
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
+
+		sql = getPubInfoSql + " order by update_time desc, created_time desc"
+		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+		sql = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1 and sub_account_id = 1"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{})
@@ -7452,7 +7142,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7460,9 +7150,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -7499,7 +7188,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		//no result set
@@ -7507,9 +7196,8 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
-		mrs := newMrsForCheckTenant([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		sql := getAccountIdNamesSql
+		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
@@ -7697,16 +7385,13 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
-	setGlobalPu(pu)
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 
-	ioses, err := NewIOSession(serverConn, pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
 		panic(err)
 	}
@@ -7729,7 +7414,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	_ = ses.InitSystemVariables(ctx)
 
-	rm, _ := NewRoutineManager(ctx)
+	rm, _ := NewRoutineManager(ctx, "")
 	rm.baseService = new(MockBaseService)
 	ses.rm = rm
 
@@ -7742,8 +7427,7 @@ type MockBaseService struct {
 }
 
 func (m *MockBaseService) ID() string {
-	//TODO implement me
-	panic("implement me")
+	return "mock base service"
 }
 
 func (m *MockBaseService) SQLAddress() string {
@@ -7829,6 +7513,10 @@ func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 
 func (bt *backgroundExecTest) ClearExecResultSet() {
 	//bt.init()
+}
+
+func (bt *backgroundExecTest) Service() string {
+	return ""
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
@@ -8026,6 +7714,94 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForPitrRecord(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("pitr_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_UUID)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("pitr_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// bigint unsigned
+	col3 := &MysqlColumn{}
+	col3.SetName("create_account")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("create_time")
+	col4.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+
+	// modified_time
+	col5 := &MysqlColumn{}
+	col5.SetName("modified_time")
+	col5.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+
+	// level varchar(10)
+	col6 := &MysqlColumn{}
+	col6.SetName("level")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// account_id bigint unsigned
+	col7 := &MysqlColumn{}
+	col7.SetName("account_id")
+	col7.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	// account name
+	col8 := &MysqlColumn{}
+	col8.SetName("account_name")
+	col8.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// db_name
+	col9 := &MysqlColumn{}
+	col9.SetName("db_name")
+	col9.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// table_name
+	col10 := &MysqlColumn{}
+	col10.SetName("table_name")
+	col10.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	// object_id
+	col11 := &MysqlColumn{}
+	col11.SetName("object_id")
+	col11.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	// pitr length
+	// tiny int unsigned
+	col12 := &MysqlColumn{}
+	col12.SetName("pitr_length")
+	col12.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	// pitr uint
+	// varchar
+	col13 := &MysqlColumn{}
+	col13.SetName("pitr_uint")
+	col13.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+	mrs.AddColumn(col11)
+	mrs.AddColumn(col12)
+	mrs.AddColumn(col13)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForCheckUserGrant(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -8092,6 +7868,146 @@ func newMrsForCheckDatabaseTable(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("status")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("version")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("suspended_time")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetPubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("pub_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2 := &MysqlColumn{}
+	col2.SetName("database_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("database_id")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col4 := &MysqlColumn{}
+	col4.SetName("table_list")
+	col4.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col5 := &MysqlColumn{}
+	col5.SetName("account_list")
+	col5.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col6 := &MysqlColumn{}
+	col6.SetName("created_time")
+	col6.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col7 := &MysqlColumn{}
+	col7.SetName("update_time")
+	col7.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col8 := &MysqlColumn{}
+	col8.SetName("owner")
+	col8.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col9 := &MysqlColumn{}
+	col9.SetName("creator")
+	col9.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col10 := &MysqlColumn{}
+	col10.SetName("account_list")
+	col10.SetColumnType(defines.MYSQL_TYPE_TEXT)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSqlForGetSubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("sub_account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col2 := &MysqlColumn{}
+	col2.SetName("sub_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3 := &MysqlColumn{}
+	col3.SetName("sub_time")
+	col3.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col4 := &MysqlColumn{}
+	col4.SetName("pub_account_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col5 := &MysqlColumn{}
+	col5.SetName("pub_name")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col6 := &MysqlColumn{}
+	col6.SetName("pub_database")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col7 := &MysqlColumn{}
+	col7.SetName("pub_tables")
+	col7.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	col8 := &MysqlColumn{}
+	col8.SetName("pub_time")
+	col8.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col9 := &MysqlColumn{}
+	col9.SetName("pub_comment")
+	col9.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	col10 := &MysqlColumn{}
+	col10.SetName("status")
+	col10.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+	mrs.AddColumn(col10)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -8428,576 +8344,6 @@ func Test_DropDatabaseOfAccount(t *testing.T) {
 	})
 }
 
-func TestGetSqlForGetDbIdAndType(t *testing.T) {
-	ctx := context.TODO()
-	kases := []struct {
-		pubName string
-		want    string
-		err     bool
-	}{
-		{
-			pubName: "abc",
-			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc' and account_id = 0;",
-			err:     false,
-		},
-		{
-			pubName: "abc\t",
-			want:    "",
-			err:     true,
-		},
-	}
-	for _, k := range kases {
-		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true, 0)
-		require.Equal(t, k.err, err != nil)
-		require.Equal(t, k.want, sql)
-	}
-}
-
-func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
-	ctx := context.TODO()
-	kases := []struct {
-		pubName      string
-		databaseName string
-		err          bool
-	}{
-		{
-			pubName:      "abc",
-			databaseName: "abc",
-			err:          false,
-		},
-		{
-			pubName:      "abc\t",
-			databaseName: "abc",
-			err:          true,
-		},
-		{
-			pubName:      "abc",
-			databaseName: "abc\t",
-			err:          true,
-		},
-	}
-	for _, k := range kases {
-		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, "", "", 1, 1, "", true)
-		require.Equal(t, k.err, err != nil)
-	}
-}
-
-func TestDoCreatePublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	sa := &tree.CreatePublication{
-		Name:     "pub1",
-		Database: "db1",
-		Comment:  "124",
-		AccountsSet: &tree.AccountsSetOption{
-			SetAccounts: tree.IdentifierList{"a1", "a2"},
-		},
-	}
-	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true, 0)
-	require.NoError(t, err)
-	bh := &backgroundExecTest{}
-	bh.init()
-	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
-	require.NoError(t, err)
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result[sql1] = &MysqlResultSet{
-		Columns: []Column{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "dat_id",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "dat_type",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-		Data: [][]interface{}{{0, ""}},
-	}
-	bh.sql2result[sql2] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	err = doCreatePublication(ctx, ses, sa)
-	require.NoError(t, err)
-}
-
-func TestDoDropPublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	sa := &tree.DropPublication{
-		Name: "pub1",
-	}
-	sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
-	require.NoError(t, err)
-	sql2, err := getSqlForDropPubInfo(ctx, string(sa.Name), true)
-	require.NoError(t, err)
-	bh := &backgroundExecTest{}
-	bh.init()
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result[sql1] = &MysqlResultSet{
-		Data: [][]any{{"db1", 0, "a1, a2", "124"}},
-	}
-	bh.sql2result[sql2] = nil
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	err = doDropPublication(ctx, ses, sa)
-	require.NoError(t, err)
-
-}
-
-func TestDoAlterPublication(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-	ses.SetTenantInfo(tenant)
-	columns := []Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "account_list",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "comment",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database_name",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database_id",
-				columnType: defines.MYSQL_TYPE_LONGLONG,
-			},
-		},
-	}
-	dbColumns := []Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "dat_id",
-				columnType: defines.MYSQL_TYPE_LONGLONG,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "dat_type",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-	}
-	kases := []struct {
-		pubName     string
-		dbName      string
-		dbId        uint64
-		dbType      string
-		comment     string
-		accountsSet *tree.AccountsSetOption
-		accountList string
-		data        [][]any
-		err         bool
-	}{
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				All: true,
-			},
-			accountList: "121",
-			data:        [][]any{{"all", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				AddAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				SetAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			accountsSet: &tree.AccountsSetOption{
-				DropAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "all",
-			data:        [][]any{{"all", "121", "db1", 1}},
-			err:         true,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			dbName:  "db2",
-			dbId:    2,
-			dbType:  "",
-			data:    [][]any{{"all", "121", "db1", 1}},
-			err:     false,
-		},
-		{
-			pubName: "pub1",
-			comment: "124",
-			dbName:  "db2",
-			dbId:    2,
-			dbType:  "",
-			accountsSet: &tree.AccountsSetOption{
-				AddAccounts: tree.IdentifierList{
-					tree.Identifier("a1"),
-				},
-			},
-			accountList: "a0,a1",
-			data:        [][]any{{"a0", "121", "db1", 1}},
-			err:         false,
-		},
-	}
-
-	for _, kase := range kases {
-		sa := &tree.AlterPublication{
-			Name:        tree.Identifier(kase.pubName),
-			Comment:     kase.comment,
-			AccountsSet: kase.accountsSet,
-			DbName:      kase.dbName,
-		}
-		sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
-		require.NoError(t, err)
-
-		sql3, err := getSqlForGetDbIdAndType(ctx, kase.dbName, true, 0)
-		require.NoError(t, err)
-
-		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, kase.dbName, kase.dbId, true)
-		require.NoError(t, err)
-
-		bh := &backgroundExecTest{}
-		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result[sql1] = &MysqlResultSet{
-			Data:    kase.data,
-			Columns: columns,
-		}
-		bh.sql2result[sql2] = nil
-		bh.sql2result[sql3] = &MysqlResultSet{
-			Data:    [][]any{{kase.dbId, kase.dbType}},
-			Columns: dbColumns,
-		}
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		err = doAlterPublication(ctx, ses, sa)
-		if kase.err {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-		}
-	}
-
-}
-
-func TestCheckSubscriptionValid(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ses := newTestSession(t, ctrl)
-	_ = ses.SetGlobalSysVar(context.TODO(), "lower_case_table_names", int64(1))
-	defer ses.Close()
-
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
-
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	pu.SV.SetDefaultValues()
-	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	rm, _ := NewRoutineManager(ctx)
-	ses.rm = rm
-
-	proc := testutil.NewProcess()
-	proc.Base.FileService = getGlobalPu().FileService
-	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
-		proc: proc,
-	}
-	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
-
-	columns := [][]Column{
-		{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "account_id",
-					columnType: defines.MYSQL_TYPE_LONGLONG,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "status",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-		{
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "database_name",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "all_account",
-					columnType: defines.MYSQL_TYPE_BOOL,
-				},
-			},
-			&MysqlColumn{
-				ColumnImpl: ColumnImpl{
-					name:       "account_list",
-					columnType: defines.MYSQL_TYPE_VARCHAR,
-				},
-			},
-		},
-	}
-
-	kases := []struct {
-		createSql string
-
-		accName   string
-		pubName   string
-		pubExists bool
-		accExists bool
-
-		subName string
-
-		accId     uint32
-		accStatus string
-
-		databaseName string
-		accountList  string
-
-		sqls  []string
-		datas [][][]interface{}
-
-		err bool
-	}{
-		{
-			createSql: "create database sub1 from acc0 publication",
-			accName:   "acc0",
-			pubName:   "",
-			subName:   "sub1",
-			accId:     1,
-			err:       true,
-		},
-		{
-			createSql: "create database sub1 from sys publication pub1",
-			accName:   "sys",
-			pubName:   "pub1",
-			subName:   "sub1",
-			accId:     0,
-			accStatus: "",
-			err:       true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "all",
-
-			sqls: []string{},
-			err:  false,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  false,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: false,
-			accId:     1,
-			accStatus: "",
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: true,
-			accExists: true,
-			accId:     1,
-			accStatus: tree.AccountStatusSuspend.String(),
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-		{
-			createSql: "create database sub1 from acc0 publication pub1",
-			accName:   "acc0",
-			pubName:   "pub1",
-			subName:   "sub1",
-			pubExists: false,
-			accExists: true,
-			accId:     1,
-			accStatus: tree.AccountStatusSuspend.String(),
-
-			databaseName: "t1",
-			accountList:  "sys",
-
-			sqls: []string{},
-			err:  true,
-		},
-	}
-
-	initData := func(idx int) {
-		sql1, _ := getSqlForAccountIdAndStatus(ctx, kases[idx].accName, true)
-		sql2, _ := getSqlForPubInfoForSub(ctx, kases[idx].pubName, true)
-		kases[idx].sqls = []string{
-			sql1, sql2,
-		}
-		kases[idx].datas = [][][]interface{}{
-			{{kases[idx].accId, kases[idx].accStatus}},
-			{{kases[idx].databaseName, kases[idx].accountList}},
-		}
-
-		if !kases[idx].accExists {
-			kases[idx].datas[0] = nil
-		}
-		if !kases[idx].pubExists {
-			kases[idx].datas[1] = nil
-		}
-	}
-
-	for idx := range kases {
-		initData(idx)
-
-		bh := &backgroundExecTest{}
-		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		for i := range kases[idx].sqls {
-			bh.sql2result[kases[idx].sqls[i]] = &MysqlResultSet{
-				Data:    kases[idx].datas[i],
-				Columns: columns[i],
-			}
-		}
-
-		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
-		if kases[idx].err {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-		}
-	}
-
-}
-
 func TestDoCheckRole(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -9070,7 +8416,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9110,7 +8456,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9158,7 +8504,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9201,7 +8547,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9242,7 +8588,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9290,7 +8636,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9354,7 +8700,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9410,7 +8756,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9468,7 +8814,7 @@ func TestDoAlterAccountConfig(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9525,7 +8871,7 @@ func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9576,7 +8922,7 @@ func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9627,7 +8973,7 @@ func TestGetVersionCompatibility(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9674,7 +9020,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9720,7 +9066,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9797,7 +9143,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9851,7 +9197,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9905,7 +9251,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9957,7 +9303,7 @@ func TestDoDropStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10013,7 +9359,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10029,7 +9375,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -10071,7 +9417,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10087,7 +9433,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -10131,7 +9477,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10147,7 +9493,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: true,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "file:///load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -10189,7 +9535,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10205,10 +9551,10 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			Status: tree.StageStatus{
 				Exist:  true,
@@ -10249,7 +9595,7 @@ func TestDoCreateStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10265,7 +9611,7 @@ func TestDoCreateStage(t *testing.T) {
 		cs := &tree.CreateStage{
 			IfNotExists: false,
 			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
+			Url:         "s3://load/files/",
 			Credentials: tree.StageCredentials{
 				Exist: false,
 			},
@@ -10309,7 +9655,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10327,7 +9673,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -10372,7 +9718,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10393,7 +9739,7 @@ func TestDoAlterStage(t *testing.T) {
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10435,7 +9781,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10453,7 +9799,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -10496,7 +9842,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10514,7 +9860,7 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist: false,
@@ -10557,7 +9903,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10575,11 +9921,11 @@ func TestDoAlterStage(t *testing.T) {
 			Name:        tree.Identifier("my_stage_test"),
 			UrlOption: tree.StageUrl{
 				Exist: true,
-				Url:   "'s3://load/files/'",
+				Url:   "s3://load/files/",
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10619,7 +9965,7 @@ func TestDoAlterStage(t *testing.T) {
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10640,7 +9986,7 @@ func TestDoAlterStage(t *testing.T) {
 			},
 			CredentialsOption: tree.StageCredentials{
 				Exist:       true,
-				Credentials: []string{"'AWS_KEY_ID'", "'1a2b3c'", "'AWS_SECRET_KEY'", "'4x5y6z'"},
+				Credentials: []string{"AWS_KEY_ID", "1a2b3c", "AWS_SECRET_KEY", "4x5y6z"},
 			},
 			StatusOption: tree.StageStatus{
 				Exist: false,
@@ -10665,307 +10011,6 @@ func TestDoAlterStage(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-}
-
-func TestDoCheckFilePath(t *testing.T) {
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "/mnt/disk1/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForCheckStageStatus(ctx, "enabled")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "/mnt/disk1/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForCheckStageStatus(ctx, "enabled")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"/tmp", "disabled"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doCheckFilePath success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.Select{
-			Ep: &tree.ExportParam{
-				FilePath: "stage1:/t1.csv",
-			},
-		}
-		ses.InitExportConfig(cs.Ep)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStageStatusWithStageName(ctx, "stage1")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"/tmp", "enabled"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doCheckFilePath(ctx, ses, cs.Ep)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
-	})
 }
 
 func TestGetLabelPart(t *testing.T) {
@@ -11044,10 +10089,9 @@ func TestUpload(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		proc := testutil.NewProc()
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go writeExceptResult(clientConn, []*Packet{
+		tConn := &testConn{}
+		defer tConn.Close()
+		writeExceptResult(tConn, []*Packet{
 			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
 			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
 			{Length: 0, Payload: []byte(""), SequenceID: 3},
@@ -11065,9 +10109,9 @@ func TestUpload(t *testing.T) {
 		pu.SV.SaveQueryResult = "on"
 		//file service
 		pu.FileService = fs
-		setGlobalPu(pu)
+		setPu("", pu)
 
-		ioses, err := NewIOSession(serverConn, pu)
+		ioses, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -11114,9 +10158,9 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		setGlobalPu(pu)
+		setPu("", pu)
 
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11160,9 +10204,9 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11206,9 +10250,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11260,9 +10304,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11314,9 +10358,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11366,9 +10410,9 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11422,9 +10466,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11483,9 +10527,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11544,9 +10588,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11609,9 +10653,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11674,9 +10718,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11740,9 +10784,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11806,9 +10850,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11872,9 +10916,9 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11917,9 +10961,9 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11961,9 +11005,9 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		setGlobalPu(pu)
+		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx)
+		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11988,5 +11032,99 @@ func TestCheckTimeStampValid(t *testing.T) {
 		valid, err := checkTimeStampValid(ctx, ses, 1713235646865937000)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(valid, convey.ShouldBeTrue)
+	})
+}
+
+func Test_getSqlForCheckDupPitrFormat(t *testing.T) {
+	sql := getSqlForCheckDupPitrFormat(123, 456)
+	assert.Equal(t, "select pitr_id from mo_catalog.mo_pitr where create_account = 123 and obj_id = 456;", sql)
+}
+
+func Test_checkPitrDup(t *testing.T) {
+	convey.Convey("checkPitrDup false", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.CreatePitr{
+			Level: tree.PITRLEVELACCOUNT,
+		}
+
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		isDup, err := checkPitrDup(ctx, bh, tenant.Tenant, 0, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(isDup, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("checkPitrDup true", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		stmt := &tree.CreatePitr{
+			Level: tree.PITRLEVELACCOUNT,
+		}
+
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{1},
+		})
+		bh.sql2result[sql] = mrs
+
+		isDup, err := checkPitrDup(ctx, bh, tenant.Tenant, 0, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(isDup, convey.ShouldBeTrue)
 	})
 }

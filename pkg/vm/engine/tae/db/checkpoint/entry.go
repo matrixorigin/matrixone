@@ -38,12 +38,14 @@ type CheckpointEntry struct {
 	entryType  EntryType
 	cnLocation objectio.Location
 	tnLocation objectio.Location
-	lastPrint  time.Time
-	waterLine  time.Duration
 	version    uint32
 
 	ckpLSN      uint64
 	truncateLSN uint64
+
+	// only for new entry logic procedure
+	bornTime   time.Time
+	refreshCnt uint32
 }
 
 func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -53,9 +55,8 @@ func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *Checkpo
 		end:       end,
 		state:     ST_Pending,
 		entryType: typ,
-		lastPrint: time.Now(),
-		waterLine: time.Minute * 4,
 		version:   logtail.CheckpointCurrentVersion,
+		bornTime:  time.Now(),
 	}
 }
 
@@ -65,24 +66,26 @@ func (e *CheckpointEntry) SetVersion(version uint32) {
 	e.version = version
 }
 
-func (e *CheckpointEntry) IncrWaterLine() {
-	e.Lock()
-	defer e.Unlock()
-	e.waterLine += time.Minute * 4
-}
 func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 	e.ckpLSN = ckpLSN
 	e.truncateLSN = truncateLSN
 }
-func (e *CheckpointEntry) CheckPrintTime() bool {
+func (e *CheckpointEntry) DeferRetirement() {
+	e.Lock()
+	defer e.Unlock()
+	e.refreshCnt++
+}
+func (e *CheckpointEntry) Age() time.Duration {
 	e.RLock()
 	defer e.RUnlock()
-	return time.Since(e.lastPrint) > e.waterLine
+	return time.Since(e.bornTime)
+}
+func (e *CheckpointEntry) TooOld() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return time.Since(e.bornTime) > time.Minute*4*time.Duration(e.refreshCnt+1)
 }
 func (e *CheckpointEntry) LSNString() string {
-	if e.version < logtail.CheckpointVersion7 {
-		return fmt.Sprintf("version too small: v%d", e.version)
-	}
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
 }
 
@@ -103,13 +106,13 @@ func (e *CheckpointEntry) IsCommitted() bool {
 	return e.state == ST_Finished
 }
 func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
-	if e.start.Greater(&to) || e.end.Less(&from) {
+	if e.start.GT(&to) || e.end.LT(&from) {
 		return false
 	}
 	return true
 }
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
-	return e.end.LessEq(&ts)
+	return e.end.LE(&ts)
 }
 func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
@@ -132,6 +135,10 @@ func (e *CheckpointEntry) GetTNLocation() objectio.Location {
 
 func (e *CheckpointEntry) GetVersion() uint32 {
 	return e.version
+}
+
+func (e *CheckpointEntry) GetTruncateLsn() uint64 {
+	return e.truncateLSN
 }
 
 func (e *CheckpointEntry) SetState(state State) (ok bool) {
@@ -175,6 +182,9 @@ func (e *CheckpointEntry) GetType() EntryType {
 }
 
 func (e *CheckpointEntry) String() string {
+	if e == nil {
+		return "nil"
+	}
 	t := "I"
 	if !e.IsIncremental() {
 		t = "G"
@@ -189,10 +199,7 @@ func (e *CheckpointEntry) Prefetch(
 	data *logtail.CheckpointData,
 ) (err error) {
 	if err = data.PrefetchFrom(
-		ctx,
-		e.version,
 		fs.Service,
-		e.tnLocation,
 	); err != nil {
 		return
 	}
@@ -227,8 +234,6 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 ) (data *logtail.CheckpointData, err error) {
 	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
-		ctx,
-		e.version,
 		fs.Service,
 		e.tnLocation,
 	); err != nil {
@@ -249,7 +254,7 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
 }
 
-func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
+func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
 	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
@@ -280,7 +285,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
 		return
 	}
-	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
+	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
 	return
 }
 

@@ -17,46 +17,26 @@ package fileservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
-	cache       *memorycache.Cache
+	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
 }
 
 func NewMemCache(
-	dataCache *memorycache.Cache,
-	counterSets []*perfcounter.CounterSet,
-) *MemCache {
-	ret := &MemCache{
-		cache:       dataCache,
-		counterSets: counterSets,
-	}
-	return ret
-}
-
-func NewMemoryCache(
 	capacity fscache.CapacityFunc,
-	checkOverlaps bool,
 	callbacks *CacheCallbacks,
-) *memorycache.Cache {
+	counterSets []*perfcounter.CounterSet,
+	name string,
+) *MemCache {
 
-	var overlapChecker *interval.OverlapChecker
-	if checkOverlaps {
-		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
-	}
-
-	postSetFn := func(key CacheKey, value fscache.Data) {
-		if overlapChecker != nil {
-			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
-				panic(err)
-			}
-		}
+	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Retain()
 
 		if callbacks != nil {
 			for _, fn := range callbacks.PostSet {
@@ -65,7 +45,9 @@ func NewMemoryCache(
 		}
 	}
 
-	postGetFn := func(key CacheKey, value fscache.Data) {
+	postGetFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Retain()
+
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -73,12 +55,8 @@ func NewMemoryCache(
 		}
 	}
 
-	postEvictFn := func(key CacheKey, value fscache.Data) {
-		if overlapChecker != nil {
-			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
-				panic(err)
-			}
-		}
+	postEvictFn := func(key fscache.CacheKey, value fscache.Data) {
+		value.Release()
 
 		if callbacks != nil {
 			for _, fn := range callbacks.PostEvict {
@@ -86,14 +64,24 @@ func NewMemoryCache(
 			}
 		}
 	}
-	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMemoryCacheAllocator())
+
+	capacityFunc := func() int64 {
+		// read from global hint
+		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
+	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+
+	return &MemCache{
+		cache:       dataCache,
+		counterSets: counterSets,
+	}
 }
 
 var _ IOVectorCache = new(MemCache)
-
-func (m *MemCache) Alloc(n int) fscache.Data {
-	return m.cache.Alloc(n)
-}
 
 func (m *MemCache) Read(
 	ctx context.Context,
@@ -114,9 +102,6 @@ func (m *MemCache) Read(
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Memory.Read.Add(numRead)
 			c.FileService.Cache.Memory.Hit.Add(numHit)
-			c.FileService.Cache.Memory.Capacity.Swap(m.cache.Capacity())
-			c.FileService.Cache.Memory.Used.Swap(m.cache.Used())
-			c.FileService.Cache.Memory.Available.Swap(m.cache.Available())
 		}, m.counterSets...)
 	}()
 
@@ -129,7 +114,7 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		key := CacheKey{
+		key := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,
@@ -170,7 +155,7 @@ func (m *MemCache) Update(
 			continue
 		}
 
-		key := CacheKey{
+		key := fscache.CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Sz:     entry.Size,
@@ -191,4 +176,13 @@ func (m *MemCache) DeletePaths(
 ) error {
 	m.cache.DeletePaths(ctx, paths)
 	return nil
+}
+
+func (m *MemCache) Evict(done chan int64) {
+	m.cache.Evict(done)
+}
+
+func (m *MemCache) Close() {
+	m.Flush()
+	allMemoryCaches.Delete(m)
 }

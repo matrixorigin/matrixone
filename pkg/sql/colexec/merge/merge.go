@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,8 +33,17 @@ func (merge *Merge) OpType() vm.OpType {
 }
 
 func (merge *Merge) Prepare(proc *process.Process) error {
-	merge.ctr = new(container)
-	merge.ctr.InitReceiver(proc, true)
+	if merge.OpAnalyzer == nil {
+		merge.OpAnalyzer = process.NewAnalyzer(merge.GetIdx(), merge.IsFirst, merge.IsLast, "merge")
+	} else {
+		merge.OpAnalyzer.Reset()
+	}
+
+	if merge.Partial {
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+	} else {
+		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
+	}
 	return nil
 }
 
@@ -44,37 +52,28 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	var msg *process.RegisterMessage
-	result := vm.NewCallResult()
-	if merge.ctr.buf != nil {
-		proc.PutBatch(merge.ctr.buf)
-		merge.ctr.buf = nil
-	}
+	analyzer := merge.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
+	var info error
+	result := vm.NewCallResult()
 	for {
-		msg = merge.ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			result.Status = vm.ExecStop
-			return result, msg.Err
+		result.Batch, info = merge.ctr.receiver.GetNextBatch(analyzer)
+		if info != nil {
+			return vm.CancelResult, info
 		}
-		if msg.Batch == nil {
+
+		if result.Batch == nil {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-
-		merge.ctr.buf = msg.Batch
-		if merge.ctr.buf.Last() && merge.SinkScan {
-			proc.PutBatch(merge.ctr.buf)
+		if merge.SinkScan && result.Batch.Last() {
 			continue
 		}
 		break
 	}
 
-	anal.Input(merge.ctr.buf, merge.GetIsFirst())
-	anal.Output(merge.ctr.buf, merge.GetIsLast())
-	result.Batch = merge.ctr.buf
+	analyzer.Output(result.Batch)
 	return result, nil
 }

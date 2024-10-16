@@ -54,6 +54,17 @@ const (
 )
 
 var (
+	needSkipDbs = map[string]bool{
+		"mysql":              true,
+		"system":             true,
+		"system_metrics":     true,
+		"mo_task":            true,
+		"mo_debug":           true,
+		"information_schema": true,
+		catalog.MO_CATALOG:   true,
+	}
+)
+var (
 	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
 	fuzzyNonCompoundCheck = "select %s from `%s`.`%s` where %s in (%s) group by %s having count(*) > 1 limit 1;"
 	fuzzyCompoundCheck    = "select serial(%s) from `%s`.`%s` where %s group by serial(%s) having count(*) > 1 limit 1;"
@@ -70,12 +81,14 @@ var (
 )
 
 var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
-	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
+	deleteMoIndexesWithDatabaseIdFormat                 = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat                    = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat        = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	deleteMoRetentionWithDatabaseNameFormat             = `delete from mo_catalog.mo_retention where database_name = '%s';`
+	deleteMoRetentionWithDatabaseNameAndTableNameFormat = `delete from mo_catalog.mo_retention where database_name = '%s' and table_name = '%s';`
+	updateMoIndexesVisibleFormat                        = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
+	updateMoIndexesTruncateTableFormat                  = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
+	updateMoIndexesAlgoParams                           = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 )
 
 var (

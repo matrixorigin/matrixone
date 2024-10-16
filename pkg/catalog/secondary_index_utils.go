@@ -117,7 +117,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		if opType != IndexAlgoParamOpType_l2 {
 			//	opType != IndexAlgoParamOpType_ip &&
 			//	opType != IndexAlgoParamOpType_cos
-			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
+			return "", moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'", IndexAlgoParamOpType_l2)
 			//IndexAlgoParamOpType_ip, , IndexAlgoParamOpType_cos)
 
 		}
@@ -193,7 +193,7 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 				//opType != IndexAlgoParamOpType_ip &&
 				//opType != IndexAlgoParamOpType_cos &&
 
-				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s'",
+				return nil, moerr.NewInternalErrorNoCtxf("invalid op_type. not of type '%s'",
 					IndexAlgoParamOpType_l2,
 					//IndexAlgoParamOpType_ip, IndexAlgoParamOpType_cos,
 				)

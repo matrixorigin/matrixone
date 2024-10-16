@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -52,12 +51,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, t := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	_, t := ctx.Resolve(dbName, tblName, nil)
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if t.TableType == catalog.SystemSourceRel {
-		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
+		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
@@ -81,6 +80,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
+		builder.isRestore = true
 		oldSnapshot := builder.compCtx.GetSnapshot()
 		builder.compCtx.SetSnapshot(&Snapshot{
 			Tenant: &plan.SnapshotTenant{
@@ -324,7 +324,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
-	reCheckifNeedLockWholeTable(builder, stmt.IsRestore)
+	reCheckifNeedLockWholeTable(builder)
 
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -356,7 +356,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		}
 	} else {
 		for _, column := range stmt.Columns {
-			colName := string(column)
+			colName := strings.ToLower(string(column))
 			if _, ok := colToIdx[colName]; !ok {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
@@ -669,6 +669,17 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		return nil, nil
 	}
 
+	// insert pk col with default value, skip build pk filter expr
+	insertColMap := make(map[string]bool)
+	for _, name := range insertColsNameFromStmt {
+		insertColMap[name] = true
+	}
+	for col := range lmap.m {
+		if _, ok := insertColMap[col]; !ok {
+			return nil, nil
+		}
+	}
+
 	// colExprs will store the constant value expressions (or UUID value) for each primary key column by the order in insert value SQL
 	// that is, the key part of pkPosInValues, more info see the comment of func getPkOrderInValues
 	colExprs := make([][]*Expr, len(lmap.m))
@@ -702,7 +713,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				// handles UUID types specifically by creating a VARCHAR type and casting the UUID to a string.
 				if bat.Vecs[idx].GetType().Oid == types.T_uuid {
 					// we have not uuid type in plan.Const. so use string & cast string to uuid
-					val := vector.MustFixedCol[types.Uuid](bat.Vecs[idx])[i]
+					val := vector.MustFixedColWithTypeCheck[types.Uuid](bat.Vecs[idx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
 						Expr: &plan.Expr_Lit{
@@ -847,8 +858,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
+			vecLength := vec.Length()
 			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
+			vec.Free(proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -858,7 +871,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
-							Len:  int32(vec.Length()),
+							Len:  int32(vecLength),
 							Data: data,
 						},
 					},

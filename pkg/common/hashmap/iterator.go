@@ -21,12 +21,11 @@ import (
 )
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = itr.keys[i][:0]
-		}
-	}()
+	for i := 0; i < count; i++ {
+		itr.keys[i] = itr.keys[i][:0]
+	}
 	copy(itr.zValues[:count], OneInt64s[:count])
+	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
 	itr.mp.hashMap.FindStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
 	return itr.values[:count], itr.zValues[:count]
@@ -37,7 +36,7 @@ func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 	keys := itr.keys
 	defer func() { keys[0] = keys[0][:0] }()
 	itr.encodeHashKeys(vecs, row, 1)
-	if err := itr.mp.hashMap.InsertStringBatch(itr.strHashStates, keys[:1], itr.values[:1], itr.m); err != nil {
+	if err := itr.mp.hashMap.InsertStringBatch(itr.strHashStates, keys[:1], itr.values[:1]); err != nil {
 		return false, err
 	}
 	if itr.values[0] > itr.mp.rows {
@@ -59,9 +58,9 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	itr.encodeHashKeys(vecs, start, count)
 
 	if itr.mp.hasNull {
-		err = itr.mp.hashMap.InsertStringBatch(itr.strHashStates, itr.keys[:count], itr.values, itr.m)
+		err = itr.mp.hashMap.InsertStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
 	} else {
-		err = itr.mp.hashMap.InsertStringBatchWithRing(itr.zValues, itr.strHashStates, itr.keys[:count], itr.values, itr.m)
+		err = itr.mp.hashMap.InsertStringBatchWithRing(itr.zValues, itr.strHashStates, itr.keys[:count], itr.values)
 	}
 
 	vs, zvs := itr.values[:count], itr.zValues[:count]
@@ -70,13 +69,12 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 }
 
 func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = 0
-		}
-		copy(itr.keyOffs[:count], zeroUint32)
-	}()
+	for i := 0; i < count; i++ {
+		itr.keys[i] = 0
+	}
+	copy(itr.keyOffs[:count], zeroUint32)
 	copy(itr.zValues[:count], OneInt64s[:count])
+	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
 	copy(itr.hashes[:count], zeroUint64[:count])
 	itr.mp.hashMap.FindBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values[:count])
@@ -101,9 +99,9 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	itr.encodeHashKeys(vecs, start, count)
 	copy(itr.hashes[:count], zeroUint64[:count])
 	if itr.mp.hasNull {
-		err = itr.mp.hashMap.InsertBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values, itr.m)
+		err = itr.mp.hashMap.InsertBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values)
 	} else {
-		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.zValues, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values, itr.m)
+		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.zValues, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values)
 	}
 	vs, zvs := itr.values[:count], itr.zValues[:count]
 	updateHashTableRows(itr.mp, vs, zvs)

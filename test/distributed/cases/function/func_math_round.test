@@ -252,3 +252,24 @@ insert into t2 select round(984798.123), round(-980.409);
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (round(t1.b) = round(t2.b));
 drop table t1;
 drop table t2;
+
+select round(1.000,2);
+
+drop table if exists t1;
+create table t1(a int ,b decimal(10,5));
+insert into t1 values(1,0.5);
+insert into t1 values(2,0.499);
+insert into t1 values(3,0.501);
+insert into t1 values(4,20.5);
+insert into t1 values(5,20.499);
+insert into t1 values(6,13.500);
+insert into t1 values(7,-0.500);
+insert into t1 values(8,-0.499);
+insert into t1 values(9,-0.501);
+insert into t1 values(10,-20.499);
+insert into t1 values(11,-20.500);
+insert into t1 values(12,-13.500);
+insert into t1 values (13, 20.89123);
+insert into t1 values (14, 23.40123);
+insert into t1 values (15, 123.45678);
+select a, b, round(b,2) from t1;

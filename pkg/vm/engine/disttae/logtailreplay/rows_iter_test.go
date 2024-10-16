@@ -18,12 +18,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
@@ -156,15 +159,22 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		// delete number i at (deleteAt+i) with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time"},
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -187,8 +197,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 		{
 			// deleted rows iter
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -232,7 +243,12 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		// duplicate delete
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
 		}
@@ -241,14 +257,17 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
 
 	for i := 0; i < num; i++ {
 		{
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -303,7 +322,12 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		// delete number i at the same time
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 		}
@@ -312,6 +336,8 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -375,7 +401,12 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		pkVec := vector.NewVec(types.T_int32.ToType())
+
 		for i := 0; i < num; i++ {
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
+			vector.AppendFixed(pkVec, int32(i), false, pool)
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 		}
@@ -384,6 +415,8 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -467,11 +500,14 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		tombStoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+
 		primaryKeyVec := vector.NewVec(types.T_int64.ToType())
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
 			vector.AppendFixed(primaryKeyVec, int64(i), false, pool)
+			vector.AppendFixed(tombStoneRowIDVec, types.RandomRowid(), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "i"},
@@ -479,6 +515,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(primaryKeyVec), // with primary key
+				mustVectorToProto(tombStoneRowIDVec),
 			},
 		}, packer, pool)
 	}
@@ -491,4 +528,37 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		require.True(t, modified)
 	}
 
+}
+
+func TestPrefixIn(t *testing.T) {
+	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{
+		Degree: 64,
+	})
+
+	for i := 0; i < 10; i++ {
+		pkTree.Set(&PrimaryIndexEntry{
+			Bytes: []byte{byte(i)},
+		})
+	}
+
+	var encodes = [][]byte{{0}, {2}, {4}}
+
+	for i := 10; i < 150; i++ {
+		encodes = append(encodes, []byte{byte(i)})
+	}
+
+	// len(encodes) >> len(pkTree) to trigger Scan all
+	spec := InKind(encodes, function.PREFIX_IN)
+
+	pkIter := &primaryKeyIter{
+		primaryIndex: pkTree,
+		iter:         pkTree.Iter(),
+	}
+
+	spec.Move(pkIter)
+	require.Equal(t, []byte{0}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{2}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
 }

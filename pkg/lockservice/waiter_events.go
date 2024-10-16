@@ -291,10 +291,11 @@ func (mw *waiterEvents) addToOrphanCheck(
 	w *waiter,
 	wait time.Duration,
 ) {
+	ck := *w.conflictKey.Load()
 	v := checkOrphan{
 		wait: wait,
-		key:  w.conflictKey,
-		lt:   w.lt,
+		key:  ck,
+		lt:   w.lt.Load(),
 		txn:  w.txn,
 	}
 

@@ -15,6 +15,7 @@
 package timewin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,78 +31,72 @@ import (
 var _ vm.Operator = new(TimeWin)
 
 const (
-	initTag     = 0
-	evalTag     = 1
-	nextTag     = 2
-	dataTag     = 3
-	endTag      = 4
-	evalLastCur = 5
-	evalLastPre = 6
-	resultTag   = 7
-)
-
-type preType int
-
-const (
-	withoutPre preType = iota
-	hasPre
-)
-
-type curType int
-
-const (
-	withoutGrow curType = iota
-	hasGrow
+	receive     = 0
+	fill        = 1
+	end         = 2
+	flush       = 3
+	nextWindow  = 4
+	nextBatch   = 5
+	firstWindow = 6
+	interval    = 7
 )
 
 type container struct {
-	rbat   *batch.Batch
+	bat    *batch.Batch
 	colCnt int
-
-	bats []*batch.Batch
+	i      int
 
 	aggExe []colexec.ExpressionExecutor
 	aggVec [][]*vector.Vector
 
 	tsExe colexec.ExpressionExecutor
 	tsVec []*vector.Vector
-
 	tsOid types.T
-	tsTyp *types.Type
+
+	startExe colexec.ExpressionExecutor
+	startVec *vector.Vector
+	endExe   colexec.ExpressionExecutor
+	endVec   *vector.Vector
 
 	status int32
-
-	start     int64
-	end       int64
-	nextStart int64
-
-	pre    preType
-	preRow int
-	preIdx int
-
-	cur    curType
-	curRow int
-	curIdx int
+	end    bool
 
 	group int
 	aggs  []aggexec.AggFuncExec
 
-	wstart []int64
-	wend   []int64
+	wStart []types.Datetime
+	wEnd   []types.Datetime
 
-	calRes func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
-	eval   func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
+	curVecIdx int
+	curRowIdx int
+
+	left  types.Datetime
+	right types.Datetime
+
+	preVecIdx int
+	preRowIdx int
+
+	nextLeft  types.Datetime
+	nextRight types.Datetime
+
+	withoutFill bool
+
+	last    bool
+	lastVal types.Datetime
 }
 
 type TimeWin struct {
-	ctr *container
+	ctr container
 
 	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
 
-	Interval *Interval
-	Sliding  *Interval
-	Ts       *plan.Expr
+	TsType  plan.Type
+	Ts      *plan.Expr
+	EndExpr *plan.Expr
+
+	Interval types.Datetime
+	Sliding  types.Datetime
 
 	WStart bool
 	WEnd   bool
@@ -140,57 +135,143 @@ func (timeWin *TimeWin) Release() {
 	}
 }
 
-type Interval struct {
-	Typ types.IntervalType
-	Val int64
+func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &timeWin.ctr
+	ctr.resetExes()
+	ctr.resetParam(timeWin)
 }
 
-func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	timeWin.Free(proc, pipelineFailed, err)
+func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) error {
+	str := interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
+	typ, err := types.IntervalTypeOf(str)
+	if err != nil {
+		return err
+	}
+	val1 := interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	timeWin.Interval, err = calcDatetime(val1, typ)
+	if err != nil {
+		return err
+	}
+
+	if sliding != nil {
+		str = sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
+		typ, err = types.IntervalTypeOf(str)
+		if err != nil {
+			return err
+		}
+		val2 := sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+		timeWin.Sliding, err = calcDatetime(val2, typ)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func calcDatetime(diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	var num int64
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
+	if err != nil {
+		return 0, err
+	}
+	switch iTyp {
+	case types.Second:
+		num = diff * types.MicroSecsPerSec
+	case types.Minute:
+		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
+	case types.Hour:
+		num = diff * types.SecsPerHour * types.MicroSecsPerSec
+	case types.Day:
+		num = diff * types.SecsPerDay * types.MicroSecsPerSec
+	default:
+		return 0, moerr.NewNotSupportedNoCtx("Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit")
+	}
+	return types.Datetime(num), nil
 }
 
 func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := timeWin.ctr
-	if ctr != nil {
-		ctr.cleanBatch(proc.Mp())
-		ctr.cleanTsVector()
-		ctr.cleanAggVector()
-		ctr.cleanWin()
-		timeWin.ctr = nil
-	}
+	ctr := &timeWin.ctr
+	ctr.freeBatch(proc.Mp())
+	ctr.freeVector(proc.Mp())
+	ctr.freeExes()
+	ctr.freeAgg()
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
-	}
-	for _, b := range ctr.bats {
-		if b != nil {
-			b.Clean(mp)
+func (ctr *container) resetExes() {
+	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.ResetForNextQuery()
 		}
 	}
+	if ctr.tsExe != nil {
+		ctr.tsExe.ResetForNextQuery()
+	}
+	if ctr.startExe != nil {
+		ctr.startExe.ResetForNextQuery()
+	}
+	if ctr.endExe != nil {
+		ctr.endExe.ResetForNextQuery()
+	}
 }
 
-func (ctr *container) cleanTsVector() {
+func (ctr *container) resetParam(timeWin *TimeWin) {
+	if timeWin.EndExpr != nil {
+		ctr.status = interval
+	} else {
+		ctr.status = receive
+	}
+	ctr.end = false
+	ctr.group = -1
+	ctr.wStart = nil
+	ctr.wEnd = nil
+}
+
+func (ctr *container) freeExes() {
+	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.Free()
+		}
+	}
 	if ctr.tsExe != nil {
 		ctr.tsExe.Free()
 	}
-	ctr.tsVec = nil
-	ctr.tsExe = nil
+	if ctr.startExe != nil {
+		ctr.startExe.Free()
+	}
+	if ctr.endExe != nil {
+		ctr.endExe.Free()
+	}
 }
 
-func (ctr *container) cleanAggVector() {
-	for i := range ctr.aggExe {
-		if ctr.aggExe[i] != nil {
-			ctr.aggExe[i].Free()
+func (ctr *container) freeBatch(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		ctr.bat.Clean(mp)
+	}
+}
+
+func (ctr *container) freeAgg() {
+	for _, a := range ctr.aggs {
+		if a != nil {
+			a.Free()
+		}
+	}
+}
+
+func (ctr *container) freeVector(mp *mpool.MPool) {
+	for _, vec := range ctr.tsVec {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.tsVec = nil
+
+	for _, vecs := range ctr.aggVec {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(mp)
+			}
 		}
 	}
 	ctr.aggVec = nil
-	ctr.aggExe = nil
-}
-
-func (ctr *container) cleanWin() {
-	ctr.wstart = nil
-	ctr.wend = nil
-	ctr.aggs = nil
 }

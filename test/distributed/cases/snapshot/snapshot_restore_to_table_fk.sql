@@ -375,3 +375,5 @@ drop database if exists Projects;
 drop database if exists Company;
 
 drop snapshot snapshot_01;
+-- @ignore:1
+show snapshots;

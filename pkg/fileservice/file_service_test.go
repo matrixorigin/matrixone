@@ -51,6 +51,7 @@ func testFileService(
 	t.Run("basic", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		assert.True(t, strings.Contains(fs.Name(), fsName))
 
@@ -182,6 +183,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -231,8 +233,10 @@ func testFileService(
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
-		fs := newFS(fsName)
 		ctx := context.Background()
+		fs := newFS(fsName)
+		defer fs.Close()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -310,6 +314,7 @@ func testFileService(
 	t.Run("random", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		for i := 0; i < 8; i++ {
 			filePath := fmt.Sprintf("%d", mrand.Int63())
@@ -318,7 +323,7 @@ func testFileService(
 			content := make([]byte, _BlockContentSize*4)
 			_, err := rand.Read(content)
 			assert.Nil(t, err)
-			parts := randomSplit(content, 32)
+			parts := randomSplit(content, len(content)/16)
 
 			// write
 			writeVector := IOVector{
@@ -356,7 +361,7 @@ func testFileService(
 			readVector.Release()
 
 			// read, random entry
-			parts = randomSplit(content, 16)
+			parts = randomSplit(content, len(content)/16)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
 			for _, part := range parts {
@@ -374,7 +379,7 @@ func testFileService(
 			readVector.Release()
 
 			// read, random entry with ReadCloserForRead
-			parts = randomSplit(content, len(content)/10)
+			parts = randomSplit(content, len(content)/16)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
 			readers := make([]io.ReadCloser, len(parts))
@@ -393,8 +398,6 @@ func testFileService(
 			numDone := int64(0)
 			for i, entry := range readVector.Entries {
 				wg.Add(1)
-				i := i
-				entry := entry
 				go func() {
 					defer wg.Done()
 					reader := readers[i]
@@ -403,7 +406,7 @@ func testFileService(
 					reader.Close()
 					if !bytes.Equal(parts[i], data) {
 						select {
-						case errCh <- moerr.NewInternalError(context.Background(),
+						case errCh <- moerr.NewInternalErrorf(context.Background(),
 							"not equal: path: %s, entry: %+v, content %v",
 							filePath, entry, content,
 						):
@@ -441,6 +444,7 @@ func testFileService(
 	t.Run("tree", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		for _, dir := range []string{
 			"",
@@ -563,6 +567,7 @@ func testFileService(
 	t.Run("errors", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		defer fs.Close()
 
 		err := fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -666,6 +671,7 @@ func testFileService(
 
 	t.Run("cache data", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx := context.Background()
 		var counterSet perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
@@ -701,7 +707,7 @@ func testFileService(
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.Alloc(len(bs))
+						cacheData := allocator.AllocateCacheData(len(bs))
 						copy(cacheData.Bytes(), bs)
 						return cacheData, nil
 					},
@@ -739,11 +745,11 @@ func testFileService(
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
 		vec.Release()
-		fs.Close()
 	})
 
 	t.Run("ignore", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx := context.Background()
 
 		data := []byte("foo")
@@ -782,6 +788,7 @@ func testFileService(
 	t.Run("named path", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		// write
 		err := fs.Write(ctx, IOVector{
@@ -851,6 +858,8 @@ func testFileService(
 	t.Run("issue6110", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
+
 		err := fs.Write(ctx, IOVector{
 			FilePath: "path/to/file/foo",
 			Entries: []IOEntry{
@@ -872,6 +881,7 @@ func testFileService(
 	t.Run("streaming write", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
+		defer fs.Close()
 
 		reader, writer := io.Pipe()
 		n := 65536
@@ -982,6 +992,7 @@ func testFileService(
 
 	t.Run("context cancel", func(t *testing.T) {
 		fs := newFS(fsName)
+		defer fs.Close()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 

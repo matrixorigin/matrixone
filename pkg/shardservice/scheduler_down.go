@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // downScheduler is a scheduler that schedules down shards.
@@ -46,6 +47,7 @@ func (s *downScheduler) schedule(
 		return nil
 	}
 
+	n := 0
 	for _, shards := range r.tables {
 		for i := range shards.shards {
 			for j := range shards.shards[i].Replicas {
@@ -54,11 +56,16 @@ func (s *downScheduler) schedule(
 				}
 				shards.shards[i].Replicas[j].CN = ""
 				shards.shards[i].Replicas[j].State = pb.ReplicaState_Allocating
+				n++
 			}
 		}
 	}
+	if n > 0 {
+		v2.ReplicaScheduleReAllocateReplicaCounter.Add(float64(n))
+	}
 	for k := range s.downCNs {
 		delete(r.cns, k)
+		delete(s.downCNs, k)
 	}
 	return nil
 }

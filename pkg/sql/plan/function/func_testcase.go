@@ -117,7 +117,7 @@ func NewFunctionTestCase(
 		}
 	}
 	// new the result
-	f.result = vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, wanted.typ, mp)
+	f.result = vector.NewFunctionResultWrapper(wanted.typ, mp)
 	if len(f.parameters) == 0 {
 		f.fnLength = 1
 	} else {

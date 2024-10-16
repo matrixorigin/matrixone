@@ -146,7 +146,7 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 func (c *messageCodec) Valid(msg Message) error {
 	n := msg.ProtoSize()
 	if n >= c.bc.maxBodySize {
-		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
+		return moerr.NewInternalErrorNoCtxf("message body %d is too large, max is %d",
 			n,
 			c.bc.maxBodySize)
 	}
@@ -209,7 +209,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) error {
 	msg, ok := data.(RPCMessage)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx("not support %T %+v", data, data)
+		return moerr.NewInternalErrorNoCtxf("not support %T %+v", data, data)
 	}
 
 	startWriteOffset := out.GetWriteOffset()
@@ -438,7 +438,7 @@ func (c *baseCodec) writeBody(
 		return nil, err
 	}
 	defer dec.Deallocate(malloc.NoHints)
-	if _, err := msg.MarshalTo(origin); err != nil {
+	if _, err = msg.MarshalTo(origin); err != nil {
 		return nil, err
 	}
 
@@ -477,7 +477,7 @@ func (c *baseCodec) readMessage(
 			zap.Int("len", len(data)),
 			zap.Int("payloadSize", payloadSize),
 			zap.String("data-hex", hex.EncodeToString(data)))
-		return moerr.NewInvalidInputNoCtx("invalid body packet, offset %d, len %d, payload size %d",
+		return moerr.NewInvalidInputNoCtxf("invalid body packet, offset %d, len %d, payload size %d",
 			offset, len(data), payloadSize)
 	}
 
@@ -650,7 +650,7 @@ func validChecksum(body, payload []byte, expectChecksum uint64) error {
 	}
 	actulChecksum := checksum.Sum64()
 	if actulChecksum != expectChecksum {
-		return moerr.NewInternalErrorNoCtx("checksum mismatch, expect %d, got %d",
+		return moerr.NewInternalErrorNoCtxf("checksum mismatch, expect %d, got %d",
 			expectChecksum,
 			actulChecksum)
 	}

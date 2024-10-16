@@ -98,7 +98,7 @@ func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryData
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql)
+	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
 	if err != nil {
 		return 0, err
 	}
@@ -309,8 +309,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
 		" FROM `%s` cross_l2 join %s "+
-		" using (`%s`, `%s`) "+
-		" order by `%s`, `%s`;",
+		" using (`%s`, `%s`) ",
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -323,13 +322,6 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		indexColumnName,
-
-		// Without ORDER BY, we get 20QPS
-		// With    ORDER BY, we get 60QPS
-		// I think it's because there are lesser number of segments to scan during JOIN.
-		//TODO: need to revisit this once we have BlockFilter applied on the TableScan.
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 	)
 
 	err := s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")

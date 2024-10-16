@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -84,10 +85,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 		if config.EnableMetrics != nil && *config.EnableMetrics {
 			allocator = NewMetricsAllocator(
 				allocator,
-				metric.MallocCounterAllocateBytes,
-				metric.MallocGaugeInuseBytes,
-				metric.MallocCounterAllocateObjects,
-				metric.MallocGaugeInuseObjects,
+				metric.MallocCounter.WithLabelValues("allocate"),
+				metric.MallocGauge.WithLabelValues("inuse"),
+				metric.MallocCounter.WithLabelValues("allocate-objects"),
+				metric.MallocGauge.WithLabelValues("inuse-objects"),
 			)
 		}
 		return allocator
@@ -102,10 +103,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(
 						ret,
-						metric.MallocCounterAllocateBytes,
-						metric.MallocGaugeInuseBytes,
-						metric.MallocCounterAllocateObjects,
-						metric.MallocGaugeInuseObjects,
+						metric.MallocCounter.WithLabelValues("allocate"),
+						metric.MallocGauge.WithLabelValues("inuse"),
+						metric.MallocCounter.WithLabelValues("allocate-objects"),
+						metric.MallocGauge.WithLabelValues("inuse-objects"),
 					)
 				}
 				return ret
@@ -122,10 +123,10 @@ func newDefault(delta *Config) (allocator Allocator) {
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(
 						ret,
-						metric.MallocCounterAllocateBytes,
-						metric.MallocGaugeInuseBytes,
-						metric.MallocCounterAllocateObjects,
-						metric.MallocGaugeInuseObjects,
+						metric.MallocCounter.WithLabelValues("allocate"),
+						metric.MallocGauge.WithLabelValues("inuse"),
+						metric.MallocCounter.WithLabelValues("allocate-objects"),
+						metric.MallocGauge.WithLabelValues("inuse-objects"),
 					)
 				}
 				return ret
@@ -143,4 +144,8 @@ func init() {
 	http.HandleFunc("/debug/malloc", func(w http.ResponseWriter, req *http.Request) {
 		globalProfiler.Write(w)
 	})
+}
+
+func WriteProfileData(w io.Writer) error {
+	return globalProfiler.Write(w)
 }

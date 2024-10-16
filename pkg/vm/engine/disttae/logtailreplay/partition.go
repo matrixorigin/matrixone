@@ -15,7 +15,6 @@
 package logtailreplay
 
 import (
-	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -52,10 +51,11 @@ type TableInfo struct {
 	PrimarySeqnum int
 }
 
+// PXU TODO
 func (p *Partition) CanServe(ts types.TS) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return ts.GreaterEq(&p.mu.start) && ts.LessEq(&p.mu.end)
+	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end)
 }
 
 func NewPartition(
@@ -70,12 +70,6 @@ func NewPartition(
 	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
-}
-
-type RowID types.Rowid
-
-func (r RowID) Less(than RowID) bool {
-	return bytes.Compare(r[:], than[:]) < 0
 }
 
 func (p *Partition) Snapshot() *PartitionState {
@@ -112,7 +106,7 @@ func (p *Partition) Unlock() {
 func (p *Partition) IsValid() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.mu.start.LessEq(&p.mu.end)
+	return p.mu.start.LE(&p.mu.end)
 }
 
 func (p *Partition) IsEmpty() bool {
@@ -161,20 +155,28 @@ func (p *Partition) ConsumeSnapCkps(
 	state := p.state.Load()
 	start := types.MaxTs()
 	end := types.TS{}
-	for _, ckp := range ckps {
+	for i, ckp := range ckps {
 		if err = fn(ckp, state); err != nil {
 			return
 		}
-		if ckp.GetType() == checkpoint.ET_Global {
-			start = ckp.GetEnd()
+		if ckp.GetType() == checkpoint.ET_Global ||
+			(ckp.GetType() == checkpoint.ET_Compacted && i == 0) {
+			ckpStart := ckp.GetStart()
+			if ckpStart.IsEmpty() && ckp.GetType() == checkpoint.ET_Global {
+				start = ckp.GetEnd()
+			} else {
+				start = ckp.GetStart()
+				end = ckp.GetEnd()
+			}
 		}
-		if ckp.GetType() == checkpoint.ET_Incremental {
+		if ckp.GetType() == checkpoint.ET_Incremental ||
+			(ckp.GetType() == checkpoint.ET_Compacted && i > 0) {
 			ckpstart := ckp.GetStart()
-			if ckpstart.Less(&start) {
+			if ckpstart.LT(&start) {
 				start = ckpstart
 			}
 			ckpend := ckp.GetEnd()
-			if ckpend.Greater(&end) {
+			if ckpend.GT(&end) {
 				end = ckpend
 			}
 		}

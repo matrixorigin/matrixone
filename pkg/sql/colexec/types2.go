@@ -38,7 +38,7 @@ func (srv *Server) RecordDispatchPipeline(
 	value := runningPipelineInfo{
 		alreadyDone: false,
 		isDispatch:  true,
-		runningProc: nil,
+		queryCancel: nil,
 		receiver:    dispatchReceiver,
 	}
 
@@ -49,6 +49,8 @@ func (srv *Server) RecordBuiltPipeline(
 	session morpc.ClientSession, streamID uint64, proc *process.Process) {
 
 	key := generateRecordKey(session, streamID)
+
+	_, cancel := process.GetQueryCtxFromProc(proc)
 
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
@@ -61,7 +63,7 @@ func (srv *Server) RecordBuiltPipeline(
 	value := runningPipelineInfo{
 		alreadyDone: false,
 		isDispatch:  false,
-		runningProc: proc,
+		queryCancel: cancel,
 		receiver:    nil,
 	}
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value

@@ -25,14 +25,15 @@ import (
 const (
 	VarlenaInlineSize = 23
 	VarlenaSize       = 24
-	MaxStringSize     = 10485760
 	VarlenaBigHdr     = 0xffffffff
-	MaxVarcharLen     = 65535
 	MaxCharLen        = 255
 	MaxBinaryLen      = 255
-	MaxVarBinaryLen   = 65535
 	MaxEnumLen        = 65535
 	MaxBitLen         = 64
+	MaxBlobLen        = 65535
+	MaxVarcharLen     = MaxBlobLen
+	MaxVarBinaryLen   = MaxBlobLen
+	MaxStringSize     = MaxBlobLen
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {
@@ -63,7 +64,7 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 }
 
 // do not use this function, will be deleted in the future
-// use BuildVarlenaFromValena or BuildVarlenaFromByteSlice instead
+// use BuildVarlenaFromVarlena or BuildVarlenaFromByteSlice instead
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
@@ -77,7 +78,7 @@ func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, erro
 		if voff+vlen < cap(area) || m == nil {
 			area = append(area, bs...)
 		} else {
-			area, err = m.Grow2(area, bs, voff+vlen)
+			area, err = m.Grow2(area, bs, voff+vlen, false)
 			if err != nil {
 				return v, nil, err
 			}

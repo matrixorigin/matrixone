@@ -470,7 +470,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
+	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), false, op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -490,7 +490,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
+	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), false, op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 

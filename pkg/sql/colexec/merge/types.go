@@ -16,8 +16,6 @@ package merge
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,14 +24,15 @@ import (
 var _ vm.Operator = new(Merge)
 
 type container struct {
-	buf *batch.Batch
-	colexec.ReceiverOperator
+	receiver *process.PipelineSignalReceiver
 }
 
 type Merge struct {
-	ctr      *container
+	ctr      container
 	SinkScan bool
-
+	Partial  bool  // false means listening on all merge receivers
+	StartIDX int32 // if partial, listening on receivers[start:end]
+	EndIDX   int32
 	vm.OperatorBase
 }
 
@@ -67,6 +66,13 @@ func (merge *Merge) WithSinkScan(sinkScan bool) *Merge {
 	return merge
 }
 
+func (merge *Merge) WithPartial(start, end int32) *Merge {
+	merge.Partial = true
+	merge.StartIDX = start
+	merge.EndIDX = end
+	return merge
+}
+
 func (merge *Merge) Release() {
 	if merge != nil {
 		reuse.Free[Merge](merge, nil)
@@ -74,17 +80,11 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	merge.Free(proc, pipelineFailed, err)
+	if merge.ctr.receiver == nil {
+		_ = merge.Prepare(proc)
+	}
+	merge.ctr.receiver.WaitingEnd()
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if merge.ctr != nil {
-		merge.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if merge.ctr.buf != nil {
-			merge.ctr.buf.Clean(proc.Mp())
-			merge.ctr.buf = nil
-		}
-		merge.ctr = nil
-	}
-
 }

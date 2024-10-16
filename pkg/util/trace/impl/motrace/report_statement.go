@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,7 +101,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 		windowSize, _ := ctx.Value(DurationKey).(time.Duration)
 		e.StatementTag = ""
 		e.StatementFingerprint = ""
-		e.Error = nil
+		//e.Error = nil /* keep the Error msg */
 		e.Database = ""
 		duration := e.Duration
 		e.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
@@ -247,6 +248,7 @@ type Key struct {
 	Window        time.Time
 	Status        StatementInfoStatus
 	SqlSourceType string
+	Error         string
 }
 
 func (k Key) Before(end time.Time) bool {
@@ -271,8 +273,22 @@ type Statistic struct {
 	BytesScan int64
 }
 
+func getErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
-	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
+	return Key{
+		SessionID:     s.SessionID,
+		StatementType: s.StatementType,
+		Window:        s.ResponseAt.Truncate(duration),
+		Status:        s.Status,
+		SqlSourceType: s.SqlSourceType,
+		Error:         getErrorString(s.Error),
+	}
 }
 
 func (s *StatementInfo) GetName() string {
@@ -430,6 +446,10 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
+	if s.AggrCount > 1 && GetTracerProvider().enableStmtMerge {
+		s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
+		s.StmtBuilder.Reset()
+	}
 	row.SetColumnVal(stmtCol, table.StringField(s.Statement))
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
 	row.SetColumnVal(sqlTypeCol, table.StringField(s.SqlSourceType))

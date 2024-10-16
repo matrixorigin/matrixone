@@ -181,3 +181,5 @@ drop snapshot sp_01;
 drop database if exists snapshot_read;
 -- @session
 drop account if exists test_account;
+-- @ignore:1
+show snapshots;

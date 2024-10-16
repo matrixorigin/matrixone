@@ -42,4 +42,18 @@ xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
 null
 null
 xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
+create table t4(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
+create stage parqstage URL='file:///$resources/load_data/';
+load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
+select * from t4;
+id    name    sex    f32
+1    user1    false    1.0
+2    user2    false    null
+7    user7    false    7.0
+8    user8    true    null
+10    user10    false    10.0
+12    user12    false    null
+15    user15    false    null
+16    user16    true    null
+drop stage parqstage;
 drop database parq;

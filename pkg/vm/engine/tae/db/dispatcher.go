@@ -42,12 +42,12 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 type asyncJobDispatcher struct {
 	sync.RWMutex
 	*tasks.BaseDispatcher
-	actives map[common.ID]bool
+	actives map[common.ID]struct{}
 }
 
 func newAsyncJobDispatcher() *asyncJobDispatcher {
 	return &asyncJobDispatcher{
-		actives:        make(map[common.ID]bool),
+		actives:        make(map[common.ID]struct{}),
 		BaseDispatcher: tasks.NewBaseDispatcher(),
 	}
 }
@@ -81,7 +81,7 @@ func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 		return
 	}
 	for _, scope := range scopes {
-		dispatcher.actives[scope] = true
+		dispatcher.actives[scope] = struct{}{}
 	}
 	task.AddObserver(dispatcher)
 	dispatcher.Unlock()

@@ -88,3 +88,5 @@ restore account sys from snapshot `_binary`;
 select count(*) from cluster01{snapshot = `_binary`};
 drop snapshot if exists `_binary`;
 drop table if exists cluster01;
+-- @ignore:1
+show snapshots;

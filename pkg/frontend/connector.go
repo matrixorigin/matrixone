@@ -21,10 +21,7 @@ import (
 	"strings"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,7 +38,7 @@ const (
 )
 
 func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.CreateTable) error {
-	ts := getGlobalPu().TaskService
+	ts := getPu(ses.GetService()).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -50,7 +47,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(st.Table.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -59,7 +56,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		switch opt := option.(type) {
 		case *tree.CreateSourceWithOption:
 			key := string(opt.Key)
-			val := opt.Val.(*tree.NumVal).OrigString()
+			val := opt.Val.(*tree.NumVal).String()
 			options[key] = val
 		}
 	}
@@ -102,13 +99,13 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 }
 
 func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateConnector) error {
-	ts := getGlobalPu().TaskService
+	ts := getPu(ses.GetService()).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
 	dbName := string(st.TableName.Schema())
 	tableName := string(st.TableName.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, plan2.Snapshot{TS: &timestamp.Timestamp{}})
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -235,10 +232,11 @@ func handleDropConnector(ctx context.Context, ses *Session, st *tree.DropConnect
 }
 
 func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
-	if getGlobalPu() == nil || getGlobalPu().TaskService == nil {
+	pu := getPu(ses.GetService())
+	if pu == nil || pu.TaskService == nil {
 		return moerr.NewInternalError(ctx, "task service not ready yet")
 	}
-	ts := getGlobalPu().TaskService
+	ts := pu.TaskService
 
 	// Query all relevant tasks belonging to the current tenant
 	tasks, err := ts.QueryDaemonTask(ctx,
@@ -353,7 +351,7 @@ var connectorCols = []Column{
 }
 
 func showConnectors(ctx context.Context, ses FeSession) error {
-	ts := getGlobalPu().TaskService
+	ts := getPu(ses.GetService()).TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx,
 			"task service not ready yet, please try again later.")

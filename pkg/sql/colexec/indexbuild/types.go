@@ -33,11 +33,11 @@ const (
 
 type container struct {
 	state int
-	batch *batch.Batch
+	buf   *batch.Batch
 }
 
 type IndexBuild struct {
-	ctr               *container
+	ctr               container
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
@@ -74,16 +74,16 @@ func (indexBuild *IndexBuild) Release() {
 }
 
 func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	indexBuild.Free(proc, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	indexBuild.ctr.state = ReceiveBatch
+	if indexBuild.ctr.buf != nil {
+		indexBuild.ctr.buf.CleanOnlyData()
+	}
 }
 
 func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := indexBuild.ctr
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	if ctr != nil {
-		if ctr.batch != nil {
-			proc.PutBatch(ctr.batch)
-		}
-		indexBuild.ctr = nil
+	if indexBuild.ctr.buf != nil {
+		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf = nil
 	}
 }

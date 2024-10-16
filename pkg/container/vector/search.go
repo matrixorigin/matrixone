@@ -27,7 +27,7 @@ const kMaxLenForBinarySearch = 64
 func OrderedSearchOffsetsByLess[T types.OrderedT](ub T, closed bool, quick bool) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vector)
+		rows := MustFixedColNoTypeCheck[T](vector)
 		if len(rows) == 0 {
 			return sels
 		}
@@ -48,7 +48,7 @@ func OrderedSearchOffsetsByLess[T types.OrderedT](ub T, closed bool, quick bool)
 func OrderedSearchOffsetsByGreat[T types.OrderedT](lb T, closed bool, quick bool) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vector)
+		rows := MustFixedColNoTypeCheck[T](vector)
 		if len(rows) == 0 {
 			return sels
 		}
@@ -66,12 +66,12 @@ func OrderedSearchOffsetsByGreat[T types.OrderedT](lb T, closed bool, quick bool
 	}
 }
 
-func FixedSizeSearchOffsetsByLess[
+func FixedSizeSearchOffsetsByLessTypeChecked[
 	T types.Decimal128 | types.Decimal64](
 	ub T, closed bool, quick bool, cmp func(a, b T) int) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vector)
+		rows := MustFixedColNoTypeCheck[T](vector)
 		if len(rows) == 0 {
 			return sels
 		}
@@ -89,12 +89,12 @@ func FixedSizeSearchOffsetsByLess[
 	}
 }
 
-func FixedSizeSearchOffsetsByGreat[
-	T types.Decimal128 | types.Decimal64](
-	lb T, closed bool, quick bool, cmp func(a, b T) int) func(vector *Vector) []int64 {
+func FixedSizeSearchOffsetsByGTTypeChecked[T types.Decimal128 | types.Decimal64](
+	lb T, closed bool, quick bool, cmp func(a, b T) int,
+) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vector)
+		rows := MustFixedColNoTypeCheck[T](vector)
 		if len(rows) == 0 {
 			return sels
 		}
@@ -160,7 +160,7 @@ func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 |
 	vals []T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vector)
+		rows := MustFixedColNoTypeCheck[T](vector)
 		if len(rows) == 0 {
 			return sels
 		}
@@ -260,7 +260,7 @@ func LinearCollectOffsetsByBetweenFactory[T types.OrderedT](lb, ub T, hint int) 
 		if vecLen == 0 {
 			return sels
 		}
-		cols := MustFixedCol[T](vector)
+		cols := MustFixedColNoTypeCheck[T](vector)
 		for x := 0; x < vecLen; x++ {
 			if check(cols[x]) {
 				sels = append(sels, int64(x))
@@ -281,7 +281,7 @@ func FixedSizedLinearCollectOffsetsByBetweenFactory[
 		if vecLen == 0 {
 			return sels
 		}
-		cols := MustFixedCol[T](vector)
+		cols := MustFixedColNoTypeCheck[T](vector)
 		for x := 0; x < vecLen; x++ {
 			if cmp(cols[x], lb) >= 0 && cmp(cols[x], ub) <= 0 {
 				sels = append(sels, int64(x))
@@ -318,7 +318,7 @@ func LinearCollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int64 {
 func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vec)
+		rows := MustFixedColNoTypeCheck[T](vec)
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			minVal := rows[0]
@@ -405,7 +405,7 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 		} else {
 			n2 := len(subVals)
 			i1, i2 := 0, 0
-			varlenas := MustFixedCol[types.Varlena](vec)
+			varlenas := MustFixedColNoTypeCheck[types.Varlena](vec)
 			s1 := varlenas[0].GetByteSlice(vec.GetArea())
 			for i2 < n2 {
 				ord := bytes.Compare(s1, subVals[i2])
@@ -436,7 +436,7 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		var sels []int64
-		rows := MustFixedCol[T](vec)
+		rows := MustFixedColNoTypeCheck[T](vec)
 
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
@@ -546,7 +546,7 @@ func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal128](lval, rval T,
 		if vecLen == 0 {
 			return nil
 		}
-		cols := MustFixedCol[T](vec)
+		cols := MustFixedColNoTypeCheck[T](vec)
 		start := sort.Search(vecLen, func(i int) bool {
 			return cmp(cols[i], lval) >= 0
 		})
@@ -595,7 +595,7 @@ func CollectOffsetsByBetweenFactory[T types.OrderedT](lval, rval T, hint int) fu
 		if vecLen == 0 {
 			return nil
 		}
-		cols := MustFixedCol[T](vec)
+		cols := MustFixedColNoTypeCheck[T](vec)
 		start := sort.Search(vecLen, func(i int) bool {
 			//return cols[i] >= lval
 			return cmpLeft(cols[i], lval)

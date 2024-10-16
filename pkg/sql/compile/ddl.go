@@ -45,53 +45,87 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
-		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+
+	createDatabase := s.Plan.GetDdl().GetCreateDatabase()
+	dbName := createDatabase.GetDatabase()
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+		if createDatabase.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.proc.Ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
 	datType := ""
-	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
+	// handle sub
+	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
+		if err := createSubscription(ctx, c, dbName, subOption); err != nil {
+			return err
+		}
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+
+	if !needSkipDbs[dbName] {
+		newDb, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = '%s' where `%s` = %d and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newDb.GetDatabaseId(ctx),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName)
+
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
+	}
+
+	// handle sub
+	if db.IsSubscription(c.proc.Ctx) {
+		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
+			return err
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
-		err := runDetectFkReferToDBSql(c, sql)
-		if err != nil {
+		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
 	}
 
 	// whether foreign_key_checks = 0 or 1
-	err := s.removeFkeysRelationships(c, dbName)
+	err = s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
 	}
@@ -115,12 +149,17 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	//3. delete fks
+	// 3. delete fks
 	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
 		return err
 	}
-	return nil
+	// 4. delete retention info
+	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
@@ -254,7 +293,7 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 			return cols, int32(idx + 1), nil
 		}
 	}
-	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
+	return nil, 0, moerr.NewInvalidInputNoCtxf("column '%s' doesn't exist in table", colName)
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -777,14 +816,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
-	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -806,36 +837,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return moerr.NewNoDB(c.proc.Ctx)
-		}
-		// TODO: debug for #11917
-		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-			c.proc.Info(c.proc.Ctx, "createTable no exist",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-			)
 		}
 		return err
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			// TODO: debug for #11917
-			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-				c.proc.Info(c.proc.Ctx, "createTable no exist",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-				)
-			}
 			return nil
 		}
 
@@ -879,14 +886,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		c.proc.Info(c.proc.Ctx, "createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
@@ -968,7 +967,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
 			if dedupFkName.Find(fkey.Name) {
-				return moerr.NewInternalError(c.proc.Ctx, "deduplicate fk name %s", fkey.Name)
+				return moerr.NewInternalErrorf(c.proc.Ctx, "deduplicate fk name %s", fkey.Name)
 			}
 			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
@@ -1122,7 +1121,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if id, has := colNameToId[colReferred]; has {
 					newDef.ForeignCols[j] = id
 				} else {
-					err := moerr.NewInternalError(c.proc.Ctx, "no column %s", colReferred)
+					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
 					c.proc.Info(c.proc.Ctx, "createTable",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1241,7 +1240,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1250,7 +1249,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("insertSQL", insertSQL),
+				zap.String("dbName0", dbName),
+				zap.String("tblName0", tblName),
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1291,6 +1293,36 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if qry.RetentionDeadline != 0 {
+		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d)",
+			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
+		err = c.runSql(insertRetention)
+		if err != nil {
+			return err
+		}
+	}
+
+	// update mo_pitr table
+	// if mo_pitr table contains the same dbName and tblName, then update the table_id and modified_time
+	// otherwise, skip it
+	if !needSkipDbs[dbName] {
+		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+		if err != nil {
+			return err
+		}
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d  where `%s` = %d and `%s` = '%s' and `%s` = '%s'",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_OBJECT_ID, newRelation.GetTableID(c.proc.Ctx),
+			catalog.MO_PITR_ACCOUNT_ID, c.proc.GetSessionInfo().AccountId,
+			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_TABLE_NAME, tblName)
+
+		// change ctx
+		err = c.runSqlWithSystemTenant(updatePitrSql)
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(partitionTables) == 0 {
 		return nil
 	}
@@ -1300,6 +1332,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
 	)
+}
+
+func (c *Compile) runSqlWithSystemTenant(sql string) error {
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, defines.TenantIDKey{}, uint32(0))
+	defer func() {
+		c.proc.Ctx = oldCtx
+	}()
+	return c.runSql(sql)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -2130,6 +2171,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
+	}
+
 	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
@@ -2306,7 +2352,19 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
-	return nil
+
+	// remove entry in mo_retention if exists
+	// skip tables in mo_catalog.
+	// These tables do not have retention info.
+	if dbName == catalog.MO_CATALOG {
+		return nil
+	}
+	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
+	err = c.runSql(deleteRetentionSQL)
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
@@ -2533,7 +2591,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return moerr.NewInternalError(c.proc.Ctx, "sequence %s not exists", tblName)
+		return moerr.NewInternalErrorf(c.proc.Ctx, "sequence %s not exists", tblName)
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -2577,8 +2635,6 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 
 func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
-	bat.Cnt = 0
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
@@ -2687,8 +2743,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
-	bat.Ro = true
-	bat.Cnt = 0
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
@@ -3071,10 +3125,10 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
 	if maxValue <= minValue {
-		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
+		return moerr.NewInvalidInputf(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
+		return moerr.NewInvalidInputf(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
 	}
 	return nil
 }
@@ -3243,13 +3297,13 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	defer func() {
 		for _, v := range vecs {
 			if v != nil {
-				proc.PutVector(v)
+				v.Free(proc.GetMPool())
 			}
 		}
 	}()
 
 	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType())
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err
@@ -3257,7 +3311,7 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	vecs[0] = accountIdVec
 	// append names
 	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType())
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {
 			return nil, err

@@ -15,59 +15,57 @@
 package malloc
 
 import (
-	"hash/maphash"
 	"runtime"
-	"runtime/debug"
-	"sync"
-	"unsafe"
+	"strconv"
+	"strings"
+	"unique"
 )
 
-type StacktraceID uint64
+// _PCs represents a fixed-size array of program counters (PCs) for stack traces.
+// 128 is chosen as a reasonable maximum depth for most stack traces.
+type _PCs [128]uintptr
 
-func GetStacktraceID(skip int) StacktraceID {
-	pcs := pcs1024Pool.Get().(*[]uintptr)
-	defer func() {
-		*pcs = (*pcs)[:cap(*pcs)]
-		pcs1024Pool.Put(pcs)
-	}()
+type Stacktrace unique.Handle[_PCs]
 
-	n := runtime.Callers(2+skip, *pcs)
-	*pcs = (*pcs)[:n]
-
-	hasher := hasherPool.Get().(*maphash.Hash)
-	defer func() {
-		hasher.Reset()
-		hasherPool.Put(hasher)
-	}()
-	for _, pc := range *pcs {
-		hasher.Write(
-			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
-		)
+func GetStacktrace(skip int) Stacktrace {
+	if skip < 0 {
+		skip = 0
 	}
-	id := StacktraceID(hasher.Sum64())
-
-	if _, ok := stackIDToInfo.Load(id); ok {
-		return id
-	}
-
-	info := debug.Stack()
-	stackIDToInfo.LoadOrStore(id, info)
-
-	return id
+	var pcs _PCs
+	runtime.Callers(2+skip, pcs[:])
+	return Stacktrace(unique.Make(pcs))
 }
 
-var stackIDToInfo sync.Map
-
-var pcs1024Pool = sync.Pool{
-	New: func() any {
-		slice := make([]uintptr, 1024)
-		return &slice
-	},
+func (s Stacktrace) String() string {
+	var n int
+	pcs := unique.Handle[_PCs](s).Value()
+	for ; n < len(pcs); n++ {
+		if pcs[n] == 0 {
+			break
+		}
+	}
+	return pcsToString(pcs[:n])
 }
 
-func (s StacktraceID) String() string {
-	if v, ok := stackIDToInfo.Load(s); ok {
-		return string(v.([]byte))
+func pcsToString(pcs []uintptr) string {
+	buf := new(strings.Builder)
+
+	frames := runtime.CallersFrames(pcs)
+	for {
+		frame, more := frames.Next()
+
+		buf.WriteString(frame.Function)
+		buf.WriteString("\n")
+		buf.WriteString("\t")
+		buf.WriteString(frame.File)
+		buf.WriteString(":")
+		buf.WriteString(strconv.Itoa(frame.Line))
+		buf.WriteString("\n")
+
+		if !more {
+			break
+		}
 	}
-	panic("bad stack id")
+
+	return buf.String()
 }

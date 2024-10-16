@@ -15,9 +15,10 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"reflect"
+	"context"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -71,7 +72,7 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	runningProc *process.Process
+	queryCancel context.CancelFunc
 
 	isDispatch bool
 	receiver   *process.WrapCs
@@ -86,12 +87,15 @@ func (info *runningPipelineInfo) cancelPipeline() {
 		info.receiver.Unlock()
 
 	} else {
-		info.runningProc.Cancel()
+		if info.queryCancel != nil {
+			info.queryCancel()
+		}
 	}
 }
 
 type uuidProcMapItem struct {
 	proc *process.Process
+	ch   process.RemotePipelineInformationChannel
 }
 
 type UuidProcMap struct {
@@ -106,21 +110,6 @@ type CnSegmentMap struct {
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
 	mp map[objectio.Segmentid]int32
-}
-
-// ReceiverOperator need to receive batch from proc.Reg.MergeReceivers
-type ReceiverOperator struct {
-	proc *process.Process
-
-	// parameter for Merge-Type receiver.
-	// Merge-Type specifys the operator receive batch from all
-	// regs or single reg.
-	//
-	// Merge/MergeGroup/MergeLimit ... are Merge-Type
-	// while Join/Intersect/Minus ... are not
-	aliveMergeReceiver int
-	chs                []chan *process.RegisterMessage
-	receiverListener   []reflect.SelectCase
 }
 
 const (

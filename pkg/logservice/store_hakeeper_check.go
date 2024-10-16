@@ -77,10 +77,22 @@ func (a *idAllocator) Capacity() uint64 {
 	return 0
 }
 
-func (l *store) setInitialClusterInfo(numOfLogShards uint64,
-	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
-	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
-		numOfTNShards, numOfLogReplicas, nextID, nextIDByKey)
+func (l *store) setInitialClusterInfo(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+) error {
+	cmd := hakeeper.GetInitialClusterRequestCmd(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -197,8 +209,7 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 			l.runtime.Logger().Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
-			// TODO: check whether this is temp error
-			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
+			l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
 			return
 		}
 	}
@@ -242,13 +253,35 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 		for _, c := range cmds {
 			l.runtime.Logger().Debug("bootstrap cmd", zap.String("cmd", c.LogString()))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
-		defer cancel()
-		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
-			// TODO: check whether this is temp error
-			l.runtime.Logger().Debug("failed to add schedule commands", zap.Error(err))
-			return
+
+		addFn := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+			defer cancel()
+			if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
+				l.runtime.Logger().Error("failed to add schedule commands", zap.Error(err))
+				return err
+			}
+			return nil
 		}
+
+		timeout := time.NewTimer(time.Minute)
+		defer timeout.Stop()
+
+	LOOP:
+		for {
+			select {
+			case <-timeout.C:
+				panic("failed to add commands in bootstrap")
+
+			default:
+				if err := addFn(); err != nil {
+					time.Sleep(time.Second)
+				} else {
+					break LOOP
+				}
+			}
+		}
+
 		l.bootstrapCheckCycles = checkBootstrapCycles
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
@@ -308,7 +341,7 @@ func (l *store) getScheduleCommand(check bool,
 	}
 
 	if check {
-		return l.checker.Check(l.alloc, *state), nil
+		return l.checker.Check(l.alloc, *state, l.cfg.BootstrapConfig.StandbyEnabled), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
 	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)

@@ -118,7 +118,7 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	// parse path => filename, table
 	elems := strings.Split(p.path, "/")
 	if len(elems) != PathElems {
-		return moerr.NewInternalError(ctx, "invalid etl path: %s", p.path)
+		return moerr.NewInternalErrorf(ctx, "invalid etl path: %s", p.path)
 	}
 	p.filename = elems[PathIdxFilename]
 	p.table = elems[PathIdxTable]
@@ -127,7 +127,7 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	filename := strings.Trim(p.filename, CsvExtension)
 	fnElems := strings.Split(filename, FilenameSeparator)
 	if len(fnElems) != FilenameElems && len(fnElems) != FilenameElemsV2 {
-		return moerr.NewInternalError(ctx, "invalid etl filename: %s", p.filename)
+		return moerr.NewInternalErrorf(ctx, "invalid etl filename: %s", p.filename)
 	}
 	if fnElems[FilenameIdxType] == string(MergeLogTypeMerged) {
 		p.fileType = MergeLogTypeMerged
@@ -340,6 +340,18 @@ type RowWriter interface {
 	FlushAndClose() (int, error)
 }
 
+type BackOff interface {
+	// Count do the event count
+	// return true, means not in backoff cycle. You can run your code.
+	// return false, means you should skip this time.
+	Count() bool
+}
+
+// BackOffSettable work with reactWriter and ContentWriter
+type BackOffSettable interface {
+	SetupBackOff(BackOff)
+}
+
 // RowField work with Row
 // base usage:
 //
@@ -380,26 +392,36 @@ type NeedSyncWrite interface {
 // work on flow: from Generate to Export.
 type WriteRequest interface {
 	Handle() (int, error)
-	GetContent() string
 }
 
 type ExportRequests []WriteRequest
 
 type RowRequest struct {
 	writer RowWriter
+	// backoff adapt BackOffSettable
+	backoff BackOff
 }
 
-func NewRowRequest(writer RowWriter) *RowRequest {
-	return &RowRequest{writer}
+func NewRowRequest(writer RowWriter, backoff BackOff) *RowRequest {
+	return &RowRequest{
+		writer:  writer,
+		backoff: backoff,
+	}
 }
 
-func (r *RowRequest) Handle() (int, error) {
+func (r *RowRequest) Handle() (n int, err error) {
 	if r.writer == nil {
 		return 0, nil
 	}
-	return r.writer.FlushAndClose()
+	if setter, ok := r.writer.(BackOffSettable); ok {
+		setter.SetupBackOff(r.backoff)
+	}
+	n, err = r.writer.FlushAndClose()
+	r.writer = nil
+	return
 }
 
+// GetContent for test
 func (r *RowRequest) GetContent() string {
 	return r.writer.GetContent()
 }

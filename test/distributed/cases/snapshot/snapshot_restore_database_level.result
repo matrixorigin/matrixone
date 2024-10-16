@@ -1,3 +1,4 @@
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -18,6 +19,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 delete from test_snapshot_read where a <= 50;
 DELETE FROM  users where email = 'john@example.com';
@@ -38,6 +40,7 @@ count(*)
 11
 drop database snapshot_read;
 drop snapshot sp_01;
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -58,6 +61,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 drop table users;
 drop table test_snapshot_read;
@@ -74,6 +78,7 @@ count(*)
 11
 drop database snapshot_read;
 drop snapshot sp_01;
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -94,6 +99,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
@@ -109,7 +115,10 @@ count(*)
 11
 drop snapshot sp_01;
 drop database if exists snapshot_read;
+drop accoount if exists test_account;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accoount if exists test_account;";
 create account test_account admin_name = 'test_user' identified by '111';
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -130,6 +139,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 delete from test_snapshot_read where a <= 50;
 DELETE FROM  users where email = 'john@example.com';
@@ -150,6 +160,7 @@ count(*)
 11
 drop database snapshot_read;
 drop snapshot sp_01;
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -170,6 +181,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop table users;
 drop table test_snapshot_read;
@@ -186,6 +198,7 @@ count(*)
 11
 drop database snapshot_read;
 drop snapshot sp_01;
+drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -206,6 +219,7 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop database snapshot_read;
 select count(*) from snapshot_read.test_snapshot_read;
@@ -219,6 +233,7 @@ count(*)
 drop snapshot sp_01;
 drop database if exists snapshot_read;
 drop account test_account;
+drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -258,6 +273,7 @@ INSERT INTO students (name, age) VALUES ('Thomas', 65), ('Ursula', 66), ('Victor
 select count(*) from snapshot_read.students;
 count(*)
 50
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 use snapshot_read;
 drop table students;
@@ -277,8 +293,10 @@ count(*)
 select count(*) from snapshot_read.users;
 count(*)
 11
+drop database if exists snapshot_read;
 drop snapshot sp_01;
 drop account test_account;
+drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -318,9 +336,15 @@ INSERT INTO students (name, age) VALUES ('Thomas', 65), ('Ursula', 66), ('Victor
 select count(*) from snapshot_read.students;
 count(*)
 50
+drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
-create account test_account_2 admin_name = 'test_user_2' identified by '111';
-restore account test_account database snapshot_read from snapshot sp_01 to account test_account_2;
+drop account if exists acc02;
+create account acc02 admin_name = 'admin' identified by '111';
+select count(*) from snapshot_read.students;
+invalid database snapshot_read
+select count(*) from snapshot_read.users;
+invalid database snapshot_read
+restore account test_account from snapshot sp_01 to account acc02;
 select count(*) from snapshot_read.students;
 count(*)
 50
@@ -329,4 +353,4 @@ count(*)
 11
 drop snapshot sp_01;
 drop account test_account;
-drop account test_account_2;
+drop account acc02;

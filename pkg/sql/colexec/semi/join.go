@@ -40,19 +40,32 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 }
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
-	semiJoin.ctr = new(container)
-	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
-
-	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))
-	for i := range semiJoin.ctr.evecs {
-		semiJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, semiJoin.Conditions[0][i])
-		if err != nil {
-			return err
-		}
+	if semiJoin.OpAnalyzer == nil {
+		semiJoin.OpAnalyzer = process.NewAnalyzer(semiJoin.GetIdx(), semiJoin.IsFirst, semiJoin.IsLast, "semi join")
+	} else {
+		semiJoin.OpAnalyzer.Reset()
 	}
 
-	if semiJoin.Cond != nil {
-		semiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, semiJoin.Cond)
+	if semiJoin.ctr.vecs == nil {
+		semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
+		semiJoin.ctr.executor = make([]colexec.ExpressionExecutor, len(semiJoin.Conditions[0]))
+		for i := range semiJoin.ctr.executor {
+			semiJoin.ctr.executor[i], err = colexec.NewExpressionExecutor(proc, semiJoin.Conditions[0][i])
+			if err != nil {
+				return err
+			}
+		}
+
+		if semiJoin.Cond != nil {
+			semiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, semiJoin.Cond)
+			if err != nil {
+				return err
+			}
+		}
+
+		if semiJoin.ProjectList != nil {
+			err = semiJoin.PrepareProjection(proc)
+		}
 	}
 	return err
 }
@@ -62,16 +75,22 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	ctr := semiJoin.ctr
+	analyzer := semiJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
+	ctr := &semiJoin.ctr
+	input := vm.NewCallResult()
 	result := vm.NewCallResult()
+	probeResult := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			semiJoin.build(anal, proc)
+			err = semiJoin.build(analyzer, proc)
+			if err != nil {
+				return result, err
+			}
 			if ctr.mp == nil && !semiJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -84,46 +103,64 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			result, err = semiJoin.Children[0].Call(proc)
+			input, err = vm.ChildrenCall(semiJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
-			bat := result.Batch
-
+			bat := input.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.skipProbe {
-				vecused := make([]bool, len(bat.Vecs))
-				newvecs := make([]*vector.Vector, len(semiJoin.Result))
+
+			if ctr.mp == nil {
+				continue
+			}
+
+			if ctr.rbat == nil {
+				ctr.rbat = batch.NewWithSize(len(semiJoin.Result))
 				for i, pos := range semiJoin.Result {
-					vecused[pos] = true
-					newvecs[i] = bat.Vecs[pos]
+					ctr.rbat.Vecs[i] = vector.NewVec(*bat.Vecs[pos].GetType())
+					// for semi join, if left batch is sorted , then output batch is sorted
+					ctr.rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 				}
-				for i := range bat.Vecs {
-					if !vecused[i] {
-						bat.Vecs[i].Free(proc.Mp())
+			} else {
+				ctr.rbat.CleanOnlyData()
+				for i, pos := range semiJoin.Result {
+					ctr.rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
+				}
+			}
+
+			if ctr.skipProbe {
+				rowCount := bat.RowCount()
+				var srcVec *vector.Vector
+				var targetVec *vector.Vector
+				for i, pos := range semiJoin.Result {
+					srcVec = bat.Vecs[pos]
+					targetVec = ctr.rbat.Vecs[i]
+					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
+					if err != nil {
+						return result, err
 					}
 				}
-				bat.Vecs = newvecs
-				result.Batch = bat
-				anal.Output(bat, semiJoin.GetIsLast())
-				return result, nil
+				ctr.rbat.SetRowCount(rowCount)
+				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
+			} else {
+				if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
+					return result, err
+				}
+
+				result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			}
-			if ctr.mp == nil {
-				proc.PutBatch(bat)
-				continue
-			}
-			if err := ctr.probe(bat, semiJoin, proc, anal, semiJoin.GetIsFirst(), semiJoin.GetIsLast(), &result); err != nil {
-				bat.Clean(proc.Mp())
+
+			if err != nil {
 				return result, err
 			}
-			proc.PutBatch(bat)
+
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -134,45 +171,43 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
-	ctr := semiJoin.ctr
+func (semiJoin *SemiJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
+	ctr := &semiJoin.ctr
 	start := time.Now()
-	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	defer analyzer.WaitStop(start)
+	ctr.mp, err = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	if err != nil {
+		return err
+	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	ctr.batches = ctr.mp.GetBatches()
-	ctr.batchRowCount = ctr.mp.GetRowCount()
+	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-	for i, pos := range ap.Result {
-		ctr.rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
-		// for semi join, if left batch is sorted , then output batch is sorted
-		ctr.rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
-	}
+func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, result *vm.CallResult) error {
+	mpbat := ctr.mp.GetBatches()
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err
 	}
 	if ctr.joinBat1 == nil {
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
 	}
-	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+	if ctr.joinBat2 == nil && ctr.mp.GetRowCount() > 0 {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(mpbat[0], proc.Mp())
 	}
 	count := bat.RowCount()
-	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 
 	rowCountIncrease := 0
-	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
+	if ctr.eligible == nil {
+		ctr.eligible = make([]int64, 0, hashmap.UnitLimit)
+	} else {
+		ctr.eligible = ctr.eligible[:0]
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -185,13 +220,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 			}
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], idx2,
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, mpbat[idx1], idx2,
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -202,19 +237,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
 					}
-					bs := vector.MustFixedCol[bool](vec)
+					bs := vector.MustFixedColWithTypeCheck[bool](vec)
 					if bs[0] {
 						matched = true
 					}
 				} else {
-					sels := mSels[vals[k]-1]
+					sels := ctr.mp.GetSels(vals[k] - 1)
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 							1, ctr.cfs1); err != nil {
 							return err
 						}
-						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2),
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, mpbat[idx1], int64(idx2),
 							1, ctr.cfs2); err != nil {
 							return err
 						}
@@ -225,7 +260,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 							continue
 						}
-						bs := vector.MustFixedCol[bool](vec)
+						bs := vector.MustFixedColWithTypeCheck[bool](vec)
 						if bs[0] {
 							matched = true
 							break
@@ -237,38 +272,35 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					continue
 				}
 			}
-			eligible = append(eligible, int64(i+k))
+			ctr.eligible = append(ctr.eligible, int64(i+k))
 			rowCountIncrease++
 		}
-		//eligible = eligible[:0]
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(ctr.eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
 			return err
 		}
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], ctr.eligible, proc.Mp()); err != nil {
 			return err
 		}
 	}
 
 	ctr.rbat.AddRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
-	for i := range ctr.evecs {
-		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
+	for i := range ctr.executor {
+		vec, err := ctr.executor[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
 		ctr.vecs[i] = vec
-		ctr.evecs[i].vec = vec
 	}
 	return nil
 }

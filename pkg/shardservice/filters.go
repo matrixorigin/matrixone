@@ -16,6 +16,8 @@ package shardservice
 
 import (
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type freezeFilter struct {
@@ -35,6 +37,7 @@ func (f *freezeFilter) add(cns ...string) {
 	for _, cn := range cns {
 		f.freeze[cn] = now
 	}
+	v2.ReplicaFreezeCNCountGauge.Set(float64(len(f.freeze)))
 }
 
 func (f *freezeFilter) filter(
@@ -50,6 +53,9 @@ func (f *freezeFilter) filter(
 			time.Since(t) > f.maxFreezeTime {
 			values = append(values, c)
 			delete(f.freeze, c.id)
+			v2.ReplicaFreezeCNCountGauge.Set(float64(len(f.freeze)))
+		} else {
+			v2.ReplicaScheduleSkipFreezeCNCounter.Add(1)
 		}
 	}
 	return values

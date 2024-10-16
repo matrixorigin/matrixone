@@ -113,7 +113,9 @@ func (lc *leakChecker) doCheck() []ActiveTxn {
 				txn.Options.InRunSql = txn.txnOp.inRunSql()
 				txn.Options.InCommit = txn.txnOp.inCommit()
 				txn.Options.InRollback = txn.txnOp.inRollback()
-				txn.Options.SessionInfo = txn.txnOp.options.SessionInfo
+				txn.Options.InIncrStmt = txn.txnOp.inIncrStmt()
+				txn.Options.InRollbackStmt = txn.txnOp.inRollbackStmt()
+				txn.Options.SessionInfo = txn.txnOp.opts.options.SessionInfo
 			}
 			values = append(values, txn)
 		}

@@ -15,9 +15,9 @@
 package mergedelete
 
 import (
+	"bytes"
 	"context"
-	"fmt"
-	"reflect"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -41,6 +41,17 @@ type mockRelation struct {
 func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrName string) error {
 	e.result = b
 	return nil
+}
+
+func TestString(t *testing.T) {
+	buf := new(bytes.Buffer)
+	arg := new(MergeDelete)
+	arg.String(buf)
+}
+
+func TestOpType(t *testing.T) {
+	arg := new(MergeDelete)
+	require.Equal(t, arg.OpType(), vm.MergeDelete)
 }
 
 func TestMergeDelete(t *testing.T) {
@@ -146,10 +157,11 @@ func TestMergeDelete(t *testing.T) {
 	batch2.SetRowCount(3)
 
 	argument1 := MergeDelete{
-		ctr: &container{
+		ctr: container{
 			delSource: &mockRelation{},
+			bat:       &batch.Batch{},
 		},
-		AffectedRows: 0,
+		AddAffectedRows: true,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -160,45 +172,50 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	// require.NoError(t, argument1.Prepare(proc))
+	argument1.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
 	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.AffectedRows)
+	require.Equal(t, uint64(15), argument1.AffectedRows())
 
-	// Check DelSource
-	result0 := argument1.ctr.delSource.(*mockRelation).result
-	// check attr names
-	require.True(t, reflect.DeepEqual(
-		[]string{
-			catalog.BlockMetaOffset,
-		},
-		result0.Attrs,
-	))
-	// check vector
-	require.Equal(t, 1, len(result0.Vecs))
-	for i, vec := range result0.Vecs {
-		require.Equal(t, 15, vec.Length(), fmt.Sprintf("column number: %d", i))
-	}
-
+	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(60), argument1.AffectedRows)
+	require.Equal(t, uint64(60), argument1.AffectedRows())
 
-	// Check DelSource
-	result1 := argument1.ctr.delSource.(*mockRelation).result
-	// check attr names
-	require.True(t, reflect.DeepEqual(
-		[]string{
-			catalog.BlockMeta_DeltaLoc,
+	argument1.ctr.affectedRows = 0
+	argument1.Reset(proc, false, err)
+	resetChildren(&argument1, nil)
+	_, err = argument1.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), argument1.AffectedRows())
+
+	var partitionSources []engine.Relation
+	partitionSources = append(partitionSources, &mockRelation{})
+	argument2 := MergeDelete{
+		ctr: container{
+			delSource:        &mockRelation{},
+			bat:              &batch.Batch{},
+			partitionSources: partitionSources,
+			affectedRows:     0,
 		},
-		result1.Attrs,
-	))
-	// check vector
-	require.Equal(t, 1, len(result1.Vecs))
-	for i, vec := range result1.Vecs {
-		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
+		AddAffectedRows: true,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
 	}
+
+	argument2.Reset(proc, false, err)
+	resetChildren(&argument2, batch2)
+	argument2.OpAnalyzer = process.NewAnalyzer(0, false, false, "mergedelete")
+	_, err = argument2.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(45), argument2.AffectedRows())
 
 	// free resource
 	argument1.Free(proc, false, nil)
@@ -208,18 +225,11 @@ func TestMergeDelete(t *testing.T) {
 	metaLocBat3.Clean(proc.GetMPool())
 	batch1.Clean(proc.GetMPool())
 	batch2.Clean(proc.GetMPool())
-	// constVector can't free
-	// 2 * 16 is 2 header of const vector.
-	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *MergeDelete, bat *batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: []*batch.Batch{bat},
-	}
-	valueScanArg.Prepare(nil)
-	arg.SetChildren(
-		[]vm.Operator{
-			valueScanArg,
-		})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
 }

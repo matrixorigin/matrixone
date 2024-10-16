@@ -18,11 +18,10 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -35,25 +34,6 @@ type objectsIter struct {
 	onlyVisible bool
 	ts          types.TS
 	iter        btree.IterG[ObjectEntry]
-}
-
-// not accurate!  only used by stats
-func (p *PartitionState) ApproxObjectsNum() int {
-	return p.dataObjects.Len()
-}
-
-func (p *PartitionState) NewObjectsIter(ts types.TS, onlyVisible bool) (ObjectsIter, error) {
-	if ts.Less(&p.minTS) {
-		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
-		return nil, moerr.NewTxnStaleNoCtx(msg)
-	}
-	iter := p.dataObjects.Copy().Iter()
-	ret := &objectsIter{
-		onlyVisible: onlyVisible,
-		ts:          ts,
-		iter:        iter,
-	}
-	return ret, nil
 }
 
 var _ ObjectsIter = new(objectsIter)
@@ -71,9 +51,7 @@ func (b *objectsIter) Next() bool {
 }
 
 func (b *objectsIter) Entry() ObjectEntry {
-	return ObjectEntry{
-		ObjectInfo: b.iter.Item().ObjectInfo,
-	}
+	return b.iter.Item()
 }
 
 func (b *objectsIter) Close() error {
@@ -87,38 +65,76 @@ type BlocksIter interface {
 	Entry() types.Blockid
 }
 
-type dirtyBlocksIter struct {
-	iter        btree.IterG[types.Blockid]
-	firstCalled bool
+// ApproxDataObjectsNum not accurate!  only used by stats
+func (p *PartitionState) ApproxDataObjectsNum() int {
+	return p.dataObjectsNameIndex.Len()
+}
+
+func (p *PartitionState) ApproxTombstoneObjectsNum() int {
+	return p.tombstoneObjectsNameIndex.Len()
+}
+
+func (p *PartitionState) newTombstoneObjectsIter(
+	snapshot types.TS,
+	onlyVisible bool) (ObjectsIter, error) {
+
+	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	if onlyVisible {
+		pivot := ObjectEntry{
+			ObjectInfo{
+				DeleteTime: snapshot,
+			},
+		}
+
+		iter.Seek(pivot)
+		if !iter.Prev() && p.tombstoneObjectDTSIndex.Len() > 0 {
+			// reset iter only when seeked to the first item
+			iter.Release()
+			iter = p.tombstoneObjectDTSIndex.Copy().Iter()
+		}
+	}
+
+	ret := &objectsIter{
+		onlyVisible: onlyVisible,
+		ts:          snapshot,
+		iter:        iter,
+	}
+	return ret, nil
+}
+
+func (p *PartitionState) newDataObjectIter(
+	snapshot types.TS,
+	onlyVisible bool) (ObjectsIter, error) {
+
+	iter := p.dataObjectsNameIndex.Copy().Iter()
+	ret := &objectsIter{
+		onlyVisible: onlyVisible,
+		ts:          snapshot,
+		iter:        iter,
+	}
+	return ret, nil
+}
+
+func (p *PartitionState) NewObjectsIter(
+	snapshot types.TS,
+	onlyVisible bool,
+	visitTombstone bool) (ObjectsIter, error) {
+
+	if snapshot.LT(&p.minTS) {
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
+	}
+
+	if visitTombstone {
+		return p.newTombstoneObjectsIter(snapshot, onlyVisible)
+	} else {
+		return p.newDataObjectIter(snapshot, onlyVisible)
+	}
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	//iter := p.dirtyBlocks.Copy().Iter()
-	ret := &dirtyBlocksIter{
-		iter: btree.IterG[types.Blockid]{},
-	}
-	return ret
-}
 
-var _ BlocksIter = new(dirtyBlocksIter)
-
-func (b *dirtyBlocksIter) Next() bool {
-	if !b.firstCalled {
-		if !b.iter.First() {
-			return false
-		}
-		b.firstCalled = true
-		return true
-	}
-	return b.iter.Next()
-}
-
-func (b *dirtyBlocksIter) Entry() types.Blockid {
-	return b.iter.Item()
-}
-
-func (b *dirtyBlocksIter) Close() error {
-	b.iter.Release()
 	return nil
 }
 
@@ -134,7 +150,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
-	iter := p.objectIndexByTS.Copy().Iter()
+	iter := p.dataObjectTSIndex.Copy().Iter()
 	defer iter.Release()
 
 	for ok := iter.Seek(ObjectIndexByTSEntry{
@@ -142,7 +158,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(&end) {
+		if entry.Time.GT(&end) {
 			break
 		}
 
@@ -161,39 +177,107 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
-	iter := p.blockDeltas.Copy().Iter()
-	defer iter.Release()
-
-	pivot := BlockDeltaEntry{
-		BlockID: bid,
-	}
-	if ok := iter.Seek(pivot); ok {
-		e := iter.Item()
-		if e.BlockID.Compare(bid) == 0 {
-			return e.DeltaLoc, e.CommitTs, true
-		}
-	}
-	return objectio.ObjectLocation{}, types.TS{}, false
-}
-
-func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	iter := p.dataObjects.Copy().Iter()
+func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
+	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(blockID))
 	if ok := iter.Seek(pivot); ok {
 		e := iter.Item()
-		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&blockID)[:]) {
+		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(blockID)[:]) {
 			return true
 		}
 	}
 	return false
 }
 
+func (p *PartitionState) CollectObjectsBetween(
+	start, end types.TS,
+	collectDeleted bool,
+) (stats []objectio.ObjectStats) {
+
+	iter := p.dataObjectTSIndex.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(ObjectIndexByTSEntry{
+		Time: start,
+	}) {
+		return
+	}
+
+	nameIdx := p.dataObjectsNameIndex.Copy()
+
+	for ok := true; ok; ok = iter.Next() {
+		entry := iter.Item()
+
+		var ss objectio.ObjectStats
+		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
+
+		val, exist := nameIdx.Get(ObjectEntry{
+			ObjectInfo{
+				ObjectStats: ss,
+			},
+		})
+
+		if !exist {
+			continue
+		}
+
+		if !collectDeleted {
+			// if deleted before end
+			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
+				continue
+			}
+		} else {
+			// only collect deletes
+			// if not delete or delete after end
+			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
+				continue
+			}
+		}
+
+		// if created not in [start, end]
+		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
+			continue
+		}
+
+		stats = append(stats, val.ObjectStats)
+	}
+
+	return
+}
+
+func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
+	ts types.TS,
+	isTombstone bool,
+	objId *objectio.ObjectId,
+) bool {
+
+	var tree *btree.BTreeG[ObjectEntry]
+	if isTombstone {
+		tree = p.tombstoneObjectsNameIndex.Copy()
+	} else {
+		tree = p.dataObjectsNameIndex.Copy()
+	}
+
+	var stats objectio.ObjectStats
+	objectio.SetObjectStatsShortName(&stats, (*objectio.ObjectNameShort)(objId))
+	val, exist := tree.Get(ObjectEntry{
+		ObjectInfo{
+			ObjectStats: stats,
+		},
+	})
+
+	if !exist {
+		return true
+	}
+
+	return !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&ts)
+}
+
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjects.Copy().Iter()
+	iter := p.dataObjectsNameIndex.Copy().Iter()
 	defer iter.Release()
 
 	pivot := ObjectEntry{}
@@ -207,22 +291,24 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	return ObjectInfo{}, false
 }
 
-type BlockDeltaInfo struct {
-	//the commit ts of location.
-	Cts types.TS
-	Loc objectio.Location
-}
+func (p *PartitionState) CollectTombstoneObjects(
+	snapshot types.TS,
+	appendTo func(stats *objectio.ObjectStats),
+) (err error) {
 
-func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaInfo) (err error) {
-	iter := p.blockDeltas.Copy().Iter()
-	defer iter.Release()
+	if p.ApproxTombstoneObjectsNum() == 0 {
+		return
+	}
 
-	for ok := iter.First(); ok; ok = iter.Next() {
-		item := iter.Item()
-		mp[item.BlockID] = BlockDeltaInfo{
-			Loc: item.DeltaLoc[:],
-			Cts: item.CommitTs,
-		}
+	iter, err := p.NewObjectsIter(snapshot, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		item := iter.Entry()
+		appendTo(&item.ObjectStats)
 	}
 
 	return nil

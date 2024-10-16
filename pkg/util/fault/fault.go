@@ -309,7 +309,7 @@ func RemoveFaultPoint(ctx context.Context, name string) error {
 	gfm.chIn <- &msg
 	out := <-gfm.chOut
 	if out == nil {
-		return moerr.NewInvalidInput(ctx, "invalid injection point %s", name)
+		return moerr.NewInvalidInputf(ctx, "invalid injection point %s", name)
 	}
 	return nil
 }

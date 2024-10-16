@@ -43,31 +43,31 @@ func use(spi SPI) {
 }
 
 // DefaultOptions default options
-func DefaultOptions[T ReusableObject]() *Options[T] {
-	return &Options[T]{}
+func DefaultOptions[T any, P ReusableObject[T]]() *Options[T, P] {
+	return &Options[T, P]{}
 }
 
 // WithReleaseFunc with specified release function. The release function is used to
 // release resources before gc.
-func (opts *Options[T]) WithReleaseFunc(release func(*T)) *Options[T] {
+func (opts *Options[T, P]) WithReleaseFunc(release func(P)) *Options[T, P] {
 	opts.release = release
 	return opts
 }
 
 // WithEnableChecker enable check double free, leak free.
-func (opts *Options[T]) WithEnableChecker() *Options[T] {
+func (opts *Options[T, P]) WithEnableChecker() *Options[T, P] {
 	opts.enableChecker = true
 	return opts
 }
 
-func (opts *Options[T]) withGCRecover(fn func()) *Options[T] {
+func (opts *Options[T, P]) withGCRecover(fn func()) *Options[T, P] {
 	opts.gcRecover = fn
 	return opts
 }
 
-func (opts *Options[T]) adjust() {
+func (opts *Options[T, P]) adjust() {
 	if opts.release == nil {
-		opts.release = func(*T) {}
+		opts.release = func(P) {}
 	}
 	if opts.memCapacity == 0 {
 		opts.memCapacity = mpool.MB
@@ -75,13 +75,12 @@ func (opts *Options[T]) adjust() {
 }
 
 // CreatePool create pool instance.
-func CreatePool[T ReusableObject](
-	new func() *T,
-	reset func(*T),
-	opts *Options[T]) {
-	if p := get[T](); p != nil {
-		var v *T
-		panic(fmt.Sprintf("%T pool already created", v))
+func CreatePool[T any, P ReusableObject[T]](
+	new func() P,
+	reset func(P),
+	opts *Options[T, P]) {
+	if p := get[T, P](); p != nil {
+		panic(fmt.Sprintf("%T pool already created", P(nil)))
 	}
 
 	tp := typeOf[T]()
@@ -94,10 +93,10 @@ func CreatePool[T ReusableObject](
 }
 
 // Alloc allocates a pooled object.
-func Alloc[T ReusableObject](p Pool[T]) *T {
+func Alloc[T any, P ReusableObject[T]](p Pool[T, P]) P {
 	if p == nil {
 		var v T
-		p = get[T]()
+		p = get[T, P]()
 		if p == nil {
 			panic(fmt.Sprintf("%T pool not created", v))
 		}
@@ -106,9 +105,9 @@ func Alloc[T ReusableObject](p Pool[T]) *T {
 }
 
 // Free free a pooled object.
-func Free[T ReusableObject](v *T, p Pool[T]) {
+func Free[T any, P ReusableObject[T]](v P, p Pool[T, P]) {
 	if p == nil {
-		p = get[T]()
+		p = get[T, P]()
 	}
 	if p == nil {
 		panic(fmt.Sprintf("%T pool not created", v))
@@ -116,9 +115,9 @@ func Free[T ReusableObject](v *T, p Pool[T]) {
 	p.Free(v)
 }
 
-func get[T ReusableObject]() Pool[T] {
+func get[T any, P ReusableObject[T]]() Pool[T, P] {
 	if pool, ok := pools[typeOf[T]()]; ok {
-		return pool.(Pool[T])
+		return pool.(Pool[T, P])
 	}
 	return nil
 }

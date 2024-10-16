@@ -160,7 +160,8 @@ func (l *localLockTable) doLock(
 				c.txn.closeBlockWaiters()
 			}
 
-			if len(c.w.conflictKey) > 0 &&
+			ck := *c.w.conflictKey.Load()
+			if len(ck) > 0 &&
 				c.opts.Granularity == pb.Granularity_Row {
 
 				if l.options.beforeCloseFirstWaiter != nil {
@@ -171,9 +172,9 @@ func (l *localLockTable) doLock(
 				// we must reload conflict lock, because the lock may be deleted
 				// by other txn and readd into store. So c.w.conflictWith is
 				// invalid.
-				conflictWith, ok := l.mu.store.Get(c.w.conflictKey)
+				conflictWith, ok := l.mu.store.Get(ck)
 				if ok && conflictWith.closeWaiter(c.w) {
-					l.mu.store.Delete(c.w.conflictKey)
+					l.mu.store.Delete(ck)
 				}
 				l.mu.Unlock()
 			}
@@ -390,6 +391,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
 					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				continue
 			}
@@ -455,6 +457,7 @@ func (l *localLockTable) addRowLockLocked(
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
 	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	c.result.NewLockAdd = true
 	l.mu.store.Add(row, lock)
 }
 
@@ -466,8 +469,8 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
-	c.w.conflictKey = key
-	c.w.lt = l
+	c.w.conflictKey.Store(&key)
+	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
@@ -515,6 +518,7 @@ func (l *localLockTable) addRangeLockLocked(
 			}
 			if newHolder {
 				c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+				c.result.NewLockAdd = true
 			}
 			return nil, Lock{}, nil
 		}
@@ -589,6 +593,7 @@ func (l *localLockTable) addRangeLockLocked(
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
 					c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
+					c.result.NewLockAdd = true
 				}
 				conflictWith = Lock{}
 				conflictKey = nil
@@ -624,6 +629,7 @@ func (l *localLockTable) addRangeLockLocked(
 
 	// similar to row lock
 	c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+	c.result.NewLockAdd = true
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)

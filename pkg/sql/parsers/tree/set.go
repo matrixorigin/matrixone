@@ -14,6 +14,8 @@
 
 package tree
 
+import "fmt"
+
 type SetVar struct {
 	statementImpl
 	Assignments []*VarAssignmentExpr
@@ -281,3 +283,34 @@ func (node *SetTransaction) Format(ctx *FmtCtx) {
 
 func (node *SetTransaction) GetStatementType() string { return "Set Transaction" }
 func (node *SetTransaction) GetQueryType() string     { return QueryTypeTCL }
+
+type SetConnectionID struct {
+	statementImpl
+	ConnectionID uint32
+}
+
+func (node *SetConnectionID) Format(ctx *FmtCtx) {
+	ctx.WriteString("set connection id = ")
+	ctx.WriteString(fmt.Sprintf("%d", node.ConnectionID))
+}
+func (node *SetConnectionID) GetStatementType() string { return "Set Connection ID" }
+func (node *SetConnectionID) GetQueryType() string     { return QueryTypeTCL }
+
+type SetLogserviceSettings struct {
+	statementImpl
+	Name  string
+	Value Expr
+}
+
+func (node *SetLogserviceSettings) Format(ctx *FmtCtx) {
+	ctx.WriteString("set logservice settings ")
+	ctx.WriteString(node.Name)
+	ctx.WriteString(" =")
+	if node.Value != nil {
+		ctx.WriteByte(' ')
+		node.Value.Format(ctx)
+	}
+}
+
+func (node *SetLogserviceSettings) GetStatementType() string { return "Set Logservice Settings" }
+func (node *SetLogserviceSettings) GetQueryType() string     { return QueryTypeOth }

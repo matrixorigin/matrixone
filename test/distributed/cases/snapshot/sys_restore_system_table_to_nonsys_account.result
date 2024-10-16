@@ -19,7 +19,7 @@ drop snapshot if exists udf_dsp01;
 create snapshot udf_dsp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-udf_dsp01    2024-05-31 03:17:51.505792    account    acc01        
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
 create function`concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
 language sql as
 '$1 + $2';
@@ -30,8 +30,8 @@ drop snapshot if exists udf_dsp02;
 create snapshot udf_dsp02 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-udf_dsp02    2024-05-31 03:17:51.605929    account    acc01        
-udf_dsp01    2024-05-31 03:17:51.505792    account    acc01        
+udf_dsp02    2024-08-07 09:46:00.188348149    account    acc01        
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
 drop database if exists udf_db2;
 create database udf_db2;
 use udf_db2;
@@ -50,27 +50,27 @@ drop snapshot if exists udf_dsp03;
 create snapshot udf_dsp03 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-udf_dsp03    2024-05-31 03:17:51.743983    account    acc01        
-udf_dsp02    2024-05-31 03:17:51.605929    account    acc01        
-udf_dsp01    2024-05-31 03:17:51.505792    account    acc01        
+udf_dsp03    2024-08-07 09:46:00.221115771    account    acc01        
+udf_dsp02    2024-08-07 09:46:00.188348149    account    acc01        
+udf_dsp01    2024-08-07 09:46:00.17249539    account    acc01        
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
 restore account acc01 from snapshot udf_dsp03;
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 restore account acc01 from snapshot udf_dsp02;
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-05-31 03:17:51    2024-05-31 03:17:51    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop database udf_db;
 drop snapshot udf_dsp01;
 drop snapshot udf_dsp02;
@@ -83,7 +83,7 @@ language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-05-31 03:17:52    2024-05-31 03:17:52    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop snapshot if exists udf_sp04;
 create snapshot udf_sp04 for account acc01;
 drop database udf_db2;
@@ -92,7 +92,7 @@ function_id    name    owner    args    rettype    body    language    db    def
 restore account acc01 from snapshot udf_sp04;
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-05-31 03:17:52    2024-05-31 03:17:52    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop database udf_db2;
 drop snapshot udf_sp04;
 drop database if exists procedure_test;
@@ -123,8 +123,8 @@ id    val
 3    c
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:53    2024-05-31 03:17:53    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:53    2024-05-31 03:17:53    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop snapshot if exists sp_sp05;
 create snapshot sp_sp05 for account acc01;
 drop procedure test_if_hit_elseif_first_elseif;
@@ -132,8 +132,8 @@ drop procedure test_if_hit_if;
 restore account acc01 from snapshot sp_sp05;
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:53    2024-05-31 03:17:53    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:53    2024-05-31 03:17:53    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    test_if_hit_elseif_first_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    {}    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:00    2024-08-07 09:46:00    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 call test_if_hit_elseif_first_elseif();
 id    val
 1    a
@@ -174,8 +174,8 @@ id    val
 3    3.5
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:54    2024-05-31 03:17:54    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:54    2024-05-31 03:17:54    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop snapshot if exists sp_sp06;
 create snapshot sp_sp06 for account acc01;
 drop table tbh1;
@@ -183,7 +183,7 @@ drop table tbh2;
 drop procedure test_if_hit_second_elseif;
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:54    2024-05-31 03:17:54    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 restore account acc01 from snapshot sp_sp06;
 call test_if_hit_else();
 id    val
@@ -195,8 +195,8 @@ id    val
 1    a
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:54    2024-05-31 03:17:54    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-05-31 03:17:54    2024-05-31 03:17:54    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2024-08-07 09:46:01    2024-08-07 09:46:01    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop procedure test_if_hit_second_elseif;
 drop procedure test_if_hit_else;
 drop snapshot sp_sp06;
@@ -206,20 +206,20 @@ drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2024-05-31 03:17:55    
-2    my_ext_stage1    s3://load/files/    *0E0591E0E0FC0806815D04D93FD4BD3F5ADB39AD    disabled    2024-05-31 03:17:55    
+1    my_ext_stage    s3://load/files/        disabled    2024-08-07 09:46:01    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
 drop snapshot if exists stage_sp01;
 create snapshot stage_sp01 for account acc01;
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
 drop stage my_ext_stage;
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-2    my_ext_stage1    s3://load/files2/    *0E0591E0E0FC0806815D04D93FD4BD3F5ADB39AD    disabled    2024-05-31 03:17:55    
+2    my_ext_stage1    s3://load/files2/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
 restore account acc01 from snapshot stage_sp01;
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2024-05-31 03:17:55    
-2    my_ext_stage1    s3://load/files/    *0E0591E0E0FC0806815D04D93FD4BD3F5ADB39AD    disabled    2024-05-31 03:17:55    
+1    my_ext_stage    s3://load/files/        disabled    2024-08-07 09:46:01    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2024-08-07 09:46:01    
 drop stage my_ext_stage;
 drop stage my_ext_stage1;
 drop snapshot stage_sp01;
@@ -703,4 +703,6 @@ drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
 drop snapshot sp01;
 drop account acc01;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 set global enable_privilege_cache = on;

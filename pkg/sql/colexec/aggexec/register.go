@@ -130,7 +130,7 @@ func getSingleAggImplByInfo(
 	if impl, ok := registeredAggFunctions[key]; ok {
 		return impl, nil
 	}
-	return aggImplementation{}, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argType %s", id, arg)
+	return aggImplementation{}, moerr.NewInternalErrorNoCtxf("no implementation for aggID %d with argType %s", id, arg)
 }
 
 func getMultiArgAggImplByInfo(
@@ -140,7 +140,7 @@ func getMultiArgAggImplByInfo(
 	if impl, ok := registeredMultiColumnAggFunctions[key]; ok {
 		return impl, nil
 	}
-	return multiColumnAggImplementation{}, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
+	return multiColumnAggImplementation{}, moerr.NewInternalErrorNoCtxf("no implementation for aggID %d with argTypes %v", id, args)
 }
 
 type aggImplementation struct {

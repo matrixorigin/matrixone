@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -116,6 +118,7 @@ type PushClient struct {
 
 	// Record the timestamp of last log received by CN.
 	receivedLogTailTime syncLogTailTimestamp
+	dca                 delayedCacheApply
 
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
@@ -145,9 +148,49 @@ type PushClient struct {
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 }
 
+type delayedCacheApply struct {
+	// replayCatalogCache and consumeEntry may be called concurrently.
+	// In consumeEntry, update logtail entries of the three tables should be applied to the catalog cache AFTER
+	// replayCatalogCache is finished.
+	// Note: Do not let consumeEntry wait for replayCatalogCache
+	// because replayCatalogCache will be wating for consumeEntry's goroutine to change subcribing status.
+
+	// Consider the lock contention:
+	// consumeEntry handling the three tables will run on a single goroutine,
+	// and on the other goroutine, replayCatalogCache will attempt to acquire the lock only once.
+	// Therefore, the lock contention is not serious.
+	sync.Mutex
+	replayed bool
+	flist    []func()
+}
+
+func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
+	c.dca.Lock()
+	defer c.dca.Unlock()
+	if c.dca.replayed {
+		// replay finished, no need to delay
+		return false
+	}
+	if isSub {
+		return true
+	}
+	c.dca.flist = append(c.dca.flist, f)
+	return true
+}
+
+func (c *PushClient) dcaConfirmAndApply() {
+	c.dca.Lock()
+	defer c.dca.Unlock()
+	c.dca.replayed = true
+	for _, f := range c.dca.flist {
+		f()
+	}
+	c.dca.flist = c.dca.flist[:0]
+}
+
 type State struct {
 	LatestTS  timestamp.Timestamp
-	SubTables map[SubTableID]SubTableStatus
+	SubTables map[uint64]SubTableStatus
 }
 
 func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
@@ -157,7 +200,7 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 func (c *PushClient) GetState() State {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	subTables := make(map[SubTableID]SubTableStatus, len(c.subscribed.m))
+	subTables := make(map[uint64]SubTableStatus, len(c.subscribed.m))
 	for k, v := range c.subscribed.m {
 		subTables[k] = v
 	}
@@ -169,8 +212,8 @@ func (c *PushClient) GetState() State {
 
 // Only used for ut
 func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
-	k := SubTableID{DatabaseID: dbId, TableID: tblId}
-	c.subscribed.m[k] = SubTableStatus{
+	c.subscribed.m[tblId] = SubTableStatus{
+		DBID:       dbId,
 		SubState:   state,
 		LatestTime: time.Now(),
 	}
@@ -178,6 +221,15 @@ func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState)
 
 func (c *PushClient) IsSubscriberReady() bool {
 	return c.subscriber.ready.Load()
+}
+
+func (c *PushClient) IsSubscribed(tblId uint64) bool {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	if _, ok := c.subscribed.m[tblId]; ok {
+		return true
+	}
+	return false
 }
 
 type connector struct {
@@ -228,6 +280,7 @@ func (c *PushClient) init(
 	// release subscriber lock when we received enough response from service.
 	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
+	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
 	c.subscribed.mutex.Lock()
 	defer func() {
@@ -235,7 +288,7 @@ func (c *PushClient) init(
 	}()
 
 	c.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
-	c.subscribed.m = make(map[SubTableID]SubTableStatus)
+	c.subscribed.m = make(map[uint64]SubTableStatus)
 
 	if !c.initialized {
 		c.connector = newConnector(c, e)
@@ -284,15 +337,32 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 		ts))
 }
 
+func (c *PushClient) skipSubscribeIf(
+	ctx context.Context, tbl *txnTable) (bool, *logtailreplay.PartitionState) {
+	//if table has been subscribed, return quickly.
+	if ps, ok := c.isSubscribed(tbl.db.databaseId, tbl.tableId); ok {
+		return true, ps
+	}
+
+	// no need to subscribe a view
+	// for issue #19192
+	if strings.ToUpper(tbl.relKind) == "V" {
+		return true, nil
+	}
+
+	return false, nil
+}
+
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
 	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
 
-	tableId := tbl.tableId
-	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, tableId); ok {
+	var skip bool
+	if skip, ps = c.skipSubscribeIf(ctx, tbl); skip {
 		return ps, nil
 	}
+
+	tableId := tbl.tableId
 
 	state, err := c.toSubIfUnsubscribed(ctx, tbl.db.databaseId, tableId)
 	if err != nil {
@@ -614,18 +684,38 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
-func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
+func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
 	// replay mo_catalog cache
+	var op client.TxnOperator
+	var result executor.Result
 	ts := c.receivedLogTailTime.getTimestamp()
 	typeTs := types.TimestampToTS(ts)
-	op, err := e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"replayCatalogCache",
+		0)
+	op, err = e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts), createByOpt)
 	if err != nil {
 		return err
 	}
-	_ = e.New(ctx, op)
+	defer func() {
+		//same timeout value as it in frontend
+		ctx2, cancel := context.WithTimeout(ctx, e.Hints().CommitOrRollbackTimeout)
+		defer cancel()
+		if err != nil {
+			_ = op.Rollback(ctx2)
+		} else {
+			_ = op.Commit(ctx2)
+		}
+	}()
+	err = e.New(ctx, op)
+	if err != nil {
+		return err
+	}
 
 	// read databases
-	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
+	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
 	if err != nil {
 		return err
 	}
@@ -654,7 +744,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		tryAdjustThreeTablesCreatedTimeWithBatch(b)
+		e.tryAdjustThreeTablesCreatedTimeWithBatch(b)
 		e.catalog.InsertTable(b)
 	}
 
@@ -682,13 +772,14 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 				return err
 			}
 		}
-		if err := fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
+		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
 			return err
 		}
 		e.catalog.InsertColumns(bat)
 	}
 
 	e.catalog.UpdateStart(typeTs)
+	c.dcaConfirmAndApply()
 	return nil
 
 }
@@ -703,7 +794,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				c.pause(false)
 				time.Sleep(time.Second)
 
-				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
@@ -735,7 +826,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			return
 		}
 
-		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+		tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
@@ -763,6 +854,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		err = c.subSysTables(ctx)
 		if err != nil {
+			c.pause(false)
 			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
 			continue
 		}
@@ -783,27 +875,29 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 // UnsubscribeTable implements the LogtailEngine interface.
 func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
 	if c.subscriber == nil {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
 	}
 	if !c.subscriber.ready.Load() {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
 	}
 	if !c.receivedLogTailTime.ready.Load() {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
 	}
 	if ifShouldNotDistribute(dbID, tbID) {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
+		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	k := SubTableID{DatabaseID: dbID, TableID: tbID}
+	k := tbID
 	status, ok := c.subscribed.m[k]
 	if !ok || status.SubState != Subscribed {
 		logutil.Infof("%s table %d-%d is not subscribed yet", logTag, dbID, tbID)
 		return nil
 	}
 
+	dbID = status.DBID
 	c.subscribed.m[k] = SubTableStatus{
+		DBID:       dbID,
 		SubState:   Unsubscribing,
 		LatestTime: status.LatestTime,
 	}
@@ -845,7 +939,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 
 				var err error
 				for k, v := range c.subscribed.m {
-					if ifShouldNotDistribute(k.DatabaseID, k.TableID) {
+					if ifShouldNotDistribute(v.DBID, k) {
 						// never unsubscribe the mo_databases, mo_tables, mo_columns.
 						continue
 					}
@@ -859,17 +953,17 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 						}
 						if err = c.subscriber.sendUnSubscribe(
 							ctx,
-							api.TableID{DbId: k.DatabaseID, TbId: k.TableID}); err == nil {
+							api.TableID{DbId: v.DBID, TbId: k}); err == nil {
 							logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
 								logTag,
-								k.DatabaseID,
-								k.TableID)
+								v.DBID,
+								k)
 							continue
 						}
 						logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
 							logTag,
-							k.DatabaseID,
-							k.TableID,
+							v.DBID,
+							k,
 							err.Error())
 						break
 					}
@@ -916,11 +1010,6 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 	}()
 }
 
-type SubTableID struct {
-	DatabaseID uint64
-	TableID    uint64
-}
-
 // subscribedTable used to record table subscribed status.
 // only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
@@ -928,10 +1017,11 @@ type subscribedTable struct {
 	mutex sync.Mutex
 
 	// value is table's latest use time.
-	m map[SubTableID]SubTableStatus
+	m map[uint64]SubTableStatus
 }
 
 type SubTableStatus struct {
+	DBID       uint64
 	SubState   SubscribeState
 	LatestTime time.Time
 }
@@ -941,10 +1031,11 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	v, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tId}]
+	v, exist := s.m[tId]
 	if exist && v.SubState == Subscribed {
 		//update latest time
-		s.m[SubTableID{DatabaseID: dbId, TableID: tId}] = SubTableStatus{
+		s.m[tId] = SubTableStatus{
+			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -956,32 +1047,34 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	_, ok := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	_, ok := c.subscribed.m[tblId]
 	if !ok {
 		if !c.subscriber.ready.Load() {
 			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
-		c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+		c.subscribed.m[tblId] = SubTableStatus{
+			DBID:     dbId,
 			SubState: Subscribing,
 		}
 
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			//restore the table status.
-			delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+			delete(c.subscribed.m, tblId)
 			return Unsubscribed, err
 		}
 	}
-	return c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}].SubState, nil
+	return c.subscribed.m[tblId].SubState, nil
 
 }
 
 func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	v, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	v, exist := s.m[tblId]
 	if exist && v.SubState == Subscribed {
 		//update latest time
-		s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+		s.m[tblId] = SubTableStatus{
+			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -994,22 +1087,20 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
 	tableId uint64,
-	tbl *txnTable) (SubscribeState, *logtailreplay.PartitionState, error) {
+	tbl *txnTable,
+) (SubscribeState, *logtailreplay.PartitionState, error) {
 
-	//part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
-	//if err != nil {
-	//	return InvalidSubState, nil, err
-	//}
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	v, exist := c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}]
+	v, exist := c.subscribed.m[tableId]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
 		part, err := c.eng.LazyLoadLatestCkp(ctx, tbl)
 		if err != nil {
 			return InvalidSubState, nil, err
 		}
 		//update latest time
-		c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}] = SubTableStatus{
+		c.subscribed.m[tableId] = SubTableStatus{
+			DBID:       tbl.db.databaseId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -1020,12 +1111,13 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 		if !c.subscriber.ready.Load() {
 			return Unsubscribed, nil, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
-		c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}] = SubTableStatus{
+		c.subscribed.m[tableId] = SubTableStatus{
+			DBID:     tbl.db.databaseId,
 			SubState: Subscribing,
 		}
 		if err := c.subscribeTable(ctx, api.TableID{DbId: tbl.db.databaseId, TbId: tableId}); err != nil {
 			//restore the table status.
-			delete(c.subscribed.m, SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId})
+			delete(c.subscribed.m, tableId)
 			return Unsubscribed, nil, err
 		}
 		return Subscribing, nil, nil
@@ -1052,7 +1144,7 @@ func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblI
 	}
 	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] subscribing changed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] subscribing changed timeout",
+	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] subscribing changed timeout",
 		dbId, tblId)
 }
 
@@ -1076,14 +1168,14 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 	}
 	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] unsubscribing changed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableUnSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribing changed timeout",
+	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribing changed timeout",
 		dbId, tblId)
 }
 
 func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	v, exist := c.subscribed.m[tblId]
 	if exist {
 		if v.SubState == Subscribing {
 			return false, v.SubState, nil
@@ -1094,12 +1186,13 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 	if !c.subscriber.ready.Load() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
-	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+	c.subscribed.m[tblId] = SubTableStatus{
+		DBID:     dbId,
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		//restore the table status.
-		delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+		delete(c.subscribed.m, tblId)
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
@@ -1109,7 +1202,7 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	v, exist := c.subscribed.m[tblId]
 	if exist {
 		if v.SubState == Unsubscribing {
 			return false, v.SubState, nil
@@ -1121,12 +1214,13 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	if !c.subscriber.ready.Load() {
 		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 	}
-	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+	c.subscribed.m[tblId] = SubTableStatus{
+		DBID:     dbId,
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		//restore the table status.
-		delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+		delete(c.subscribed.m, tblId)
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
@@ -1135,7 +1229,8 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+	s.m[tblId] = SubTableStatus{
+		DBID:       dbId,
 		SubState:   Subscribed,
 		LatestTime: time.Now(),
 	}
@@ -1145,18 +1240,25 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+	s.m[tblId] = SubTableStatus{
+		DBID:       dbId,
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] resp received", logTag, dbId, tblId)
+	logutil.Infof("%s %s subscribe tbl[db: %d, tbl: %d] resp received, %p",
+		s.eng.service,
+		logTag,
+		dbId,
+		tblId,
+		s,
+	)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.eng.cleanMemoryTableWithTable(dbId, tblId)
-	delete(s.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+	delete(s.m, tblId)
 	logutil.Infof("%s unsubscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
 }
 
@@ -1374,7 +1476,7 @@ func waitServerReady(addr string) {
 
 	// If we still cannot connect to logtail server for serverTimeout, we consider
 	// it has something wrong happened and panic immediately.
-	serverTimeout := time.Minute * 5
+	serverTimeout := time.Minute * 10
 	serverFatal := time.NewTimer(serverTimeout)
 	defer serverFatal.Stop()
 
@@ -1410,7 +1512,7 @@ func waitServerReady(addr string) {
 }
 
 func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.getTNServices()
+	tnStores := e.GetTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
 	}
@@ -1722,7 +1824,7 @@ func (e *Engine) consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true)
 }
 
 func (e *Engine) consumeUpdateLogTail(
@@ -1730,7 +1832,7 @@ func (e *Engine) consumeUpdateLogTail(
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
@@ -1739,7 +1841,8 @@ func updatePartitionOfPush(
 	e *Engine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
-	receiveAt time.Time) (err error) {
+	receiveAt time.Time,
+	isSub bool) (err error) {
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -1801,6 +1904,7 @@ func updatePartitionOfPush(
 			e,
 			state,
 			tl,
+			isSub,
 		)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 
@@ -1812,7 +1916,7 @@ func updatePartitionOfPush(
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 		t0 = time.Now()
-		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, partition.TableInfo.Name)
+		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, isSub)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
@@ -1845,8 +1949,26 @@ func consumeLogTail(
 	engine *Engine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
+	isSub bool,
 ) error {
-	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
+	// return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
+	if lt.Table.DbName == "" {
+		panic(fmt.Sprintf("missing fields %v", lt.Table.String()))
+	}
+	t0 := time.Now()
+	for i := 0; i < len(lt.Commands); i++ {
+		if err := consumeEntry(ctx, primarySeqnum,
+			engine, engine.GetLatestCatalogCache(), state, &lt.Commands[i], isSub); err != nil {
+			return err
+		}
+	}
+
+	if catalog.IsSystemTable(lt.Table.TbId) {
+		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
+	} else {
+		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
+	}
+	return nil
 }
 
 func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
@@ -1875,7 +1997,7 @@ func consumeCkpsAndLogTail(
 	lt *logtail.TableLogtail,
 	databaseId uint64,
 	tableId uint64,
-	tableName string,
+	isSub bool,
 ) (err error) {
 	var entries []*api.Entry
 	var closeCBs []func()
@@ -1883,47 +2005,22 @@ func consumeCkpsAndLogTail(
 		ctx,
 		engine.service,
 		lt.CkpLocation,
-		tableId, tableName,
+		tableId, "",
 		databaseId, "", engine.mp, engine.fs); err != nil {
 		return
 	}
 	defer func() {
 		for _, cb := range closeCBs {
-			cb()
+			if cb != nil {
+				cb()
+			}
 		}
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.GetLatestCatalogCache(), state, entry); err != nil {
+			engine, engine.GetLatestCatalogCache(), state, entry, isSub); err != nil {
 			return
 		}
 	}
-	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
-}
-
-func hackConsumeLogtail(
-	ctx context.Context,
-	primarySeqnum int,
-	engine *Engine,
-	state *logtailreplay.PartitionState,
-	lt *logtail.TableLogtail) error {
-
-	if lt.Table.DbName == "" {
-		panic(fmt.Sprintf("missing fields %v", lt.Table.String()))
-	}
-	t0 := time.Now()
-	for i := 0; i < len(lt.Commands); i++ {
-		if err := consumeEntry(ctx, primarySeqnum,
-			engine, engine.GetLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
-			return err
-		}
-	}
-
-	if lt.Table.TbId == catalog.MO_DATABASE_ID || lt.Table.TbId == catalog.MO_TABLES_ID || lt.Table.TbId == catalog.MO_COLUMNS_ID {
-		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
-	} else {
-		v2.LogtailUpdatePartitonConsumeLogtailCatalogTableDurationHistogram.Observe(time.Since(t0).Seconds())
-	}
-
-	return nil
+	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub)
 }

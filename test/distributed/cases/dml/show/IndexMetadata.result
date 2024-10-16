@@ -48,7 +48,7 @@ create unique index x ON t3(a) comment 'x';
 create index xx ON t3(a) comment 'xx';
 show create table t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL,\n  UNIQUE KEY `a` (`a`) COMMENT 'a',\n  UNIQUE KEY `x` (`a`) COMMENT 'x',\n  KEY `xx` (`a`) COMMENT 'xx'\n)
+t3    CREATE TABLE `t3` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`) COMMENT 'a',\n  UNIQUE KEY `x` (`a`) COMMENT 'x',\n  KEY `xx` (`a`) COMMENT 'xx'\n)
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t3    0    a    1    a    A    0    NULL    NULL    YES            a        YES    NULL

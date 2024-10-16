@@ -44,21 +44,37 @@ func NewMockOperator() *MockOperator {
 	return &MockOperator{}
 }
 
+func (op *MockOperator) ResetBatchs(proc *process.Process, batchs []*batch.Batch) *MockOperator {
+	op.Free(proc, false, nil)
+	op.WithBatchs(batchs)
+	return op
+}
+
 func (op *MockOperator) WithBatchs(batchs []*batch.Batch) *MockOperator {
 	op.batchs = append(op.batchs, batchs...)
 	return op
+}
+
+func (op *MockOperator) GetBatchs() []*batch.Batch {
+	return op.batchs
 }
 
 func (op *MockOperator) Release() {
 }
 
 func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	op.Free(proc, pipelineFailed, err)
+	for i := range op.batchs {
+		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
+			op.batchs[i].CleanOnlyData()
+		}
+	}
 }
 
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for i := range op.batchs {
-		op.batchs[i].Clean(proc.Mp())
+		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
+			op.batchs[i].Clean(proc.Mp())
+		}
 	}
 	op.batchs = nil
 	op.current = 0
@@ -82,6 +98,9 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	if op.current > 0 {
+		op.batchs[op.current-1].CleanOnlyData()
+	}
 	result.Batch = op.batchs[op.current]
 	op.current = op.current + 1
 	return result, nil
@@ -101,8 +120,26 @@ func makeMockVecs() []*vector.Vector {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeMockBatchs() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
+func makeMockTimeWinVecs() []*vector.Vector {
+	vecs := make([]*vector.Vector, 2)
+	vecs[0] = testutil.MakeDatetimeVector([]string{
+		"2021-01-01 00:00:01", "2025-01-01 00:00:02",
+		"2021-01-01 00:00:03", "2025-01-01 00:00:04",
+	}, nil)
+	vecs[1] = testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil)
+	return vecs
+}
+
+func MakeMockTimeWinBatchs() *batch.Batch {
+	bat := batch.New([]string{"ts", "b"})
+	vecs := makeMockTimeWinVecs()
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
@@ -110,7 +147,7 @@ func MakeMockBatchs() *batch.Batch {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID() *batch.Batch {
-	bat := batch.New(true, []string{catalog.Row_ID, "a", "b", "c", "d", "e"})
+	bat := batch.New([]string{catalog.Row_ID, "a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
 
 	uuid1 := objectio.NewSegmentid()
@@ -128,7 +165,7 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 // new batchs with schema : (a int auto_increment, b uuid, c varchar, d json, e date)
 // vecs[0] is null,  use for test preinsert...
 func MakeMockBatchsWithNullVec() *batch.Batch {
-	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
 	vecs := makeMockVecs()
 	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1})
 	bat.Vecs = vecs

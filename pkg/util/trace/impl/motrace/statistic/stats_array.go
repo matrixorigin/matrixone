@@ -255,7 +255,17 @@ type StatsInfo struct {
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
 	// Statistics on the time consumption of the output operator in generating data for query statements
-	OutputDuration int64 `json:"OutputDuration"`
+	OutputDuration      int64 `json:"OutputDuration"`
+	BuildReaderDuration int64 `json:"BuildReaderDuration"`
+
+	//--------------------------------------------------------------------------------
+	// The following attributes are independent statistics for special operations in `buildPlan` phase, used for reference.
+	BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`
+	BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"`
+
+	// The following attributes are independent statistics for special operations in `CompileQuery` phase, used for reference.
+	CompileTableScanDuration int64 `json:"CompileTableScanDuration"`
+	//--------------------------------------------------------------------------------
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -264,12 +274,12 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	LocalFSReadIOMergerTimeConsumption      int64
-	LocalFSReadCacheIOMergerTimeConsumption int64
+	// Local FileService blocking wait time
+	LocalFSReadIOMergerTimeConsumption int64
 
+	// S3 FileService blocking wait time
 	S3FSPrefetchFileIOMergerTimeConsumption int64
 	S3FSReadIOMergerTimeConsumption         int64
-	S3FSReadCacheIOMergerTimeConsumption    int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -333,6 +343,13 @@ func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.OutputDuration, int64(d))
 }
 
+func (stats *StatsInfo) AddBuidReaderTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.BuildReaderDuration, int64(d))
+}
+
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -340,12 +357,6 @@ func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) AddLocalFSReadCacheIOMergerTimeConsumption(d time.Duration) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.LocalFSReadCacheIOMergerTimeConsumption, int64(d))
-}
 func (stats *StatsInfo) AddLocalFSReadIOMergerTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -364,22 +375,58 @@ func (stats *StatsInfo) AddS3FSReadIOMergerTimeConsumption(d time.Duration) {
 	}
 	atomic.AddInt64(&stats.S3FSReadIOMergerTimeConsumption, int64(d))
 }
-func (stats *StatsInfo) AddS3FSReadCacheIOMergerTimeConsumption(d time.Duration) {
+
+func (stats *StatsInfo) ResetIOMergerTimeConsumption() {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.S3FSReadCacheIOMergerTimeConsumption, int64(d))
+	atomic.StoreInt64(&stats.LocalFSReadIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSPrefetchFileIOMergerTimeConsumption, 0)
+	atomic.StoreInt64(&stats.S3FSReadIOMergerTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetIOAccessTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.IOAccessTimeConsumption, 0)
+}
+
+func (stats *StatsInfo) ResetBuildReaderTimeConsumption() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.BuildReaderDuration, 0)
 }
 
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
 	}
-	return stats.LocalFSReadCacheIOMergerTimeConsumption +
-		stats.LocalFSReadIOMergerTimeConsumption +
+	return stats.LocalFSReadIOMergerTimeConsumption +
 		stats.S3FSPrefetchFileIOMergerTimeConsumption +
-		stats.S3FSReadCacheIOMergerTimeConsumption +
 		stats.S3FSReadIOMergerTimeConsumption
+}
+
+func (stats *StatsInfo) AddBuildPlanStatsConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.BuildPlanStatsDuration, int64(d))
+}
+
+func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.BuildPlanResolveVarDuration, int64(d))
+}
+
+func (stats *StatsInfo) AddCompileTableScanConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileTableScanDuration, int64(d))
 }
 
 func (stats *StatsInfo) SetWaitActiveCost(cost time.Duration) {

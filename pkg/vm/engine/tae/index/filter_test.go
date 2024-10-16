@@ -245,7 +245,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	// require.False(t, ok)
 
 	idVec := rowids.GetDownstreamVector()
-	ids := vector.MustFixedCol[types.Rowid](idVec)
+	ids := vector.MustFixedColWithTypeCheck[types.Rowid](idVec)
 	for i := 0; i < len(ids); i++ {
 		id := ids[i]
 		ok, err = hbf2.MayContainsKey(id[:])

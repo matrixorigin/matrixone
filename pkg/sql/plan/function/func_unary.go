@@ -24,7 +24,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -33,6 +32,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -446,7 +447,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
 		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "'%s'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
 		}
 		return d.ToDate(), nil
 	}, selectList)
@@ -591,44 +592,99 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		filePath := util.UnsafeBytesToString(_filePath)
 		fs := proc.GetFileService()
 
-		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
-		if err != nil {
-			return err
-		}
-		r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
 
-		defer r.Close()
-
-		fileBytes, err := io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-
-		var contentBytes []byte
-		switch ext {
-		case ".csv", ".txt":
-			contentBytes = fileBytes
-			//nothing to do.
-		default:
-			return moerr.NewInvalidInput(proc.Ctx, "unsupported file extension: %s", ext)
-		}
-
-		if len(fileBytes) > 65536 /*blob size*/ {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		if len(fileBytes) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		err = func() error {
+			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+			if err != nil {
 				return err
 			}
-			return nil
-		}
 
-		if err = rs.AppendBytes(contentBytes, false); err != nil {
+			defer r.Close()
+
+			fileBytes, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+
+			if len(fileBytes) == 0 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			if err = rs.AppendBytes(fileBytes, false); err != nil {
+				return err
+			}
+
+			return nil
+		}()
+
+		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// WriteFileDatalink write content to file service and return number of byte written
+func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+
+		moUrl, _, err := ParseDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+
+		_content, null2 := contentVec.GetStrValue(i)
+		if null2 {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		content := util.UnsafeBytesToString(_content)
+
+		err = func() error {
+			writer, err := NewFileServiceWriter(moUrl, proc)
+			if err != nil {
+				return err
+			}
+
+			defer writer.Close()
+
+			n, err := writer.Write([]byte(content))
+			if err != nil {
+				return err
+			}
+
+			if err = rs.Append(int64(n), false); err != nil {
+				return err
+			}
+
+			return nil
+		}()
+
+		if err != nil {
+			return err
+		}
+
 	}
 	return nil
 }
@@ -687,7 +743,7 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		case "available":
 			return int64(system.MemoryAvailable()), nil
 		default:
-			return -1, moerr.NewInvalidInput(proc.Ctx, "unsupported memory command: %s", v)
+			return -1, moerr.NewInvalidInputf(proc.Ctx, "unsupported memory command: %s", v)
 		}
 	}, selectList)
 }
@@ -747,7 +803,7 @@ func FillSpaceNumber[T types.BuiltinNumber](v T) (string, error) {
 	} else {
 		ilen = int(v)
 		if ilen > MaxAllowedValue || ilen < 0 {
-			return "", moerr.NewInvalidInputNoCtx("the space count is greater than max allowed value %d", MaxAllowedValue)
+			return "", moerr.NewInvalidInputNoCtxf("the space count is greater than max allowed value %d", MaxAllowedValue)
 		}
 	}
 	return strings.Repeat(" ", ilen), nil
@@ -776,11 +832,18 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
+		return v.ToDatetime(time.Local).ToTime(scale)
+	}, selectList)
+}
+
 func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[int64, types.Time](ivecs, result, proc, length, func(v int64) (types.Time, error) {
 		t, e := types.ParseInt64ToTime(v, 0)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%d'", v)
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
 		return t, nil
 	}, selectList)
@@ -790,7 +853,7 @@ func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", string(v))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
 		return t, nil
 	}, selectList)
@@ -801,7 +864,7 @@ func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
 		t, e := types.ParseDecimal128ToTime(v, scale, 6)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtx("time", "'%s'", v.Format(0))
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
 		return t, nil
 	}, selectList)
@@ -1309,7 +1372,7 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return proc.GetSessionInfo().LastInsertID
+		return proc.GetLastInsertID()
 	})
 }
 
@@ -1343,12 +1406,12 @@ func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
 	var idx int
 	if loc < 0 {
 		if loc < -cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc + cnt)
 	} else {
 		if loc > cnt {
-			return 0, moerr.NewInvalidInput(proc.Ctx, "index out of range: %d", loc)
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
 		idx = int(loc)
 	}
@@ -1556,7 +1619,7 @@ func bitCastBinaryToFixed[T types.FixedSizeTExceptStrType](
 			}
 		} else {
 			if len(v) > byteLen {
-				return moerr.NewOutOfRange(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
 			}
 
 			if len(v) < byteLen {
@@ -1730,6 +1793,29 @@ func LastDay(
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func GroupingFunc(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := 0; i < length; i++ {
+		var ans int64 = 0
+		power := 0
+		for j := len(parameters) - 1; j >= 0; j-- {
+			rollup := parameters[j].GetGrouping()
+			isRollup := rollup.Contains(uint64(i))
+			if isRollup {
+				ans += 1 << power
+			}
+			power++
+		}
+		rs.AppendMustValue(ans)
 	}
 	return nil
 }

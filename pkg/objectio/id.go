@@ -64,9 +64,14 @@ func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
 
 func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	var id Blockid
-	copy(id[:], name[0:NameStringOff])
-	copy(id[NameStringOff:], types.EncodeUint16(&sequence))
+	BuildObjectBlockidTo(name, sequence, id[:])
 	return &id
+
+}
+
+func BuildObjectBlockidTo(name ObjectName, sequence uint16, to []byte) {
+	copy(to, name[0:NameStringOff])
+	copy(to[NameStringOff:], types.EncodeUint16(&sequence))
 }
 
 func Str2Blockid(id string) *Blockid {

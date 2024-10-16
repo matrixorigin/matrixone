@@ -628,7 +628,7 @@ func writeResponse(response *udf.Response, result vector.FunctionResultWrapper) 
 			}
 		}
 	default:
-		return moerr.NewNotSupportedNoCtx("python udf return type: %v", retType.String())
+		return moerr.NewNotSupportedNoCtxf("python udf return type: %v", retType.String())
 	}
 
 	return nil

@@ -45,7 +45,7 @@ func (s *LogtailStatus) fill(c *disttae.PushClient) {
 	st := c.GetState()
 	s.SubscribedTables = make(map[string]SubTableStatus, len(st.SubTables))
 	for id, status := range st.SubTables {
-		tid := fmt.Sprintf("%d-%d", id.DatabaseID, id.TableID)
+		tid := fmt.Sprintf("%d-%d", status.DBID, id)
 		s.SubscribedTables[tid] = SubTableStatus{
 			SubState:   int32(status.SubState),
 			LatestTime: status.LatestTime,

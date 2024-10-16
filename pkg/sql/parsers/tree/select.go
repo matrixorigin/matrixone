@@ -300,7 +300,7 @@ type SelectClause struct {
 	Exprs    SelectExprs
 	From     *From
 	Where    *Where
-	GroupBy  GroupBy
+	GroupBy  *GroupByClause
 	Having   *Where
 	Option   string
 }
@@ -335,7 +335,7 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
 	}
-	if len(node.GroupBy) > 0 {
+	if node.GroupBy != nil {
 		ctx.WriteByte(' ')
 		node.GroupBy.Format(ctx)
 	}
@@ -397,14 +397,28 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 }
 
 // a GROUP BY clause.
-type GroupBy []Expr
+type GroupByClause struct {
+	GroupByExprsList []Exprs
+	GroupingSet      Exprs
+	Apart            bool
+	Cube             bool
+	Rollup           bool
+}
 
-func (node *GroupBy) Format(ctx *FmtCtx) {
+func (node *GroupByClause) Format(ctx *FmtCtx) {
 	prefix := "group by "
-	for _, n := range *node {
-		ctx.WriteString(prefix)
-		n.Format(ctx)
-		prefix = ", "
+	for _, list := range node.GroupByExprsList {
+		for _, n := range list {
+			ctx.WriteString(prefix)
+			n.Format(ctx)
+			prefix = ", "
+		}
+	}
+	if node.Cube {
+		ctx.WriteString("with cube")
+	}
+	if node.Rollup {
+		ctx.WriteString(" with rollup")
 	}
 }
 
@@ -514,6 +528,30 @@ func (node *UsingJoinCond) Format(ctx *FmtCtx) {
 
 func NewUsingJoinCond(c IdentifierList) *UsingJoinCond {
 	return &UsingJoinCond{Cols: c}
+}
+
+const (
+	APPLY_TYPE_CROSS = "CROSS APPLY"
+	APPLY_TYPE_OUTER = "OUTER APPLY"
+)
+
+type ApplyTableExpr struct {
+	TableExpr
+	ApplyType string
+	Left      TableExpr
+	Right     TableExpr
+}
+
+type ApplyCond interface {
+	NodeFormatter
+}
+
+func (node *ApplyTableExpr) Format(ctx *FmtCtx) {
+	node.Left.Format(ctx)
+	ctx.WriteByte(' ')
+	ctx.WriteString(strings.ToLower(node.ApplyType))
+	ctx.WriteByte(' ')
+	node.Right.Format(ctx)
 }
 
 // the parenthesized TableExpr.

@@ -18,8 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Response Categories
@@ -199,9 +200,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 		return
 	}
 	if mp.tcpConn != nil {
-		if err := mp.tcpConn.Disconnect(); err != nil {
-			return
-		}
+		_ = mp.tcpConn.closeConn()
 	}
 	//release salt
 	if mp.salt != nil {
@@ -276,6 +275,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)
 	default:
-		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
+		return moerr.NewInternalErrorf(ctx, "unsupported response:%d ", resp.category)
 	}
 }

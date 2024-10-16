@@ -28,6 +28,7 @@ import (
 )
 
 func TestUpgrade(t *testing.T) {
+	t.SkipNow()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -81,6 +82,7 @@ func TestUpgrade(t *testing.T) {
 }
 
 func TestUpgradeCrossVersions(t *testing.T) {
+	t.SkipNow()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return

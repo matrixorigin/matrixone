@@ -22,11 +22,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -45,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -54,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
@@ -77,6 +80,9 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
+	GetTimestampWaiter() client.TimestampWaiter
+	GetEngine() engine.Engine
+	GetClock() clock.Clock
 }
 
 type EngineType string
@@ -611,7 +617,7 @@ type service struct {
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
-	mo                     *frontend.MOServer
+	mo                     frontend.Server
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
 	hakeeperConnected      chan struct{}
@@ -621,6 +627,7 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
+	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService

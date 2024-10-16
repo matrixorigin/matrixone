@@ -66,3 +66,5 @@ drop snapshot sn1;
 
 drop snapshot syssn1;
 drop account acc1;
+-- @ignore:1
+show snapshots;

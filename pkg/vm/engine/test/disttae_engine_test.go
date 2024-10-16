@@ -15,13 +15,17 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,11 +33,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -41,7 +48,8 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/stretchr/testify/require"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_InsertRows(t *testing.T) {
@@ -130,7 +138,6 @@ func Test_InsertRows(t *testing.T) {
 
 // Create database and tables, and check the data length in the system tables in TN
 func TestSystemDB1(t *testing.T) {
-
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
 
@@ -154,36 +161,45 @@ func TestSystemDB1(t *testing.T) {
 	txnop.GetWorkspace().StartStatement()
 	require.Equal(t, 2+1, len(dbs))
 
-	txn, err := p.T.GetDB().StartTxn(nil)
+	txn, err := p.T.StartTxn()
 	require.NoError(t, err)
 
 	catalogDB, err := txn.GetDatabase(catalog.MO_CATALOG)
 	require.NoError(t, err)
 	table, err := catalogDB.GetRelationByName(catalog.MO_DATABASE)
 	require.NoError(t, err)
-	it := table.MakeObjectIt()
+	it := table.MakeObjectIt(false)
+	tableSchema := table.GetMeta().(*catalog2.TableEntry).GetLastestSchema(false)
 	for it.Next() {
 		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemDBAttr_Name, common.DefaultAllocator)
-		require.Nil(t, err)
-		defer view.Close()
+		var view *containers.Batch
+		err := blk.Scan(p.Ctx, &view, 0, []int{
+			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
 		require.Equal(t, 2, view.Length())
-		view, err = blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemDBAttr_CreateSQL, common.DefaultAllocator)
 		require.Nil(t, err)
-		defer view.Close()
+		view.Close()
+		view = nil
+		err = blk.Scan(p.Ctx, &view, 0, []int{
+			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
+		require.Nil(t, err)
 		require.Equal(t, 2, view.Length())
+		view.Close()
 	}
 
 	table, err = catalogDB.GetRelationByName(catalog.MO_TABLES)
 	require.Nil(t, err)
-	it = table.MakeObjectIt()
+	it = table.MakeObjectIt(false)
 	for it.Next() {
 		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemRelAttr_Name, common.DefaultAllocator)
+		var view *containers.Batch
+		err := blk.Scan(p.Ctx, &view, 0, []int{
+			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
 		require.Nil(t, err)
-		defer view.Close()
 		require.Equal(t, 1, view.Length())
-		view, err = blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemRelAttr_Kind, common.DefaultAllocator)
+		view.Close()
+		view = nil
+		err = blk.Scan(p.Ctx, &view, 0, []int{
+			tableSchema.GetColIdx(catalog.SystemDBAttr_Name)}, common.DefaultAllocator)
 		require.NoError(t, err)
 		defer view.Close()
 		require.Equal(t, 1, view.Length())
@@ -191,28 +207,20 @@ func TestSystemDB1(t *testing.T) {
 
 	table, err = catalogDB.GetRelationByName(catalog.MO_COLUMNS)
 	require.Nil(t, err)
-	bat := containers.NewBatch()
-	defer bat.Close()
-	it = table.MakeObjectIt()
+	tableSchema = table.GetMeta().(*catalog2.TableEntry).GetLastestSchema(false)
+	var bat *containers.Batch
+	it = table.MakeObjectIt(false)
 	for it.Next() {
 		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemColAttr_DBName, common.DefaultAllocator)
+		err := blk.Scan(p.Ctx, &bat, 0, []int{
+			tableSchema.GetColIdx(catalog.SystemColAttr_DBName),
+			tableSchema.GetColIdx(catalog.SystemColAttr_RelName),
+			tableSchema.GetColIdx(catalog.SystemColAttr_Name)}, common.DefaultAllocator)
 		require.NoError(t, err)
-		defer view.Close()
-		bat.AddVector(catalog.SystemColAttr_DBName, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemColAttr_RelName, common.DefaultAllocator)
-		require.Nil(t, err)
-		defer view.Close()
-		bat.AddVector(catalog.SystemColAttr_RelName, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(p.Ctx, 0, catalog.SystemColAttr_Name, common.DefaultAllocator)
-		require.Nil(t, err)
-		defer view.Close()
-		bat.AddVector(catalog.SystemColAttr_Name, view.Vecs[0])
 	}
 	require.Equal(t, 3, bat.Length())
 	t.Log(bat.PPString(10))
+	bat.Close()
 }
 
 type dummyCpkGetter struct{}
@@ -231,7 +239,6 @@ func totsp(ts types.TS) *timestamp.Timestamp {
 }
 
 func TestLogtailBasic(t *testing.T) {
-
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -247,7 +254,8 @@ func TestLogtailBasic(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
-	schema.Comment = "rows:10;blks=1"
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txnop := p.StartCNTxn()
 	p.CreateDBAndTable(txnop, "todrop", schema)
@@ -284,7 +292,7 @@ func TestLogtailBasic(t *testing.T) {
 			txn, _ := tae.StartTxn(nil)
 			db, _ := txn.GetDatabase("db")
 			tbl, _ := db.GetRelationByName("test")
-			blkIt := tbl.MakeObjectIt()
+			blkIt := tbl.MakeObjectIt(false)
 			for blkIt.Next() {
 				obj := blkIt.GetObject()
 				id := obj.GetMeta().(*catalog2.ObjectEntry).ID()
@@ -353,19 +361,19 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_DATABASE_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // insert and delete
+	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
-	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
+	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(resp.Commands[2].Bat.Vecs))
+	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 db
+	datname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // datname column
 	require.NoError(t, err)
 	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
 	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
-	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
+	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
+	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs))
+	check_same_rows(resp.Commands[3].Bat, 1) // 1 drop db
 
 	close()
 
@@ -376,18 +384,18 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // insert + delete
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
-	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
+	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
+	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
+	check_same_rows(resp.Commands[2].Bat, 2)                                 // 2 tables
+	relname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3]) // relname column
 	require.NoError(t, err)
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
-	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop table
+	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
+	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
+	check_same_rows(resp.Commands[3].Bat, 1)                        // 1 drop table
 	close()
 
 	// get columns catalog change
@@ -397,10 +405,10 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // insert + delete
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
+	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
+	check_same_rows(resp.Commands[2].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 	close()
 
 	// get user table change
@@ -410,10 +418,10 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // 2 insert data and delete data
+	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 
 	// check data change
-	insDataEntry := resp.Commands[0]
+	insDataEntry := resp.Commands[2]
 	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
 	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
 	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
@@ -423,9 +431,9 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	require.NoError(t, err)
 
-	delDataEntry := resp.Commands[1]
+	delDataEntry := resp.Commands[3]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
+	require.Equal(t, fixedColCnt+2, len(delDataEntry.Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
 	check_same_rows(delDataEntry.Bat, 10)
 
 	// check delete rowids are exactly what we want
@@ -437,7 +445,7 @@ func TestLogtailBasic(t *testing.T) {
 		rowidMap[id] = 1
 	}
 	for i := int64(0); i < 10; i++ {
-		id := vector.MustFixedCol[types.Rowid](rowids)[i]
+		id := vector.MustFixedColWithTypeCheck[types.Rowid](rowids)[i]
 		rowidMap[id] = rowidMap[id] + 1
 	}
 	require.Equal(t, 10, len(rowidMap))
@@ -448,7 +456,6 @@ func TestLogtailBasic(t *testing.T) {
 }
 
 func TestAlterTableBasic(t *testing.T) {
-
 	opts := config.WithLongScanAndCKPOpts(nil)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
@@ -493,7 +500,7 @@ func TestAlterTableBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 
-	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
 	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	c1, err := cstr1.MarshalBinary()
@@ -510,7 +517,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
 
 	close()
 
@@ -525,9 +532,9 @@ func TestAlterTableBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
 	}, true)
 
-	require.Equal(t, 2, len(resp.Commands)) // create and drop
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.Equal(t, 4, len(resp.Commands)) // create and drop
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
+	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
 	close()
 }
 
@@ -539,10 +546,10 @@ func TestColumnsTransfer(t *testing.T) {
 	defer p.Close()
 	tae := p.T.GetDB()
 
-	schema := catalog2.MockSchemaAll(8188, -1)
+	schema := catalog2.MockSchemaAll(8000, -1)
 	schema.Name = "test"
 
-	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2 := catalog2.MockSchemaAll(200, -1)
 	schema2.Name = "todrop"
 
 	txnop := p.StartCNTxn()
@@ -561,14 +568,15 @@ func TestColumnsTransfer(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
-	it := columnsTbl.MakeObjectIt()
+	it := columnsTbl.MakeObjectIt(false)
 	it.Next()
 	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
 	t.Log(firstEntry.ID().ShortStringEx())
 	task1, err := jobs.NewFlushTableTailTask(
 		tasks.WaitableCtx, txn,
 		[]*catalog2.ObjectEntry{firstEntry},
-		tae.Runtime, txn.GetStartTS())
+		nil,
+		tae.Runtime)
 	require.NoError(t, err)
 	worker.SendOp(task1)
 	err = task1.WaitDone(context.Background())
@@ -581,6 +589,147 @@ func TestColumnsTransfer(t *testing.T) {
 	require.NoError(t, txnop.GetWorkspace().IncrStatementID(ctx, true))
 	require.NoError(t, txnop.Commit(p.Ctx))
 
+}
+
+func TestInProgressTransfer(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	dir := testutil.MakeDefaultTestPath("partition_state", t)
+	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	var did, tid uint64
+	var theRow *batch.Batch
+	{
+		schema := catalog2.MockSchemaAll(10, 3)
+		schema.Name = "test"
+		// create and append data
+		txnop := p.StartCNTxn()
+		_, rel := p.CreateDBAndTable(txnop, "db", schema)
+		did, tid = rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
+		bat := catalog2.MockBatch(schema, 10)
+		theRow = containers.ToCNBatch(bat.CloneWindow(7, 1, p.Mp))
+		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
+		require.NoError(t, txnop.Commit(p.Ctx))
+		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+	}
+
+	toTransferTxn1 := p.StartCNTxn()
+	toTransferTxn2 := p.StartCNTxn()
+	{
+		tnTxn, _ := tae.StartTxn(nil)
+		userDB, _ := tnTxn.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+		id, row, err := userTbl.GetByFilter(p.Ctx, handle.NewEQFilter(int64(7)))
+		require.NoError(t, err)
+		rowid := *objectio.NewRowid(&id.BlockID, row)
+
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec2, int64(7), false, p.Mp))
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(1)
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		{
+			db, err := p.D.Engine.Database(p.Ctx, "db", toTransferTxn1)
+			require.NoError(t, err)
+			rel, err := db.Relation(p.Ctx, "test", nil)
+			require.NoError(t, err)
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+			require.NoError(t, rel.Write(p.Ctx, theRow))
+		}
+
+		{
+			db, err := p.D.Engine.Database(p.Ctx, "db", toTransferTxn2)
+			require.NoError(t, err)
+			rel, err := db.Relation(p.Ctx, "test", nil)
+			require.NoError(t, err)
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		}
+	}
+
+	{
+		// first flush, with a parallel updating
+		tnFlushTxn, _ := tae.StartTxn(nil)
+		userDB, _ := tnFlushTxn.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+
+		it := userTbl.MakeObjectIt(false)
+		it.Next()
+		firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+		firstEntry.GetObjectData().FreezeAppend()
+		t.Log(firstEntry.ID().ShortStringEx())
+		task1, err := jobs.NewFlushTableTailTask(
+			tasks.WaitableCtx, tnFlushTxn,
+			[]*catalog2.ObjectEntry{firstEntry},
+			nil,
+			tae.Runtime)
+		require.NoError(t, err)
+		worker.SendOp(task1)
+		err = task1.WaitDone(context.Background())
+		require.NoError(t, err)
+
+		{
+			// update during flushing, create a new aobject
+			tnDelTxn, _ := tae.StartTxn(nil)
+			userDB, _ := tnDelTxn.GetDatabaseByID(did)
+			userTbl, _ := userDB.GetRelationByID(tid)
+			require.NoError(t, userTbl.UpdateByFilter(p.Ctx, handle.NewEQFilter(int64(7)), 0, int8(42), false))
+			require.NoError(t, tnDelTxn.Commit(p.Ctx))
+		}
+
+		require.NoError(t, tnFlushTxn.Commit(p.Ctx))
+	}
+
+	{
+		// trigger first transfer, read the memory delete and also find the the pk in memroy
+		time.Sleep(200 * time.Millisecond)
+		ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, 42)
+		require.NoError(t, toTransferTxn1.GetWorkspace().IncrStatementID(ctx, true))
+		require.NoError(t, toTransferTxn1.Commit(p.Ctx))
+	}
+
+	{
+		// flush the second abobject
+		tnFlushTxn2, _ := tae.StartTxn(nil)
+		userDB, _ := tnFlushTxn2.GetDatabaseByID(did)
+		userTbl, _ := userDB.GetRelationByID(tid)
+		it := userTbl.MakeObjectIt(false)
+		var entry *catalog2.ObjectEntry
+		for it.Next() {
+			entry = it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+			if entry.IsAppendable() && !entry.HasDropCommitted() {
+				break
+			}
+		}
+		task1, err := jobs.NewFlushTableTailTask(
+			tasks.WaitableCtx, tnFlushTxn2,
+			[]*catalog2.ObjectEntry{entry},
+			nil,
+			tae.Runtime)
+		require.NoError(t, err)
+		worker.SendOp(task1)
+		err = task1.WaitDone(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, tnFlushTxn2.Commit(p.Ctx))
+	}
+
+	{
+		// trigge the second transfer, find the pk in the first row of the latest nobject
+		time.Sleep(200 * time.Millisecond)
+		ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, 42)
+		require.NoError(t, toTransferTxn2.GetWorkspace().IncrStatementID(ctx, true))
+		require.NoError(t, toTransferTxn2.Commit(p.Ctx))
+	}
 }
 
 func TestCacheGC(t *testing.T) {
@@ -633,7 +782,313 @@ func TestCacheGC(t *testing.T) {
 	// gc
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
-	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
+	require.Equal(t, 4, r.TStaleItem)
 	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
 
+}
+
+func TestShowDatabasesInRestoreTxn(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(10, -1)
+	schema.Name = "test"
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	ts := time.Now().UTC().UnixNano()
+
+	schema2 := catalog2.MockSchemaAll(10, -1)
+	schema2.Name = "test2"
+	txnop = p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db2", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	catalogDB, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	dbTbl, _ := catalogDB.GetRelationByID(catalog.MO_DATABASE_ID)
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	it := dbTbl.MakeObjectIt(false)
+	it.Next()
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		[]*catalog2.ObjectEntry{firstEntry},
+		nil,
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	require.NoError(t, p.D.Engine.Delete(p.Ctx, "db2", txnop))
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+	res, err := exec.Exec(p.Ctx, fmt.Sprintf("show databases {MO_TS=%d}", ts), executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	var rels []string
+	for _, b := range res.Batches {
+		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
+			rels = append(rels, v.GetStringAt(i))
+		}
+	}
+	require.Equal(t, 2, len(rels), rels) // mo_catalog + db
+	require.NotContains(t, rels, "db2")
+}
+
+func TestObjectStats1(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog2.MockSchemaAll(10, 0)
+	bat := catalog2.MockBatch(schema, 10)
+
+	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
+
+	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	appendableObjectID := testutil2.GetOneObject(rel).GetID()
+	id.SetObjectID(appendableObjectID)
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	ts := taeHandler.GetDB().TxnMgr.Now()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err := state.NewObjectsIter(ts, false, false)
+	assert.NoError(t, err)
+	objCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+			assert.True(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		} else {
+			assert.False(t, obj.GetAppendable())
+			assert.True(t, obj.GetSorted())
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		}
+	}
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+	iter, err = state.NewObjectsIter(ts, false, true)
+	assert.NoError(t, err)
+	objCount = 0
+	appendableCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if obj.GetAppendable() {
+			appendableCount++
+		}
+		assert.True(t, obj.GetSorted())
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, appendableCount, 1)
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+
+	testutil2.MergeBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	ts = taeHandler.GetDB().TxnMgr.Now()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err = state.NewObjectsIter(ts, true, false)
+	assert.NoError(t, err)
+	objCount = 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		assert.False(t, obj.GetAppendable())
+		assert.True(t, obj.GetSorted())
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, objCount, 1)
+	iter.Close()
+}
+
+func TestObjectStats2(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog2.MockSchemaAll(10, -1)
+	bat := catalog2.MockBatch(schema, 10)
+
+	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
+
+	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	appendableObjectID := testutil2.GetOneObject(rel).GetID()
+	id.SetObjectID(appendableObjectID)
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	ts := taeHandler.GetDB().TxnMgr.Now()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err := state.NewObjectsIter(ts, false, false)
+	assert.NoError(t, err)
+	objCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if bytes.Equal(obj.ObjectInfo.ObjectStats.ObjectName().ObjectId()[:], appendableObjectID[:]) {
+			assert.True(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		} else {
+			assert.False(t, obj.GetAppendable())
+			assert.False(t, obj.GetSorted())
+			assert.False(t, obj.ObjectStats.GetCNCreated())
+		}
+	}
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+	iter, err = state.NewObjectsIter(ts, false, true)
+	assert.NoError(t, err)
+	objCount = 0
+	appendableCount := 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		if obj.GetAppendable() {
+			appendableCount++
+		}
+		assert.True(t, obj.GetSorted())
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	assert.Equal(t, appendableCount, 1)
+	assert.Equal(t, objCount, 2)
+	iter.Close()
+
+	testutil2.MergeBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	ts = taeHandler.GetDB().TxnMgr.Now()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	iter, err = state.NewObjectsIter(ts, true, false)
+	assert.NoError(t, err)
+	objCount = 0
+	for iter.Next() {
+		obj := iter.Entry()
+		objCount++
+		assert.False(t, obj.GetAppendable())
+		assert.False(t, obj.GetSorted())
+		assert.False(t, obj.ObjectStats.GetCNCreated())
+	}
+	iter.Close()
+	assert.Equal(t, objCount, 1)
+}
+
+func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(5, 1)
+	schema.Name = "mo_account"
+	txnop := p.StartCNTxn()
+	bats := catalog2.MockBatch(schema, 4).Split(2)
+	bat, bat1 := bats[0], bats[1]
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	rel.Write(p.Ctx, containers.ToCNBatch(bat)) // pk 0 and 1
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	did, tid := rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+
+	txnop = p.StartCNTxn()
+	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	udb, _ := txn.GetDatabaseByID(did)
+	utbl, _ := udb.GetRelationByID(tid)
+
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+
+	// flusht tombstone ahead of data insert
+	it := utbl.MakeObjectIt(true)
+	it.Next()
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		nil,
+		[]*catalog2.ObjectEntry{firstEntry},
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+	rel, err = db.Relation(p.Ctx, "mo_account", nil)
+	require.NoError(t, err)
+	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat1))) // pk 2 and 3
+	res, err := exec.Exec(p.Ctx, "select * from db.mo_account", executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(res.Batches))
+	require.Equal(t, 2, res.Batches[0].RowCount())
+	pkSum := int16(0)
+	for i := 0; i < 2; i++ {
+		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
+	}
+	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }

@@ -65,6 +65,10 @@ func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tun
 	return nil, nil, nil
 }
 
+func (r *mockRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
 func (r *mockRouter) Refresh(sync bool) {
 	r.refreshCount++
 }
@@ -80,6 +84,7 @@ func TestPluginRouter_Route(t *testing.T) {
 		expectErr         bool
 		expectUUID        string
 		expectRefresh     int
+		filter            func(prevAddr string) bool
 	}{{
 		name: "recommend select CN",
 		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
@@ -149,6 +154,26 @@ func TestPluginRouter_Route(t *testing.T) {
 		},
 		expectUUID:    "cn0",
 		expectRefresh: 1,
+	}, {
+		name: "filter out current CN",
+		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{
+				Action: plugin.Select,
+				CN: &metadata.CNService{
+					ServiceID:  "cn0",
+					SQLAddress: "8.8.8.8:6001",
+				},
+				Updated: true,
+			}, nil
+		},
+		mockRouteFn: func(ctx context.Context, ci clientInfo) (*CNServer, error) {
+			return &CNServer{uuid: "cn1"}, nil
+		},
+		expectRefresh: 1,
+		expectUUID:    "cn1",
+		filter: func(addr string) bool {
+			return addr == "8.8.8.8:6001"
+		},
 	}}
 
 	for _, tt := range tests {
@@ -156,13 +181,13 @@ func TestPluginRouter_Route(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
 			pr := newPluginRouter("", r, p)
-			cn, err := pr.Route(context.TODO(), "", clientInfo{}, nil)
+			cn, err := pr.Route(context.TODO(), "", clientInfo{}, tt.filter)
 			if tt.expectErr {
 				require.Error(t, err)
 				require.Nil(t, cn)
 			} else {
 				require.NotNil(t, cn)
-				require.Equal(t, cn.uuid, tt.expectUUID)
+				require.Equal(t, tt.expectUUID, cn.uuid)
 			}
 			require.Equal(t, r.refreshCount, tt.expectRefresh)
 		})

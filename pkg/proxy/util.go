@@ -21,7 +21,9 @@ import (
 	"net"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 // makeOKPacket returns an OK packet
@@ -46,8 +48,23 @@ func makeErrPacket(l int) []byte {
 	return data
 }
 
+func makeQuitPacket() []byte {
+	data := make([]byte, 5)
+	data[4] = byte(cmdQuit)
+	data[0] = 1
+	data[3] = 1
+	return data
+}
+
 func isCmdQuery(p []byte) bool {
 	if len(p) > 4 && p[4] == byte(cmdQuery) {
+		return true
+	}
+	return false
+}
+
+func isCmdQuit(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdQuit) {
 		return true
 	}
 	return false
@@ -93,6 +110,28 @@ func isEOFPacket(p []byte) bool {
 // isErrPacket returns true if []byte is a MySQL Err packet.
 func isErrPacket(p []byte) bool {
 	if len(p) > 4 && p[4] == 0xFF {
+		return true
+	}
+	return false
+}
+
+// isLoadDataLocalInfileRespPacket returns true if []byte is a packet
+// of load data local infile response.
+func isLoadDataLocalInfileRespPacket(p []byte) bool {
+	if len(p) > 4 && p[4] == 0xFB {
+		return true
+	}
+	return false
+}
+
+// isEmptyPacket returns true if []byte is an empty packet.
+func isEmptyPacket(p []byte) bool {
+	return len(p) == 0
+}
+
+// isDeallocatePacket returns true if []byte is a MySQL
+func isDeallocatePacket(p []byte) bool {
+	if len(p) > 4 && p[4] == 0x19 {
 		return true
 	}
 	return false
@@ -241,4 +280,18 @@ func containIP(ipNetList []*net.IPNet, ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// getQueryAddress gets the query server address from mo cluster service.
+// the second parameter is the SQL address.
+func getQueryAddress(mc clusterservice.MOCluster, sqlAddr string) string {
+	var queryAddr string
+	mc.GetCNService(clusterservice.NewSelectAll(), func(service metadata.CNService) bool {
+		if service.SQLAddress == sqlAddr {
+			queryAddr = service.QueryAddress
+			return false
+		}
+		return true
+	})
+	return queryAddr
 }

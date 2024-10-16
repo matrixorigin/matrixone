@@ -17,8 +17,8 @@ package queryservice
 import (
 	"context"
 	"sync"
-	"time"
 
+	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -148,8 +148,6 @@ func RequestMultipleCn(ctx context.Context,
 	nodesLeft := len(nodes)
 	responseChan := make(chan nodeResponse, nodesLeft)
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
 
 	for _, node := range nodes {
@@ -163,6 +161,7 @@ func RequestMultipleCn(ctx context.Context,
 			// gen request and send it
 			if genRequest != nil {
 				req := genRequest()
+				logger.GetLogger("RequestMultipleCn").Infof("[send request]%s send request %s to %s", qc.ServiceID(), req.CmdMethod.String(), node)
 				resp, err := qc.SendMessage(ctx, addr, req)
 				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 			}
@@ -179,9 +178,7 @@ func RequestMultipleCn(ctx context.Context,
 				queryResp, ok := res.response.(*pb.Response)
 				if ok {
 					//save response
-					if handleValidResponse != nil {
-						handleValidResponse(res.nodeAddr, queryResp)
-					}
+					handleValidResponse(res.nodeAddr, queryResp)
 					if queryResp != nil {
 						qc.Release(queryResp)
 					}

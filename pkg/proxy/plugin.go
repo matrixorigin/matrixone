@@ -61,9 +61,9 @@ func (r *pluginRouter) Route(
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
 		}
-		hash, err := ci.labelInfo.getHash()
-		if err != nil {
-			return nil, err
+		// selected CN should be filtered out, fall back to the delegated router
+		if filter != nil && filter(re.CN.SQLAddress) {
+			return r.Router.Route(ctx, sid, ci, filter)
 		}
 		v2.ProxyConnectSelectCounter.Inc()
 		return &CNServer{
@@ -71,7 +71,7 @@ func (r *pluginRouter) Route(
 			cnLabel:  re.CN.Labels,
 			uuid:     re.CN.ServiceID,
 			addr:     re.CN.SQLAddress,
-			hash:     hash,
+			hash:     ci.hash,
 		}, nil
 	case plugin.Reject:
 		v2.ProxyConnectRejectCounter.Inc()
@@ -80,7 +80,7 @@ func (r *pluginRouter) Route(
 	case plugin.Bypass:
 		return r.Router.Route(ctx, r.sid, ci, filter)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("unknown recommended action %d", re.Action)
+		return nil, moerr.NewInternalErrorNoCtxf("unknown recommended action %d", re.Action)
 	}
 }
 

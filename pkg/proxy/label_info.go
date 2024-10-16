@@ -46,6 +46,8 @@ type clientInfo struct {
 	originIP net.IP
 	// originPort is the origin port of client.
 	originPort uint16
+	// hash is the hash value of this client information.
+	hash LabelHash
 }
 
 // reservedLabels are the labels not allowed in user labels.

@@ -38,6 +38,10 @@ func NewEnv(
 
 func (e *env) HasCN(serviceID string) bool {
 	_, ok := e.getCN(serviceID)
+	if !ok {
+		e.cluster.ForceRefresh(true)
+		_, ok = e.getCN(serviceID)
+	}
 	return ok
 }
 

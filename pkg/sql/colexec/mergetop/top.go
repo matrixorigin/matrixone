@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ func (mergeTop *MergeTop) String(buf *bytes.Buffer) {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", mergeTop.Limit))
+	fmt.Fprintf(buf, "], %v)", mergeTop.Limit)
 }
 
 func (mergeTop *MergeTop) OpType() vm.OpType {
@@ -47,16 +47,24 @@ func (mergeTop *MergeTop) OpType() vm.OpType {
 }
 
 func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
-	mergeTop.ctr = new(container)
-	mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
-	if err != nil {
-		return err
+	if mergeTop.OpAnalyzer == nil {
+		mergeTop.OpAnalyzer = process.NewAnalyzer(mergeTop.GetIdx(), mergeTop.IsFirst, mergeTop.IsLast, "mergetop")
+	} else {
+		mergeTop.OpAnalyzer.Reset()
+	}
+
+	// limit executor
+	if mergeTop.ctr.limitExecutor == nil {
+		mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
+		if err != nil {
+			return err
+		}
 	}
 	vec, err := mergeTop.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
+	mergeTop.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
 	if mergeTop.ctr.limit > 1024 {
 		mergeTop.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -64,14 +72,17 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	}
 	mergeTop.ctr.poses = make([]int32, 0, len(mergeTop.Fs))
 
-	ctr := mergeTop.ctr
-	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
-	for i := range ctr.executorsForOrderList {
-		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
-		if err != nil {
-			return err
+	// executor for order list
+	if len(mergeTop.ctr.executorsForOrderList) != len(mergeTop.Fs) {
+		mergeTop.ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
+		for i := range mergeTop.ctr.executorsForOrderList {
+			mergeTop.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
+			if err != nil {
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -80,10 +91,10 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
-	ctr := mergeTop.ctr
+	analyzer := mergeTop.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	result := vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
 		result.Batch = nil
@@ -91,29 +102,35 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	if end, err := ctr.build(mergeTop, proc, anal, mergeTop.GetIsFirst()); err != nil {
+	if end, err := mergeTop.ctr.build(mergeTop, proc, analyzer); err != nil {
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
-	if ctr.bat == nil {
+	if mergeTop.ctr.bat == nil || mergeTop.ctr.bat.IsEmpty() {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(mergeTop.ctr.limit, proc, anal, mergeTop.GetIsLast(), &result)
+	err := mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
 	if err == nil {
 		result.Status = vm.ExecStop
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
+	analyzer.Output(result.Batch)
 	return result, err
 }
 
-func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
+func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer process.Analyzer) (bool, error) {
+	if ctr.bat != nil {
+		ctr.bat.CleanOnlyData()
+	}
 	for {
-		result, err := ap.GetChildren(0).Call(proc)
+		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return true, err
 		}
@@ -125,7 +142,8 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 		if err != nil {
 			return true, err
 		}
-		anal.Input(bat, isFirst)
+		analyzer.Alloc(int64(bat.Size()))
+		defer bat.Clean(proc.Mp())
 
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
@@ -140,21 +158,24 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 				}
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 				bat.Vecs = append(bat.Vecs, vec)
-				anal.Alloc(int64(vec.Size()))
+				analyzer.Alloc(int64(vec.Size()))
 			}
 		}
 
-		if ctr.bat == nil {
+		if len(ctr.cmps) == 0 {
 			mp := make(map[int]int, len(ctr.poses))
 			for i, pos := range ctr.poses {
 				mp[int(pos)] = i
 			}
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
-			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
+
+			if ctr.bat == nil {
+				ctr.bat = batch.NewWithSize(len(bat.Vecs))
+				for i, vec := range bat.Vecs {
+					ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+				}
 			}
-			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
-			for i := range ctr.cmps {
+
+			for i := 0; i < len(bat.Vecs); i++ {
 				var desc, nullsLast bool
 				if pos, ok := mp[i]; ok {
 					desc = ap.Fs[pos].Flag&plan.OrderBySpec_DESC != 0
@@ -166,8 +187,12 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 						nullsLast = desc
 					}
 				}
-				ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
+				ctr.cmps = append(
+					ctr.cmps,
+					compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+				)
 			}
+
 		}
 
 		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
@@ -220,7 +245,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	return nil
 }
 
-func (ctr *container) eval(limit uint64, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	if uint64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -238,7 +263,6 @@ func (ctr *container) eval(limit uint64, proc *process.Process, anal process.Ana
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	anal.Output(ctr.bat, isLast)
 	result.Batch = ctr.bat
 	return nil
 }

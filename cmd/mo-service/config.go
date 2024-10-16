@@ -217,7 +217,7 @@ func (c *Config) validate() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
@@ -253,7 +253,7 @@ func (c *Config) setDefaultValue() error {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s clock backend not support", c.Clock.Backend)
+		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
@@ -466,7 +466,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 			}
 		}
 		if len(filtered) != 1 {
-			return moerr.NewBadConfig(context.Background(), "GossipSeedAddress %s", addr)
+			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
 		}
 		result = append(result, net.JoinHostPort(filtered[0], port))
 	}
@@ -508,7 +508,7 @@ func (c *Config) getServiceType() (metadata.ServiceType, error) {
 	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
 		return v, nil
 	}
-	return metadata.ServiceType(0), moerr.NewInternalError(context.Background(), "service type %s not support", c.ServiceType)
+	return metadata.ServiceType(0), moerr.NewInternalErrorf(context.Background(), "service type %s not support", c.ServiceType)
 }
 
 func (c *Config) mustGetServiceType() metadata.ServiceType {
@@ -529,6 +529,8 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:
 		return c.ProxyConfig.UUID
+	case metadata.ServiceType_PYTHON_UDF:
+		return c.PythonUdfServerConfig.UUID
 	}
 	panic("impossible")
 }
@@ -583,6 +585,7 @@ func dumpCommonConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
 }
 
 func (c *Config) setFileserviceDefaultValues() {
+
 	for i := 0; i < len(c.FileServices); i++ {
 		config := &c.FileServices[i]
 
@@ -603,12 +606,6 @@ func (c *Config) setFileserviceDefaultValues() {
 			} else {
 				config.DataDir = c.defaultFileServiceDataDir(config.Name)
 			}
-		}
-
-		// set default disk cache dir
-		if config.Cache.DiskPath == nil {
-			path := config.DataDir + "-cache"
-			config.Cache.DiskPath = &path
 		}
 
 	}
@@ -662,6 +659,43 @@ func (c *Config) setFileserviceDefaultValues() {
 			Backend: "DISK-ETL", // must be ETL
 			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
 		})
+	}
+
+	for i := 0; i < len(c.FileServices); i++ {
+		config := &c.FileServices[i]
+
+		// cache configs
+		switch config.Name {
+
+		case defines.LocalFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// no disk
+
+		case defines.SharedFileServiceName:
+			// memory
+			if config.Cache.MemoryCapacity == nil {
+				capacity := tomlutil.ByteSize(512 * (1 << 20))
+				config.Cache.MemoryCapacity = &capacity
+			}
+			// disk
+			if config.Cache.DiskPath == nil {
+				path := config.DataDir + "-cache"
+				config.Cache.DiskPath = &path
+			}
+			if config.Cache.DiskCapacity == nil {
+				capacity := tomlutil.ByteSize(8 * (1 << 30))
+				config.Cache.DiskCapacity = &capacity
+			}
+
+		case defines.ETLFileServiceName:
+			// no caches
+
+		}
+
 	}
 
 }

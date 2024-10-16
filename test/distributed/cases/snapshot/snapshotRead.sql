@@ -540,8 +540,5 @@ drop table t1;
 drop database test07;
 drop snapshot sp10;
 drop snapshot sp08;
-
-
-
-
-
+-- @ignore:1
+show snapshots;

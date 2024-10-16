@@ -284,7 +284,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	proc := process.New(
+	proc := process.NewTopProcess(
 		exec.ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -297,14 +297,12 @@ func (exec *txnExecutor) Exec(
 		nil,
 	)
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
-	proc.SetVectorPoolSize(0)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
@@ -363,6 +361,7 @@ func (exec *txnExecutor) Exec(
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),
+			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
 	}
@@ -385,7 +384,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	if err != nil {
 		return err
 	}
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -397,12 +396,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.us,
 		nil,
 	)
-	proc.SetVectorPoolSize(0)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
-		proc.CleanValueScanBatchs()
-		proc.FreeVectors()
+		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
 }

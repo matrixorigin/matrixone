@@ -4,105 +4,105 @@ create account a2 ADMIN_NAME 'admin2' IDENTIFIED BY 'test456';
 create database sub1;
 create table sub1.t1 (a int,b int);
 insert into sub1.t1 values (1, 1), (2, 2), (3, 3);
-create publication pub1 database sub1;
-create publication pub3 database sub1;
+create publication pub1 database sub1 account all;
+create publication pub3 database sub1 account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub3    sub1    2024-04-11 17:49:55    null    *    
-pub1    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
 show publications like 'pub%';
-publication    database    create_time    update_time    sub_account    comments
-pub1    sub1    2024-04-11 17:49:55    null    *    
-pub3    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
 show publications like '%1';
-publication    database    create_time    update_time    sub_account    comments
-pub1    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
 create database sub2;
 create table sub2.t1 (a float);
 create publication pub2 database sub2 account a1;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub2    sub2    2024-04-11 17:49:55    null    a1    
-pub3    sub1    2024-04-11 17:49:55    null    *    
-pub1    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub2    sub2    *    a1        2024-07-29 16:02:26    null    
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
 show publications like 'pub%';
-publication    database    create_time    update_time    sub_account    comments
-pub1    sub1    2024-04-11 17:49:55    null    *    
-pub2    sub2    2024-04-11 17:49:55    null    a1    
-pub3    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
+pub2    sub2    *    a1        2024-07-29 16:02:26    null    
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
 show publications like '%1';
-publication    database    create_time    update_time    sub_account    comments
-pub1    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    sub1    *    *        2024-07-29 16:02:26    null    
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    null    null
-pub3    sys    sub1    2024-04-11 17:49:55    null    null
-pub2    sys    sub2    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub2    sys    sub2    *        2024-07-29 16:02:26    null    null    0
+pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
+pub1    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 show subscriptions all like '%1';
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 create database syssub1 from sys publication pub1;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    syssub1    2024-04-11 17:49:55
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    sub1    *        2024-07-29 16:02:26    syssub1    2024-07-29 16:02:26    0
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    syssub1    2024-04-11 17:49:55
-pub3    sys    sub1    2024-04-11 17:49:55    null    null
-pub2    sys    sub2    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    sub1    *        2024-07-29 16:02:26    syssub1    2024-07-29 16:02:26    0
+pub2    sys    sub2    *        2024-07-29 16:02:26    null    null    0
+pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 use syssub1;
 show tables;
 Tables_in_syssub1
 t1
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    syssub1    2024-04-11 17:49:55
-pub3    sys    sub1    2024-04-11 17:49:55    null    null
-pub2    sys    sub2    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    sub1    *        2024-07-29 16:02:26    syssub1    2024-07-29 16:02:26    0
+pub2    sys    sub2    *        2024-07-29 16:02:26    null    null    0
+pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-04-11 17:49:55    NULL    NULL    utf-8    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-07-29 16:02:26    NULL    NULL    utf-8    NULL            0    moadmin
 show table status like 't1';
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-04-11 17:49:55    NULL    NULL    utf-8    NULL            0    moadmin
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-07-29 16:02:26    NULL    NULL    utf-8    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    INT(32)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 select * from t1;
 a    b
 1    1
 2    2
 3    3
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    null    null
-pub3    sys    sub1    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
+pub1    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 alter publication pub2 account all;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub2    sub2    2024-04-11 17:49:55    2024-04-11 17:49:55    *    
-pub3    sub1    2024-04-11 17:49:55    null    *    
-pub1    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub2    sub2    *    *        2024-07-29 16:02:26    2024-07-29 16:02:26    
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
+pub1    sub1    *    *    a1    2024-07-29 16:02:26    null    
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub1    2024-04-11 17:49:55    null    null
-pub3    sys    sub1    2024-04-11 17:49:55    null    null
-pub2    sys    sub2    2024-04-11 17:49:55    null    null
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub2    sys    sub2    *        2024-07-29 16:02:26    null    null    0
+pub3    sys    sub1    *        2024-07-29 16:02:26    null    null    0
+pub1    sys    sub1    *        2024-07-29 16:02:26    null    null    0
 alter publication pub1 database sub2;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub1    sub2    2024-04-11 17:49:55    2024-04-11 17:49:55    *    
-pub2    sub2    2024-04-11 17:49:55    2024-04-11 17:49:55    *    
-pub3    sub1    2024-04-11 17:49:55    null    *    
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    sub2    *    *    a1    2024-07-29 16:02:26    2024-07-29 16:02:26    
+pub2    sub2    *    *        2024-07-29 16:02:26    2024-07-29 16:02:26    
+pub3    sub1    *    *        2024-07-29 16:02:26    null    
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub1    sys    sub2    2024-04-11 17:49:55    syssub1    2024-04-11 17:49:55
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    sub2    *        2024-07-29 16:02:26    syssub1    2024-07-29 16:02:26    0
 use syssub1;
 show tables;
 Tables_in_syssub1
@@ -120,7 +120,7 @@ drop account a2;
 create database sub1;
 create table sub1.t1 (a int,b int);
 insert into sub1.t1 values (1, 1), (2, 2), (3, 3);
-create publication pub1 database sub1;
+create publication pub1 database sub1 account all;
 drop publication if exists pub1;
 drop publication if exists pub1;
 drop database if exists sub1;

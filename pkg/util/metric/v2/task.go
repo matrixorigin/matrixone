@@ -41,14 +41,6 @@ var (
 	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")
 	TaskShowAccountsTotalDurationHistogram         = taskShortDurationHistogram.WithLabelValues("show_accounts_total_duration")
 
-	TransferPageFlushLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_flush_latency")
-	TransferPageMergeLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_merge_latency")
-
-	TransferMemLatencyHistogram            = taskShortDurationHistogram.WithLabelValues("transfer_mem_latency")
-	TransferDiskLatencyHistogram           = taskShortDurationHistogram.WithLabelValues("transfer_disk_latency")
-	TransferPageSinceBornDurationHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_since_born_duration")
-	TransferTableRunTTLDurationHistogram   = taskShortDurationHistogram.WithLabelValues("transfer_table_run_ttl_duration")
-
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -147,8 +139,6 @@ var (
 		Help:      "The total number of transfer hit counter.",
 	}, []string{"type"})
 
-	//TransferPageMemHitHistogram   = transferPageHitHistogram.WithLabelValues("memory")
-	//TransferPageDiskHitHistogram  = transferPageHitHistogram.WithLabelValues("disk")
 	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
 )
 
@@ -159,4 +149,28 @@ var (
 		Name:      "transfer_page_row",
 		Help:      "The total number of transfer row.",
 	})
+)
+
+var (
+	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_duration",
+		Buckets:   getDurationBuckets(),
+	}, []string{"type"})
+
+	TransferDiskLatencyHistogram           = transferDurationHistogram.WithLabelValues("disk_latency")
+	TransferPageSinceBornDurationHistogram = transferDurationHistogram.WithLabelValues("page_since_born_duration")
+	TransferTableRunTTLDurationHistogram   = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
+	TransferPageFlushLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_flush_latency")
+	TransferPageMergeLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_merge_latency")
+
+	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_short_duration",
+		Buckets:   getShortDurationBuckets(),
+	}, []string{"type"})
+
+	TransferMemLatencyHistogram = transferShortDurationHistogram.WithLabelValues("mem_latency")
 )

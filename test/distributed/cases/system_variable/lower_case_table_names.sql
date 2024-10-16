@@ -137,6 +137,32 @@ use INFORMATION_SCHEMA;
 use information_schema;
 select table_name from TABLES limit 0;
 select table_name from tables limit 0;
+
+# set to 0
+set global lower_case_table_names = 0;
+-- @session
+
+
+-- @session:id=9&user=a1:admin1&password=test123
+# it is 0 now
+select @@lower_case_table_names;
+
+drop database if exists test;
+create database test;
+use test;
+create table t1 (`Id` int);
+show create table t1;
+desc t1;
+
+insert into t1 (`Id`) values (1);
+insert into t1 (id) values (1);
+insert into t1 (Id) values (1);
+insert into t1 (iD) values (1);
+insert into t1 (ID) values (1);
+select * from t1;
+
+# reset to 1
+set global lower_case_table_names = 1;
 -- @session
 
 drop account a1;

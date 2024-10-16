@@ -270,7 +270,7 @@ e bigint auto_increment
 );
 show create table auto_increment15;
 Table    Create Table
-auto_increment15    CREATE TABLE `auto_increment15` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` BIGINT NOT NULL AUTO_INCREMENT,\n  `c` INT NOT NULL AUTO_INCREMENT,\n  `d` INT NOT NULL AUTO_INCREMENT,\n  `e` BIGINT NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`a`)\n)
+auto_increment15    CREATE TABLE `auto_increment15` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` bigint NOT NULL AUTO_INCREMENT,\n  `c` int NOT NULL AUTO_INCREMENT,\n  `d` int NOT NULL AUTO_INCREMENT,\n  `e` bigint NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`a`)\n)
 insert into auto_increment15 values (),(),(),();
 select * from auto_increment15 order by a;
 a    b    c    d    e

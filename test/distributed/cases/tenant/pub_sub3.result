@@ -1,0 +1,239 @@
+create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
+create account acc2 ADMIN_NAME 'admin2' IDENTIFIED BY 'test456';
+create account acc3 ADMIN_NAME 'admin3' IDENTIFIED BY 'test789';
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int,b int);
+insert into t1 values (1, 1), (2, 2), (3, 3);
+select * from t1;
+a    b
+1    1
+2    2
+3    3
+create table t2 (a text);
+drop database if exists db2;
+create database db2;
+use db2;
+create table t1 (a float);
+insert into t1 values (1.0), (1.1), (2.0);
+create publication pub1 database db1 account acc1,acc2;
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    db1    *    acc1,acc2        2024-08-02 15:21:45    null    
+show publications like 'pub%';
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    db1    *    acc1,acc2        2024-08-02 15:21:45    null    
+show publications like '%1';
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    db1    *    acc1,acc2        2024-08-02 15:21:45    null    
+show create publication pub1;
+Publication    Create Publication
+pub1    CREATE PUBLICATION pub1 DATABASE db1 ACCOUNT acc1,acc2
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    null    null    0
+show subscriptions all like '%1';
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    null    null    0
+show subscriptions all like 'pub%';
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    null    null    0
+create database syssub1 from sys publication pub1;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+use syssub1;
+show tables;
+Tables_in_syssub1
+t1
+t2
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *        2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+t2    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+show table status like 't1';
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
+select * from t1;
+a    b
+1    1
+2    2
+3    3
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub1    db1    *    acc1,acc2    acc1    2024-08-02 15:21:45    null    
+alter publication pub1 account acc3 comment 'this is a pub';
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    null    null    null    null    syssub1    2024-08-09 16:06:40    1
+use syssub1;
+internal error: the account acc1 is not allowed to subscribe the publication pub1
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db1    *    this is a pub    2024-08-02 15:21:45    null    null    0
+drop publication pub1;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    null    null    null    null    syssub1    2024-08-09 16:06:40    2
+use syssub1;
+internal error: there is no publication pub1
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+create publication pub1 database db2 account acc1,acc2 comment 'this is a recreated pub';
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+use syssub1;
+show tables;
+Tables_in_syssub1
+t1
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+show table status like 't1';
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    FLOAT(0)    YES        null        
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` float DEFAULT NULL\n)
+select * from t1;
+a
+1.0
+1.1
+2.0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    null    null    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+create publication pub_all database db1 account all;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+use syssub1;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    null    null    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+alter publication pub_all account acc1,acc2;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+use syssub1;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    null    null    0
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+create publication pub_self database db1 account sys;
+internal error: can't publish to self
+create publication pub_to_not_exist database db1 account not_exist;
+internal error: not existed account name 'not_exist'
+create database syssub1dup from sys publication pub1;
+internal error: publication pub1 can only be subscribed once
+create publication pub_part_tbls database db1 table t1 account acc1;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+pub_part_tbls    sys    db1    t1        2024-08-02 15:21:45    null    null    0
+pub_all    sys    db1    *        2024-08-02 15:21:45    null    null    0
+create database sys_sub_part_tbls from sys publication pub_part_tbls;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub_part_tbls    sys    db1    t1        2024-08-02 15:21:45    sys_sub_part_tbls    2024-08-02 15:21:45    0
+pub1    sys    db2    *    this is a recreated pub    2024-08-02 15:21:45    syssub1    2024-08-02 15:21:45    0
+show full tables from sys_sub_part_tbls;
+Tables_in_sys_sub_part_tbls    Table_type
+t1    BASE TABLE
+show table status from sys_sub_part_tbls;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+desc sys_sub_part_tbls.t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
+show create table sys_sub_part_tbls.t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
+select * from sys_sub_part_tbls.t1;
+a    b
+1    1
+2    2
+3    3
+desc sys_sub_part_tbls.t2;
+no such table sys_sub_part_tbls.t2
+show create table sys_sub_part_tbls.t2;
+internal error: table t2 not found in publication pub_part_tbls
+select * from sys_sub_part_tbls.t2;
+SQL parser error: table "t2" does not exist
+use sys_sub_part_tbls;
+show full tables;
+Tables_in_sys_sub_part_tbls    Table_type
+t1    BASE TABLE
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+t1    Tae    Dynamic    3    0    120    0    0    NULL    0    2024-08-02 15:21:45    NULL    NULL    utf-8    NULL            0    moadmin
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
+select * from t1;
+a    b
+1    1
+2    2
+3    3
+desc t2;
+no such table sys_sub_part_tbls.t2
+show create table t2;
+internal error: table t2 not found in publication pub_part_tbls
+select * from t2;
+SQL parser error: table "t2" does not exist
+create database db1;
+create publication pub_all database db1 account all;
+internal error: only sys account and authorized normal accounts can publish to all accounts
+drop publication pub1;
+drop publication pub_all;
+drop publication pub_part_tbls;
+drop database db1;
+drop database db2;
+create publication pub_exists_when_drop_account database db1 account acc2;
+drop account acc1;
+drop account acc2;
+drop account acc3;

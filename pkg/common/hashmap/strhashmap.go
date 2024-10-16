@@ -17,7 +17,6 @@ package hashmap
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -33,13 +32,12 @@ func init() {
 	}
 }
 
-func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
+func NewStrMap(hasNull bool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	if err := mp.Init(m); err != nil {
+	if err := mp.Init(nil); err != nil {
 		return nil, err
 	}
 	return &StrHashMap{
-		m:       m,
 		hashMap: mp,
 		hasNull: hasNull,
 	}, nil
@@ -48,7 +46,6 @@ func NewStrMap(hasNull bool, m *mpool.MPool) (*StrHashMap, error) {
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
 		mp:            m,
-		m:             m.m,
 		values:        make([]uint64, UnitLimit),
 		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
@@ -61,11 +58,11 @@ func (m *StrHashMap) HasNull() bool {
 }
 
 func (m *StrHashMap) Free() {
-	m.hashMap.Free(m.m)
+	m.hashMap.Free()
 }
 
-func (m *StrHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
-	return m.hashMap.ResizeOnDemand(n, mp)
+func (m *StrHashMap) PreAlloc(n uint64) error {
+	return m.hashMap.ResizeOnDemand(n)
 }
 
 func (m *StrHashMap) GroupCount() uint64 {
@@ -113,6 +110,12 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 // for one col, just give the value bytes
 func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, start int, lenCols int) {
 	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -127,8 +130,14 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 	}
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
+			gsp := vec.GetGrouping()
 			for i := 0; i < n; i++ {
 				bytes := vec.GetBytesAt(i + start)
+				hasGrouping := gsp.Contains(uint64(i + start))
+				if hasGrouping {
+					keys[i] = append(keys[i], byte(2))
+					continue
+				}
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// this is not null value
 				keys[i] = append(keys[i], 0)
@@ -151,10 +160,14 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 		}
 	} else {
 		nsp := vec.GetNulls()
+		rsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
 			hasNull := nsp.Contains(uint64(i + start))
+			hasGrouping := rsp.Contains(uint64(i + start))
 			if itr.mp.hasNull {
-				if hasNull {
+				if hasGrouping {
+					keys[i] = append(keys[i], byte(2))
+				} else if hasNull {
 					keys[i] = append(keys[i], byte(1))
 				} else {
 					bytes := vec.GetBytesAt(i + start)
@@ -186,6 +199,12 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 
 func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
 	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -228,10 +247,14 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		}
 	} else {
 		nsp := vec.GetNulls()
+		gsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
 			isNull := nsp.Contains(uint64(i + start))
+			isGrouping := gsp.Contains(uint64(i + start))
 			if itr.mp.hasNull {
-				if isNull {
+				if isGrouping {
+					keys[i] = append(keys[i], 2)
+				} else if isNull {
 					keys[i] = append(keys[i], 1)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]

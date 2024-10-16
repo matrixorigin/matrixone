@@ -18,11 +18,11 @@ delete from foreign01 where col3 = 100;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `fk` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `fk` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 alter table foreign02 drop foreign key fk;
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` INT DEFAULT NULL,\n  `col2` INT DEFAULT NULL,\n  `col3` INT NOT NULL,\n  PRIMARY KEY (`col3`)\n)
+foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`)\n)
 drop table foreign01;
 drop table foreign02;
 drop table if exists ti1;
@@ -41,10 +41,10 @@ alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 delete from ti2 where c = 1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from tm2 where c = 1;
@@ -53,10 +53,10 @@ alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 show create table ti1;
 Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 delete from ti2 where c = 1;
 delete from tm2 where c = 1;
 drop table  ti1;
@@ -405,7 +405,7 @@ count(*)
 alter table t4 add unique key `title01`(`col1`);
 show create table t4;
 Table    Create Table
-t4    CREATE TABLE `t4` (\n  `col1` VARCHAR(256) NOT NULL,\n  `col2` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `title01` (`col1`)\n)
+t4    CREATE TABLE `t4` (\n  `col1` varchar(256) NOT NULL,\n  `col2` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `title01` (`col1`)\n)
 select count(*) from t4;
 count(*)
 500000
@@ -419,7 +419,7 @@ count(*)
 alter table t5 add unique key `title01`(`col1`) using btree;
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n  `col1` VARCHAR(256) NOT NULL,\n  `col2` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `title01` (`col1`)\n)
+t5    CREATE TABLE `t5` (\n  `col1` varchar(256) NOT NULL,\n  `col2` int DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `title01` (`col1`)\n)
 select count(*) from t5;
 count(*)
 500000

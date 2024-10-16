@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -38,13 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
@@ -53,7 +49,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -71,6 +69,7 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	options ...EngineOptions,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster(service)
 	services := cluster.GetAllTNServices()
@@ -130,12 +129,31 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	for _, opt := range options {
+		opt(e)
+	}
+	e.fillDefaults()
+
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
+}
+
+func (e *Engine) fillDefaults() {
+	if e.insertEntryMaxCount <= 0 {
+		e.insertEntryMaxCount = InsertEntryThreshold
+	}
+	if e.workspaceThreshold <= 0 {
+		e.workspaceThreshold = WorkspaceThreshold
+	}
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
+	)
 }
 
 func (e *Engine) GetService() string {
@@ -200,7 +218,7 @@ func (e *Engine) loadDatabaseFromStorage(
 				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
 		}
 	}()
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -235,9 +253,19 @@ func (e *Engine) loadDatabaseFromStorage(
 	return ret, nil
 }
 
-func (e *Engine) Database(ctx context.Context, name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.Database %s", name)
+func (e *Engine) Database(
+	ctx context.Context,
+	name string,
+	op client.TxnOperator,
+) (engine.Database, error) {
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Database",
+			zap.String("txn", op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
+
 	txn, err := txnIsValid(op)
 	if err != nil {
 		return nil, err
@@ -258,7 +286,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if _, exist := txn.deletedDatabaseMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "database %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
 	if v, ok := txn.databaseMap.Load(key); ok {
@@ -303,7 +331,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	}
 	sql := fmt.Sprintf(catalog.MoDatabasesInEngineQueryFormat, aid)
 
-	res, err := execReadSql(ctx, op, sql, false)
+	res, err := execReadSql(ctx, op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +387,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -373,7 +401,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			// not found in cache, try storage
 			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql, false)
+			result, err := execReadSql(ctx, op, sql, true)
 			if err != nil {
 				return "", "", nil, err
 			}
@@ -398,7 +426,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		accountId, _ := defines.GetAccountId(ctx)
 		logutil.Error("FIND_TABLE GetRelationById failed",
 			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId), zap.String("workspace", txn.PPString()))
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 
 	txnDb, err := e.Database(ctx, dbName, op)
@@ -477,7 +505,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			zap.String("workspace", op.GetWorkspace().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowId := vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// write the batch to delete the database
 	var packer *types.Packer
@@ -505,8 +533,13 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.New")
-	proc := process.New(
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.New",
+			zap.String("txn", op.Txn().DebugString()),
+		)
+	})
+	proc := process.NewTopProcess(
 		ctx,
 		e.mp,
 		e.cli,
@@ -518,48 +551,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.us,
 		nil,
 	)
-
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
-	txn := &Transaction{
-		op:     op,
-		proc:   proc,
-		engine: e,
-		//meta:     op.TxnRef(),
-		idGen:              e.idGen,
-		tnStores:           e.getTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
-		deletedBlocks: &deletedBlocks{
-			offsets: map[types.Blockid][]int64{},
-		},
-		cnBlkId_Pos:          map[types.Blockid]Pos{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		toFreeBatches:        make(map[tableKey][]*batch.Batch),
-		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
-	}
-
-	txn.blockId_tn_delete_metaLoc_batch = struct {
-		sync.RWMutex
-		data map[types.Blockid][]*batch.Batch
-	}{data: make(map[types.Blockid][]*batch.Batch)}
-
-	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)
+	txn.BindTxnOp(op)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil
@@ -583,6 +577,8 @@ func (e *Engine) Nodes(
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			if c.CommitID == version.CommitID {
 				nodes = append(nodes, engine.Node{
+					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
+					// ref: https://github.com/matrixorigin/matrixone/issues/17935
 					Mcpu: ncpu,
 					Id:   c.ServiceID,
 					Addr: c.PipelineServiceAddress,
@@ -634,16 +630,6 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func determineScanType(relData engine.RelData, num int) (scanType int) {
-	scanType = NORMAL
-	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
-		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
-		scanType = LARGE
-	}
-	return
-}
-
 func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
 	p any,
@@ -652,51 +638,56 @@ func (e *Engine) BuildBlockReaders(
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
+	newNum := num
 	if blkCnt < num {
-		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(engine_util.EmptyReader))
+		}
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
 
-	var (
-		rds   []engine.Reader
-		shard engine.RelData
-	)
-	scanType := determineScanType(relData, num)
-	mod := blkCnt % num
-	divide := blkCnt / num
-	for i := 0; i < num; i++ {
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
+	for i := 0; i < newNum; i++ {
 		if i == 0 {
 			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds := NewRemoteDataSource(
+		ds := engine_util.NewRemoteDataSource(
 			ctx,
-			proc,
 			fs,
 			ts,
 			shard)
-		rd := NewReader(
+		rd, err := engine_util.NewReader(
 			ctx,
-			proc,
-			e,
+			proc.Mp(),
+			e.packerPool,
+			e.fs,
 			def,
 			ts,
 			expr,
 			ds,
 		)
-		rd.scanType = scanType
+		if err != nil {
+			return nil, err
+		}
 		rds = append(rds, rd)
 	}
 	return rds, nil
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }
@@ -769,4 +760,8 @@ func (e *Engine) FS() fileservice.FileService {
 
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
+}
+
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.pClient.LatestLogtailAppliedTime()
 }

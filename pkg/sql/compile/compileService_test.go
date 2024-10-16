@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,12 +27,7 @@ import (
 func generateRunningProc(n int) []*process.Process {
 	rs := make([]*process.Process, n)
 	for i := range rs {
-		ctx, cancel := context.WithCancel(context.TODO())
-
-		rs[i] = &process.Process{
-			Ctx:    ctx,
-			Cancel: cancel,
-		}
+		rs[i] = testutil.NewProcess()
 	}
 	return rs
 }
@@ -49,14 +44,16 @@ func TestCompileService(t *testing.T) {
 	for _, p := range inputs {
 		wg.Add(1)
 
-		c := service.getCompile(p)
-		service.startService(c)
+		c := allocateNewCompile(p)
+		c.InitPipelineContextToExecuteQuery()
+
+		service.recordRunningCompile(c, nil)
 		go func(cc *Compile) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
-			service.endService(cc)
-			service.putCompile(cc)
+			service.removeRunningCompile(cc, nil)
+			releaseCompile(cc)
 			wg.Done()
 		}(c)
 	}
@@ -64,7 +61,7 @@ func TestCompileService(t *testing.T) {
 
 	// 2. kill all running Compile.
 	service.PauseService()
-	service.KillAllQueriesWithError(nil)
+	service.KillAllQueriesWithError()
 	service.ResumeService()
 
 	require.Equal(t, int32(10), doneRoutine.Load())

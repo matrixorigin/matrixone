@@ -40,7 +40,7 @@ func TestAdjustClient(t *testing.T) {
 	assert.NotNil(t, c.generator)
 }
 
-func TestNewTxn(t *testing.T) {
+func TestNewTxnAndReset(t *testing.T) {
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
@@ -51,9 +51,19 @@ func TestNewTxn(t *testing.T) {
 	c.Resume()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
+
 	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
+	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
+	assert.NotEmpty(t, txnMeta.ID)
+	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+
+	require.NoError(t, tx.Rollback(ctx))
+
+	tx, err = c.RestartTxn(ctx, tx, newTestTimestamp(0))
+	assert.Nil(t, err)
+	txnMeta = tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
@@ -137,9 +147,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 
 type fakeRunningPipelinesManager struct{}
 
-func (m *fakeRunningPipelinesManager) PauseService()                   {}
-func (m *fakeRunningPipelinesManager) KillAllQueriesWithError(_ error) {}
-func (m *fakeRunningPipelinesManager) ResumeService()                  {}
+func (m *fakeRunningPipelinesManager) PauseService()            {}
+func (m *fakeRunningPipelinesManager) KillAllQueriesWithError() {}
+func (m *fakeRunningPipelinesManager) ResumeService()           {}
 
 func TestTxnClientAbortAllRunningTxn(t *testing.T) {
 	SetRunningPipelineManagement(&fakeRunningPipelinesManager{})

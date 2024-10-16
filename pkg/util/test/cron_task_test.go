@@ -19,7 +19,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/lni/goutils/leaktest"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,12 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/golang/mock/gomock"
-	"github.com/lni/goutils/leaktest"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 const defaultTestTimeout = 3 * time.Minute
@@ -76,7 +78,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	table := mock_frontend.NewMockRelation(ctrl)
-	table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -119,4 +121,55 @@ func TestGetTenantInfo(t *testing.T) {
 	require.Equal(t, "sys", tenant.GetTenant())
 	require.Equal(t, "internal", tenant.GetUser())
 	require.Equal(t, "moadmin", tenant.GetDefaultRole())
+}
+
+func TestCalculateObjectCount(t *testing.T) {
+	c, err := embed.NewCluster(embed.WithCNCount(1))
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	svc, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+	// query with metrics db
+	{
+		queryOpts := ie.NewOptsBuilder().Database(mometric.MetricDBConst).Internal(true).Finish()
+
+		result := frontend.NewInternalExecutor(svc.ServiceID()).Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+		require.NoError(t, result.Error())
+
+		name2idx := make(map[string]uint64)
+		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+			colName, _, _, err := result.Column(ctx, colIdx)
+			require.NoError(t, err)
+			name2idx[colName] = colIdx
+		}
+
+		_, ok := name2idx[mometric.ColumnObjectCount]
+		require.True(t, ok)
+	}
+
+	{
+		queryOpts := ie.NewOptsBuilder().Internal(true).Finish()
+
+		result := frontend.NewInternalExecutor(svc.ServiceID()).Query(ctx, mometric.ShowAllAccountSQL, queryOpts)
+		require.NoError(t, result.Error())
+
+		name2idx := make(map[string]uint64)
+		for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+			colName, _, _, err := result.Column(ctx, colIdx)
+			require.NoError(t, err)
+			name2idx[colName] = colIdx
+		}
+
+		_, ok := name2idx[mometric.ColumnObjectCount]
+		require.False(t, ok)
+	}
+
+	svc.Close()
 }

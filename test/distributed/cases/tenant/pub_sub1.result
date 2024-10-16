@@ -7,8 +7,8 @@ insert into tt values(1);
 create publication mo_test_pub database test account `62915dd9_d454_4b02_be16_0741d94b62cc`;
 create database mo_test_sub from `0b6d35cc_11ab_4da5_a5c5_c4cc09917c11` publication mo_test_pub;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-mo_test_pub    0b6d35cc_11ab_4da5_a5c5_c4cc09917c11    test    2024-01-05 18:13:15    mo_test_sub    2024-01-05 18:13:15
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+mo_test_pub    0b6d35cc_11ab_4da5_a5c5_c4cc09917c11    test    *        2024-07-29 15:34:39    mo_test_sub    2024-07-29 15:34:39    0
 drop publication mo_test_pub;
 drop account `0b6d35cc_11ab_4da5_a5c5_c4cc09917c11`;
 drop account `62915dd9_d454_4b02_be16_0741d94b62cc`;

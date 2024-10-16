@@ -129,6 +129,10 @@ type Config struct {
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
 		CheckGC        bool          `toml:"check-gc"`
+		CacheSize      int           `toml:"cache-size"`
+		GCMergeCount   int           `toml:"gc-merge-count"`
+		GCestimateRows int           `toml:"gc-estimate-rows"`
+		GCProbility    float64       `toml:"gc-probility"`
 	}
 
 	Merge struct {
@@ -136,6 +140,8 @@ type Config struct {
 		CNStandaloneTake bool          `toml:"offload-when-standalone"`
 		CNTakeOverExceed toml.ByteSize `toml:"offload-exceed"`
 		CNMergeMemHint   toml.ByteSize `toml:"offload-mem-hint"`
+
+		DisableZMBasedMerge bool `toml:"disable-zm-based-merge"`
 	}
 
 	LogtailServer struct {
@@ -223,7 +229,7 @@ func (c *Config) Validate() error {
 		c.Txn.Storage.Backend = StorageTAE
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
-		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
@@ -288,7 +294,7 @@ func (c *Config) Validate() error {
 		c.Txn.Mode = defaultTxnMode.String()
 	} else {
 		if !txn.ValidTxnMode(c.Txn.Mode) {
-			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
+			return moerr.NewInternalErrorf(context.Background(), "invalid txn mode %s", c.Txn.Mode)
 		}
 	}
 

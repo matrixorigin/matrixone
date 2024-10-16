@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/parquet-go/parquet-go"
@@ -77,7 +78,7 @@ func Test_getMapper(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := proc.GetVector(types.New(types.T_varchar, 0, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
 		var h ParquetHandler
 		err = h.getMapper(col, plan.Type{
 			Id: int32(types.T_varchar),
@@ -252,7 +253,7 @@ func Test_getMapper(t *testing.T) {
 			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 			require.NoError(t, err)
 
-			vec := proc.GetVector(types.New(tc.dt, 0, 0))
+			vec := vector.NewVec(types.New(tc.dt, 0, 0))
 			var h ParquetHandler
 			err = h.getMapper(f.Root().Column("c"), plan.Type{
 				Id:          int32(tc.dt),
@@ -298,7 +299,7 @@ func Test_getMapper(t *testing.T) {
 			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 			require.NoError(t, err)
 
-			vec := proc.GetVector(types.New(tc.dt, 0, 0))
+			vec := vector.NewVec(types.New(tc.dt, 0, 0))
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{
 				Id: int32(tc.dt),

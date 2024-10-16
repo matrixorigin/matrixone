@@ -14,20 +14,32 @@
 
 package malloc
 
-type ShardedAllocator []Allocator
+import "golang.org/x/sys/cpu"
 
-func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAllocator {
-	var ret ShardedAllocator
+type ShardedAllocator[T Allocator] []allocatorShard[T]
+
+type allocatorShard[T Allocator] struct {
+	Allocator T
+	_         cpu.CacheLinePad
+}
+
+func NewShardedAllocator[T Allocator](
+	numShards int,
+	newShard func() T,
+) ShardedAllocator[T] {
+	var ret ShardedAllocator[T]
 	for i := 0; i < numShards; i++ {
-		ret = append(ret, newShard())
+		ret = append(ret, allocatorShard[T]{
+			Allocator: newShard(),
+		})
 	}
 	return ret
 }
 
-var _ Allocator = ShardedAllocator{}
+var _ Allocator = ShardedAllocator[Allocator]{}
 
-func (s ShardedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+func (s ShardedAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	return s[pid%len(s)].Allocate(size, hints)
+	return s[pid%len(s)].Allocator.Allocate(size, hints)
 }

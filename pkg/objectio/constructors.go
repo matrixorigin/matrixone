@@ -15,11 +15,14 @@
 package objectio
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
@@ -37,13 +40,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.Alloc(len(data))
+			cacheData = allocator.AllocateCacheData(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil
 		}
 
 		// lz4 compress
-		decompressed := allocator.Alloc(int(size))
+		decompressed := allocator.AllocateCacheData(int(size))
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return
@@ -64,4 +67,32 @@ func Decode(buf []byte) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// NOTE: hack way to get vector
+func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
+	// check if vector cannot be freed
+	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+		logutil.Warn("input vector should be readonly or empty")
+	}
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ColData {
+		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	}
+	if header.Version == IOET_ColumnData_V2 {
+		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
+		return
+	} else if header.Version == IOET_ColumnData_V1 {
+		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
+		return
+	}
+	panic(fmt.Sprintf("invalid column data: %s", header.String()))
+}
+
+func MustObjectMeta(buf []byte) ObjectMeta {
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ObjMeta {
+		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	}
+	return ObjectMeta(buf)
 }

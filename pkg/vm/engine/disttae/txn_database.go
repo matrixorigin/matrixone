@@ -29,12 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -68,7 +70,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	}
 	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
 
-	res, err := execReadSql(ctx, db.op, sql, false)
+	res, err := execReadSql(ctx, db.op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,13 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug(
+			"Transaction.Relation",
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.String("name", name),
+		)
+	})
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
@@ -122,7 +130,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	// check the table is deleted or not
 	if txn.tableOps.existAndDeleted(key) {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	// get relation from the txn created tables cache: created by this txn
@@ -152,6 +160,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		item,
 		p,
 		shardservice.GetService(p.GetService()),
+		txn.engine,
 	)
 	if err != nil {
 		return nil, err
@@ -231,7 +240,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			zap.String("workspace", db.getTxn().PPString()))
 		panic("delete table failed: query failed")
 	}
-	rowid = vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
+	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
 	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
@@ -240,7 +249,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 	for _, b := range res.Batches {
 		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
-			rowids = append(rowids, vector.GetFixedAt[types.Rowid](v, i))
+			rowids = append(rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](v, i))
 		}
 	}
 
@@ -357,6 +366,7 @@ func (db *txnDatabase) createWithID(
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.eng = txn.engine
 
 	{ // prepare table information
 		// 2.1 prepare basic table information
@@ -364,7 +374,7 @@ func (db *txnDatabase) createWithID(
 		tbl.tableName = name
 		tbl.tableId = tableId
 		tbl.accountId = accountId
-		tbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{tableId}))
+		tbl.extraInfo = &api.SchemaExtra{}
 		for _, def := range defs {
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
@@ -376,6 +386,8 @@ func (db *txnDatabase) createWithID(
 						tbl.relKind = property.Value
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value
+					case catalog.PropSchemaExtra:
+						tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
 					default:
 					}
 				}
@@ -392,6 +404,13 @@ func (db *txnDatabase) createWithID(
 					return err
 				}
 			}
+		}
+		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)
+		if tbl.extraInfo.BlockMaxRows == 0 {
+			tbl.extraInfo.BlockMaxRows = options.DefaultBlockMaxRows
+		}
+		if tbl.extraInfo.ObjectMaxBlocks == 0 {
+			tbl.extraInfo.ObjectMaxBlocks = uint32(options.DefaultBlocksPerObject)
 		}
 		// 2.2 prepare columns related information
 		tbl.primaryIdx = -1
@@ -434,6 +453,7 @@ func (db *txnDatabase) createWithID(
 			Viewdef:       tbl.viewdef,
 			Constraint:    tbl.constraint,
 			Version:       tbl.version,
+			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {
@@ -443,13 +463,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		tbl.rowid = vector.GetFixedAt[types.Rowid](rowidVec, 0)
 	}
 
 	{ // 4. Write create column batch
@@ -461,15 +480,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(
+		_, err = txn.WriteBatch(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
-		}
-		for i := 0; i < rowidVec.Length(); i++ {
-			tbl.rowids = append(tbl.rowids, vector.GetFixedAt[types.Rowid](rowidVec, i))
 		}
 	}
 
@@ -479,8 +495,12 @@ func (db *txnDatabase) createWithID(
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
-	defs []engine.TableDef) engine.Relation {
+func (db *txnDatabase) openSysTable(
+	p *process.Process,
+	id uint64,
+	name string,
+	defs []engine.TableDef,
+) engine.Relation {
 	item := &cache.TableItem{
 		AccountId:  catalog.System_Account,
 		DatabaseId: catalog.MO_CATALOG_ID,
@@ -501,17 +521,11 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		defs:          defs,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
+		tableDef:      item.TableDef,
+		constraint:    item.Constraint,
 		clusterByIdx:  -1,
+		eng:           db.getTxn().engine,
 	}
-	switch name {
-	case catalog.MO_DATABASE:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoDatabaseConstraint
-	case catalog.MO_TABLES:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoTableConstraint
-	case catalog.MO_COLUMNS:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
-	}
-	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)
 	return tbl
 }
@@ -519,7 +533,8 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 func (db *txnDatabase) loadTableFromStorage(
 	ctx context.Context,
 	accountID uint32,
-	name string) (tableitem *cache.TableItem, err error) {
+	name string,
+) (tableitem *cache.TableItem, err error) {
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
@@ -540,7 +555,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	{
 		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, tblSql, false)
+		res, err = execReadSql(ctx, db.op, tblSql, true)
 		if err != nil {
 			return
 		}
@@ -556,7 +571,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		if err := fillTsVecForSysTableQueryBatch(bat, ts, res.Mp); err != nil {
 			return nil, err
 		}
-		ids := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + cache.MO_OFF))
+		ids := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + cache.MO_OFF))
 		tblid = ids[0]
 		cache.ParseTablesBatchAnd(bat, func(ti *cache.TableItem) {
 			tableitem = ti
@@ -567,13 +582,13 @@ func (db *txnDatabase) loadTableFromStorage(
 		// fresh columns
 		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, colSql, false)
+		res, err = execReadSql(ctx, db.op, colSql, true)
 		if err != nil {
 			return
 		}
 		defer res.Close()
 		if len(res.Batches) == 0 {
-			err = moerr.NewParseError(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
+			err = moerr.NewParseErrorf(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
 			return
 		}
 		bat := res.Batches[0]
@@ -622,10 +637,10 @@ func (db *txnDatabase) getTableItem(
 		if tableitem == nil {
 			if strings.Contains(name, "_copy_") {
 				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(),
+				logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(),
 					zap.String("Stack Trace", string(stackInfo)))
 			}
-			return cache.TableItem{}, moerr.NewParseError(ctx, "table %q does not exist", name)
+			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 		}
 		return *tableitem, nil
 	}

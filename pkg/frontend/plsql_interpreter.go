@@ -309,7 +309,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		// create new variable scope and push it
 		curScope := make(map[string]interface{})
 		*interpreter.varScope = append(*interpreter.varScope, curScope)
-		interpreter.ses.Infof(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
+		interpreter.ses.Info(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
 		// recursively execute
 		for _, innerSt := range st.Stmts {
 			_, err := interpreter.interpret(innerSt)

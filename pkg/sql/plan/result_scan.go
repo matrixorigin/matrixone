@@ -66,7 +66,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
+	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
 	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	// get cols
@@ -76,7 +76,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.String())
 	if len(path) == 0 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "empty %s", "query result")
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "empty %s", "query result")
 	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
@@ -102,9 +102,6 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 			// S3Param:     &tree.S3Parameter{},
 			Tail: &tree.TailParameter{},
 		},
-		ExParam: tree.ExParam{
-			QueryResult: true,
-		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -128,7 +125,10 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}})
 	tableDef.Createsql = string(b)
 	node := &plan.Node{
-		NodeType:     plan.Node_EXTERNAL_SCAN,
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_RESULT_SCAN),
+		},
 		Stats:        &plan.Stats{},
 		TableDef:     tableDef,
 		BindingTags:  []int32{builder.genNewTag()},

@@ -97,10 +97,10 @@ func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 }
 
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
-	if entry.start.Greater(&o.start) {
+	if entry.start.GT(&o.start) {
 		entry.start = o.start
 	}
-	if entry.end.Less(&o.end) {
+	if entry.end.LT(&o.end) {
 		entry.end = o.end
 	}
 	entry.tree.Merge(o.tree)
@@ -159,7 +159,7 @@ func NewDirtyCollector(
 	}
 	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
-			return a.start.Less(&b.start) && a.end.Less(&b.end)
+			return a.start.LT(&b.start) && a.end.LT(&b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})
@@ -186,8 +186,7 @@ func (d *dirtyCollector) Run(lag time.Duration) {
 func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	tree *DirtyTreeEntry) {
 	tree, _ = d.ScanInRange(from, to)
-	ctx := context.WithValue(context.Background(), TempFKey{}, 42)
-	if err := d.tryCompactTree(ctx, d.interceptor, tree.tree, from, to); err != nil {
+	if err := d.tryCompactTree(context.Background(), d.interceptor, tree.tree); err != nil {
 		panic(err)
 	}
 	return
@@ -236,7 +235,7 @@ func (d *dirtyCollector) GetAndRefreshMerged() (merged *DirtyTreeEntry) {
 	d.storage.RLock()
 	maxTs := d.storage.maxTs
 	d.storage.RUnlock()
-	if maxTs.LessEq(&merged.end) {
+	if maxTs.LE(&merged.end) {
 		return
 	}
 	merged = d.Merge()
@@ -267,7 +266,7 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	var old *DirtyTreeEntry
 	for {
 		old = d.merged.Load()
-		if old.end.GreaterEq(&merged.end) {
+		if old.end.GE(&merged.end) {
 			break
 		}
 		if d.merged.CompareAndSwap(old, merged) {
@@ -286,7 +285,7 @@ func (d *dirtyCollector) findRange(lagDuration time.Duration) (from, to types.TS
 	lag := types.BuildTS(now.Physical()-int64(lagDuration), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
-	if lag.LessEq(&d.storage.maxTs) {
+	if lag.LE(&d.storage.maxTs) {
 		return
 	}
 	from, to = d.storage.maxTs.Next(), lag
@@ -352,7 +351,7 @@ func (d *dirtyCollector) cleanupStorage() {
 			toDeletes = append(toDeletes, entry)
 			return true
 		}
-		if err := d.tryCompactTree(context.Background(), d.interceptor, entry.tree, entry.start, entry.end); err != nil {
+		if err := d.tryCompactTree(context.Background(), d.interceptor, entry.tree); err != nil {
 			logutil.Warnf("error: interceptor on dirty tree: %v", err)
 		}
 		if entry.tree.IsEmpty() {
@@ -373,15 +372,21 @@ func (d *dirtyCollector) cleanupStorage() {
 	}
 }
 
-// iter the tree and call interceptor to process block. flushed block, empty obj and table will be removed from the tree
+// iter the tree and call interceptor to process block.
+// Those entries that will be removed from the tree:
+// 1. not found db
+// 2. not found table
+// 3. empty table
+// 4. dropped aobject
+// 5. nobject
+// Or, put it in a more concise way, **not dropped aobjects** will be kept in the tree.
 func (d *dirtyCollector) tryCompactTree(
 	ctx context.Context,
 	interceptor DirtyEntryInterceptor,
-	tree *model.Tree, from, to types.TS) (err error) {
+	tree *model.Tree) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
-		obj *catalog.ObjectEntry
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
@@ -407,59 +412,39 @@ func (d *dirtyCollector) tryCompactTree(
 			break
 		}
 
-		tbl.Stats.RLock()
-		lastFlush := tbl.Stats.LastFlush
-		if lastFlush.GreaterEq(&to) {
-			tree.Shrink(id)
-			tbl.Stats.RUnlock()
-			continue
-		}
-		tbl.Stats.RUnlock()
-
 		if x := ctx.Value(TempFKey{}); x != nil && TempF.Check(tbl.ID) {
-			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchemaLocked().Name)
+			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchemaLocked(false).Name)
 			tree.Shrink(id)
 			continue
 		}
 
-		for id, dirtyObj := range dirtyTable.Objs {
-			if obj, err = tbl.GetObjectByID(dirtyObj.ID); err != nil {
+		checkAndTrimObject := func(id types.Objectid, isTombstone bool) error {
+			obj, err := tbl.GetObjectByID(&id, isTombstone)
+			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					dirtyTable.Shrink(id)
-					err = nil
-					continue
+					dirtyTable.Shrink(id, isTombstone)
+					return nil
 				}
+				return err
+			}
+			// keep only non-dropped aobjects
+			if !(obj.IsAppendable() && !obj.HasDropCommitted()) {
+				dirtyTable.Shrink(id, isTombstone)
+				return nil
+			}
+			if err := interceptor.OnObject(obj); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		for id := range dirtyTable.Objs {
+			if err = checkAndTrimObject(id, false); err != nil {
 				return
 			}
-			var calibration int
-			calibration, err = obj.GetObjectData().RunCalibration()
-			if err != nil {
-				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID().String(), err)
-				continue
-			}
-			if calibration == 0 {
-				// TODO: may be put it to post replay process
-				// FIXME
-				if obj.HasPersistedData() {
-					obj.GetObjectData().TryUpgrade()
-				}
-				dirtyTable.Shrink(id)
-				continue
-			}
-			if !obj.IsAppendable() {
-				newFrom := from
-				if lastFlush.Greater(&newFrom) {
-					newFrom = lastFlush
-				}
-				// sometimes, delchain is no cleared after flushing table tail.
-				// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
-				found, _ := obj.GetObjectData().HasDeleteIntentsPreparedIn(newFrom, to)
-				if !found {
-					dirtyTable.Shrink(id)
-					continue
-				}
-			}
-			if err = interceptor.OnObject(obj); err != nil {
+		}
+		for id := range dirtyTable.Tombstones {
+			if err = checkAndTrimObject(id, true); err != nil {
 				return
 			}
 		}

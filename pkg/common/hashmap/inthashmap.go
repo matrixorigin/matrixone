@@ -17,7 +17,6 @@ package hashmap
 import (
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,13 +27,12 @@ func init() {
 	zeroUint32 = make([]uint32, UnitLimit)
 }
 
-func NewIntHashMap(hasNull bool, m *mpool.MPool) (*IntHashMap, error) {
+func NewIntHashMap(hasNull bool) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(m); err != nil {
+	if err := mp.Init(nil); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{
-		m:       m,
 		rows:    0,
 		hasNull: hasNull,
 		hashMap: mp,
@@ -44,7 +42,6 @@ func NewIntHashMap(hasNull bool, m *mpool.MPool) (*IntHashMap, error) {
 func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	return &intHashMapIterator{
 		mp:      m,
-		m:       m.m,
 		keys:    make([]uint64, UnitLimit),
 		keyOffs: make([]uint32, UnitLimit),
 		values:  make([]uint64, UnitLimit),
@@ -58,11 +55,11 @@ func (m *IntHashMap) HasNull() bool {
 }
 
 func (m *IntHashMap) Free() {
-	m.hashMap.Free(m.m)
+	m.hashMap.Free()
 }
 
-func (m *IntHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
-	return m.hashMap.ResizeOnDemand(int(n), mp)
+func (m *IntHashMap) PreAlloc(n uint64) error {
+	return m.hashMap.ResizeOnDemand(int(n))
 }
 
 func (m *IntHashMap) GroupCount() uint64 {

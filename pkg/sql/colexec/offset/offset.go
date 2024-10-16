@@ -38,7 +38,13 @@ func (offset *Offset) OpType() vm.OpType {
 
 func (offset *Offset) Prepare(proc *process.Process) error {
 	var err error
-	offset.ctr = new(container)
+
+	if offset.OpAnalyzer == nil {
+		offset.OpAnalyzer = process.NewAnalyzer(offset.GetIdx(), offset.IsFirst, offset.IsLast, "offset")
+	} else {
+		offset.OpAnalyzer.Reset()
+	}
+
 	if offset.ctr.offsetExecutor == nil {
 		offset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, offset.OffsetExpr)
 		if err != nil {
@@ -49,7 +55,7 @@ func (offset *Offset) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	offset.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
+	offset.ctr.offset = uint64(vector.MustFixedColWithTypeCheck[uint64](vec)[0])
 
 	return nil
 }
@@ -59,35 +65,45 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := offset.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
 
-	result, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
-	if err != nil {
-		return result, err
-	}
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
-		return result, nil
-	}
-	bat := result.Batch
-	anal.Input(bat, offset.GetIsFirst())
+	for {
+		input, err := vm.ChildrenCall(offset.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		if input.Batch == nil || input.Batch.Last() {
+			return input, nil
+		}
+		if input.Batch.IsEmpty() {
+			continue
+		}
+		if offset.ctr.seen > offset.ctr.offset {
+			analyzer.Output(input.Batch)
+			return input, nil
+		}
 
-	if offset.ctr.seen > offset.ctr.offset {
-		return result, nil
-	}
-	length := bat.RowCount()
-	if offset.ctr.seen+uint64(length) > offset.ctr.offset {
-		sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
+		length := input.Batch.RowCount()
+		if offset.ctr.buf != nil {
+			offset.ctr.buf.CleanOnlyData()
+		}
+		if offset.ctr.seen+uint64(length) > offset.ctr.offset {
+			sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
+			offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			offset.ctr.buf.Shrink(sels, false)
+			proc.Mp().PutSels(sels)
+			offset.ctr.seen += uint64(length)
+
+			analyzer.Output(offset.ctr.buf)
+			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
+		}
 		offset.ctr.seen += uint64(length)
-		bat.Shrink(sels, false)
-		proc.Mp().PutSels(sels)
-		result.Batch = bat
-		return result, nil
 	}
-	offset.ctr.seen += uint64(length)
-	result.Batch = batch.EmptyBatch
-	return result, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {

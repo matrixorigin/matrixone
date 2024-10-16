@@ -16,14 +16,19 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
 
 func TestBuildWhereClause(t *testing.T) {
@@ -100,10 +105,48 @@ var (
 		"create_at",
 		"update_at",
 	}
+
+	daemonHeads = []string{
+		"task_id",
+		"task_metadata_id",
+		"task_metadata_executor",
+		"task_metadata_context",
+		"task_metadata_option",
+		"account_id",
+		"account",
+		"task_type",
+		"task_runner",
+		"task_status",
+		"last_heartbeat",
+		"create_at",
+		"update_at",
+		"end_at",
+		"last_run",
+		"details",
+	}
+
+	daemonRows = []string{
+		"task_id",
+		"task_metadata_id",
+		"task_metadata_executor",
+		"task_metadata_context",
+		"task_metadata_option",
+		"account_id",
+		"account",
+		"task_type",
+		"task_runner",
+		"task_status",
+		"last_heartbeat",
+		"create_at",
+		"update_at",
+		"end_at",
+		"last_run",
+		"details",
+	}
 )
 
 func TestAsyncTaskInSqlMock(t *testing.T) {
-	storage, mock := newMockStorage(t, "sqlmock")
+	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
 		WithArgs("a", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -121,7 +164,6 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 	assert.Equal(t, "a", asyncTask[0].Metadata.ID)
 
 	mock.ExpectBegin()
-	mock.ExpectPrepare(updateAsyncTask + " AND task_epoch=0")
 	mock.ExpectExec(updateAsyncTask+" AND task_epoch=0").
 		WithArgs(0, []byte(nil), "{}", "", 0, "c1", 0, 0, 0, "", 0, 0, 1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -136,7 +178,7 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 }
 
 func TestCronTaskInSqlMock(t *testing.T) {
-	storage, mock := newMockStorage(t, "sqlmock")
+	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?)").
 		WithArgs("a", 0, []byte(nil), "{}", "mock_cron_expr", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -157,10 +199,348 @@ func TestCronTaskInSqlMock(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
-func newMockStorage(t *testing.T, dsn string) (*mysqlTaskStorage, sqlmock.Sqlmock) {
-	db, mock, err := sqlmock.NewWithDSN(dsn, sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+func newMockStorage(t *testing.T) (*mysqlTaskStorage, sqlmock.Sqlmock) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	return &mysqlTaskStorage{
 		db: db,
 	}, mock
+}
+
+func newCdcInfo(t *testing.T) task.DaemonTask {
+	details := &task.Details{
+		AccountID: catalog.System_Account,
+		Account:   "sys",
+		Username:  "root",
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{
+				TaskName: "task1",
+				TaskId:   "taskID-1",
+				Accounts: []*task.Account{
+					{
+						Id:   uint64(catalog.System_Account),
+						Name: "sys",
+					},
+				},
+			},
+		},
+	}
+
+	mdata := task.TaskMetadata{
+		ID:       "taskID-1",
+		Executor: task.TaskCode_InitCdc,
+		Options: task.TaskOptions{
+			MaxRetryTimes: 3,
+			RetryInterval: 10,
+			DelayDuration: 0,
+			Concurrency:   0,
+		},
+	}
+
+	dt := task.DaemonTask{
+		Metadata:   mdata,
+		TaskType:   details.Type(),
+		TaskStatus: task.TaskStatus_Created,
+		Details:    details,
+		CreateAt:   time.Now(),
+		UpdateAt:   time.Now(),
+	}
+	return dt
+}
+
+func newDaemonTaskRows(t *testing.T, dt task.DaemonTask) *sqlmock.Rows {
+	dbytes, err := dt.Details.Marshal()
+	assert.NoError(t, err)
+
+	return sqlmock.NewRows(daemonHeads).AddRow(
+		0,
+		dt.Metadata.ID,
+		dt.Metadata.Executor,
+		dt.Metadata.Context,
+		json.MustMarshal(dt.Metadata.Options),
+		catalog.System_Account,
+		"sys",
+		dt.TaskType,
+		dt.TaskRunner,
+		dt.TaskStatus,
+		dt.LastHeartbeat,
+		dt.CreateAt,
+		dt.UpdateAt,
+		dt.EndAt,
+		dt.LastRun,
+		dbytes,
+	)
+}
+
+func newInsertDaemonTaskExpect(t *testing.T, mock sqlmock.Sqlmock) {
+	mock.ExpectExec(insertDaemonTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WithArgs(
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+}
+
+func TestAddCdcTask(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	dt := newCdcInfo(t)
+
+	mock.ExpectBegin()
+	newInsertDaemonTaskExpect(t, mock)
+
+	callback := func(context.Context, SqlExecutor) (int, error) {
+		return 1, nil
+	}
+
+	affected, err := storage.AddCdcTask(
+		context.Background(),
+		dt,
+		callback,
+	)
+	assert.NoError(t, err)
+	assert.Greater(t, affected, 0)
+
+	mock.ExpectBegin()
+
+	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(
+		newDaemonTaskRows(t, dt),
+	)
+
+	mock.ExpectExec(updateDaemonTask).WithArgs(
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CdcTaskKey]struct{}, se SqlExecutor) (int, error) {
+		keyMap[CdcTaskKey{
+			AccountId: uint64(catalog.System_Account),
+			TaskId:    dt.Metadata.ID,
+		}] = struct{}{}
+		return 1, nil
+	}
+
+	affected, err = storage.UpdateCdcTask(
+		context.Background(),
+		task.TaskStatus_Canceled,
+		callback2,
+	)
+	assert.NoError(t, err)
+	assert.Greater(t, affected, 0)
+
+	mock.ExpectBegin()
+
+	dt.TaskStatus = task.TaskStatus_Paused
+	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(
+		newDaemonTaskRows(t, dt),
+	)
+
+	_, err = storage.UpdateCdcTask(
+		context.Background(),
+		task.TaskStatus_PauseRequested,
+		callback2,
+	)
+	assert.Error(t, err)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func Test_AddDaemonTask(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	details := &task.Details{
+		AccountID: catalog.System_Account,
+		Account:   "sys",
+		Username:  "root",
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{
+				TaskName: "task1",
+				TaskId:   "taskID-1",
+				Accounts: []*task.Account{
+					{
+						Id:   uint64(catalog.System_Account),
+						Name: "sys",
+					},
+				},
+			},
+		},
+	}
+
+	mdata := task.TaskMetadata{
+		ID:       "taskID-1",
+		Executor: task.TaskCode_InitCdc,
+		Options: task.TaskOptions{
+			MaxRetryTimes: 3,
+			RetryInterval: 10,
+			DelayDuration: 0,
+			Concurrency:   0,
+		},
+	}
+
+	dt := task.DaemonTask{
+		Metadata:   mdata,
+		TaskType:   details.Type(),
+		TaskStatus: task.TaskStatus_Created,
+		Details:    details,
+		CreateAt:   time.Now(),
+		UpdateAt:   time.Now(),
+	}
+
+	newInsertDaemonTaskExpect(t, mock)
+
+	cnt, err := storage.AddDaemonTask(context.Background(), dt)
+	assert.NoError(t, err)
+	assert.Greater(t, cnt, 0)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(updateDaemonTask).WithArgs(
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	cnt, err = storage.UpdateDaemonTask(context.Background(), []task.DaemonTask{dt})
+	assert.NoError(t, err)
+	assert.Greater(t, cnt, 0)
+
+	mock.ExpectExec(deleteDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	cnt, err = storage.DeleteDaemonTask(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, cnt, 0)
+
+	mock.ExpectClose()
+	_ = storage.Close()
+}
+
+func Test_labels(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	dt := newCdcInfo(t)
+
+	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, dt))
+
+	labels := NewCnLabels("xxx")
+	labels.Add("xxx", []string{"sys"})
+	fmt.Println(labels.String())
+	cond := WithLabels(IN, labels)
+
+	tks, err := storage.QueryDaemonTask(context.Background(), cond)
+	assert.NoError(t, err)
+	assert.Greater(t, len(tks), 0)
+
+	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, dt))
+
+	labels2 := NewCnLabels("xxx")
+	labels2.Add("yyy", []string{"sys"})
+	fmt.Println(labels2.String())
+	cond2 := WithLabels(IN, labels2)
+
+	tks, err = storage.QueryDaemonTask(context.Background(), cond2)
+	assert.NoError(t, err)
+	assert.Equal(t, len(tks), 0)
+
+	_ = mock.ExpectClose()
+	_ = storage.Close()
+}
+
+func TestUpdateAsyncTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WithArgs("a", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	affected, err := storage.AddAsyncTask(context.Background(), newTaskFromMetadata(task.TaskMetadata{ID: "a"}))
+	assert.NoError(t, err)
+	assert.Equal(t, 1, affected)
+
+	mock.ExpectQuery(selectAsyncTask + " AND task_id=1 order by task_id").
+		WillReturnRows(sqlmock.NewRows(asyncRows).
+			AddRow(1, "a", 0, []byte(nil), "{}", "", 0, "", 0, 0, 0, "", 0, 0))
+	asyncTask, err := storage.QueryAsyncTask(context.Background(), WithTaskIDCond(EQ, 1))
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(asyncTask))
+	assert.Equal(t, "a", asyncTask[0].Metadata.ID)
+
+	mock.ExpectBegin()
+	updateSql := "update sys_async_task set error_msg=NULL where task_id=1"
+	mock.ExpectExec(updateSql).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	asyncTask[0].TaskRunner = "c1"
+	tx, err := storage.db.Begin()
+	assert.NoError(t, err)
+	_, err = tx.ExecContext(context.Background(), updateSql)
+	assert.NoError(t, err)
+	assert.NoError(t, tx.Commit())
+
+	mock.ExpectQuery(selectAsyncTask + " AND task_id=1 order by task_id").
+		WillReturnRows(sqlmock.NewRows(asyncRows).
+			AddRow(1, "a", 0, []byte(nil), "{}", "", 0, "", 0, 0, 0, nil, 0, 0))
+	_, err = storage.QueryAsyncTask(context.Background(), WithTaskIDCond(EQ, 1))
+	assert.NoError(t, err)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestDaemonTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	mock.ExpectExec(insertDaemonTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WithArgs("-", 4, []byte(nil), "{}", 0, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	affected, err := storage.AddDaemonTask(context.Background(), newDaemonTaskForTest(1, task.TaskStatus_Created, ""))
+	assert.NoError(t, err)
+	assert.Equal(t, 1, affected)
+
+	mock.ExpectQuery(selectDaemonTask + " AND task_id=1 order by task_id").
+		WillReturnRows(sqlmock.NewRows(daemonRows).
+			AddRow(1, "a", 0, []byte(nil), "{}", 0, 0, "", 0, 0, time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}, 0))
+
+	daemonTask, err := storage.QueryDaemonTask(context.Background(), WithTaskIDCond(EQ, 1))
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(daemonTask))
+	assert.Equal(t, "a", daemonTask[0].Metadata.ID)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(updateDaemonTask).
+		WithArgs(0, []byte(nil), "{}", "Unknown", 0, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	update, err := storage.UpdateDaemonTask(context.Background(), []task.DaemonTask{{
+		ID: 0, Metadata: task.TaskMetadata{ID: "test"}, Details: &task.Details{},
+	}})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, update)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(heartbeatDaemonTask).WithArgs(time.Time{}, 0).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	heartbeat, err := storage.HeartbeatDaemonTask(context.Background(), []task.DaemonTask{{
+		ID: 0, Metadata: task.TaskMetadata{ID: "test"},
+	}})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, heartbeat)
+
+	mock.ExpectClose()
 }

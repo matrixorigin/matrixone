@@ -90,7 +90,7 @@ func parseService(str string) (service string, arguments []string, err error) {
 		return
 	}
 	if len(records) != 1 {
-		err = moerr.NewInvalidInputNoCtx("bad service: %v", str)
+		err = moerr.NewInvalidInputNoCtxf("bad service: %v", str)
 		return
 	}
 	service = records[0][0]

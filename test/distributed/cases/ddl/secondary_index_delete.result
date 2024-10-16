@@ -41,7 +41,7 @@ idx3    MULTIPLE    name
 idx3    MULTIPLE    __mo_alias_id
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx3` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx3` (`name`)\n)
 DROP INDEX idx3 ON t1;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -50,4 +50,4 @@ select name, type,column_name from mo_catalog.mo_indexes mi where name="idx3";
 name    type    column_name
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)

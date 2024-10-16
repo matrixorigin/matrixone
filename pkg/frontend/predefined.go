@@ -150,6 +150,13 @@ var (
 			primary key(pitr_name, create_account)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 
+	MoCatalogMoRetentionDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+    		database_name varchar(5000),
+			table_name varchar(5000),
+    		retention_deadline bigint unsigned,
+    		primary key(database_name, table_name)
+    		)`, catalog.MO_CATALOG, catalog.MO_RETENTION)
+
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
@@ -163,6 +170,21 @@ var (
     		creator int unsigned,
     		comment text
     		)`
+
+	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
+			sub_account_id INT NOT NULL, 
+			sub_name VARCHAR(5000) DEFAULT NULL,
+			sub_time TIMESTAMP DEFAULT NULL,
+			pub_account_name VARCHAR(300) NOT NULL,
+			pub_name VARCHAR(64) NOT NULL,
+			pub_database VARCHAR(5000) NOT NULL,
+			pub_tables TEXT NOT NULL,
+			pub_time TIMESTAMP NOT NULL,
+			pub_comment TEXT NOT NULL,
+			status TINYINT(8) NOT NULL,
+			PRIMARY KEY (pub_account_name, pub_name, sub_account_id),
+			UNIQUE KEY (sub_account_id, sub_name)
+	)`
 
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
@@ -194,12 +216,64 @@ var (
 				primary key(stage_id)
 			)`
 
+	MoCatalogMoCdcTaskDDL = `create table mo_catalog.mo_cdc_task (
+    			account_id bigint unsigned,			
+    			task_id uuid,
+    			task_name varchar(1000),
+    			source_uri text not null,
+    			source_password  varchar(1000),
+    			sink_uri text not null,
+    			sink_type      varchar(20),
+    			sink_password  varchar(1000),
+    			sink_ssl_ca_path varchar(65535),
+    			sink_ssl_cert_path varchar(65535),
+    			sink_ssl_key_path varchar(65535),
+    			tables text not null,
+    			filters text,
+    			opfilters text,
+    			source_state varchar(20),
+    			sink_state varchar(20),
+    			start_ts varchar(1000),
+    			end_ts varchar(1000),
+    			config_file varchar(65535),
+    			task_create_time datetime,
+    			state varchar(20),
+    			checkpoint bigint unsigned,
+    			checkpoint_str varchar(1000),
+    			no_full bool,
+    			incr_config varchar(1000),
+    			reserved0 text,
+    			reserved1 text,
+    			reserved2 text,
+    			reserved3 text,
+    			reserved4 text,
+    			primary key(account_id, task_id),
+    			unique key(account_id, task_name)
+			)`
+
+	MoCatalogMoCdcWatermarkDDL = `create table mo_catalog.mo_cdc_watermark (
+    			account_id bigint unsigned,			
+    			task_id uuid,
+    			table_id varchar(64),			
+    			watermark varchar(128),			
+    			primary key(account_id,task_id,table_id)
+			)`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`
 	MoCatalogMoVariablesDDL      = `CREATE VIEW mo_catalog.mo_variables AS SELECT configuration_id, account_id, account_name, dat_name, variable_name, variable_value, system_variables FROM mo_catalog.mo_mysql_compatibility_mode`
 	MoCatalogMoTransactionsDDL   = `CREATE VIEW mo_catalog.mo_transactions AS SELECT cn_id, txn_id, create_ts, snapshot_ts, prepared_ts, commit_ts, txn_mode, isolation, user_txn, txn_status, table_id, lock_key, lock_content, lock_mode FROM mo_transactions() AS mo_transactions_tmp`
 	MoCatalogMoCacheDDL          = `CREATE VIEW mo_catalog.mo_cache AS SELECT node_type, node_id, type, used, free, hit_ratio FROM mo_cache() AS mo_cache_tmp`
+
+	MoCatalogMoDataKeyDDL = `create table mo_catalog.mo_data_key (
+    			account_id bigint unsigned,			
+    			key_id uuid, 
+    			encrypted_key varchar(128), 
+				create_time timestamp not null default current_timestamp,
+				update_time timestamp not null default current_timestamp on update current_timestamp,
+    			primary key(account_id, key_id)
+			)`
 )
 
 // `mo_catalog` database system tables
@@ -332,7 +406,7 @@ var (
 var (
 	MoTaskSysAsyncTaskDDL = fmt.Sprintf(`create table %s.sys_async_task (
 			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
+			task_metadata_id            varchar(50) not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),

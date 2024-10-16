@@ -88,7 +88,7 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 	case txn.TxnMethod_RollbackTNShard:
 		return r.service.RollbackTNShard(ctx, request, response)
 	default:
-		return moerr.NewNotSupported(ctx, "unknown txn request method: %s", request.Method.String())
+		return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", request.Method.String())
 	}
 }
 

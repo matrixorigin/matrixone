@@ -18,6 +18,9 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,17 +34,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
+
+func MockProcessInfoWithPro(
+	sql string,
+	pro any,
+) (pipeline.ProcessInfo, error) {
+	process := pro.(*Process)
+	process.Base.SessionInfo.TimeZone = time.UTC
+	return process.BuildProcessInfo(sql)
+}
 
 func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
-	if len(proc.Base.AnalInfos) == 0 {
-		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
-	}
 	{
 		procInfo.Id = proc.QueryId()
 		procInfo.Sql = sql
@@ -57,10 +64,7 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 		procInfo.Snapshot = snapshot
-		procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
-		for i := range procInfo.AnalysisNodeList {
-			procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
-		}
+
 		vec := proc.GetPrepareParams()
 		if vec != nil {
 			procInfo.PrepareParams.Length = int64(vec.Length())
@@ -75,7 +79,11 @@ func (proc *Process) BuildProcessInfo(
 		}
 	}
 	{ // session info
-		timeBytes, err := time.Time{}.In(proc.Base.SessionInfo.TimeZone).MarshalBinary()
+		loc := proc.Base.SessionInfo.TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
 		if err != nil {
 			return procInfo, err
 		}
@@ -125,7 +133,7 @@ func NewCodecService(
 	udfService udf.Service,
 	engine engine.Engine,
 ) ProcessCodecService {
-	mp, err := mpool.NewMPool("codec", 1024*1024*32, mpool.NoFixed)
+	mp, err := mpool.NewMPool("codec", 1<<40, mpool.NoFixed)
 	if err != nil {
 		panic(err)
 	}
@@ -185,7 +193,7 @@ func (c *codecService) Decode(
 		return nil, err
 	}
 
-	proc := New(
+	proc := NewTopProcess(
 		ctx,
 		c.mp,
 		c.txnClient,

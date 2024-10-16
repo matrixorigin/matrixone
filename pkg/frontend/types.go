@@ -15,12 +15,14 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -37,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -50,6 +54,140 @@ const (
 	DefaultRpcBufferSize = 1 << 10
 )
 
+const (
+	FPHandleRequest = iota
+	FPExecRequest
+	FPDoComQuery
+	FPDoComQueryInBack
+	FPStmtWithResponse
+	FPStmtWithResponseCreateAsSelect
+	FPDispatchStmt
+	FPExecStmt
+	FPExecStmtBeforeCompile
+	FPExecStmtInBack
+	FPExecStmtInBackBeforeCompile
+	FPExecStmtWithTxn
+	FPExecStmtWithWorkspace
+	FPExecStmtWithWorkspaceBeforeStart
+	FPExecStmtWithWorkspaceBeforeEnd
+	FPExecStmtWithIncrStmt
+	FPExecStmtWithIncrStmtBeforeIncr
+	FPExecStmtInSameSession
+	FPExecInFrontEnd
+	FPExecInFrontEndInBack
+	FPInBackUse
+	FPInBackCreateDatabase
+	FPInBackDropDatabase
+	FPInBackGrant
+	FPInBackRevoke
+	FPStatusStmtInBack
+	FPCleanup
+	FPBeginTxn
+	FPSetRole
+	FPUse
+	FPPrepareStmt
+	FPPrepareString
+	FPCreateConnector
+	FPPauseDaemonTask
+	FPCancelDaemonTask
+	FPResumeDaemonTask
+	FPDropConnector
+	FPShowConnectors
+	FPDeallocate
+	FPReset
+	FPSetVar
+	FPShowVariables
+	FPShowErrors
+	FPAnalyzeStmt
+	FPExplainStmt
+	FPInternalCmdFieldList
+	FPCreatePublication
+	FPAlterPublication
+	FPDropPublication
+	FPShowSubscriptions
+	FPCreateStage
+	FPDropStage
+	FPAlterStage
+	FPCreateAccount
+	FPDropAccount
+	FPAlterAccount
+	FPAlterDataBaseConfig
+	FPCreateUser
+	FPDropUser
+	FPAlterUser
+	FPCreateRole
+	FPDropRole
+	FPCreateFunction
+	FPDropFunction
+	FPCreateProcedure
+	FPDropProcedure
+	FPCallStmt
+	FPGrant
+	FPRevoke
+	FPKill
+	FPShowAccounts
+	FPShowCollation
+	FPShowBackendServers
+	FPSetTransaction
+	FPBackupStart
+	FPCreateSnapShot
+	FPDropSnapShot
+	FPRestoreSnapShot
+	FPUpgradeStatement
+	FPCreatePitr
+	FPDropPitr
+	FPAlterPitr
+	FPRestorePitr
+	FPSetConnectionID
+	FPRollbackTxn
+	FPCommitTxn
+	FPFinishTxn
+	FPCommit
+	FPCommitBeforeCommitUnsafe
+	FPCommitUnsafe
+	FPCommitUnsafeBeforeCommit
+	FPCommitUnsafeBeforeCommitWithTxn
+	FPRollback
+	FPRollbackUnsafe1
+	FPRollbackUnsafe2
+	FPRollbackUnsafe
+	FPRollbackUnsafeBeforeRollback
+	FPRollbackUnsafeBeforeRollbackWithTxn
+	FPSetAutoCommit
+	FPResultRowStmt
+	FPResultRowStmtInBack
+	FPResultRowStmtSelect1
+	FPResultRowStmtSelect2
+	FPResultRowStmtExplainAnalyze1
+	FPResultRowStmtExplainAnalyze2
+	FPResultRowStmtDefault1
+	FPResultRowStmtDefault2
+	FPRespStreamResultRow
+	FPrespPrebuildResultRow
+	FPrespMixedResultRow
+	FPRespStatus
+	FPMigrate
+	FPMigrateDB
+	FPMigratePrepareStmt
+	FPGetBackgroundExec
+	FPGetShareTxnBackgroundExec
+	FPGetRawBatchBackgroundExec
+	FPBackExecExec
+	FPBackExecRestore
+	FPGetShareTxnBackgroundExecInBackSession
+	FPGetBackgroundExecInBackSession
+	FPInternalExecutorExec
+	FPInternalExecutorQuery
+	FPHandleAnalyzeStmt
+	FPShowPublications
+	FPCreateCDC
+	FPPauseCDC
+	FPDropCDC
+	FPRestartCDC
+	FPResumeCDC
+	FPShowCDC
+)
+
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
@@ -57,8 +195,12 @@ type (
 )
 
 type ComputationRunner interface {
+	// todo: remove the ts next day, that's useless.
 	Run(ts uint64) (*util.RunResult, error)
 }
+
+// compile.Compile should implement ComputationRunner to support Run method.
+var _ ComputationRunner = &compile.Compile{}
 
 // ComputationWrapper is the wrapper of the computation
 type ComputationWrapper interface {
@@ -73,7 +215,9 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
-	RecordExecPlan(ctx context.Context) error
+	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
+
+	SetExplainBuffer(buf *bytes.Buffer)
 
 	GetLoadTag() bool
 
@@ -116,6 +260,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	ColDefData     [][]byte
 	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
@@ -175,6 +320,8 @@ type ExecResult interface {
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
+
+	ColumnIsNull(ctx context.Context, rindex, cindex uint64) (bool, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {
@@ -193,6 +340,7 @@ type BackgroundExec interface {
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
 	Clear()
+	Service() string
 }
 
 var _ BackgroundExec = &backExec{}
@@ -224,7 +372,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1)
 		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
 	}
@@ -236,6 +383,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
@@ -246,30 +394,47 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.PrepareStmt = nil
 	}
+	if prepareStmt.ColDefData != nil {
+		prepareStmt.ColDefData = nil
+	}
 }
 
-var _ buf.Allocator = &SessionAllocator{}
+type Allocator interface {
+	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
+	// be expanded in use.
+	Alloc(capacity int) ([]byte, error)
+	// Free the allocated memory
+	Free([]byte)
+}
+
+var _ Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	allocator *malloc.ManagedAllocator
+	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
-func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 	// default
 	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("session-allocate"),
+		metric.MallocGauge.WithLabelValues("session-inuse"),
+		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+	)
+	return allocator
+})
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	// base
+	allocator := baseSessionAllocator()
 	// size bounded
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
 		uint64(pu.SV.GuestMmuLimitation),
 		nil,
-	)
-	// with metrics
-	allocator = malloc.NewMetricsAllocator(
-		allocator,
-		metric.MallocCounterSessionAllocateBytes,
-		metric.MallocGaugeSessionInuseBytes,
-		metric.MallocCounterSessionAllocateObjects,
-		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
 		// managed
@@ -366,6 +531,7 @@ type FeSession interface {
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
+	GetMySQLParser() *mysql.MySQLParser
 	SessionLogger
 }
 
@@ -418,6 +584,7 @@ type ExecCtx struct {
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	prepareColDef     [][]byte
 	isIssue3482       bool
 }
 
@@ -439,6 +606,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.executeParamTypes = nil
 	execCtx.resper = nil
 	execCtx.results = nil
+	execCtx.prepareColDef = nil
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -504,32 +672,51 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// mysql parser
+	mysqlParser mysql.MySQLParser
+	// reserveCOnn is set true when TCP network on the session/routine should be
+	// reserved because the connection is still in use in proxy's connection cache.
+	// Default is false, means that the network connection should be closed.
+	reserveConn bool
+	service     string
+}
+
+func (ses *feSessionImpl) GetService() string {
+	return ses.service
+}
+
+func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
+	return &ses.mysqlParser
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addEnter(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(idx, true)
+		}
 	}
 }
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
 		ses.fprints.addExit(idx)
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.SetFootPrints(idx, false)
+		}
 	}
 }
 
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil {
+	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
-		ses.txnHandler = nil
+		ses.txnHandler.Close()
 	}
 	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.execCtx = nil
-		ses.txnCompileCtx.snapshot = nil
-		ses.txnCompileCtx.views = nil
+		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
@@ -815,7 +1002,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 	return ses.sesSysVars
 }
 
-func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
@@ -915,6 +1102,10 @@ func (ses *feSessionImpl) GetStaticTxnInfo() string {
 	return ses.staticTxnInfo
 }
 
+func (ses *feSessionImpl) ReserveConn() {
+	ses.reserveConn = true
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -936,6 +1127,9 @@ const (
 	CAPABILITY
 	ESTABLISHED
 	TLS_ESTABLISHED
+
+	// AuthString is the property authString in MysqlProtocolImpl.
+	AuthString
 )
 
 type Property interface {
@@ -972,6 +1166,8 @@ type MysqlReader interface {
 	MediaReader
 	Property
 	Read() ([]byte, error)
+	ReadLoadLocalPacket() ([]byte, error)
+	FreeLoadLocal()
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
@@ -993,6 +1189,7 @@ type MysqlWriter interface {
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
 	WriteColumnDef(context.Context, Column, int) error
+	WriteColumnDefBytes([]byte) error
 	WriteRow() error
 	WriteTextRow() error
 	WriteBinaryRow() error
@@ -1004,11 +1201,18 @@ type MysqlWriter interface {
 	CalculateOutTrafficBytes(b bool) (int64, int64)
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
+	// Reset sets the session and reset some fields and stats.
+	Reset(ses *Session)
+}
+
+type MysqlHelper interface {
+	MakeColumnDefData(context.Context, []*plan.ColDef) ([][]byte, error)
 }
 
 type MysqlRrWr interface {
 	MysqlReader
 	MysqlWriter
+	MysqlHelper
 }
 
 // MysqlPayloadWriter make final payload for the packet
@@ -1033,4 +1237,14 @@ type CsvWriter interface {
 // MemWriter write batch into memory pool
 type MemWriter interface {
 	MediaWriter
+}
+
+// ServerLevelVariables holds the variables are shared in single frontend mo server instance.
+// these variables should be initialized at the server startup.
+type ServerLevelVariables struct {
+	RtMgr           atomic.Value
+	Pu              atomic.Value
+	Aicm            atomic.Value
+	moServerStarted atomic.Bool
+	sessionAlloc    atomic.Value
 }

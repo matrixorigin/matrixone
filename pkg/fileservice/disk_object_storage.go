@@ -75,6 +75,11 @@ func (d *diskObjectStorage) Delete(ctx context.Context, keys ...string) (err err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Delete.Add(1)
+	}, d.perfCounterSets...)
+
 	for _, key := range keys {
 		path := filepath.Join(d.path, key)
 		_ = os.Remove(path)
@@ -101,6 +106,10 @@ func (d *diskObjectStorage) List(ctx context.Context, prefix string, fn func(isP
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.List.Add(1)
+	}, d.perfCounterSets...)
 
 	dir, prefix := path.Split(prefix)
 
@@ -143,6 +152,10 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Get.Add(1)
+	}, d.perfCounterSets...)
 
 	path := filepath.Join(d.path, key)
 	f, err := os.Open(path)
@@ -188,6 +201,10 @@ func (d *diskObjectStorage) Stat(ctx context.Context, key string) (size int64, e
 		return 0, err
 	}
 
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Head.Add(1)
+	}, d.perfCounterSets...)
+
 	path := filepath.Join(d.path, key)
 	stat, err := os.Stat(path)
 	if err != nil {
@@ -206,6 +223,10 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Put.Add(1)
+	}, d.perfCounterSets...)
 
 	tempFile, err := os.CreateTemp(d.path, "*.mofstemp")
 	if err != nil {

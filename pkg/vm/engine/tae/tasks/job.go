@@ -40,7 +40,7 @@ var jobTypeNames = map[JobType]string{
 func RegisterJobType(jt JobType, jn string) {
 	_, ok := jobTypeNames[jt]
 	if ok {
-		panic(any(moerr.NewInternalErrorNoCtx("duplicate job type: %d", jt)))
+		panic(any(moerr.NewInternalErrorNoCtxf("duplicate job type: %d", jt)))
 	}
 	jobTypeNames[jt] = jn
 }
@@ -48,7 +48,7 @@ func RegisterJobType(jt JobType, jn string) {
 func JobName(jt JobType) string {
 	n, ok := jobTypeNames[jt]
 	if !ok {
-		panic(any(moerr.NewInternalErrorNoCtx("specified job type: %d not found", jt)))
+		panic(any(moerr.NewInternalErrorNoCtxf("specified job type: %d not found", jt)))
 	}
 	return n
 }

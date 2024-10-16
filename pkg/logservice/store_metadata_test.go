@@ -31,7 +31,7 @@ func TestHasMetadataRec(t *testing.T) {
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	s := store{cfg: cfg}
-	s.addMetadata(10, 1)
+	s.addMetadata(10, 1, false)
 	has, err := hasMetadataRec(s.cfg.DataDir, logMetadataFilename, 10, 1, s.cfg.FS)
 	require.NoError(t, err)
 	assert.True(t, has)
@@ -45,13 +45,14 @@ func TestAddMetadata(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	s := store{cfg: cfg}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
-	s.addMetadata(10, 1)
+	s.addMetadata(10, 1, true)
 	ss := store{cfg: s.cfg}
 	ss.mu.metadata = metadata.LogStore{}
 	assert.NoError(t, ss.loadMetadata())
 	require.Equal(t, 1, len(ss.mu.metadata.Shards))
 	assert.Equal(t, uint64(10), ss.mu.metadata.Shards[0].ShardID)
 	assert.Equal(t, uint64(1), ss.mu.metadata.Shards[0].ReplicaID)
+	assert.Equal(t, true, ss.mu.metadata.Shards[0].NonVoting)
 }
 
 func TestAddMetadataRejectDupl(t *testing.T) {
@@ -59,9 +60,9 @@ func TestAddMetadataRejectDupl(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	s := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
-	s.addMetadata(10, 1)
-	s.addMetadata(10, 1)
-	s.addMetadata(10, 1)
+	s.addMetadata(10, 1, false)
+	s.addMetadata(10, 1, false)
+	s.addMetadata(10, 1, false)
 	require.Equal(t, 1, len(s.mu.metadata.Shards))
 }
 
@@ -70,8 +71,8 @@ func TestRemoveMetadata(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	s := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
 	require.NoError(t, mkdirAll(s.cfg.DataDir, cfg.FS))
-	s.addMetadata(10, 1)
-	s.addMetadata(20, 2)
+	s.addMetadata(10, 1, false)
+	s.addMetadata(20, 2, false)
 	s.removeMetadata(10, 1)
 	ss := store{cfg: s.cfg, runtime: runtime.DefaultRuntime()}
 	ss.mu.metadata = metadata.LogStore{}
@@ -82,11 +83,15 @@ func TestRemoveMetadata(t *testing.T) {
 }
 
 func TestStartReplicas(t *testing.T) {
-	cfg := getStoreTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
 	func() {
-		store, err := getTestStore(cfg, false, nil)
+		store, err := getTestStore(genCfg, false, nil)
 		require.NoError(t, err)
 		members := make(map[uint64]dragonboat.Target)
 		members[1] = store.id()
@@ -97,7 +102,9 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, store.startReplica(20, 1, members, false))
 	}()
 
-	store, err := getTestStore(cfg, false, nil)
+	store, err := getTestStore(func() Config {
+		return cfg
+	}, false, nil)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.close())

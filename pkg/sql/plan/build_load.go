@@ -15,20 +15,26 @@
 package plan
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
-	LoadParallelMinSize = 1 << 20
+	LoadParallelMinSize = int(colexec.WriteS3Threshold)
+	LoadWriteS3MinSize  = 1 << 20
 )
 
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
@@ -65,7 +71,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
 			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
-				return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", colName)
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
@@ -87,7 +93,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			name := realCol.Name
 			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
 		default:
-			return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
 	}
 
@@ -101,6 +107,106 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 	} else {
 		return getExternalWithColListProject(stmt, ctx, tableDef, tblName)
 	}
+}
+
+func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow bool) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
+
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
+
+	if param.Tail.Fields != nil {
+		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
+		}
+		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
+		}
+	}
+
+	if param.Tail.Lines != nil {
+		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
+		}
+		if param.Tail.Lines.StartingBy != "" {
+			linesStartingBy = param.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Format == tree.JSONLINE {
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
+	}
+
+	config := csvparser.CSVConfig{
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Comment:            '#',
+	}
+
+	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false, reuseRow)
+}
+
+func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
+	fs, readPath, err := GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return 0, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+
+	param.Ctx = ctx.GetContext()
+	if err = fs.Read(param.Ctx, &vec); err != nil {
+		return 0, err
+	}
+
+	bufR := bufio.NewReader(r)
+	skipLines := param.Tail.IgnoredLines
+
+	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR), true)
+	if err != nil {
+		return 0, err
+	}
+	for skipLines > 0 {
+		_, err = csvReader.Read()
+		if err != nil {
+			if err == io.EOF {
+				param.Tail.IgnoredLines = 0
+				param.Ctx = nil
+				return csvReader.Pos(), nil
+			}
+			return 0, err
+		}
+		skipLines--
+	}
+
+	param.Tail.IgnoredLines = 0
+	param.Ctx = nil
+	return csvReader.Pos(), nil
 }
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
@@ -125,13 +231,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
-
-	tableDef.Name2ColIndex = map[string]int32{}
-	for i, col := range tableDef.Cols {
-		if col.Name != catalog.FakePrimaryKeyColName {
-			tableDef.Name2ColIndex[col.Name] = int32(i)
-		}
-	}
 	originTableDef := tableDef
 	// load with columnlist will copy a new tableDef
 	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
@@ -143,10 +242,20 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	if stmt.Param.FileSize < LoadParallelMinSize {
+	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
+	var offset int64 = 0
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+		offset, err = IgnoredLines(stmt.Param, ctx)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Param.FileStartOff = offset
+	}
+
+	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
 	}
-	stmt.Param.LoadFile = true
+
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
@@ -184,7 +293,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:           int32(stmt.Param.ScanType),
+			Type:           int32(plan.ExternType_LOAD),
+			LoadType:       int32(stmt.Param.ScanType),
 			Data:           stmt.Param.Data,
 			Format:         stmt.Param.Format,
 			IgnoredLines:   uint64(stmt.Param.Tail.IgnoredLines),
@@ -208,10 +318,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
+
+	inlineDataSize := strings.Count(stmt.Param.Data, "")
+	builder.qry.LoadWriteS3 = true
+
+	if noCompress && ((stmt.Param.ScanType == tree.INLINE && inlineDataSize < LoadWriteS3MinSize) || (stmt.Param.ScanType != tree.INLINE && stmt.Param.FileSize-offset < int64(LoadWriteS3MinSize))) {
+		builder.qry.LoadWriteS3 = false
 	}
-	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
+
+	if stmt.Param.Parallel && (!noCompress || stmt.Local) {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
@@ -283,7 +398,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	} else {
-		if err := InitInfileParam(param); err != nil {
+		if err := InitInfileOrStageParam(param, ctx.GetProcess()); err != nil {
 			return "", err
 		}
 	}
@@ -300,7 +415,6 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		return "", moerr.NewInternalError(ctx.GetContext(), err.Error())
 	}
-	param.Init = true
 	return param.Filepath, nil
 }
 
@@ -390,7 +504,7 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 			}
 		}
 		if !find {
-			return moerr.NewInvalidInput(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "wrong col name '%s' in nullif function", k)
 		}
 	}
 	return nil

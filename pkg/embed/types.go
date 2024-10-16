@@ -20,8 +20,10 @@ import (
 
 // Cluster is the mo cluster interface
 type Cluster interface {
+	ID() uint64
 	Start() error
 	Close() error
+	StartNewCNService(n int) error
 	GetService(sid string) (ServiceOperator, error)
 	GetCNService(index int) (ServiceOperator, error)
 	ForeachServices(fn func(ServiceOperator) bool)
@@ -34,6 +36,8 @@ type ServiceOperator interface {
 	ServiceType() metadata.ServiceType
 	Index() int
 	Adjust(func(*ServiceConfig))
+	RawService() interface{}
+	GetServiceConfig() ServiceConfig
 
 	Start() error
 	Close() error

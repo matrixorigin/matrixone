@@ -35,8 +35,18 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 }
 
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
-	ap := indexJoin
-	ap.ctr = new(container)
+	if indexJoin.OpAnalyzer == nil {
+		indexJoin.OpAnalyzer = process.NewAnalyzer(indexJoin.GetIdx(), indexJoin.IsFirst, indexJoin.IsLast, "index join")
+	} else {
+		indexJoin.OpAnalyzer.Reset()
+	}
+
+	if indexJoin.ProjectList != nil {
+		err = indexJoin.PrepareProjection(proc)
+	}
+	if indexJoin.ctr.buf == nil {
+		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.Result))
+	}
 	return err
 }
 
@@ -45,18 +55,20 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
+	analyzer := indexJoin.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+
 	ap := indexJoin
-	ctr := ap.ctr
+	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
 
 		case Probe:
-			result, err = indexJoin.Children[0].Call(proc)
+			// TODO: `indexjoin` operator originally did not have input statistics, which needs to be verified later
+			result, err = vm.ChildrenCall(indexJoin.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
 			}
@@ -66,33 +78,36 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
-			if indexJoin.ctr.buf != nil {
-				proc.PutBatch(indexJoin.ctr.buf)
-				indexJoin.ctr.buf = nil
-			}
-			indexJoin.ctr.buf = batch.NewWithSize(len(ap.Result))
+			indexJoin.ctr.buf.CleanOnlyData()
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
-				vec := proc.GetVector(*srcVec.GetType())
-				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-					vec.Free(proc.Mp())
+				if ctr.buf.Vecs[i] == nil {
+					ctr.buf.Vecs[i] = vector.NewVec(*srcVec.GetType())
+				}
+				if err = vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(ctr.buf.Vecs[i], srcVec); err != nil {
 					return result, err
 				}
-				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
-			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
-			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
+			if indexJoin.ProjectList != nil {
+				var err error
+				result.Batch, err = indexJoin.EvalProjection(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+
+			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

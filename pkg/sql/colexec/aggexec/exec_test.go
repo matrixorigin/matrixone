@@ -43,12 +43,6 @@ type testAggMemoryManager struct {
 func (m *testAggMemoryManager) Mp() *mpool.MPool {
 	return m.mp
 }
-func (m *testAggMemoryManager) GetVector(typ types.Type) *vector.Vector {
-	return vector.NewVec(typ)
-}
-func (m *testAggMemoryManager) PutVector(v *vector.Vector) {
-	v.Free(m.mp)
-}
 func newTestAggMemoryManager() AggMemoryManager {
 	return &testAggMemoryManager{mp: mpool.MustNewNoFixed("test_agg_exec")}
 }
@@ -152,7 +146,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			require.Equal(t, int64(8), vector.MustFixedCol[int64](v)[0])
+			require.Equal(t, int64(8), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		}
 		v.Free(mg.Mp())
 	}
@@ -302,7 +296,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			require.Equal(t, int64(6), vector.MustFixedCol[int64](v)[0])
+			require.Equal(t, int64(6), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		}
 		v.Free(mg.Mp())
 	}
@@ -348,8 +342,18 @@ func TestGroupConcatExec(t *testing.T) {
 		// data Fill.
 		require.NoError(t, executor.Fill(0, 0, inputs))
 		require.NoError(t, executor.Fill(0, 1, inputs))
-		require.NoError(t, executor.Fill(0, 2, inputs))
-		require.NoError(t, executor.Fill(0, 3, inputs))
+		// data merge
+		executor2 := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
+		require.NoError(t, executor2.GroupGrow(1))
+		require.NoError(t, executor2.Fill(0, 2, inputs))
+		require.NoError(t, executor2.Fill(0, 3, inputs))
+		require.NoError(t, executor.Merge(executor2, 0, 0))
+		executor2.Free()
+		// merge empty.
+		executor3 := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
+		require.NoError(t, executor3.GroupGrow(1))
+		require.NoError(t, executor.Merge(executor3, 0, 0))
+		executor3.Free()
 	}
 	{
 		// result check.
@@ -401,7 +405,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		v, err := executor.Flush()
 		require.NoError(t, err)
 		require.False(t, v.IsNull(0))
-		require.Equal(t, int64(0), vector.MustFixedCol[int64](v)[0])
+		require.Equal(t, int64(0), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		v.Free(mg.Mp())
 		executor.Free()
 	}
@@ -450,7 +454,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		v, err := executor.Flush()
 		require.NoError(t, err)
 		require.False(t, v.IsNull(0))
-		require.Equal(t, int64(0), vector.MustFixedCol[int64](v)[0])
+		require.Equal(t, int64(0), vector.MustFixedColWithTypeCheck[int64](v)[0])
 		v.Free(mg.Mp())
 		executor.Free()
 	}

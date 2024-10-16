@@ -26,10 +26,12 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/stretchr/testify/require"
 )
 
 type mockNetConn struct {
@@ -125,6 +127,13 @@ func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(err error)          {}
 func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
+	var err error
+	li := &c.clientInfo.labelInfo
+	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+	c.clientInfo.hash, err = c.clientInfo.getHash()
+	if err != nil {
+		return nil, err
+	}
 	cn, err := c.router.Route(context.TODO(), "", c.clientInfo, nil)
 	if err != nil {
 		return nil, err
@@ -144,8 +153,9 @@ func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
 }
 
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
+	defer e.notify()
 	switch ev := e.(type) {
-	case *killQueryEvent:
+	case *killEvent:
 		cn, err := c.router.SelectByConnID(ev.connID)
 		if err != nil {
 			sendResp([]byte(err.Error()), resp)
@@ -155,6 +165,9 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		return nil
 	case *setVarEvent:
 		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
+		sendResp([]byte("ok"), resp)
+		return nil
+	case *quitEvent:
 		sendResp([]byte("ok"), resp)
 		return nil
 	default:
@@ -193,6 +206,7 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 	}
 	return func() {
 		_ = tu.Close()
+		_ = sc.Close()
 	}
 }
 
@@ -266,17 +280,27 @@ func TestAccountParser(t *testing.T) {
 	}
 }
 
+func newTestPu() *config.ParameterUnit {
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	return pu
+}
+
 func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	s := goetty.NewIOSession(goetty.WithSessionConn(1,
 		newMockNetConn("127.0.0.1", 30001,
 			"127.0.0.1", 30010, nil)),
 		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())))
 	ctx, cancel := context.WithCancel(context.Background())
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	clientBaseConnID = 90
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, &Config{}, logger, cs, s, nil, nil, nil, nil, nil)
+	cc, err := newClientConn(
+		ctx, &Config{}, logger, cs, s,
+		nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {

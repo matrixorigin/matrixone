@@ -96,10 +96,11 @@ const (
 )
 
 const (
-	TxnTsSize    = 12
-	RowidSize    = 24
-	ObjectidSize = 18
-	BlockidSize  = 20
+	TxnTsSize     = 12
+	SegmentidSize = 16
+	ObjectidSize  = 18
+	BlockidSize   = 20
+	RowidSize     = 24
 )
 
 type Type struct {
@@ -320,6 +321,10 @@ type Floats interface {
 
 type BuiltinNumber interface {
 	Ints | UInts | Floats
+}
+
+type Times interface {
+	Date | Time | Datetime | Timestamp
 }
 
 type OrderedT interface {

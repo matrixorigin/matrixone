@@ -25,7 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,7 +63,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
-	MergeHandle        *MergeTaskBuilder
+	MergeScheduler     *merge.Scheduler
 
 	DiskCleaner *gc2.DiskCleaner
 

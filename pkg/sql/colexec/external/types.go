@@ -19,18 +19,20 @@ import (
 	"context"
 	"io"
 
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/parquet-go/parquet-go"
 )
 
 var _ vm.Operator = new(External)
@@ -109,10 +111,11 @@ type container struct {
 	buf          *batch.Batch
 }
 type External struct {
-	ctr *container
+	ctr container
 	Es  *ExternalParam
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (external *External) GetOperatorBase() *vm.OperatorBase {
@@ -152,19 +155,28 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	external.Free(proc, pipelineFailed, err)
+	if external.ctr.buf != nil {
+		external.ctr.buf.CleanOnlyData()
+	}
+
+	allocSize := int64(external.ctr.maxAllocSize)
+	if external.ProjectList != nil {
+		allocSize += external.ProjectAllocSize
+		external.ResetProjection(proc)
+	}
+
+	if external.OpAnalyzer != nil {
+		external.OpAnalyzer.Alloc(allocSize)
+	}
+	external.ctr.maxAllocSize = 0
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if external.ctr != nil {
-		if external.ctr.buf != nil {
-			external.ctr.buf.Clean(proc.Mp())
-			external.ctr.buf = nil
-		}
-		anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
-		anal.Alloc(int64(external.ctr.maxAllocSize))
-		external.ctr = nil
+	if external.ctr.buf != nil {
+		external.ctr.buf.Clean(proc.Mp())
+		external.ctr.buf = nil
 	}
+	external.FreeProjection(proc)
 }
 
 type ParseLineHandler struct {

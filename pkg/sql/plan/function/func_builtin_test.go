@@ -309,106 +309,307 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 func Test_BuiltIn_Serial(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	input1 := []bool{true, false}
-	input2 := []int8{10, 1}
-
-	tc := tcTemp{
-		info: "test serial(input1, input2)",
-		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_bool.ToType(),
-				input1, nil),
-			NewFunctionTestInput(types.T_int8.ToType(),
-				input2, nil),
-		},
-		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
-	}
-	opSerial := newOpSerial()
-	defer opSerial.Close()
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerial)
-	tcc.Run()
-
-	vec := tcc.GetResultVectorDirectly()
-	p1 := vector.GenerateFunctionStrParameter(vec)
 	{
-		v, null := p1.GetStrValue(0)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, input1[0], tuple[0], tc.info)
-		require.Equal(t, input2[0], tuple[1], tc.info)
+		input1 := []bool{true, false}
+		input2 := []int8{10, 1}
+
+		tc := tcTemp{
+			info: "test serial(bool, int8)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(),
+					input1, nil),
+				NewFunctionTestInput(types.T_int8.ToType(),
+					input2, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial(true, 10)", "serial(false, 1)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerial)
+		tcc.Run()
+
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, input1[0], tuple[0], tc.info)
+			require.Equal(t, input2[0], tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, input1[1], tuple[0], tc.info)
+			require.Equal(t, input2[1], tuple[1], tc.info)
+		}
 	}
+
+	// test for uuid
 	{
-		v, null := p1.GetStrValue(1)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, input1[1], tuple[0], tc.info)
-		require.Equal(t, input2[1], tuple[1], tc.info)
+		// copy from pkg/container/types/uuid_test.go
+		input1 := []types.Uuid{
+			// "0d5687da-2a67-11ed-99e0-000c29847904"
+			{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			// "6119dffd-2a6b-11ed-99e0-000c29847904"
+			{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+		}
+		input2 := []bool{true, false}
+
+		tc := tcTemp{
+			info: "test serial(uuid, bool)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(),
+					input1, nil),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					input2, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial('0d5687da-2a67-11ed-99e0-000c29847904', true)", "serial('6119dffd-2a6b-11ed-99e0-000c29847904', false)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerial)
+		tcc.Run()
+
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "0d5687da-2a67-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, true, tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "6119dffd-2a6b-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, false, tuple[1], tc.info)
+		}
+	}
+
+	// test for rows that contain null
+	{
+		input1 := []types.Uuid{
+			// "0d5687da-2a67-11ed-99e0-000c29847904"
+			{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			// "6119dffd-2a6b-11ed-99e0-000c29847904"
+			{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+		}
+		input2 := []bool{true, false}
+
+		tc := tcTemp{
+			info: "test serial(uuid, bool)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(),
+					input1, []bool{false, true}),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					input2, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial('0d5687da-2a67-11ed-99e0-000c29847904', true)", "serial('6119dffd-2a6b-11ed-99e0-000c29847904', false)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerial)
+		tcc.Run()
+
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "0d5687da-2a67-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, true, tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.True(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Nil(t, tuple, tc.info)
+		}
 	}
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	// serial_full functionality (preserving nulls)
-	input1 := []bool{true, false, true, true}
-	input1Nulls := []bool{true, false, true, true}
-	input2 := []int8{10, 1, 120, -1}
-	input2Nulls := []bool{false, true, false, true}
+	{
+		// serial_full functionality (preserving nulls)
+		input1 := []bool{true, false, true, true}
+		input1Nulls := []bool{true, false, true, true}
+		input2 := []int8{10, 1, 120, -1}
+		input2Nulls := []bool{false, true, false, true}
 
-	tc := tcTemp{
-		info: "test serial_full(input1, input2)",
-		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_bool.ToType(), input1, input1Nulls),
-			NewFunctionTestInput(types.T_int8.ToType(), input2, input2Nulls),
-		},
-		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
-	}
-	opSerial := newOpSerial()
-	defer opSerial.Close()
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
-	tcc.Run()
+		tc := tcTemp{
+			info: "test serial_full(input1, input2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), input1, input1Nulls),
+				NewFunctionTestInput(types.T_int8.ToType(), input2, input2Nulls),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
+		tcc.Run()
 
-	vec := tcc.GetResultVectorDirectly()
-	p1 := vector.GenerateFunctionStrParameter(vec)
-	{
-		v, null := p1.GetStrValue(0)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
-		require.Equal(t, input2[0], tuple[1], tc.info)
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+			require.Equal(t, input2[0], tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, input1[1], tuple[0], tc.info)
+			require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
+		}
+		{
+			v, null := p1.GetStrValue(2)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+			require.Equal(t, input2[2], tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(3)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+			require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
+		}
 	}
+
 	{
-		v, null := p1.GetStrValue(1)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, input1[1], tuple[0], tc.info)
-		require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
+		// copy from pkg/container/types/uuid_test.go
+		input1 := []types.Uuid{
+			// "0d5687da-2a67-11ed-99e0-000c29847904"
+			{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			// "6119dffd-2a6b-11ed-99e0-000c29847904"
+			{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+		}
+		input2 := []bool{true, false}
+
+		tc := tcTemp{
+			info: "test serial(uuid, bool)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(),
+					input1, nil),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					input2, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial('0d5687da-2a67-11ed-99e0-000c29847904', true)", "serial('6119dffd-2a6b-11ed-99e0-000c29847904', false)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
+		tcc.Run()
+
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "0d5687da-2a67-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, true, tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "6119dffd-2a6b-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, false, tuple[1], tc.info)
+		}
 	}
+
+	// test for rows that contain null
 	{
-		v, null := p1.GetStrValue(2)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
-		require.Equal(t, input2[2], tuple[1], tc.info)
-	}
-	{
-		v, null := p1.GetStrValue(3)
-		require.False(t, null, tc.info)
-		tuple, err := types.Unpack(v)
-		require.NoError(t, err, tc.info)
-		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
-		require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
+		input1 := []types.Uuid{
+			// "0d5687da-2a67-11ed-99e0-000c29847904"
+			{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			// "6119dffd-2a6b-11ed-99e0-000c29847904"
+			{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+		}
+		input2 := []bool{true, false}
+
+		tc := tcTemp{
+			info: "test serial(uuid, bool)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(),
+					input1, nil),
+				NewFunctionTestInput(types.T_bool.ToType(),
+					input2, []bool{false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"serial('0d5687da-2a67-11ed-99e0-000c29847904', true)", "serial('6119dffd-2a6b-11ed-99e0-000c29847904', false)"}, nil),
+		}
+		opSerial := newOpSerial()
+		defer opSerial.Close()
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
+		tcc.Run()
+
+		vec := tcc.GetResultVectorDirectly()
+		p1 := vector.GenerateFunctionStrParameter(vec)
+		{
+			v, null := p1.GetStrValue(0)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "0d5687da-2a67-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Equal(t, true, tuple[1], tc.info)
+		}
+		{
+			v, null := p1.GetStrValue(1)
+			require.False(t, null, tc.info)
+			tuple, err := types.Unpack(v)
+			require.NoError(t, err, tc.info)
+			ustr, err := types.UuidToString(tuple[0].(types.Uuid))
+			require.NoError(t, err, tc.info)
+			require.Equal(t, "6119dffd-2a6b-11ed-99e0-000c29847904", ustr, tc.info)
+			require.Nil(t, tuple[1], tc.info)
+		}
 	}
 }
 
 func initSerialExtractTestCase() []tcTemp {
-
 	ps := types.NewPacker()
 	defer ps.Close()
 	ps.EncodeInt8(10)

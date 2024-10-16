@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,12 +28,19 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+)
+
+var (
+	skippedTbl = map[uint64]bool{
+		pkgcatalog.MO_DATABASE_ID: true,
+		pkgcatalog.MO_TABLES_ID:   true,
+		pkgcatalog.MO_COLUMNS_ID:  true,
+	}
 )
 
 type Replayer struct {
@@ -90,14 +98,13 @@ func (replayer *Replayer) PreReplayWal() {
 func (replayer *Replayer) postReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
-		if entry.InMemoryDeletesExisted() {
-			entry.GetTable().DeletedDirties = append(entry.GetTable().DeletedDirties, entry)
+		if skippedTbl[entry.GetTable().ID] {
+			return nil
+		}
+		if entry.IsAppendable() && entry.HasDropCommitted() {
+			err = entry.GetObjectData().TryUpgrade()
 		}
 		return
-	}
-	processor.TombstoneFn = func(t data.Tombstone) error {
-		t.UpgradeAllDeleteChain()
-		return nil
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
 		panic(err)
@@ -129,6 +136,9 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		return
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
+	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
+		return
+	}
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
 	txnCmd := entry.(*txnbase.TxnCmd)
@@ -157,7 +167,7 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 }
 
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
-	if ts.Greater(&replayer.maxTs) {
+	if ts.GT(&replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -179,7 +189,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	// If WAL entry splits, they share same prepareTS
-	if txnCmd.PrepareTS.Less(&replayer.maxTs) {
+	if txnCmd.PrepareTS.LT(&replayer.maxTs) {
 		return
 	}
 	replayer.applyCount++

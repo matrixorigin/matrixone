@@ -154,7 +154,7 @@ tables_in_grant_db
 create table grant_table_03 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
 show create table grant_table_03;
 Table    Create Table
-grant_table_03    CREATE TABLE `grant_table_03` (\n  `id` INT DEFAULT NULL,\n  `name` VARCHAR(50) DEFAULT NULL,\n  `num` DOUBLE DEFAULT NULL\n) partition by key algorithm = 2 (id) partitions 4
+grant_table_03    CREATE TABLE `grant_table_03` (\n  `id` int DEFAULT NULL,\n  `name` varchar(50) DEFAULT NULL,\n  `num` double DEFAULT NULL\n) partition by key algorithm = 2 (id) partitions 4
 create view grant_v_1 as select * from grant_table_03;
 internal error: do not have privilege to execute the statement
 drop table grant_table_03;
@@ -177,7 +177,7 @@ tables_in_grant_db4
 create table grant_table_04 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
 show create table grant_table_04;
 Table    Create Table
-grant_table_04    CREATE TABLE `grant_table_04` (\n  `id` INT DEFAULT NULL,\n  `name` VARCHAR(50) DEFAULT NULL,\n  `num` DOUBLE DEFAULT NULL\n) partition by key algorithm = 2 (id) partitions 4
+grant_table_04    CREATE TABLE `grant_table_04` (\n  `id` int DEFAULT NULL,\n  `name` varchar(50) DEFAULT NULL,\n  `num` double DEFAULT NULL\n) partition by key algorithm = 2 (id) partitions 4
 create view grant_v_2 as select * from grant_table_04;
 drop table grant_table_04;
 drop view grant_v_2;

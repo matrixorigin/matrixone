@@ -15,9 +15,8 @@
 package plan
 
 import (
-	"go/constant"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -119,13 +118,13 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			},
 		}, nil
 	} else {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 	}
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
 	}
 
 	if funcName == NameGroupConcat {
@@ -147,6 +146,13 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 	b.insideAgg = false
 
+	if b.ctx.timeTag > 0 && b.ctx.sliding {
+		expr, err = b.remapAggToTimeWindowCacheAgg(expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	colPos := int32(len(b.ctx.aggregates))
 	astStr := tree.String(astExpr, dialect.MYSQL)
 	b.ctx.aggregateByAst[astStr] = colPos
@@ -161,6 +167,53 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			},
 		},
 	}, nil
+}
+
+func (b *HavingBinder) remapAggToTimeWindowCacheAgg(expr *Expr) (*Expr, error) {
+	f := expr.Expr.(*plan.Expr_F).F
+
+	funcId, _ := function.DecodeOverloadID(f.Func.Obj)
+	switch funcId {
+	case function.AVG:
+		typ := types.New(types.T(f.Args[0].Typ.Id), f.Args[0].Typ.Width, f.Args[0].Typ.Scale)
+		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_cache", []types.Type{typ})
+		if err != nil {
+			return nil, err
+		}
+		f.Func.Obj = fGet.GetEncodedOverloadID()
+		f.Func.ObjName = "avg_tw_cache"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
+	}
+	return expr, nil
+}
+
+func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) {
+	obj := expr.Expr.(*plan.Expr_F).F.Func
+
+	funcId, _ := function.DecodeOverloadID(obj.Obj)
+	switch funcId {
+	case function.COUNT:
+		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
+		if err != nil {
+			return nil, err
+		}
+		obj.Obj = fGet.GetEncodedOverloadID()
+		obj.ObjName = "sum"
+	case function.AVG_TW_CACHE:
+		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_result", []types.Type{typ})
+		if err != nil {
+			return nil, err
+		}
+		obj.Obj = fGet.GetEncodedOverloadID()
+		obj.ObjName = "avg_tw_result"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
+	}
+	return expr, nil
 }
 
 func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
@@ -186,14 +239,14 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
-			switch numVal.Value.Kind() {
-			case constant.Int:
-				colPos, _ := constant.Int64Val(numVal.Value)
+			switch numVal.Kind() {
+			case tree.Int:
+				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
-					return moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
 				}
 				orderExpr = astExpr.Exprs[colPos-1]
 			default:
@@ -278,7 +331,7 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
 	} else {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "window %s functions not allowed in having clause", funcName)
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window %s functions not allowed in having clause", funcName)
 	}
 }
 
@@ -290,18 +343,46 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNotSupported(b.GetContext(), "DISTINCT in time window")
 	}
+	var err error
 
-	b.insideAgg = true
-	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
-	if err != nil {
-		return nil, err
+	forgeColCnt := int32(0)
+	for _, expr := range b.ctx.times {
+		if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+			if e.Col.Name == TimeWindowStart {
+				forgeColCnt++
+			}
+			if e.Col.Name == TimeWindowEnd {
+				forgeColCnt++
+			}
+		}
 	}
-	b.insideAgg = false
 
 	colPos := int32(len(b.ctx.times))
+	aggColPos := colPos - forgeColCnt
+
+	expr := DeepCopyExpr(b.ctx.aggregates[aggColPos])
+	expr.Expr.(*plan.Expr_F).F.Args = []*plan.Expr{
+		{
+			Typ: b.ctx.aggregates[aggColPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: aggColPos,
+				},
+			},
+		},
+	}
+	if b.ctx.sliding {
+		expr, err = b.remapAggToTimeWindowResultAgg(expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	b.ctx.times = append(b.ctx.times, expr)
+
 	astStr := tree.String(astExpr, dialect.MYSQL)
 	b.ctx.timeByAst[astStr] = colPos
-	b.ctx.times = append(b.ctx.times, expr)
+
 	return &plan.Expr{
 		Typ: expr.Typ,
 		Expr: &plan.Expr_Col{

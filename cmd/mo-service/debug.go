@@ -15,6 +15,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"context"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -31,14 +34,15 @@ import (
 
 	"github.com/felixge/fgprof"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
+	"go.uber.org/zap"
 )
 
 var (
@@ -416,6 +420,8 @@ func saveProfiles() {
 	saveProfile(profile.HEAP)
 	//dump goroutine before stopping services
 	saveProfile(profile.GOROUTINE)
+	// dump malloc profile
+	saveMallocProfile()
 }
 
 func saveProfile(typ string) string {
@@ -424,4 +430,33 @@ func saveProfile(typ string) string {
 	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath
+}
+
+func saveMallocProfile() {
+	buf := bytes.Buffer{}
+	w := gzip.NewWriter(&buf)
+	if err := malloc.WriteProfileData(w); err != nil {
+		logutil.GetGlobalLogger().Error("failed to write malloc profile", zap.Error(err))
+		return
+	}
+	if err := w.Close(); err != nil {
+		return
+	}
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, "malloc", name.String()) + ".gz"
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Data:   buf.Bytes(),
+				Size:   int64(len(buf.Bytes())),
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
+		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(err))
+	}
 }

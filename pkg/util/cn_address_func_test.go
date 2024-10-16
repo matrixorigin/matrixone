@@ -19,11 +19,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/assert"
 )
 
 type testHAKeeperClient struct {
@@ -47,6 +48,10 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (log.Cluster
 	c.Lock()
 	defer c.Unlock()
 	return c.value, nil
+}
+
+func (c *testHAKeeperClient) GetClusterState(ctx context.Context) (log.CheckerState, error) {
+	return log.CheckerState{}, nil
 }
 
 func TestAddressFunc(t *testing.T) {

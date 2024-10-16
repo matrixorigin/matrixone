@@ -31,12 +31,14 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/require"
 )
 
 type testProxyHandler struct {
@@ -187,6 +189,8 @@ func TestHandler_Handle(t *testing.T) {
 		ListenAddress:     "unix://" + listenAddr,
 		RebalanceDisabled: true,
 	}
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	hc := &mockHAKeeperClient{}
 	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
@@ -194,9 +198,11 @@ func TestHandler_Handle(t *testing.T) {
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	frontend.InitServerLevelVars(cn1.uuid)
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
-	stopFn := startTestCNServer(t, ctx, addr, nil)
+	stopFn := startTestCNServer(t, ctx, addr, nil, withService(cn1.uuid))
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -432,7 +438,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 	fn(t, listenAddr, s)
 }
 
-func TestHandler_HandleEventKillQuery(t *testing.T) {
+func TestHandler_HandleEventKill(t *testing.T) {
 	testWithServer(t, func(t *testing.T, addr string, s *Server) {
 		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
 		// connect to server.
@@ -500,5 +506,21 @@ func TestHandler_HandleTxn(t *testing.T) {
 		}()
 		_, err = db1.Exec("select 1")
 		require.NoError(t, err)
+	})
+}
+
+func TestHandler_HandleEventUpgrade(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("upgrade account all")
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
 }

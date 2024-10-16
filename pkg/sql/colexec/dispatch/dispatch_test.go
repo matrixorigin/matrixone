@@ -15,129 +15,53 @@
 package dispatch
 
 import (
-	"bytes"
-	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows = 10 // default rows
-)
+func TestPrepareRemote(t *testing.T) {
+	_ = colexec.NewServer(nil)
 
-// add unit tests for cases
-type dispatchTestCase struct {
-	arg    *Dispatch
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-}
+	proc := testutil.NewProcess()
 
-var (
-	tcs []dispatchTestCase
-)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
 
-func init() {
-	tcs = []dispatchTestCase{
-		newTestCase(),
-		newTestCase(),
-	}
-}
-
-func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
-		tc.arg.String(buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-	}
-}
-
-func TestDispatch(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		/*{
-			for _, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					vec.FreeOriginal(tc.proc.Mp())
-				}
-			}
-		}*/
-		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.Children[0].Free(tc.proc, false, nil)
-		for _, re := range tc.arg.LocalRegs {
-			for len(re.Ch) > 0 {
-				msg := <-re.Ch
-				if msg.Batch == nil {
-					break
-				}
-				msg.Batch.Clean(tc.proc.Mp())
-			}
-		}
-		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-	}
-}
-
-func newTestCase() dispatchTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}
-	return dispatchTestCase{
-		proc:  proc,
-		types: []types.Type{types.T_int8.ToType()},
-		arg: &Dispatch{
-			FuncId:    SendToAllLocalFunc,
-			LocalRegs: []*process.WaitRegister{reg},
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		ctr:    &container{},
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid},
 		},
-		cancel: cancel,
 	}
 
+	// uuid map should have this pipeline information after prepare remote.
+	require.NoError(t, d.prepareRemote(proc))
+
+	p, c, b := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, b)
+	require.Equal(t, proc, p)
+	require.Equal(t, d.ctr.remoteInfo, c)
 }
 
-// create a new block based on the type information
-func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func resetChildren(arg *Dispatch, bats []*batch.Batch) {
-	valueScanArg := &value_scan.ValueScan{
-		Batchs: bats,
+func TestReceiverDone(t *testing.T) {
+	proc := testutil.NewProcess()
+	d := &Dispatch{
+		ctr: &container{},
 	}
-	valueScanArg.Prepare(nil)
-	if len(arg.Children) == 0 {
-		arg.AppendChild(valueScanArg)
-
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(valueScanArg)
-	}
+	d.ctr.localRegsCnt = 1
+	d.ctr.remoteReceivers = make([]*process.WrapCs, 1)
+	d.ctr.remoteReceivers[0] = &process.WrapCs{ReceiverDone: true, Err: make(chan error, 2)}
+	d.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	d.ctr.remoteToIdx[d.ctr.remoteReceivers[0].Uid] = 0
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	sendBatToIndex(d, proc, bat, 0)
+	sendBatToMultiMatchedReg(d, proc, bat, 0)
 }

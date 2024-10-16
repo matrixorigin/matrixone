@@ -29,6 +29,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+// ConstructTombstoneWriter hiddenSelection: true for add hidden columns `commitTs` and `abort`
+// object file created by `CN` with `hiddenSelection` is false
+func ConstructTombstoneWriter(
+	hiddenSelection objectio.HiddenColumnSelection,
+	fs fileservice.FileService,
+) *BlockWriter {
+	seqnums := objectio.GetTombstoneSeqnums(hiddenSelection)
+	sortkeyPos := objectio.TombstonePrimaryKeyIdx
+	sortkeyIsPK := true
+	isTombstone := true
+	return ConstructWriter(
+		0,
+		seqnums,
+		sortkeyPos,
+		sortkeyIsPK,
+		isTombstone,
+		fs,
+	)
+}
+
+func ConstructWriter(
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	writer, err := NewBlockWriterNew(
+		fs,
+		name,
+		ver,
+		seqnums,
+		isTombstone,
+	)
+	if err != nil {
+		panic(err) // it is impossible
+	}
+	// has sortkey
+	if sortkeyPos >= 0 {
+		if sortkeyIsPK {
+			if isTombstone {
+				writer.SetPrimaryKeyWithType(
+					uint16(objectio.TombstonePrimaryKeyIdx),
+					index.HBF,
+					index.ObjectPrefixFn,
+					index.BlockPrefixFn,
+				)
+			} else {
+				writer.SetPrimaryKey(uint16(sortkeyPos))
+			}
+		} else { // cluster by
+			writer.SetSortKey(uint16(sortkeyPos))
+		}
+	}
+	return writer
+}
+
 type BlockWriter struct {
 	writer         *objectio.ObjectWriter
 	objMetaBuilder *ObjectColumnMetasBuilder
@@ -38,8 +97,9 @@ type BlockWriter struct {
 	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
-	objectStats    []objectio.ObjectStats
 	prefix         []index.PrefixFn
+
+	isTombstone bool
 }
 
 func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, error) {
@@ -56,18 +116,29 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 }
 
 // seqnums is the column's seqnums of the batch written by `WriteBatch`. `WriteBatchWithoutIndex` will ignore the seqnums
-func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, schemaVer uint32, seqnums []uint16) (*BlockWriter, error) {
+func NewBlockWriterNew(
+	fs fileservice.FileService,
+	name objectio.ObjectName,
+	schemaVer uint32,
+	seqnums []uint16,
+	isTombstone bool,
+) (*BlockWriter, error) {
 	writer, err := objectio.NewObjectWriter(name, fs, schemaVer, seqnums)
 	if err != nil {
 		return nil, err
 	}
 	return &BlockWriter{
-		writer:     writer,
-		isSetPK:    false,
-		sortKeyIdx: math.MaxUint16,
-		nameStr:    name.String(),
-		name:       name,
+		writer:      writer,
+		isSetPK:     false,
+		sortKeyIdx:  math.MaxUint16,
+		nameStr:     name.String(),
+		name:        name,
+		isTombstone: isTombstone,
 	}, nil
+}
+
+func (w *BlockWriter) SetTombstone() {
+	w.isTombstone = true
 }
 
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
@@ -93,8 +164,8 @@ func (w *BlockWriter) SetAppendable() {
 	w.writer.SetAppendable()
 }
 
-func (w *BlockWriter) GetObjectStats() []objectio.ObjectStats {
-	return w.objectStats
+func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
+	return w.writer.GetObjectStats(opts...)
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
@@ -115,9 +186,15 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if i == 0 {
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+
+		// PXU TODO: change this logic
+		if !w.isTombstone {
+			// only skip SchemaData type
+			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+				continue
+			}
 		}
+
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
@@ -130,6 +207,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
+
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
@@ -169,25 +247,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 	}
-	return block, nil
-}
 
-func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObject, error) {
-	block, err := w.writer.WriteTombstone(batch)
-	if err != nil {
-		return nil, err
-	}
-	for i, vec := range batch.Vecs {
-		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
-		// Build ZM
-		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
-			return nil, err
-		}
-		index.SetZMSum(zm, columnData.GetDownstreamVector())
-		// Update column meta zonemap
-		w.writer.UpdateBlockZM(objectio.SchemaTombstone, 0, uint16(i), zm)
-	}
 	return block, nil
 }
 
@@ -209,8 +269,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-
-	w.objectStats = w.writer.GetObjectStats()
 
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),

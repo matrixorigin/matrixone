@@ -152,7 +152,7 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 		return err
 	}
 	for i := 0; i < more; i++ {
-		exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_varchar.ToType()))
+		exec.groupData = append(exec.groupData, vector.NewVec(types.T_varchar.ToType()))
 	}
 	return nil
 }
@@ -257,8 +257,8 @@ func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2
 		return nil
 	}
 
-	bts := vector.InefficientMustBytesCol(other.groupData[groupIdx2])
-	if err := vector.AppendBytesList(exec.groupData[groupIdx1], bts, nil, exec.ret.mp); err != nil {
+	otherBat := other.groupData[groupIdx2]
+	if err := exec.groupData[groupIdx1].UnionBatch(otherBat, 0, otherBat.Length(), nil, exec.ret.mp); err != nil {
 		return err
 	}
 	other.groupData[groupIdx2] = nil
@@ -288,7 +288,7 @@ func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
 			return nil, err
 		}
 	default:
-		return nil, moerr.NewInternalErrorNoCtx(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"unsupported type '%s' for cluster_centers", exec.singleAggInfo.argType.String())
 	}
 
@@ -414,11 +414,7 @@ func (exec *clusterCentersExec) Free() {
 			continue
 		}
 
-		if v.NeedDup() {
-			v.Free(exec.ret.mp)
-		} else {
-			exec.ret.mg.PutVector(v)
-		}
+		v.Free(exec.ret.mp)
 	}
 }
 
@@ -449,13 +445,13 @@ func decodeConfig(extra []byte) (
 		if res, ok := distTypeStrToEnum[v]; ok {
 			return res, nil
 		}
-		return 0, moerr.NewInternalErrorNoCtx("unsupported distance_type '%s' for cluster_centers", v)
+		return 0, moerr.NewInternalErrorNoCtxf("unsupported distance_type '%s' for cluster_centers", v)
 	}
 	parseInitType := func(s string) (kmeans.InitType, error) {
 		if res, ok := initTypeStrToEnum[s]; ok {
 			return res, nil
 		}
-		return 0, moerr.NewInternalErrorNoCtx("unsupported init_type '%s' for cluster_centers", s)
+		return 0, moerr.NewInternalErrorNoCtxf("unsupported init_type '%s' for cluster_centers", s)
 	}
 
 	if len(extra) == 0 {

@@ -314,11 +314,9 @@ drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 create snapshot snapshot_01 for account sys;
-Drop database Company;
-internal error: can not drop database. It has been referenced by foreign keys
-Drop database Projects;
-internal error: can not drop database. It has been referenced by foreign keys
 Drop database Payroll;
+Drop database Projects;
+Drop database Company;
 restore account sys from snapshot snapshot_01;
 select * from Company.Departments;
 departmentid    name    managerid
@@ -752,11 +750,9 @@ drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 create snapshot snapshot_01 for account sys;
-Drop database Projects;
-internal error: can not drop database. It has been referenced by foreign keys
-Drop database Company;
-internal error: can not drop database. It has been referenced by foreign keys
 Drop database Payroll;
+Drop database Projects;
+Drop database Company;
 restore account sys from snapshot snapshot_01;
 select * from Company.Departments;
 departmentid    name    managerid
@@ -1232,7 +1228,6 @@ departmentid    budget
 5    500000.00
 6    600000.00
 restore account sys from snapshot snapshot_01;
-internal error: can not drop database. It has been referenced by foreign keys
 select * from acc_test02.pri01;
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK
