@@ -314,8 +314,7 @@ func (s *service) registerExecutorsLocked() {
 			executor.Options{}.WithWaitCommittedLogApplied())
 		cancel1()
 		if err != nil {
-			err = moerr.AttachCause(ctx1, err)
-			return err
+			return moerr.AttachCause(ctx1, err)
 		}
 		accounts := make([]int32, 0)
 		result.ReadRows(func(rows int, cols []*vector.Vector) bool {

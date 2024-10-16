@@ -50,8 +50,7 @@ func main() {
 
 	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"})
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		panic(err)
+		panic(moerr.AttachCause(ctx, err))
 	}
 	defer f.Close()
 

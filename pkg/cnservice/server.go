@@ -908,8 +908,7 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		err = moerr.AttachCause(ctx, err)
-		panic(err)
+		panic(moerr.AttachCause(ctx, err))
 	}
 
 	trace.GetService(s.cfg.UUID).EnableFlush()
@@ -919,8 +918,8 @@ func (s *service) bootstrap() error {
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-				err = moerr.AttachCause(ctx, err)
 				if err != context.Canceled {
+					err = moerr.AttachCause(ctx, err)
 					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
 					//panic(err)
 				}

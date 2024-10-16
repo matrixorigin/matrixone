@@ -46,8 +46,7 @@ func (h *handler) bootstrap(ctx context.Context) {
 				defer cancel()
 				state, err = h.haKeeperClient.GetClusterState(ctx)
 				if err != nil {
-					err = moerr.AttachCause(ctx, err)
-					panic(err)
+					panic(moerr.AttachCause(ctx, err))
 				}
 			}(ctx)
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {

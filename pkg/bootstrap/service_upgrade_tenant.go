@@ -265,9 +265,10 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			},
 			opts)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			s.logger.Error("tenant task handle failed",
 				zap.Error(err))
-			return false, moerr.AttachCause(ctx, err)
+			return false, err
 		}
 		return hasUpgradeTenants, nil
 	}
