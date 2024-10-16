@@ -208,14 +208,16 @@ func runEventTest(t *testing.T,
 	require.NoError(t, err)
 
 	// tunnel1 is on cn1, connection ID is 10.
-	_, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
+	ssc1, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
+	defer ssc1.Close()
 	// get connection id from result.
 	connID := uint32(ret[6])
 
 	// tunnel2 is on cn2, connection ID is 20.
-	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
+	ssc2, _, err := tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
+	defer ssc2.Close()
 
 	err = tu1.run(cc1, sc1)
 	require.NoError(t, err)
@@ -405,12 +407,14 @@ func TestQuitEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// tunnel1 is on cn1, connection ID is 10.
-	_, _, err = tp.ru.Connect(cn1, testPacket, tu1)
+	ssc1, _, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
+	defer ssc1.Close()
 
 	// tunnel2 is on cn2, connection ID is 20.
-	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
+	ssc2, _, err := tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
+	defer ssc2.Close()
 
 	err = tu1.run(cc1, sc1)
 	require.NoError(t, err)
