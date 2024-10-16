@@ -946,7 +946,7 @@ func restoreToAccountWithPitr(
 	viewMap map[string]*tableInfo,
 	curAccount uint32,
 ) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account , restore timestamp : %d", pitrName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore account %d, restore timestamp : %d", pitrName, curAccount, ts))
 
 	var dbNames []string
 	// delete current dbs
@@ -1147,14 +1147,6 @@ func restoreToDatabaseOrTableWithPitr(
 		}
 	}
 
-	// restore publication record
-	if !restoreToTbl {
-		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
-		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
-			return
-		}
-	}
-
 	tableInfos, err := getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
 	if err != nil {
 		return
@@ -1194,6 +1186,14 @@ func restoreToDatabaseOrTableWithPitr(
 			pitrName,
 			ts,
 			tblInfo); err != nil {
+			return
+		}
+	}
+
+	// restore publication record
+	if !restoreToTbl {
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
+		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
 			return
 		}
 	}
