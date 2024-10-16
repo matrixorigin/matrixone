@@ -85,19 +85,24 @@ func NewTableReader(
 	return reader
 }
 
-func (reader *tableReader) Close() {}
+func (reader *tableReader) Close() {
+	reader.sinker.Close()
+}
 
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
+		reader.Close()
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-ar.Pause:
 			return
 		case <-ar.Cancel:
 			return
@@ -184,6 +189,21 @@ func (reader *tableReader) readTableWithTxn(
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
 
+	defer func() {
+		if insertData != nil {
+			insertData.Clean(reader.mp)
+		}
+		if deleteData != nil {
+			deleteData.Clean(reader.mp)
+		}
+		if insertAtmBatch != nil {
+			insertAtmBatch.Close()
+		}
+		if deleteAtmBatch != nil {
+			deleteAtmBatch.Close()
+		}
+	}()
+
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
 		if atmBatch == nil {
 			atmBatch = NewAtomicBatch(reader.mp)
@@ -219,6 +239,8 @@ func (reader *tableReader) readTableWithTxn(
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-ar.Pause:
 			return
 		case <-ar.Cancel:
 			return

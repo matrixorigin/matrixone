@@ -17,10 +17,13 @@ package logtailreplay
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	goSort "sort"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 
@@ -34,7 +37,35 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+const (
+	JTCDCLoad tasks.JobType = 300 + iota
+)
+
+var (
+	_jobPool = sync.Pool{
+		New: func() any {
+			return new(tasks.Job)
+		},
+	}
+)
+
+func getJob(
+	ctx context.Context,
+	id string,
+	typ tasks.JobType,
+	exec tasks.JobExecutor) *tasks.Job {
+	job := _jobPool.Get().(*tasks.Job)
+	job.Init(ctx, id, typ, exec)
+	return job
+}
+
+func putJob(job *tasks.Job) {
+	job.Reset()
+	_jobPool.Put(job)
+}
 
 const (
 	ChangesHandle_Object uint8 = iota
@@ -49,6 +80,9 @@ const (
 const (
 	SmallBatchThreshold = 8192
 	CoarseMaxRow        = 8192
+
+	LoadParallism = 20
+	LogThreshold  = time.Minute
 )
 
 type BatchHandle struct {
@@ -58,13 +92,16 @@ type BatchHandle struct {
 	batches     *batch.Batch
 	batchLength int
 	ctx         context.Context
+
+	baseHandle *baseHandle
 }
 
-func NewRowHandle(data *batch.Batch, mp *mpool.MPool, ctx context.Context) (handle *BatchHandle) {
+func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context) (handle *BatchHandle) {
 	handle = &BatchHandle{
-		mp:      mp,
-		batches: data,
-		ctx:     ctx,
+		mp:         mp,
+		batches:    data,
+		ctx:        ctx,
+		baseHandle: baseHandle,
 	}
 	if data != nil {
 		handle.batchLength = data.Vecs[0].Length()
@@ -129,6 +166,7 @@ func (r *BatchHandle) QuickNext(data **batch.Batch, mp *mpool.MPool) (err error)
 }
 
 func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
+	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, r.batches.Attrs...)
@@ -144,6 +182,7 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			appendFromEntry(r.batches.Vecs[i], vec, r.rowOffsetCursor, mp)
 		}
 	}
+	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
 }
 
@@ -154,18 +193,55 @@ type CNObjectHandle struct {
 	objects            []*ObjectEntry
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
+	base               *baseHandle
+
+	cache []*batch.Batch
+	TSs   []types.TS
 }
 
-func NewCNObjectHandle(isTombstone bool, objects []*ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *CNObjectHandle {
+func NewCNObjectHandle(isTombstone bool, objects []*ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
 	return &CNObjectHandle{
+		base:        baseHandle,
 		isTombstone: isTombstone,
 		objects:     objects,
 		fs:          fs,
 		mp:          mp,
+		cache:       make([]*batch.Batch, 0),
 	}
 }
+func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
+	t0 := time.Now()
+	jobs := make([]*tasks.Job, 0)
+	for i := 0; i < LoadParallism; i++ {
+		if h.objectOffsetCursor >= len(h.objects) {
+			break
+		}
+		stats := h.objects[h.objectOffsetCursor].ObjectStats
+		h.TSs = append(h.TSs, h.objects[h.objectOffsetCursor].CreateTime)
+		job := prefetchObjects(ctx, uint32(h.blkOffsetCursor), h.fs, &stats, h.base.changesHandle.scheduler)
+		jobs = append(jobs, job)
+		h.blkOffsetCursor++
+		if h.blkOffsetCursor >= int(stats.BlkCnt()) {
+			h.blkOffsetCursor = 0
+			h.objectOffsetCursor++
+		}
+	}
+	for _, job := range jobs {
+		res := job.GetResult()
+		if res.Err != nil {
+			err = res.Err
+			h.base.changesHandle.readDuration += time.Since(t0)
+			return
+		}
+		putJob(job)
+		bat := res.Res.(*batch.Batch)
+		h.cache = append(h.cache, bat)
+	}
+	h.base.changesHandle.readDuration += time.Since(t0)
+	return
+}
 func (h *CNObjectHandle) isEnd() bool {
-	return h.objectOffsetCursor >= len(h.objects)
+	return h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
 }
 func (h *CNObjectHandle) IsEmpty() bool {
 	return len(h.objects) == 0
@@ -174,27 +250,32 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	if h.isEnd() {
 		return moerr.GetOkExpectedEOF()
 	}
-	currentObject := h.objects[h.objectOffsetCursor].ObjectStats
-	data, err := readObjects(
-		ctx,
-		h.isTombstone,
-		uint32(h.blkOffsetCursor),
-		&currentObject,
-		h.fs,
-	)
+	if len(h.cache) == 0 {
+		err = h.prefetch(ctx)
+		if err != nil {
+			return
+		}
+	}
+	data := h.cache[0]
+	ts := h.TSs[0]
+	h.cache = h.cache[1:]
+	h.TSs = h.TSs[1:]
+	t0 := time.Now()
 	if h.isTombstone {
 		updateCNTombstoneBatch(
 			data,
-			h.NextTS(),
+			ts,
 			h.mp,
 		)
 	} else {
 		updateCNDataBatch(
 			data,
-			h.NextTS(),
+			ts,
 			h.mp,
 		)
 	}
+	h.base.changesHandle.updateDuration += time.Since(t0)
+	t0 = time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
@@ -215,11 +296,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		src := data.Vecs[i]
 		vec.Union(src, sels, mp)
 	}
-	h.blkOffsetCursor++
-	if h.blkOffsetCursor >= int(currentObject.BlkCnt()) {
-		h.blkOffsetCursor = 0
-		h.objectOffsetCursor++
-	}
+	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
 
@@ -231,8 +308,10 @@ func (h *CNObjectHandle) NextTS() types.TS {
 	if h.isEnd() {
 		return types.TS{}
 	}
-	currentObject := h.objects[h.objectOffsetCursor]
-	return currentObject.CreateTime
+	if len(h.cache) == 0 {
+		return h.objects[h.objectOffsetCursor].CreateTime
+	}
+	return h.TSs[0]
 }
 
 type AObjectHandle struct {
@@ -246,6 +325,7 @@ type AObjectHandle struct {
 	quick              bool
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
+	cache              []*batch.Batch
 	p                  *baseHandle
 }
 
@@ -258,8 +338,35 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		fs:          fs,
 		mp:          mp,
 		p:           p,
+		cache:       make([]*batch.Batch, 0),
 	}
 	return handle
+}
+func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
+	t0 := time.Now()
+	jobs := make([]*tasks.Job, 0)
+	for i := 0; i < LoadParallism; i++ {
+		if h.objectOffsetCursor >= len(h.objects) {
+			break
+		}
+		stats := h.objects[h.objectOffsetCursor].ObjectStats
+		job := prefetchObjects(ctx, 0, h.fs, &stats, h.p.changesHandle.scheduler)
+		jobs = append(jobs, job)
+		h.objectOffsetCursor++
+	}
+	for _, job := range jobs {
+		res := job.GetResult()
+		if res.Err != nil {
+			err = res.Err
+			h.p.changesHandle.readDuration += time.Since(t0)
+			return
+		}
+		putJob(job)
+		bat := res.Res.(*batch.Batch)
+		h.cache = append(h.cache, bat)
+	}
+	h.p.changesHandle.readDuration += time.Since(t0)
+	return
 }
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
 	h.quick = quick
@@ -281,32 +388,33 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		if h.isEnd() {
 			return
 		}
-		currentObjectStats := h.objects[h.objectOffsetCursor].ObjectStats
-		h.currentBatch, err = readObjects(
-			ctx,
-			h.isTombstone,
-			0,
-			&currentObjectStats,
-			h.fs,
-		)
+		if len(h.cache) == 0 {
+			err = h.prefetch(ctx)
+			if err != nil {
+				return
+			}
+		}
+		h.currentBatch = h.cache[0]
+		h.cache = h.cache[1:]
+		t0 := time.Now()
 		if h.isTombstone {
 			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
 		} else {
 			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
 		}
+		h.p.changesHandle.updateDuration += time.Since(t0)
 		h.batchLength = h.currentBatch.Vecs[0].Length()
 		if h.batchLength > 0 {
 			return
 		}
-		h.objectOffsetCursor++
 	}
 }
 func (h *AObjectHandle) isEnd() bool {
-	return h.objectOffsetCursor >= len(h.objects)
+	return h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
 }
 
 func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
-	if h.isEnd() {
+	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
 	}
 	err = h.next(ctx, data, mp, h.rowOffsetCursor, h.batchLength)
@@ -317,21 +425,23 @@ func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *m
 }
 
 func (h *AObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
-	if h.isEnd() {
+	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
 	}
 	return h.next(ctx, bat, mp, h.rowOffsetCursor, h.rowOffsetCursor+1)
 }
 func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
-	if h.isEnd() {
+	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
 	}
+	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
 		(*bat).Attrs = append((*bat).Attrs, h.currentBatch.Attrs...)
 		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
+				h.p.changesHandle.copyDuration += time.Since(t0)
 				return err
 			}
 			(*bat).Vecs[i] = newVec
@@ -341,19 +451,24 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 			appendFromEntry(h.currentBatch.Vecs[i], vec, h.rowOffsetCursor, mp)
 		}
 	}
+	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
 		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
+		h.batchLength = 0
 		h.rowOffsetCursor = 0
-		h.objectOffsetCursor++
 		if !h.isEnd() {
-			h.getNextAObject(ctx)
+			err = h.getNextAObject(ctx)
+			if err != nil {
+				return
+			}
 		}
 	}
 	return
 }
 func (h *AObjectHandle) NextTS() types.TS {
-	if h.isEnd() {
+	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return types.TS{}
 	}
 	commitTSVec := h.currentBatch.Vecs[len(h.currentBatch.Vecs)-1]
@@ -364,6 +479,8 @@ type baseHandle struct {
 	aobjHandle     *AObjectHandle
 	cnObjectHandle *CNObjectHandle
 	inMemoryHandle *BatchHandle
+
+	changesHandle *ChangeHandler
 
 	skipTS map[types.TS]struct{}
 }
@@ -377,9 +494,10 @@ const (
 	NextChangeHandle_Data
 )
 
-func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, tombstone bool, fs fileservice.FileService, ctx context.Context) (p *baseHandle, err error) {
+func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, end types.TS, mp *mpool.MPool, tombstone bool, fs fileservice.FileService, ctx context.Context) (p *baseHandle, err error) {
 	p = &baseHandle{
-		skipTS: make(map[types.TS]struct{}),
+		skipTS:        make(map[types.TS]struct{}),
+		changesHandle: changesHandle,
 	}
 	var iter btree.IterG[ObjectEntry]
 	if tombstone {
@@ -398,7 +516,7 @@ func NewBaseHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool,
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
 	aobj, cnObj := p.getObjectEntries(iter, start, end)
 	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
-	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, mp)
+	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
 	return
 }
 func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err error) {
@@ -509,7 +627,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btr
 	if bat == nil {
 		return nil
 	}
-	h = NewRowHandle(bat, mp, ctx)
+	h = NewRowHandle(bat, mp, p, ctx)
 	return
 }
 func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
@@ -569,6 +687,12 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 	coarseMaxRow    int
 	quick           bool
+	scheduler       tasks.JobScheduler
+
+	readDuration, copyDuration    time.Duration
+	updateDuration, totalDuration time.Duration
+	dataLength, tombstoneLength   int
+	lastPrint                     time.Time
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
@@ -577,12 +701,13 @@ func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPo
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
+		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
-	changeHandle.tombstoneHandle, err = NewBaseHandler(state, start, end, mp, true, fs, ctx)
+	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
 	if err != nil {
 		return
 	}
-	changeHandle.dataHandle, err = NewBaseHandler(state, start, end, mp, false, fs, ctx)
+	changeHandle.dataHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, false, fs, ctx)
 	if err != nil {
 		changeHandle.tombstoneHandle.Close()
 		return
@@ -601,6 +726,7 @@ func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPo
 func (p *ChangeHandler) Close() error {
 	p.dataHandle.Close()
 	p.tombstoneHandle.Close()
+	p.scheduler.Stop()
 	return nil
 }
 func (p *ChangeHandler) decideMode() {
@@ -639,9 +765,24 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if time.Since(p.lastPrint) > LogThreshold {
+		p.lastPrint = time.Now()
+		if p.dataLength != 0 || p.tombstoneLength != 0 {
+			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v",
+				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration)
+		}
+	}
 	hint = engine.ChangesHandle_Tail_done
+	t0 := time.Now()
 	if p.quick {
 		data, tombstone, err = p.quickNext(ctx, mp)
+		p.totalDuration += time.Since(t0)
+		if data != nil {
+			p.dataLength += data.Vecs[0].Length()
+		}
+		if tombstone != nil {
+			p.tombstoneLength += tombstone.Vecs[0].Length()
+		}
 		return
 	}
 	for {
@@ -650,19 +791,47 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow {
+				p.totalDuration += time.Since(t0)
+				if data != nil {
+					p.dataLength += data.Vecs[0].Length()
+				}
+				if tombstone != nil {
+					p.tombstoneLength += tombstone.Vecs[0].Length()
+				}
 				return
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow {
+				p.totalDuration += time.Since(t0)
+				if data != nil {
+					p.dataLength += data.Vecs[0].Length()
+				}
+				if tombstone != nil {
+					p.tombstoneLength += tombstone.Vecs[0].Length()
+				}
 				return
 			}
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
+			p.totalDuration += time.Since(t0)
+			if data != nil {
+				p.dataLength += data.Vecs[0].Length()
+			}
+			if tombstone != nil {
+				p.tombstoneLength += tombstone.Vecs[0].Length()
+			}
 			return
 		}
 		if err != nil {
+			p.totalDuration += time.Since(t0)
+			if data != nil {
+				p.dataLength += data.Vecs[0].Length()
+			}
+			if tombstone != nil {
+				p.tombstoneLength += tombstone.Vecs[0].Length()
+			}
 			return
 		}
 	}
@@ -845,20 +1014,34 @@ func checkTS(start, end types.TS, ts types.TS) bool {
 	return ts.LE(&end) && ts.GE(&start)
 }
 
-func readObjects(
+func prefetchObjects(
 	ctx context.Context,
-	isTombstone bool,
 	blockID uint32,
-	stats *objectio.ObjectStats,
 	fs fileservice.FileService,
-) (bat *batch.Batch, err error) {
-	loc := stats.BlockLocation(uint16(blockID), 8192)
-	bat, _, err = blockio.LoadOneBlock(
+	stats *objectio.ObjectStats,
+	scheduler tasks.JobScheduler) (job *tasks.Job) {
+	job = getJob(
 		ctx,
-		fs,
-		loc,
-		objectio.SchemaData,
+		stats.ObjectName().String(),
+		JTCDCLoad,
+		func(ctx context.Context) (res *tasks.JobResult) {
+			loc := stats.BlockLocation(uint16(blockID), 8192)
+			bat, _, err := blockio.LoadOneBlock(
+				ctx,
+				fs,
+				loc,
+				objectio.SchemaData,
+			)
+			res = &tasks.JobResult{}
+			if err != nil {
+				res.Err = err
+			} else {
+				res.Res = bat
+			}
+			return
+		},
 	)
+	scheduler.Schedule(job)
 	return
 }
 

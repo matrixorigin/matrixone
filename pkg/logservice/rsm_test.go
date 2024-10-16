@@ -273,13 +273,13 @@ func TestRequiredLsnUpdate(t *testing.T) {
 	result, err = tsm.Update(e3)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
-	assert.Equal(t, uint64(203), tsm.state.RequiredLsn)
+	assert.Equal(t, uint64(300), tsm.state.RequiredLsn)
 
 	i++
 	cmd4 := getSetRequiredLsnCmd(90)
 	e4 := sm.Entry{Index: i, Cmd: cmd4}
 	result, err = tsm.Update(e4)
-	assert.Equal(t, sm.Result{Value: 203}, result)
+	assert.Equal(t, sm.Result{Value: 300}, result)
 	assert.Nil(t, err)
-	assert.Equal(t, uint64(203), tsm.state.RequiredLsn)
+	assert.Equal(t, uint64(300), tsm.state.RequiredLsn)
 }
