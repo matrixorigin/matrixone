@@ -97,10 +97,10 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
 
 	// how to handle the *pipeline.Message.
-	if receiver.needNotReply {
-		err = handlePipelineMessage(&receiver)
-	} else {
-		if err = handlePipelineMessage(&receiver); err != nil {
+	err = handlePipelineMessage(&receiver)
+	if receiver.messageTyp != pipeline.Method_StopSending {
+		// stop message only close a running pipeline, there is no need to reply the finished-message.
+		if err != nil {
 			err = receiver.sendError(err)
 		} else {
 			err = receiver.sendEndMessage()
@@ -179,7 +179,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		s = appendWriteBackOperator(runCompile, s)
+		if !receiver.needNotReply {
+			s = appendWriteBackOperator(runCompile, s)
+		}
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
