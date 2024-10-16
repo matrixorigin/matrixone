@@ -790,13 +790,6 @@ func restoreToDatabaseOrTable(
 		}
 	}
 
-	if !restoreToTbl {
-		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", snapshotName, dbName))
-		if err = createPub(ctx, sid, bh, snapshotName, dbName, toAccountId); err != nil {
-			return
-		}
-	}
-
 	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
@@ -831,6 +824,13 @@ func restoreToDatabaseOrTable(
 		}
 
 		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+			return
+		}
+	}
+
+	if !restoreToTbl {
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", snapshotName, dbName))
+		if err = createPub(ctx, sid, bh, snapshotName, dbName, toAccountId); err != nil {
 			return
 		}
 	}
