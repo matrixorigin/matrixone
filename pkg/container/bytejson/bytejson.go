@@ -567,7 +567,7 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 	return keys, vals
 }
 
-func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filterMap map[string]struct{}) []UnnestResult {
+func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this []byte, filterMap map[string]struct{}) []UnnestResult {
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
 		tmp := UnnestResult{}
@@ -585,7 +585,8 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			genUnnestResult(tmp, nil, key, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
+				dt, _ := val.Marshal()
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, dt, filterMap)
 			}
 		}
 	}
@@ -598,24 +599,29 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			genUnnestResult(tmp, util.UnsafeStringToBytes(strconv.Itoa(i)), nil, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
+				dt, _ := val.Marshal()
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, dt, filterMap)
 			}
 		}
 	}
 	return out
 }
 
-func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, error) {
+func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, int, error) {
 
 	keys := make([]string, 0, 1)
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, moerr.NewInvalidInputNoCtxf("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+		return nil, 0, moerr.NewInvalidInputNoCtxf("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
 		if vals[i].canUnnest() {
-			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filterMap)
+			dt, err := vals[i].Marshal()
+			if err != nil {
+				return nil, 0, err
+			}
+			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], dt, filterMap)
 		}
 	}
 	if len(out) == 0 && outer {
@@ -632,27 +638,27 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 			for i := 0; i < len(vals); i++ {
 				dt, err := vals[i].Marshal()
 				if err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				out[i]["this"] = dt
 			}
 		}
 
 	}
-	return out, nil
+	return out, len(keys), nil
 }
 
 // Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
-func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, error) {
+func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filterMap map[string]struct{}) ([]UnnestResult, int, error) {
 	if !checkMode(mode) {
-		return nil, moerr.NewInvalidInputNoCtx("mode must be one of [object, array, both]")
+		return nil, 0, moerr.NewInvalidInputNoCtx("mode must be one of [object, array, both]")
 	}
 	out := make([]UnnestResult, 0, 1)
-	out, err := bj.unnest(out, path, outer, recursive, mode, filterMap)
-	return out, err
+	out, thiscnt, err := bj.unnest(out, path, outer, recursive, mode, filterMap)
+	return out, thiscnt, err
 }
 
-func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *ByteJson, filterMap map[string]struct{}) UnnestResult {
+func genUnnestResult(res UnnestResult, index, key, path []byte, value *ByteJson, this []byte, filterMap map[string]struct{}) UnnestResult {
 	if _, ok := filterMap["index"]; ok {
 		res["index"] = index
 	}
@@ -667,8 +673,7 @@ func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *Byt
 		res["value"] = dt
 	}
 	if _, ok := filterMap["this"]; ok {
-		dt, _ := this.Marshal()
-		res["this"] = dt
+		res["this"] = this
 	}
 	return res
 }
