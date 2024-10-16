@@ -15,7 +15,6 @@
 package hashtable
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -104,7 +103,7 @@ func (ht *StringHashMap) Init(allocator malloc.Allocator) (err error) {
 	return
 }
 
-func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64, m *mpool.MPool) error {
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) error {
 	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
