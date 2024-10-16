@@ -521,18 +521,11 @@ func (db *txnDatabase) openSysTable(
 		defs:          defs,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
+		tableDef:      item.TableDef,
+		constraint:    item.Constraint,
 		clusterByIdx:  -1,
 		eng:           db.getTxn().engine,
 	}
-	switch name {
-	case catalog.MO_DATABASE:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoDatabaseConstraint
-	case catalog.MO_TABLES:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoTableConstraint
-	case catalog.MO_COLUMNS:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
-	}
-	tbl.GetTableDef(p.Ctx)
 	tbl.proc.Store(p)
 	return tbl
 }
