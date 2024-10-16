@@ -724,7 +724,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 
 	// get pitr name
 	pitrName := string(stmt.Name)
-	srcAccountName := string(stmt.AccountName)
+	accountName := string(stmt.AccountName)
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)
 
@@ -768,84 +768,173 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 
-	if len(srcAccountName) > 0 {
-		restoreOtherAccount := func() (rtnErr error) {
-			fromAccount := string(stmt.SrcAccountName)
-			if len(fromAccount) == 0 {
-				fromAccount = pitr.accountName
-			}
-			toAccountId := uint32(pitr.accountId)
-			// check account exists or not
-			var accountExist bool
-			if accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, toAccountId); rtnErr != nil {
-				return rtnErr
-			}
-			if !accountExist {
-				return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
-			}
-			// mock snapshot
-			var snapshotName string
-			snapshotName, rtnErr = insertSnapshotRecord(ctx, ses.GetService(), bh, pitrName, ts, uint64(toAccountId), fromAccount)
-			defer func() {
-				deleteSnapshotRecord(ctx, ses.GetService(), bh, pitrName, snapshotName)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			restoreAccount := toAccountId
-
-			if srcAccountName != pitr.accountName {
-				// restore account to other account
-				toAccountId, rtnErr = getAccountId(ctx, bh, string(stmt.AccountName))
+	if len(accountName) > 0 {
+		var restoreOtherAccount func() error
+		if len(stmt.SrcAccountName) > 0 {
+			restoreOtherAccount = func() (rtnErr error) {
+				fromAccount := stmt.SrcAccountName.String()
+				fromAccountId, rtnErr := getAccountId(ctx, bh, fromAccount)
 				if rtnErr != nil {
 					return rtnErr
 				}
-			}
 
-			// drop foreign key related tables first
-			if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
-				return
-			}
+				var toAccountId uint32
+				if accountName == fromAccount {
+					toAccountId = fromAccountId
+				} else {
+					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
+					if rtnErr != nil {
+						return rtnErr
+					}
+				}
 
-			// get topo sorted tables with foreign key
-			sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
-			if err != nil {
-				return
-			}
+				// check account exists or not
+				var accountExist bool
+				accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, ses.GetAccountId())
+				if rtnErr != nil {
+					return rtnErr
+				}
+				if !accountExist {
+					return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+				}
 
-			// get foreign key table infos
-			fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
-			if err != nil {
-				return
-			}
+				// mock snapshot
+				var snapshotName string
+				snapshotName, rtnErr = insertSnapshotRecord(ctx, ses.GetService(), bh, pitrName, ts, uint64(fromAccountId), fromAccount)
+				defer func() {
+					deleteSnapshotRecord(ctx, ses.GetService(), bh, pitrName, snapshotName)
+				}()
+				if rtnErr != nil {
+					return rtnErr
+				}
 
-			// collect views and tables during table restoration
-			viewMap := make(map[string]*tableInfo)
+				restoreAccount := fromAccountId
+				// drop foreign key related tables first
+				rtnErr = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId)
+				if rtnErr != nil {
+					return
+				}
 
-			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
-			if rtnErr != nil {
+				// get topo sorted tables with foreign key
+				sortedFkTbls, rtnErr := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+				if rtnErr != nil {
+					return
+				}
+
+				// get foreign key table infos
+				fkTableMap, rtnErr := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
+				if rtnErr != nil {
+					return
+				}
+
+				// collect views and tables during table restoration
+				viewMap := make(map[string]*tableInfo)
+
+				rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
+				if rtnErr != nil {
+					return rtnErr
+				}
+
+				if len(fkTableMap) > 0 {
+					rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts)
+					if rtnErr != nil {
+						return
+					}
+				}
+
+				if len(viewMap) > 0 {
+					rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId)
+					if rtnErr != nil {
+						return
+					}
+				}
+				// checks if the given context has been canceled.
+				rtnErr = CancelCheck(ctx)
+				if rtnErr != nil {
+					return
+				}
 				return rtnErr
 			}
+		} else {
+			restoreOtherAccount = func() (rtnErr error) {
+				fromAccount := pitr.accountName
+				toAccountId := uint32(pitr.accountId)
+				// check account exists or not
+				var accountExist bool
+				accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, ses.GetAccountId())
+				if rtnErr != nil {
+					return rtnErr
+				}
+				if !accountExist {
+					return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+				}
 
-			if len(fkTableMap) > 0 {
-				if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts); err != nil {
+				// mock snapshot
+				var snapshotName string
+				snapshotName, rtnErr = insertSnapshotRecord(ctx, ses.GetService(), bh, pitrName, ts, uint64(toAccountId), fromAccount)
+				defer func() {
+					deleteSnapshotRecord(ctx, ses.GetService(), bh, pitrName, snapshotName)
+				}()
+				if rtnErr != nil {
+					return rtnErr
+				}
+
+				restoreAccount := toAccountId
+				if accountName != fromAccount {
+					// restore account to other account
+					toAccountId, rtnErr = getAccountId(ctx, bh, string(accountName))
+					if rtnErr != nil {
+						return rtnErr
+					}
+				}
+
+				// drop foreign key related tables first
+				rtnErr = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId)
+				if rtnErr != nil {
 					return
 				}
-			}
 
-			if len(viewMap) > 0 {
-				if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
+				// get topo sorted tables with foreign key
+				sortedFkTbls, rtnErr := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+				if rtnErr != nil {
 					return
 				}
+
+				// get foreign key table infos
+				fkTableMap, rtnErr := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
+				if rtnErr != nil {
+					return
+				}
+
+				// collect views and tables during table restoration
+				viewMap := make(map[string]*tableInfo)
+
+				rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts, restoreAccount, false, nil)
+				if rtnErr != nil {
+					return rtnErr
+				}
+
+				if len(fkTableMap) > 0 {
+					rtnErr = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts)
+					if rtnErr != nil {
+						return
+					}
+				}
+
+				if len(viewMap) > 0 {
+					rtnErr = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId)
+					if rtnErr != nil {
+						return
+					}
+				}
+				// checks if the given context has been canceled.
+				rtnErr = CancelCheck(ctx)
+				if rtnErr != nil {
+					return
+				}
+				return rtnErr
 			}
-			// checks if the given context has been canceled.
-			if err = CancelCheck(ctx); err != nil {
-				return
-			}
-			return rtnErr
 		}
-
 		err = restoreOtherAccount()
 		if err != nil {
 			return err
