@@ -81,8 +81,9 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 			SortHint:    entry.SortHint,
 			IsTombstone: entry.IsTombstone,
 		},
-		objData:     entry.objData,
-		ObjectState: entry.ObjectState,
+		objData:      entry.objData,
+		ObjectState:  entry.ObjectState,
+		GenerateHint: entry.GenerateHint,
 	}
 	return obj
 }
