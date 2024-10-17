@@ -1135,6 +1135,17 @@ func restoreToDatabaseOrTableWithPitr(
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
+		// check whether the db is master db
+		var isMasterDb bool
+		isMasterDb, err = checkDatabaseIsMaster(ctx, sid, bh, pitrName, dbName)
+		if err != nil {
+			return err
+		}
+		if isMasterDb {
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master db: %v, which has been referenced by foreign keys", pitrName, dbName))
+			return
+		}
+		// drop db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: '%v'", pitrName, dbName))
 		if err = dropDb(ctx, bh, dbName); err != nil {
 			return
