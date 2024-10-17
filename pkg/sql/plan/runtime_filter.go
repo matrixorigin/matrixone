@@ -148,27 +148,25 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
 				return
 			}
-
-			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-				switch col := probeExprs[0].Expr.(type) {
-				case *plan.Expr_Col:
-					ctx := builder.ctxByNode[leftChild.NodeId]
-					if ctx == nil {
-						return
-					}
-					if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
-						tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-						if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
-							return
-						}
-					} else {
-						return
-					}
-
-				default:
+			// only push runtime filter on first ordered column
+			switch col := probeExprs[0].Expr.(type) {
+			case *plan.Expr_Col:
+				ctx := builder.ctxByNode[leftChild.NodeId]
+				if ctx == nil {
 					return
 				}
+				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+						return
+					}
+				} else {
+					return
+				}
+			default:
+				return
 			}
+
 		}
 
 		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
