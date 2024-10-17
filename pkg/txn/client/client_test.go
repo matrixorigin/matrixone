@@ -253,3 +253,10 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 		},
 		WithMaxActiveTxn(1))
 }
+
+func TestOpenInternalTxnCannotBlockWithPausedState(t *testing.T) {
+	c := &txnClient{}
+	c.mu.state = paused
+	op := &txnOperator{}
+	require.Error(t, c.openTxn(op))
+}
