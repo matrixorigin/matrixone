@@ -270,7 +270,8 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *AnalyzeModule
+	retryTimes int
+	anal       *AnalyzeModule
 	// e db engine instance.
 	e engine.Engine
 
@@ -309,6 +310,8 @@ type Compile struct {
 	filterExprExes []colexec.ExpressionExecutor
 
 	isPrepare bool
+
+	hasMergeOp bool
 }
 
 type RemoteReceivRegInfo struct {

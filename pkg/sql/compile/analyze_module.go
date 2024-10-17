@@ -503,7 +503,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 			cpuTimeVal := gblStats.OperatorTimeConsumed + statsInfo.BuildReaderDuration +
 				int64(statsInfo.ParseDuration+
 					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
 				cpuTimeVal,
@@ -513,7 +513,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption()))
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
 			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
 				statsInfo.BuildPlanStatsDuration,
@@ -549,10 +549,10 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				gblStats.S3DeleteMultiRequest+statsInfo.BuildPlanS3Request.DeleteMulti+statsInfo.CompileS3Request.DeleteMulti+statsInfo.ScopePrepareS3Request.DeleteMulti,
 			))
 
-			cpuTimeVal := gblStats.OperatorTimeConsumed + statsInfo.BuildReaderDuration +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+			cpuTimeVal := gblStats.OperatorTimeConsumed +
+				int64(statsInfo.ParseDuration+statsInfo.PlanDuration+statsInfo.CompileDuration) +
+				statsInfo.ScopePrepareDuration + statsInfo.CompilePreRunOnceDuration -
+				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
@@ -563,7 +563,7 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				gblStats.OperatorTimeConsumed,
 				gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption()))
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
@@ -595,8 +595,9 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.BuildReaderDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
 				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.CompilePreRunOnceDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.BuildReaderDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.ScopePrepareS3Request.List,
 					statsInfo.ScopePrepareS3Request.Head,

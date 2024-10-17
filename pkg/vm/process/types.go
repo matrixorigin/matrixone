@@ -25,6 +25,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"github.com/hayageek/threadsafe"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -294,6 +295,9 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+
+	// post dml sqls run right after all pipelines finished.
+	PostDmlSqlList *threadsafe.Slice[string]
 }
 
 // Process contains context used in query execution
@@ -448,6 +452,10 @@ func (proc *Process) GetBaseProcessRunningStatus() bool {
 
 func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 	proc.Base.atRuntime = status
+}
+
+func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
+	return proc.Base.PostDmlSqlList
 }
 
 func (si *SessionInfo) GetUser() string {

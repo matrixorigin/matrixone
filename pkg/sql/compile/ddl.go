@@ -465,6 +465,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
+
 		case *plan.AlterTable_Action_AddIndex:
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 
@@ -493,6 +494,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 					// 3. Master index
 					err = s.handleMasterIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
+					// 3. FullText index
+					err = s.handleFullTextIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 					// 4. IVF indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -1202,6 +1206,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
+		err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			def,
+			c.proc.GetTxnOperator(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
@@ -1508,11 +1524,24 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tmpDBSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
+		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), nil); err == nil {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
 
 		if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
+			return err
+		}
+
+		err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			tmpDBSource,
+			def,
+			c.proc.GetTxnOperator(),
+			func() string {
+				return engine.GetTempTableName(dbName, def.Name)
+			})
+		if err != nil {
 			return err
 		}
 	}
@@ -1586,6 +1615,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				}
 			}
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
+			// 5. FullText index
+			err = s.handleFullTextIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
 		}
 		if err != nil {
 			return err
@@ -1739,9 +1771,15 @@ func (s *Scope) DropIndex(c *Compile) error {
 		if _, err = d.Relation(c.proc.Ctx, qry.IndexTableName, nil); err != nil {
 			return err
 		}
+
+		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, qry.IndexTableName, c.proc.GetTxnOperator()); err != nil {
+			return err
+		}
+
 		if err = d.Delete(c.proc.Ctx, qry.IndexTableName); err != nil {
 			return err
 		}
+
 	}
 
 	//3. delete index object from mo_catalog.mo_indexes
@@ -2009,14 +2047,41 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error
+		var oldIndexId, newIndexId uint64
+		var idxtblname string
 		if isTemp {
+			indexrel, err := dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, name), nil)
+			if err != nil {
+				return err
+			}
+			idxtblname = engine.GetTempTableName(dbName, name)
+			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
+			newIndexId = oldIndexId
 			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
+			if err != nil {
+				return err
+			}
 		} else {
-			_, err = dbSource.Truncate(c.proc.Ctx, name)
+			indexrel, err := dbSource.Relation(c.proc.Ctx, name, nil)
+			if err != nil {
+				return err
+			}
+			idxtblname = name
+			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
+			newIndexId, err = dbSource.Truncate(c.proc.Ctx, name)
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return err
+
+		// only non-temporary table can insert into mo_catalog tables so auto increment is not working on temp table
+		if !isTemp {
+			if err = maybeResetAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, idxtblname,
+				oldIndexId, newIndexId, keepAutoIncrement, c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
 		}
+
 	}
 
 	//Truncate Partition subtable if needed
@@ -2266,7 +2331,12 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
-			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
+			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource,
+				engine.GetTempTableName(dbName, name), c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
+
+			if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, name)); err != nil {
 				return err
 			}
 		}
@@ -2311,9 +2381,14 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 		for _, name := range qry.IndexTableNames {
+			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
+				return err
+			}
+
 			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 				return err
 			}
+
 		}
 
 		// delete partition subtable
@@ -3276,6 +3351,82 @@ func maybeCreateAutoIncrement(
 		def.TblId,
 		cols,
 		txnOp)
+}
+
+func maybeDeleteAutoIncrement(
+	ctx context.Context,
+	sid string,
+	db engine.Database,
+	tblname string,
+	txnOp client.TxnOperator) error {
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+	rel, err := db.Relation(ctx, tblname, nil)
+	if err != nil {
+		return err
+	}
+
+	tblId := rel.GetTableID(ctx)
+
+	tblDef := rel.GetTableDef(ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(sid).Delete(
+			ctx,
+			tblId,
+			txnOp)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func maybeResetAutoIncrement(
+	ctx context.Context,
+	sid string,
+	db engine.Database,
+	tblname string,
+	oldId uint64,
+	newId uint64,
+	keepAutoIncrement bool,
+	txnOp client.TxnOperator) error {
+
+	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
+
+	rel, err := db.Relation(ctx, tblname, nil)
+	if err != nil {
+		return err
+	}
+
+	tblDef := rel.GetTableDef(ctx)
+	var containAuto bool
+	for _, col := range tblDef.Cols {
+		if col.Typ.AutoIncr {
+			containAuto = true
+			break
+		}
+	}
+	if containAuto {
+		err = incrservice.GetAutoIncrementService(sid).Reset(
+			ctx,
+			oldId,
+			newId,
+			keepAutoIncrement,
+			txnOp)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {

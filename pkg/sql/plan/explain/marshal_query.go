@@ -241,6 +241,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "apply", nil
 	case plan.Node_MULTI_UPDATE:
 		return "multi_update", nil
+	case plan.Node_POSTDML:
+		return "postdml", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -648,6 +650,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_MULTI_UPDATE:
 		labels = append(labels, models.Label{
 			Name:  Label_Apply,
+			Value: []string{},
+		})
+	case plan.Node_POSTDML:
+		labels = append(labels, models.Label{
+			Name:  Label_PostDml,
 			Value: []string{},
 		})
 	default:

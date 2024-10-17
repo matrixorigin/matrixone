@@ -2636,9 +2636,17 @@ func executeStmt(ses *Session,
 	var cmpBegin time.Time
 	var ret interface{}
 
-	switch execCtx.stmt.StmtKind().ExecLocation() {
+	getExecLocation := func() tree.ExecLocation {
+		// because when isBinaryProtExecute is true, execCtx.stmt is preparestmt, actually it's execute
+		if execCtx.input.isBinaryProtExecute {
+			return tree.EXEC_IN_ENGINE
+		}
+		return execCtx.stmt.StmtKind().ExecLocation()
+	}
+	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontend(ses, execCtx)
+
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
@@ -2944,6 +2952,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
+		statsInfo.ParseStartTime = beginInstant
 		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
@@ -3564,27 +3573,24 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		//val := int64(statsByte.GetTimeConsumed()) + statsInfo.BuildReaderDuration +
-		//	int64(statsInfo.ParseDuration+
-		//		statsInfo.CompileDuration+
-		//		statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+statsInfo.PlanDuration+statsInfo.CompileDuration) +
 			statsInfo.ScopePrepareDuration + statsInfo.CompilePreRunOnceDuration -
-			(statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if val < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d - %d - %d) = %d",
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
-				int64(statsByte.GetTimeConsumed()),
-				statsInfo.BuildReaderDuration,
 				statsInfo.ParseDuration,
-				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
+				statsInfo.CompileDuration,
+				int64(statsByte.GetTimeConsumed()),
+				statsInfo.ScopePrepareDuration+statsInfo.CompilePreRunOnceDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption(),
-				val)
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
+				val,
+			)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
 			statsByte.WithTimeConsumed(float64(val))

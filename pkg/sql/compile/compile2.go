@@ -274,7 +274,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-
+		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
@@ -318,6 +318,9 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
 		return nil, e
 	}
+
+	// clear PostDmlSqlList
+	c.proc.GetPostDmlSqlList().Clear()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.

@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -666,8 +668,22 @@ func (txn *Transaction) gcObjs(start int) error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	var (
+		beforeEntries int
+		afterEntries  int
+	)
+	defer func() {
+		logutil.Info(
+			"RollbackLastStatement",
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+			zap.Int("before", beforeEntries),
+			zap.Int("after", afterEntries),
+		)
+	}()
 	txn.Lock()
 	defer txn.Unlock()
+
+	beforeEntries = len(txn.writes)
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
@@ -693,6 +709,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	afterEntries = len(txn.writes)
 
 	txn.CleanToFreeBatches()
 
