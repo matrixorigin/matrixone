@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 
@@ -34,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -64,6 +67,9 @@ func NewLocalDataSource(
 		}
 
 		source.rangeSlice = rangesSlice
+		source.rc.prefetchDisabled = rangesSlice.Len() < 4
+	} else {
+		source.rc.prefetchDisabled = true
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
@@ -107,6 +113,7 @@ type LocalDisttaeDataSource struct {
 
 	// runtime config
 	rc struct {
+		prefetchDisabled    bool
 		batchPrefetchCursor int
 		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
@@ -356,6 +363,17 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	if ls.category != engine.ShardingLocalDataSource {
 		if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
 			return err
+		}
+		//TODO::add debug for #19202, remove it later.
+		if ls.category == engine.ShardingRemoteDataSource {
+			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(ls.table.tableName) {
+				logutil.Infof("xxxx IterateInmemData, txn:%s, table name:%s, tid:%v, outBatch:%s",
+					ls.table.db.op.Txn().DebugString(),
+					ls.table.tableName,
+					ls.table.tableId,
+					common.MoBatchToString(outBatch, 10),
+				)
+			}
 		}
 	}
 
@@ -961,6 +979,9 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+	if ls.rc.prefetchDisabled {
+		return
+	}
 	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
 		ls.rangesCursor < ls.rc.batchPrefetchCursor {
 		return
@@ -971,20 +992,24 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
-	blks := make([]*objectio.BlockInfo, end-begin)
+	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
-		blks[idx-begin] = ls.rangeSlice.Get(idx)
-	}
+		blk := ls.rangeSlice.Get(idx)
+		if blk.BlockID.Object().EQ(&preObj) {
+			continue
+		}
 
-	// prefetch blk data
-	err := blockio.Prefetch(
-		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
-	if err != nil {
-		logutil.Errorf("pefetch block data: %s", err.Error())
-	}
+		preObj = *blk.BlockID.Object()
 
-	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
+		// prefetch blk data
+		err := blockio.Prefetch(
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		if err != nil {
+			logutil.Errorf("pefetch block data: %s, blk:%s",
+				err.Error(),
+				blk.String())
+		}
+	}
 
 	ls.rc.batchPrefetchCursor = end
 }
@@ -1020,7 +1045,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	}
 
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
-	emptyBatch := batch.EmptyBatchWithAttrs(attrs)
+	cacheVectors := containers.NewVectors(len(attrs))
 
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
@@ -1045,7 +1070,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = blockio.ReadDeletes(
-				ls.ctx, location, ls.fs, obj.GetCNCreated(), &emptyBatch,
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
 				return nil, err
 			}
@@ -1053,9 +1078,9 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](emptyBatch.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](emptyBatch.Vecs[1])
+				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
 			}
 
 			for i := 0; i < len(rowIds); i++ {

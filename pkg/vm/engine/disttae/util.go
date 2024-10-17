@@ -393,20 +393,6 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 	}
 }
 
-func getNonSortedPKSearchFuncByPKVec(
-	vec *vector.Vector,
-) objectio.ReadFilterSearchFuncType {
-
-	searchPKFunc := LinearSearchOffsetByValFactory(vec)
-
-	if searchPKFunc != nil {
-		return func(vecs []*vector.Vector) []int64 {
-			return searchPKFunc(vecs[0])
-		}
-	}
-	return nil
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,

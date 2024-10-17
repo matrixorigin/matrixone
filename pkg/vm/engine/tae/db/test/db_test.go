@@ -4267,10 +4267,10 @@ func TestBlockRead(t *testing.T) {
 			}
 			b1 := buildBatch(colTyps)
 			phyAddrColumnPos := -1
-			cacheBat := batch.EmptyBatchWithSize(len(colIdxs) + 1)
+			cacheVectors := containers.NewVectors(len(colIdxs) + 1)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				beforeDel, nil, fileservice.Policy(0), b1, &cacheBat, pool, fs,
+				beforeDel, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4281,7 +4281,7 @@ func TestBlockRead(t *testing.T) {
 			b2 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterFirstDel, nil, fileservice.Policy(0), b2, &cacheBat, pool, fs,
+				afterFirstDel, nil, fileservice.Policy(0), b2, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
@@ -4291,7 +4291,7 @@ func TestBlockRead(t *testing.T) {
 			b3 := buildBatch(colTyps)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
-				afterSecondDel, nil, fileservice.Policy(0), b3, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b3, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4304,7 +4304,7 @@ func TestBlockRead(t *testing.T) {
 				[]uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b4, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b4, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b4.Vecs))
@@ -4318,7 +4318,7 @@ func TestBlockRead(t *testing.T) {
 				ds, []uint16{2},
 				[]types.Type{types.T_Rowid.ToType()},
 				0,
-				afterSecondDel, nil, fileservice.Policy(0), b5, &cacheBat, pool, fs,
+				afterSecondDel, nil, fileservice.Policy(0), b5, cacheVectors, pool, fs,
 			)
 			assert.NoError(t, err)
 			assert.Equal(t, 1, len(b5.Vecs))
@@ -6531,21 +6531,67 @@ func TestSnapshotGC(t *testing.T) {
 	schema1.Extra.ObjectMaxBlocks = 2
 
 	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.Name = "schema2"
 	schema2.Extra.BlockMaxRows = 10
 	schema2.Extra.ObjectMaxBlocks = 2
-	var rele2, rel3 handle.Relation
+	schema3 := catalog.MockSchemaAll(13, 2)
+	schema3.Extra.BlockMaxRows = 10
+	schema3.Extra.ObjectMaxBlocks = 2
+	schema4 := catalog.MockSchemaAll(13, 2)
+	schema4.Extra.BlockMaxRows = 10
+	schema4.Extra.ObjectMaxBlocks = 2
+	var rele2, rel3, checkrel handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
 		rele2, err = testutil.CreateRelation2(ctx, txn, database, schema1)
 		assert.Nil(t, err)
-		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema3)
+		assert.Nil(t, err)
+		checkrel, err = testutil.CreateRelation2(ctx, txn, database, schema2)
 		assert.Nil(t, err)
 		rel3, err = testutil.CreateRelation2(ctx, txn, database, snapshotSchema)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
+	txn, _ := db.StartTxn(nil)
+	catalogdb, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	assert.Nil(t, err)
+	tblHandle, err := catalogdb.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	assert.Nil(t, err)
+	packer := types.NewPacker()
+	packer.EncodeUint32(schema2.AcInfo.TenantID)
+	packer.EncodeStringType([]byte("db"))
+	packer.EncodeStringType([]byte(schema2.Name))
+	assert.Nil(t, err)
+	filter := handle.NewEQFilter(packer.Bytes())
+	err = tblHandle.UpdateByFilter(context.Background(), filter, 6, []byte("tsfsdfs"), false)
+	assert.NoError(t, err)
+	err = txn.Commit(context.Background())
+	assert.Nil(t, err)
+	packer2 := types.NewPacker()
+	packer2.EncodeUint32(schema2.AcInfo.TenantID)
+	packer2.EncodeStringType([]byte("db"))
+	packer2.EncodeStringType([]byte("test2"))
+	tuple, _, _, err := types.DecodeTuple(packer2.Bytes())
+	assert.Nil(t, err)
+	checkPK := tuple.ErrString(nil)
+	assert.Nil(t, err)
+	txn, _ = db.StartTxn(nil)
+	catalogdb, err = txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	assert.Nil(t, err)
+	tblHandle, err = catalogdb.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	assert.Nil(t, err)
+	err = tblHandle.UpdateByFilter(context.Background(), filter, 19, packer2.Bytes(), false)
+	assert.Nil(t, err)
+	packer.Close()
+	packer2.Close()
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	})
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	db.DiskCleaner.GetCleaner().DisableGC()
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
@@ -6605,19 +6651,16 @@ func TestSnapshotGC(t *testing.T) {
 		err := pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
 		assert.Nil(t, err)
 
-		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
+		err = pool.Submit(testutil.AppendClosure(t, data, schema3.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	snapWG.Wait()
 	wg.Wait()
+	db.DiskCleaner.GetCleaner().EnableGC()
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
-		return
-	}
-	db.DiskCleaner.GetCleaner().EnableGC()
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -6688,7 +6731,7 @@ func TestSnapshotGC(t *testing.T) {
 		_, ok := tombstones[stats.ObjectName().String()]
 		assert.True(t, ok)
 	}
-
+	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
 }
 
 func TestSnapshotMeta(t *testing.T) {

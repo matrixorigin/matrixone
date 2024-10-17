@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -361,8 +362,12 @@ func (exec *txnExecutor) Exec(
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),
+			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
+		if len(batches) == 0 && strings.HasPrefix(sql, "select offset, step from") {
+			logutil.Info("Empty incr query", zap.String("ws", exec.opts.Txn().GetWorkspace().PPString()))
+		}
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()
