@@ -242,7 +242,7 @@ var (
     			checkpoint_str varchar(1000),
     			no_full bool,
     			incr_config varchar(1000),
-    			reserved0 text,
+    			additional_config text,
     			reserved1 text,
     			reserved2 text,
     			reserved3 text,
