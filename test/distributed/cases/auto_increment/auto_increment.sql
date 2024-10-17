@@ -63,7 +63,9 @@ Insert into auto_increment05 values();
 Insert into auto_increment05 values();
 select last_insert_id();
 Select * from auto_increment05;
+-- @pattern
 Insert into auto_increment05 values(10001);
+-- @pattern
 Insert into auto_increment05 values(10002);
 Select * from auto_increment05;
 Drop table auto_increment05;

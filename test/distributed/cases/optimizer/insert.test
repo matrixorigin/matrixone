@@ -6,6 +6,7 @@ create table t2(a int, b int, c int, unique key(b, c));
 explain insert into t2(a) values (1);
 create table t3(a int auto_increment, b int, unique key(a));
 insert into t3(b) values (1);
+-- @pattern
 insert into t3(a) values (1);
 create table t4(a int auto_increment, b int auto_increment, unique key(a, b));
 insert into t4(b) values (1);
