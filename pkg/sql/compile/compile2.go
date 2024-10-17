@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -158,6 +159,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var executeSQL = c.originSQL
 	if len(executeSQL) == 0 {
 		executeSQL = c.sql
+	}
+
+	if c.proc.GetSessionInfo().User != "mo_logger" {
+		fmt.Printf("xxxx %x run sql: %s\n", txnOperator.Txn().ID, executeSQL)
 	}
 
 	// track the entire execution lifecycle and release memory after it ends.
