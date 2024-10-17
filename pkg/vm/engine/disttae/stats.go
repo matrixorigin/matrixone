@@ -21,8 +21,6 @@ import (
 	"sync"
 	"time"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -567,7 +565,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor, gs.engine.GetService()); err != nil {
+	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
@@ -759,15 +757,7 @@ func updateInfoFromZoneMap(
 	return nil
 }
 
-func getNDVUsingInternalSql(serviceID string) float64 {
-	v, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service!")
-	}
-
-}
-
-func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef, serviceID string) {
+func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 
 	if info.AccurateObjectNumber > 1 {
@@ -812,7 +802,7 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef, serviceID 
 }
 
 // UpdateStats is the main function to calculate and update the stats for scan node.
-func UpdateStats(ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor, serviceID string) error {
+func UpdateStats(ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -828,7 +818,7 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
-	adjustNDV(info, baseTableDef, serviceID)
+	adjustNDV(info, baseTableDef)
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
 	return nil
 }
