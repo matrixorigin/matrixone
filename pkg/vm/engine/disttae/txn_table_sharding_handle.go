@@ -351,6 +351,14 @@ func HandleShardingReadNext(
 	}
 	bat := buildBatch()
 	defer func() {
+		//TODO::add for debug #19202, remove it later.
+		logutil.Infof("xxxx HandleShardingReadNext, stream:%s, txn:%s,name:%s,id:%d, bat:%s",
+			streamID.String(),
+			tbl.db.op.Txn().DebugString(),
+			tbl.tableDef.Name,
+			tbl.tableId,
+			common.MoBatchToString(bat, 10))
+
 		bat.Clean(mp)
 	}()
 
@@ -367,13 +375,6 @@ func HandleShardingReadNext(
 	if isEnd {
 		return buffer.EncodeBytes(types.EncodeBool(&isEnd)), nil
 	}
-
-	logutil.Infof("xxxx HandleShardingReadNext, stream:%s, txn:%s,name:%s,id:%d, bat:%s",
-		streamID.String(),
-		tbl.db.op.Txn().DebugString(),
-		tbl.tableDef.Name,
-		tbl.tableId,
-		common.MoBatchToString(bat, 10))
 
 	var w bytes.Buffer
 	if _, err := w.Write(types.EncodeBool(&isEnd)); err != nil {

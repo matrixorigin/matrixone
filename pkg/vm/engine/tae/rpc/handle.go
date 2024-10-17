@@ -818,6 +818,16 @@ func (h *Handle) HandleWrite(
 				)
 			}
 		}
+		//TODO::debug for #19202, romove it later.
+		//testinsertintowithremotepartition
+		if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(req.TableName) {
+			logutil.Infof("xxxx HandleWrite, txn:%s,name:%s, tid:%v, bat:%s",
+				txn.String(),
+				req.TableName,
+				req.TableID,
+				common.MoBatchToString(req.Batch, 10))
+		}
+
 		// TODO: debug for #13342, remove me later
 		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
 			schema := tb.Schema(false).(*catalog.Schema)
