@@ -67,6 +67,9 @@ func NewLocalDataSource(
 		}
 
 		source.rangeSlice = rangesSlice
+		source.rc.prefetchDisabled = rangesSlice.Len() < 4
+	} else {
+		source.rc.prefetchDisabled = true
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
@@ -110,6 +113,7 @@ type LocalDisttaeDataSource struct {
 
 	// runtime config
 	rc struct {
+		prefetchDisabled    bool
 		batchPrefetchCursor int
 		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
@@ -975,6 +979,9 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+	if ls.rc.prefetchDisabled {
+		return
+	}
 	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
 		ls.rangesCursor < ls.rc.batchPrefetchCursor {
 		return

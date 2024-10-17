@@ -107,6 +107,7 @@ const (
 	ProductL2
 	Mock
 	Apply
+	PostDml
 )
 
 var OperatorToStrMap map[OpType]string
@@ -179,6 +180,7 @@ func init() {
 		ProductL2:               "ProductL2",
 		Mock:                    "Mock",
 		Apply:                   "Apply",
+		PostDml:                 "PostDml",
 	}
 
 	// Initialize StrToOperatorMap
@@ -346,6 +348,8 @@ func (op OpType) String() string {
 		return "Mock"
 	case Apply:
 		return "Apply"
+	case PostDml:
+		return "PostDml"
 	default:
 		return "Unknown"
 	}

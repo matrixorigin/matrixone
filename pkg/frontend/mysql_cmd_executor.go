@@ -2951,6 +2951,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
+		statsInfo.ParseStartTime = beginInstant
 		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
@@ -3574,9 +3575,10 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		val := int64(statsByte.GetTimeConsumed()) + statsInfo.BuildReaderDuration +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+				statsInfo.PlanDuration) -
+			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 		if val < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d - %d - %d) = %d",
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d -%d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
 				int64(statsByte.GetTimeConsumed()),
@@ -3585,7 +3587,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption(),
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
