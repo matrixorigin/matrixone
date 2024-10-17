@@ -39,7 +39,7 @@ const (
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 
-	overlapThreshold = 0.8
+	overlapThreshold = 0.95
 	uniformThreshold = 0.3
 )
 
