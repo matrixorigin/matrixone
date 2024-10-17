@@ -164,6 +164,9 @@ type Cleaner interface {
 	GCEnabled() bool
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
+
+	// For testing
+	GetTablePK(tableId uint64) string
 }
 
 var ObjectTableAttrs []string

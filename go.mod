@@ -43,6 +43,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
+	github.com/hayageek/threadsafe v1.0.1
 	github.com/itchyny/gojq v0.12.16
 	github.com/jhump/protoreflect v1.15.2
 	github.com/json-iterator/go v1.1.12
@@ -96,6 +97,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
+	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
