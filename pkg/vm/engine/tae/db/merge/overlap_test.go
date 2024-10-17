@@ -60,8 +60,6 @@ func newMergeEntry(min, max int64, ts types.TS, size int) *mergeEntry {
 type mockEntrySet struct {
 	entries  []*mergeEntry
 	maxValue []byte
-
-	generation int
 }
 
 func (s *mockEntrySet) reset() {
@@ -155,9 +153,7 @@ func BenchmarkMergeOverlap(b *testing.B) {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			select {
-			case <-ticker.C:
-			}
+			<-ticker.C
 			a, b := rand.Int63n(10000), rand.Int63n(10000)
 			a, b = min(a, b), max(a, b)
 			ts := types.BuildTS(time.Now().Unix(), 0)
