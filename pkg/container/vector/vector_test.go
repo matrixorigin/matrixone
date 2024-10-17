@@ -15,6 +15,10 @@
 package vector
 
 import (
+	"fmt"
+	"math/rand"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -2709,6 +2713,223 @@ func TestMisc(t *testing.T) {
 	}
 }
 
+func TestGetAny(t *testing.T) {
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int8.ToType())
+		err := AppendFixed(v, int8(0), false, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		v.Free(mp)
+		require.Equal(t, int8(0), s.(int8))
+	}
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(w, []byte("x"), false, mp)
+		require.NoError(t, err)
+		s := GetAny(w, 0)
+		require.Equal(t, []byte("x"), s.([]byte))
+		w.Free(mp)
+	}
+	{ // bool
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_bool.ToType())
+		err := AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(w, 0)
+		require.Equal(t, true, s.(bool))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int8
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int8.ToType())
+		err := AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int8(1), s.(int8))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int16.ToType())
+		err := AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int16(1), s.(int16))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int32.ToType())
+		err := AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int32(1), s.(int32))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int64.ToType())
+		err := AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int64(1), s.(int64))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint8
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint8.ToType())
+		err := AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint8(1), s.(uint8))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint16.ToType())
+		err := AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint16(1), s.(uint16))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint32.ToType())
+		err := AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint32(1), s.(uint32))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint64.ToType())
+		err := AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint64(1), s.(uint64))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // text
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_text.ToType())
+		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(v, 0)
+		require.Equal(t, []byte("1"), s.([]byte))
+
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // time
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_time.ToType())
+		err := AppendFixedList(v, []types.Time{12 * 3600 * 1000 * 1000, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Time(12*3600*1000*1000), s.(types.Time))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // timestamp
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_timestamp.ToType())
+		err := AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Timestamp(10000000), s.(types.Timestamp))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal64
+		mp := mpool.MustNewZero()
+		typ := types.T_decimal64.ToType()
+		typ.Scale = 2
+		v := NewVec(typ)
+		err := AppendFixedList(v, []types.Decimal64{1234, 2000}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Decimal64(1234), s.(types.Decimal64))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal128
+		mp := mpool.MustNewZero()
+		typ := types.T_decimal128.ToType()
+		typ.Scale = 2
+		v := NewVec(typ)
+		err := AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Decimal128{B0_63: 1234, B64_127: 0}, s.(types.Decimal128))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uuid
+		mp := mpool.MustNewZero()
+		vs := make([]types.Uuid, 4)
+		v := NewVec(types.T_uuid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, "00000000-0000-0000-0000-000000000000", fmt.Sprint(s))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // ts
+		mp := mpool.MustNewZero()
+		vs := make([]types.TS, 4)
+		v := NewVec(types.T_TS.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.TS(types.TS{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // rowid
+		mp := mpool.MustNewZero()
+		vs := make([]types.Rowid, 4)
+		v := NewVec(types.T_Rowid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Rowid(types.Rowid{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
 func BenchmarkUnmarshal(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -2769,5 +2990,239 @@ func BenchmarkMustFixedCol(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		MustFixedColWithTypeCheck[int8](vec)
+	}
+}
+
+func TestIntersection2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Intersection2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestIntersection2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Intersection2VectorVarlen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Union2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Union2VectorValen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
 	}
 }
