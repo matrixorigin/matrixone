@@ -634,7 +634,8 @@ func updateInfoFromZoneMap(
 		meta := objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
 		info.BlockNumber += int64(obj.BlkCnt())
-		info.TableCnt += float64(meta.BlockHeader().Rows())
+		objSize := meta.BlockHeader().Rows()
+		info.TableCnt += float64(objSize)
 		if !init {
 			init = true
 			for idx, col := range req.tableDef.Cols[:lenCols] {
@@ -642,7 +643,13 @@ func updateInfoFromZoneMap(
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
-				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+				ndv := float64(objColMeta.Ndv())
+				info.ColumnNDVs[idx] = ndv
+				info.MaxNDVs[idx] = ndv
+				info.NDVinMinOBJ[idx] = ndv
+				info.NDVinMaxOBJ[idx] = ndv
+				info.MaxOBJSize = objSize
+				info.MinOBJSize = objSize
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
@@ -672,7 +679,21 @@ func updateInfoFromZoneMap(
 				}
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+				ndv := float64(objColMeta.Ndv())
+
+				info.ColumnNDVs[idx] += ndv
+				if ndv > info.MaxNDVs[idx] {
+					info.MaxNDVs[idx] = ndv
+				}
+				if objSize > info.MaxOBJSize {
+					info.MaxOBJSize = objSize
+					info.NDVinMaxOBJ[idx] = ndv
+				}
+				if objSize < info.MinOBJSize {
+					info.MinOBJSize = objSize
+					info.NDVinMinOBJ[idx] = ndv
+				}
+
 				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
@@ -719,9 +740,13 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
 	plan2.AdjustNDV(info, baseTableDef, req.statsInfo)
 
-	for _, coldef := range baseTableDef.Cols[:len(baseTableDef.Cols)-1] {
+	for i, coldef := range baseTableDef.Cols[:len(baseTableDef.Cols)-1] {
 		colName := coldef.Name
-		logutil.Infof("debug: table %v  col %v ndv %v", baseTableDef.Name, colName, req.statsInfo.NdvMap[colName])
+		overlap := 1.0
+		if req.statsInfo.ShuffleRangeMap[colName] != nil {
+			overlap = req.statsInfo.ShuffleRangeMap[colName].Overlap
+		}
+		logutil.Infof("debug: table %v  col %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v", baseTableDef.Name, colName, req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
 	}
 
 	return nil

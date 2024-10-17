@@ -116,9 +116,14 @@ type InfoFromZoneMap struct {
 	ColumnZMs            []objectio.ZoneMap
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
+	MaxNDVs              []float64
+	NDVinMaxOBJ          []float64
+	NDVinMinOBJ          []float64
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
 	ColumnSize           []int64
+	MaxOBJSize           uint32
+	MinOBJSize           uint32
 	BlockNumber          int64
 	AccurateObjectNumber int64
 	ApproxObjectNumber   int64
@@ -130,6 +135,9 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
+		MaxNDVs:       make([]float64, lenCols),
+		NDVinMaxOBJ:   make([]float64, lenCols),
+		NDVinMinOBJ:   make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
 		ColumnSize:    make([]int64, lenCols),
 		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
@@ -138,36 +146,52 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
-	lenCols := len(tableDef.Cols) - 1 /* row-id */
-
 	if info.AccurateObjectNumber > 1 {
-		for idx := range tableDef.Cols[:lenCols] {
-			rate := info.ColumnNDVs[idx] / info.TableCnt
-			if info.ColumnNDVs[idx] < 3 {
-				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
+		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+			colName := coldef.Name
+			rate := info.ColumnNDVs[i] / info.TableCnt
+			if info.ColumnNDVs[i] < 3 {
+				info.ColumnNDVs[i] *= (4 - info.ColumnNDVs[i])
 				continue
 			}
-			if rate < 0.001 && info.TableCnt*rate < 100 {
-				info.ColumnNDVs[idx] = info.TableCnt * rate
+			if info.MaxNDVs[i] < 50 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
 				continue
 			}
-			if rate > 0.5 {
-				info.ColumnNDVs[idx] = info.TableCnt * rate
+			if info.MaxNDVs[i] < 500 && rate < 0.01 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
 				continue
 			}
-			if info.ShuffleRanges[idx] != nil && info.ShuffleRanges[idx].Overlap < overlapThreshold {
-				info.ColumnNDVs[idx] = info.TableCnt * rate * (1 - info.ShuffleRanges[idx].Overlap)
+			overlap := 1.0
+			if s.ShuffleRangeMap[colName] != nil {
+				overlap = s.ShuffleRangeMap[colName].Overlap
+			}
+			if overlap < 0.2 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < 0.4 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
+			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
+			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < 0.4 {
+				info.ColumnNDVs[i] = info.TableCnt * rate * math.Pow((1-overlap), 2)
 				continue
 			}
 
-			if rate < 0.2 {
-				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
-				if GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
-					if info.ColumnNDVs[idx] < 50000 && info.ColumnNDVs[idx] > 500 {
-						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.2)
-					}
+			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > 0.4 {
+				if info.NDVinMaxOBJ[i]/info.MaxNDVs[i] > 0.95 && rateMax < 0.3 {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] / math.Pow(overlap, 2)
 				}
+				continue
 			}
+
+			//don't know how to calc ndv, just guess
+			info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
 		}
 	}
 
@@ -193,6 +217,9 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
+		if info.ColumnNDVs[i] > s.TableCnt {
+			info.ColumnNDVs[i] = s.TableCnt // to avoid a bug
+		}
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
