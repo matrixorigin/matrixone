@@ -523,9 +523,6 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 				break
 			}
 		}
-		if !find {
-			return nil
-		}
 	}
 
 	for i := range leftColKey {
