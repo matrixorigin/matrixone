@@ -4558,20 +4558,22 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 			break
 		}
 
+		j := idx
 		if cmp(short[i], long[idx]) == 0 {
 			if err = AppendFixed(ret, short[i], false, mp); err != nil {
 				return err
 			}
-		}
 
-		// skip the same item
-		j := idx + 1
-		for j < lenLong && cmp(long[j], long[j-1]) == 0 {
 			j++
-		}
 
-		if j >= lenLong {
-			break
+			// skip the same item
+			for j < lenLong && cmp(long[j], long[j-1]) == 0 {
+				j++
+			}
+
+			if j >= lenLong {
+				break
+			}
 		}
 
 		idx = j
@@ -4679,21 +4681,22 @@ func Intersection2VectorVarlen(
 			break
 		}
 
+		j := idx
 		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
 			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
 				return err
 			}
-		}
 
-		// skip the same item
-		j := idx + 1
-		for j < lenLong && bytes.Equal(
-			longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
+			// skip the same item
 			j++
-		}
+			for j < lenLong && bytes.Equal(
+				longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
+				j++
+			}
 
-		if j >= lenLong {
-			break
+			if j >= lenLong {
+				break
+			}
 		}
 
 		idx = j
@@ -4724,11 +4727,11 @@ func Union2VectorValen(
 	}
 
 	for i < lenA && j < lenB {
-		bb := colb[j].GetByteSlice(areab)
 		ba := cola[i].GetByteSlice(areaa)
+		bb := colb[j].GetByteSlice(areab)
 
 		if bytes.Compare(ba, bb) <= 0 {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 				prevVal = ba
 				if err = AppendBytes(ret, ba, false, mp); err != nil {
 					return err
@@ -4736,7 +4739,7 @@ func Union2VectorValen(
 			}
 			i++
 		} else {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 				prevVal = bb
 				if err = AppendBytes(ret, bb, false, mp); err != nil {
 					return err
@@ -4748,7 +4751,7 @@ func Union2VectorValen(
 
 	for ; i < lenA; i++ {
 		ba := cola[i].GetByteSlice(areaa)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 			prevVal = ba
 			if err = AppendBytes(ret, ba, false, mp); err != nil {
 				return err
@@ -4758,7 +4761,7 @@ func Union2VectorValen(
 
 	for ; j < lenB; j++ {
 		bb := colb[j].GetByteSlice(areab)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 			prevVal = bb
 			if err = AppendBytes(ret, bb, false, mp); err != nil {
 				return err
