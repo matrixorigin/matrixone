@@ -274,12 +274,13 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	// Local FileService blocking wait time
+	// Local FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
 	LocalFSReadIOMergerTimeConsumption int64
+	// S3 FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
+	S3FSReadIOMergerTimeConsumption int64
 
-	// S3 FileService blocking wait time
+	// S3 FileService Prefetch File IOMerge time Consumption
 	S3FSPrefetchFileIOMergerTimeConsumption int64
-	S3FSReadIOMergerTimeConsumption         int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`

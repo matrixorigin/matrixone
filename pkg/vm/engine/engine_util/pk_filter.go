@@ -436,12 +436,8 @@ func ConstructBlockPKFilter(
 	}
 
 	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int64 {
-			return sortedSearchFunc(vecs[0])
-		}
-		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int64 {
-			return unSortedSearchFunc(vecs[0])
-		}
+		readFilter.SortedSearchFunc = sortedSearchFunc
+		readFilter.UnSortedSearchFunc = unSortedSearchFunc
 		readFilter.Valid = true
 		return readFilter, nil
 	}
