@@ -429,7 +429,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		tag := uint64(node.BindingTags[0]) << 32
 		colMap := make(map[uint64][]uint64)
 		for _, name := range node.TableDef.Pkey.Names {
-			k := tag + uint64(node.TableDef.Name2ColIndex[name])
+			k := tag | uint64(node.TableDef.Name2ColIndex[name])
 			colMap[k] = []uint64{k}
 		}
 		return colMap
@@ -509,7 +509,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	}
 
 	leftColKey := make([]uint64, len(exprs))
-	for key, value := range rightColMap {
+	for key, value := range leftColMap {
 		find := false
 		for _, col := range value {
 			for i, leftCol := range exprLeftCols {
