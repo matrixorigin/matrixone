@@ -365,47 +365,7 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats...)
 
 			if len(bats) != 0 {
-				schema := tbl.getSchema(true)
-				seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
-				name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-				writer, err := blockio.NewBlockWriterNew(
-					tbl.store.rt.Fs.Service,
-					name,
-					schema.Version,
-					seqnums,
-					true,
-				)
-				if err != nil {
-					return err
-				}
-
-				writer.SetPrimaryKeyWithType(
-					uint16(objectio.TombstonePrimaryKeyIdx),
-					index.HBF,
-					index.ObjectPrefixFn,
-					index.BlockPrefixFn,
-				)
-
-				for _, bat := range bats {
-					for _, vec := range bat.Vecs {
-						if vec == nil {
-							// this task has been canceled
-							return nil
-						}
-					}
-					_, err = writer.WriteBatch(bat)
-					if err != nil {
-						return err
-					}
-				}
-				_, _, err = writer.Sync(context.Background())
-				if err != nil {
-					return err
-				}
-				writerStats := writer.GetObjectStats()
-				objStats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
-				objectio.SetObjectStats(objStats, &writerStats)
-				tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *objStats)
+				panic(fmt.Sprintf("TN-TRANSFER-TOMBSTONE-FILES, batch is %d", len(bats)))
 			}
 			logutil.Info(
 				"TN-TRANSFER-TOMBSTONE-FILES",
