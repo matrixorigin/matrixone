@@ -520,8 +520,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
-		stmt := ses.GetStmtInfo()
-		stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		if stmt := ses.GetStmtInfo(); stmt != nil {
+			stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		}
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
