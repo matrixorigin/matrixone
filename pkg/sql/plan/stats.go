@@ -137,6 +137,46 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
+func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
+	lenCols := len(tableDef.Cols) - 1 /* row-id */
+
+	if info.AccurateObjectNumber > 1 {
+		for idx := range tableDef.Cols[:lenCols] {
+			rate := info.ColumnNDVs[idx] / info.TableCnt
+			if info.ColumnNDVs[idx] < 3 {
+				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
+				continue
+			}
+			if rate < 0.001 && info.TableCnt*rate < 100 {
+				info.ColumnNDVs[idx] = info.TableCnt * rate
+				continue
+			}
+			if rate > 0.5 {
+				info.ColumnNDVs[idx] = info.TableCnt * rate
+				continue
+			}
+			if info.ShuffleRanges[idx] != nil && info.ShuffleRanges[idx].Overlap < overlapThreshold {
+				info.ColumnNDVs[idx] = info.TableCnt * rate * (1 - info.ShuffleRanges[idx].Overlap)
+				continue
+			}
+
+			if rate < 0.2 {
+				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
+				if GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
+					if info.ColumnNDVs[idx] < 50000 && info.ColumnNDVs[idx] > 500 {
+						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.2)
+					}
+				}
+			}
+		}
+	}
+
+	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+		colName := coldef.Name
+		s.NdvMap[colName] = info.ColumnNDVs[i]
+	}
+}
+
 func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.StatsInfo) {
 	start := time.Now()
 	defer func() {
@@ -147,8 +187,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
 	s.TableName = tableDef.Name
-	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	//set info in statsInfo
+
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
