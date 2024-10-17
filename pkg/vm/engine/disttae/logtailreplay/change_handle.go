@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,6 +38,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -230,6 +232,15 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
+				logutil.Info("ChangesHandle-CheckGCTS",
+					zap.String("err", err2.Error()),
+					zap.String("origin err", err.Error()))
+				if err2 != nil {
+					err = err2
+				}
+			}
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
 		}
@@ -358,6 +369,15 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
+				logutil.Info("ChangesHandle-CheckGCTS",
+					zap.String("err", err2.Error()),
+					zap.String("origin err", err.Error()))
+				if err2 != nil {
+					err = err2
+				}
+			}
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
 		}
@@ -693,6 +713,9 @@ type ChangeHandler struct {
 	updateDuration, totalDuration time.Duration
 	dataLength, tombstoneLength   int
 	lastPrint                     time.Time
+
+	start, end types.TS
+	fs         fileservice.FileService
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
@@ -701,6 +724,9 @@ func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPo
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
+		start:        start,
+		end:          end,
+		fs:           fs,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -1084,4 +1110,24 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
+}
+
+func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
+	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
+	if err != nil {
+		return
+	}
+	maxGCTS := types.TS{}
+	for _, dir := range dirs {
+		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		if ext == blockio.CompactedExt {
+			if end.GT(&maxGCTS) {
+				maxGCTS = end
+			}
+		}
+	}
+	if ts.LT(&maxGCTS) {
+		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
+	}
+	return nil
 }
