@@ -375,7 +375,7 @@ func doTransferRowids(
 		*readPKColumn.GetType(),
 		objectio.RowidType,
 	}
-	bat := batch.NewWithSchema(false, attrs, attrTypes)
+	bat := batch.NewWithSchema(true, attrs, attrTypes)
 	defer func() {
 		bat.Clean(mp)
 	}()
