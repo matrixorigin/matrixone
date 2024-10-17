@@ -16,6 +16,9 @@ package vector
 
 import (
 	"fmt"
+	"math/rand"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -2987,5 +2990,239 @@ func BenchmarkMustFixedCol(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		MustFixedColWithTypeCheck[int8](vec)
+	}
+}
+
+func TestIntersection2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Intersection2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestIntersection2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Intersection2VectorVarlen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Union2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Union2VectorValen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
 	}
 }
