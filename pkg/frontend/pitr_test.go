@@ -1473,5 +1473,12 @@ func Test_doRestorePitr_Account(t *testing.T) {
 
 		err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
+
+		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
 	})
 }
