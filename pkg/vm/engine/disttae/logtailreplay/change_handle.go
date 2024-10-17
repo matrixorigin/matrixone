@@ -233,9 +233,11 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-CheckGCTS", zap.String("err", err.Error()))
 				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
 				if err2 != nil {
+					logutil.Info("ChangesHandle-CheckGCTS Failed",
+						zap.String("err", err2.Error()),
+						zap.String("origin err", err.Error()))
 					err = err2
 				}
 			}
@@ -368,9 +370,11 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-CheckGCTS", zap.String("err", err.Error()))
 				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
 				if err2 != nil {
+					logutil.Info("ChangesHandle-CheckGCTS Failed",
+						zap.String("err", err2.Error()),
+						zap.String("origin err", err.Error()))
 					err = err2
 				}
 			}
