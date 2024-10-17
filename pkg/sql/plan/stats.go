@@ -148,6 +148,13 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 	if info.AccurateObjectNumber > 1 {
 		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+			if coldef.Name == "c_name" {
+				logutil.Infof("test")
+			}
+
+			if info.ColumnNDVs[i] > s.TableCnt {
+				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
+			}
 			colName := coldef.Name
 			rate := info.ColumnNDVs[i] / info.TableCnt
 			if info.ColumnNDVs[i] < 3 {
@@ -195,13 +202,20 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 			}
 
 			//don't know how to calc ndv, just guess
-			info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
+			if overlap > overlapThreshold {
+				info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+			} else {
+				info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
+			}
 		}
 	}
 
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
+		if s.NdvMap[colName] > s.TableCnt {
+			s.NdvMap[colName] = s.TableCnt * 0.99
+		}
 	}
 }
 
@@ -221,9 +235,6 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
-		if info.ColumnNDVs[i] > s.TableCnt {
-			info.ColumnNDVs[i] = s.TableCnt // to avoid a bug
-		}
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0

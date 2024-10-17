@@ -688,12 +688,15 @@ func updateInfoFromZoneMap(
 				if objSize > info.MaxOBJSize {
 					info.MaxOBJSize = objSize
 					info.NDVinMaxOBJ[idx] = ndv
+				} else if objSize == info.MaxOBJSize && ndv > info.NDVinMaxOBJ[idx] {
+					info.NDVinMaxOBJ[idx] = ndv
 				}
 				if objSize < info.MinOBJSize {
 					info.MinOBJSize = objSize
 					info.NDVinMinOBJ[idx] = ndv
+				} else if objSize == info.MinOBJSize && ndv < info.NDVinMinOBJ[idx] {
+					info.NDVinMinOBJ[idx] = ndv
 				}
-
 				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
@@ -748,6 +751,5 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 		}
 		logutil.Infof("debug: table %v tablecnt %v  col %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v", baseTableDef.Name, info.TableCnt, colName, req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
 	}
-
 	return nil
 }
