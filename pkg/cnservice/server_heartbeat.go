@@ -18,12 +18,14 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
-	"go.uber.org/zap"
 )
 
 func (s *service) startCNStoreHeartbeat() error {
@@ -69,7 +71,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
+	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
 	defer cancel()
 
 	hb := logservicepb.CNStoreHeartbeat{
@@ -98,6 +100,7 @@ func (s *service) heartbeat(ctx context.Context) {
 
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
+		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return

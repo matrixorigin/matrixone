@@ -29,7 +29,7 @@ func RetryWithIntervalAndTimeout(
 	timeout time.Duration,
 	interval time.Duration, suppressTimout bool) (err error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseRetryWithIntervalAndTimeout)
 	defer cancel()
 
 	ticker := time.NewTicker(interval)
@@ -47,7 +47,7 @@ func RetryWithIntervalAndTimeout(
 			if suppressTimout {
 				return moerr.GetOkExpectedEOB()
 			}
-			return moerr.NewInternalError(ctx, "timeout")
+			return moerr.AttachCause(ctx, moerr.NewInternalError(ctx, "timeout"))
 		case <-ticker.C:
 			ok, err = op()
 			if ok {

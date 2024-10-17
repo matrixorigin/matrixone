@@ -50,7 +50,7 @@ func NewCatalogHandler(
 	upstream *MemHandler,
 ) (*CatalogHandler, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Hour, moerr.CauseNewCatalogHandler)
 	defer cancel()
 
 	handler := &CatalogHandler{
@@ -121,7 +121,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,
@@ -142,7 +142,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,
@@ -163,7 +163,7 @@ func NewCatalogHandler(
 		}
 		id, err := upstream.idGenerator.NewID(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		row := &AttributeRow{
 			ID:         id,

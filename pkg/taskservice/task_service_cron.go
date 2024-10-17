@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/robfig/cron/v3"
-	"go.uber.org/zap"
 )
 
 var (
@@ -86,8 +88,9 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		c, cancel := context.WithTimeout(ctx, time.Second*10)
+		c, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseFetchCronTasks)
 		tasks, err := s.QueryCronTask(c)
+		err = moerr.AttachCause(c, err)
 		cancel()
 		if err != nil {
 			s.rt.Logger().Error("query cron tasks failed",
@@ -249,7 +252,7 @@ func (j *cronJob) doRun() {
 	cronTask.UpdateAt = now.UnixMilli()
 	cronTask.NextTime = j.schedule.Next(now).UnixMilli()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseDoRun)
 	defer cancel()
 
 	cronTask.TriggerTimes++
@@ -259,6 +262,7 @@ func (j *cronJob) doRun() {
 
 	_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.DebugString()),
 			zap.Error(err))
@@ -268,7 +272,7 @@ func (j *cronJob) doRun() {
 }
 
 func (j *cronJob) checkConcurrency() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseCheckConcurrency)
 	defer cancel()
 
 	queryTask, err := j.s.QueryAsyncTask(ctx,
@@ -276,6 +280,7 @@ func (j *cronJob) checkConcurrency() bool {
 		WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
 	if err != nil ||
 		uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
+		err = moerr.AttachCause(ctx, err)
 		j.s.rt.Logger().Debug("cron task not triggered",
 			zap.String("cause", "reach max concurrency"),
 			zap.String("task", j.task.DebugString()),

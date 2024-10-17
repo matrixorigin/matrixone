@@ -22,9 +22,12 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -182,4 +185,111 @@ func TestKafkaMoConnector(t *testing.T) {
 	if mockExecutor.execCount != msg_num {
 		t.Errorf("Expected SQL to be executed 10 times, but got %d", mockExecutor.execCount)
 	}
+}
+
+var _ taskservice.TaskService = new(testTaskService)
+
+type testTaskService struct {
+}
+
+func (testTS *testTaskService) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) CreateAsyncTask(ctx context.Context, metadata task.TaskMetadata) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) CreateBatch(ctx context.Context, metadata []task.TaskMetadata) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) Allocate(ctx context.Context, value task.AsyncTask, taskRunner string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) Complete(ctx context.Context, taskRunner string, task task.AsyncTask, result task.ExecuteResult) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) Heartbeat(ctx context.Context, task task.AsyncTask) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) QueryAsyncTask(ctx context.Context, condition ...taskservice.Condition) ([]task.AsyncTask, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) QueryCronTask(ctx context.Context, condition ...taskservice.Condition) ([]task.CronTask, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) CreateDaemonTask(ctx context.Context, value task.TaskMetadata, details *task.Details) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) QueryDaemonTask(ctx context.Context, conds ...taskservice.Condition) ([]task.DaemonTask, error) {
+	return nil, moerr.NewInternalErrorNoCtx("return err")
+}
+
+func (testTS *testTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...taskservice.Condition) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) StartScheduleCronTask() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) StopScheduleCronTask() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) GetStorage() taskservice.TaskStorage {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, f func(context.Context, taskservice.SqlExecutor) (int, error)) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (testTS *testTaskService) UpdateCdcTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CdcTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_KafkaSinkConnectorExecutor(t *testing.T) {
+	exec := KafkaSinkConnectorExecutor(nil, &testTaskService{}, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := exec(ctx, &task.CronTask{})
+	assert.Error(t, err)
 }

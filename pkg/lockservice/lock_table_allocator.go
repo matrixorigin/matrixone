@@ -20,13 +20,14 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"go.uber.org/zap"
 )
 
 type lockTableAllocator struct {
@@ -515,7 +516,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 	getActiveTxnFunc := l.options.getActiveTxnFunc
 	if getActiveTxnFunc == nil {
 		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseCleanCommitState)
 			defer cancel()
 
 			req := acquireRequest()
@@ -526,7 +527,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			resp, err := l.client.Send(ctx, req)
 			if err != nil {
-				return false, nil, err
+				return false, nil, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
@@ -940,7 +941,7 @@ func validateService(
 	if timeout < defaultRPCTimeout {
 		timeout = defaultRPCTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseValidateService)
 	defer cancel()
 
 	req := acquireRequest()
@@ -951,6 +952,7 @@ func validateService(
 
 	resp, err := client.Send(ctx, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logPingFailed(logger, serviceID, err)
 		return false, err
 	}
