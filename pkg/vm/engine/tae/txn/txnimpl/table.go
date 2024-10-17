@@ -356,6 +356,7 @@ func (tbl *txnTable) TransferDeletes(
 						engine_util.WithMemorySizeThreshold(common.Const1MBytes))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
+				currentTransferBatch.Close()
 			}
 		}
 		if sinker != nil {
