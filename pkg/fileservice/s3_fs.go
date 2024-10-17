@@ -288,13 +288,16 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
-
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
 
 	startLock := time.Now()
+	defer func() {
+		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
+	}()
+
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
@@ -304,7 +307,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		// not wait in prefetch, return
 		return nil
 	}
-	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -317,7 +319,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -435,6 +436,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Record S3 IO and netwokIO(un memory IO) time Consumption
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -506,13 +514,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
 
 read_disk_cache:
 	if s.diskCache != nil {
