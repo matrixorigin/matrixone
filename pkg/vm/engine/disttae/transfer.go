@@ -20,7 +20,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -370,7 +369,7 @@ func doTransferRowids(
 
 	attrs := []string{
 		pkColumName,
-		catalog.Row_ID,
+		objectio.PhysicalAddr_Attr,
 	}
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(2)
