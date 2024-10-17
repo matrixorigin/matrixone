@@ -240,6 +240,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	}
 	count := bat.RowCount()
 	itr := ctr.mp.NewIterator()
+	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -253,17 +254,20 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 			switch ap.OnDuplicateAction {
 			case plan.Node_ERROR:
-				var rowStr string
-				if len(ap.DedupColTypes) == 1 {
-					rowStr = ctr.vecs[0].RowToString(i + k)
-				} else {
-					rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
-					if err != nil {
-						return err
+				// do nothing for txn.mode = Optimistic
+				if isPessimistic {
+					var rowStr string
+					if len(ap.DedupColTypes) == 1 {
+						rowStr = ctr.vecs[0].RowToString(i + k)
+					} else {
+						rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
+						if err != nil {
+							return err
+						}
+						rowStr = "(" + strings.Join(rowItems, ",") + ")"
 					}
-					rowStr = "(" + strings.Join(rowItems, ",") + ")"
+					return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 				}
-				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 			case plan.Node_IGNORE:
 				ctr.matched.Add(vals[k] - 1)
 			case plan.Node_UPDATE: // TODO
