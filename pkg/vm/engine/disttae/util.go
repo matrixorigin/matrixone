@@ -42,6 +42,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
+var (
+	deleteMoTablesWithDatabaseIdAndPartitionFormat = `delete from mo_catalog.mo_tables where database_id = %v and partitioned = %v;`
+)
+
 func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int64 {
 	mp := make(map[any]bool)
 	switch pk.GetType().Oid {
@@ -732,7 +736,7 @@ func stringifyMap(req any, f func(any, any) string) string {
 	return buf.String()
 }
 
-func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+func execSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)

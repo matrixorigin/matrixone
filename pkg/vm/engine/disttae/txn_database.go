@@ -70,7 +70,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	}
 	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
 
-	res, err := execReadSql(ctx, db.op, sql, true)
+	res, err := execSql(ctx, db.op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
-	res, err := execReadSql(ctx, db.op, sql, true)
+	res, err := execSql(ctx, db.op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
+	res, err = execSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +555,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	{
 		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, tblSql, true)
+		res, err = execSql(ctx, db.op, tblSql, true)
 		if err != nil {
 			return
 		}
@@ -582,7 +582,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		// fresh columns
 		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, colSql, true)
+		res, err = execSql(ctx, db.op, colSql, true)
 		if err != nil {
 			return
 		}
