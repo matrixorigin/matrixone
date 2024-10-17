@@ -161,6 +161,8 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 						if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 							return
 						}
+					} else {
+						return
 					}
 
 				default:
