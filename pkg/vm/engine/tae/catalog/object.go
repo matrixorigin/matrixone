@@ -44,8 +44,6 @@ type ObjectEntry struct {
 	ObjectState uint8
 
 	HasPrintedPrepareCompact atomic.Bool
-
-	GenerateHint objectio.GenerateHint
 }
 
 func (entry *ObjectEntry) ID() *objectio.ObjectId {
@@ -81,9 +79,8 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 			SortHint:    entry.SortHint,
 			IsTombstone: entry.IsTombstone,
 		},
-		objData:      entry.objData,
-		ObjectState:  entry.ObjectState,
-		GenerateHint: entry.GenerateHint,
+		objData:     entry.objData,
+		ObjectState: entry.ObjectState,
 	}
 	return obj
 }
@@ -246,7 +243,6 @@ func NewObjectEntry(
 		ObjectMVCCNode: ObjectMVCCNode{
 			ObjectStats: *opts.Stats,
 		},
-		GenerateHint: opts.GenerateHint,
 	}
 	if dataFactory != nil {
 		e.objData = dataFactory(e)
@@ -307,10 +303,6 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
 	return entry.table.getObjectList(entry.IsTombstone).UpdateObjectInfo(entry, txn, stats)
-}
-
-func (entry *ObjectEntry) IsGeneratedBy(hint objectio.GenerateHint) bool {
-	return entry.GenerateHint == hint
 }
 
 func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {

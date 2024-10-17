@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"encoding/csv"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
 	"math/rand"
 	"os"
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -86,7 +86,8 @@ func checkOverlaps(entries []*mergeEntry) []*mergeEntry {
 	})
 	set := mockEntrySet{entries: make([]*mergeEntry, 0), maxValue: []byte{}}
 	for _, obj := range entries {
-		if obj.generation != 0 {
+		ts := obj.ts.ToTimestamp().ToStdTime()
+		if ts.Before(time.Now().Add(-1000 * time.Millisecond)) {
 			continue
 		}
 		if len(set.entries) == 0 {
@@ -150,13 +151,13 @@ func BenchmarkMergeOverlap(b *testing.B) {
 	entryChan := make(chan *mergeEntry, 1)
 
 	go func() {
-		ticker := time.NewTicker(200 * time.Millisecond)
+		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			<-ticker.C
 			a, b := rand.Int63n(10000), rand.Int63n(10000)
 			a, b = min(a, b), max(a, b)
-			ts := types.BuildTS(time.Now().Unix(), 0)
+			ts := types.BuildTS(time.Now().UnixNano(), 0)
 			size := 128 * common.Const1MBytes
 
 			entryChan <- newMergeEntry(a, b, ts, size)
@@ -164,7 +165,7 @@ func BenchmarkMergeOverlap(b *testing.B) {
 	}()
 
 	entries := make([]*mergeEntry, 0)
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	i := 0
 
@@ -180,12 +181,37 @@ func BenchmarkMergeOverlap(b *testing.B) {
 		}
 	}()
 
+	totalMergedSize := 0
 	for {
 		select {
 		case entry := <-entryChan:
 			entries = append(entries, entry)
 		case <-ticker.C:
 		}
+
+		totalHit := 0
+		for x := range 10000 {
+			for _, entry := range entries {
+				zmMax := entry.zm.GetMax().(int64)
+				zmMin := entry.zm.GetMin().(int64)
+				if zmMin <= int64(x) && int64(x) < zmMax {
+					totalHit++
+				}
+			}
+		}
+
+		fmt.Printf("Ave(hit)=%f\n", float64(totalHit)/10000)
+		fmt.Printf("Ave(mergedSize)=%f\n", float64(totalMergedSize)/float64(i)/float64(common.Const1MBytes))
+		record := []string{
+			strconv.Itoa(i),
+			strconv.FormatFloat(float64(totalHit)/10000, 'f', -1, 64),
+			strconv.FormatFloat(float64(totalMergedSize)/float64(i)/float64(common.Const1MBytes), 'f', -1, 64),
+		}
+		err = csvWriter.Write(record)
+		if err != nil {
+			b.Fatal(err)
+		}
+		csvWriter.Flush()
 
 		if len(entries) == 0 {
 			continue
@@ -196,15 +222,6 @@ func BenchmarkMergeOverlap(b *testing.B) {
 
 		inputs := checkOverlaps(entries)
 		if len(inputs) < 2 {
-			record := []string{
-				strconv.Itoa(i),
-				strconv.Itoa(0),
-			}
-			err = csvWriter.Write(record)
-			if err != nil {
-				b.Fatal(err)
-			}
-			csvWriter.Flush()
 			continue
 		}
 		for _, e := range inputs {
@@ -213,15 +230,7 @@ func BenchmarkMergeOverlap(b *testing.B) {
 			})
 		}
 		outputs, mergedSize := merge(inputs, 110*common.Const1MBytes)
-		record := []string{
-			strconv.Itoa(i),
-			strconv.Itoa(mergedSize / common.Const1MBytes),
-		}
-		err = csvWriter.Write(record)
-		if err != nil {
-			b.Fatal(err)
-		}
-		csvWriter.Flush()
+		totalMergedSize += mergedSize
 		entries = append(entries, outputs...)
 	}
 }
@@ -253,11 +262,11 @@ func merge(inputs []*mergeEntry, targetSize int) ([]*mergeEntry, int) {
 	entries := make([]*mergeEntry, 0)
 	for {
 		if totalSize < 2*targetSize {
-			entry := newMergeEntry(minValue, maxValue, types.BuildTS(time.Now().Unix(), 0), totalSize)
+			entry := newMergeEntry(minValue, maxValue, types.BuildTS(time.Now().UnixNano(), 0), totalSize)
 			entries = append(entries, entry)
 			break
 		}
-		entry := newMergeEntry(minValue, minValue+interval, types.BuildTS(time.Now().Unix(), 0), targetSize)
+		entry := newMergeEntry(minValue, minValue+interval, types.BuildTS(time.Now().UnixNano(), 0), targetSize)
 		entry.generation = maxGeneration + 1
 		entries = append(entries, entry)
 		minValue += interval
@@ -270,8 +279,8 @@ func merge(inputs []*mergeEntry, targetSize int) ([]*mergeEntry, int) {
 
 func TestMerge(t *testing.T) {
 	inputs := []*mergeEntry{
-		newMergeEntry(0, 100, types.BuildTS(time.Now().Unix(), 0), 100*common.Const1MBytes),
-		newMergeEntry(100, 200, types.BuildTS(time.Now().Unix(), 0), 110*common.Const1MBytes),
+		newMergeEntry(0, 100, types.BuildTS(time.Now().UnixNano(), 0), 100*common.Const1MBytes),
+		newMergeEntry(100, 200, types.BuildTS(time.Now().UnixNano(), 0), 110*common.Const1MBytes),
 	}
 
 	output, mergedSize := merge(inputs, 50*common.Const1MBytes)

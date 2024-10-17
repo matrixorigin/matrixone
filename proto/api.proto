@@ -394,10 +394,6 @@ message BlkTransferBooking {
 
 
 message MergeCommitEntry {
-    enum MergeType {
-        normal = 0;
-        zm = 1;
-    }
     uint64 db_id = 1;
     uint64 tbl_id = 2;
     string table_name = 3;
@@ -407,7 +403,6 @@ message MergeCommitEntry {
     BlkTransferBooking booking = 7;
     repeated string booking_loc = 8;
     string err = 9;
-    MergeType merge_type = 10;
 }
 
 message MergeTaskEntry {

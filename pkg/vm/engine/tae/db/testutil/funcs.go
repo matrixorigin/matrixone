@@ -549,7 +549,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		t.Logf("no objects to merge, type %v", isTombstone)
 		return
 	}
-	task, err := jobs.NewMergeObjectsTask(nil, txn, 0, metas, e.Runtime, 0, isTombstone)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, metas, e.Runtime, 0, isTombstone)
 	if skipConflict && err != nil {
 		_ = txn.Rollback(context.Background())
 		return

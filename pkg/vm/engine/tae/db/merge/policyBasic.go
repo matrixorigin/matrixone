@@ -27,13 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 )
 
 type reviseResult struct {
-	objs     []*catalog.ObjectEntry
-	policyID jobs.MergePolicyID
-	kind     TaskHostKind
+	objs []*catalog.ObjectEntry
+	kind TaskHostKind
 }
 
 type policyGroup struct {
@@ -242,7 +240,7 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 			}
 		}
 		if len(dnobjs) > 1 {
-			return []reviseResult{{objs: dnobjs, policyID: jobs.BasicPolicyID, kind: TaskHostDN}}
+			return []reviseResult{{objs: dnobjs, kind: TaskHostDN}}
 		}
 		return nil
 	}
@@ -250,7 +248,7 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	schedCN := func() []reviseResult {
 		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs, config)
-		return []reviseResult{{objs: cnobjs, policyID: jobs.BasicPolicyID, kind: TaskHostCN}}
+		return []reviseResult{{objs: cnobjs, kind: TaskHostCN}}
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {

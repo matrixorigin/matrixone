@@ -30,14 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-type GenerateHint int
-
-const (
-	Flush GenerateHint = iota
-	NormalMerge
-	ZMMerge
-)
-
 var (
 	VarcharType types.Type
 	RowidType   types.Type
@@ -53,9 +45,8 @@ func init() {
 }
 
 type CreateObjOpt struct {
-	Stats        *ObjectStats
-	IsTombstone  bool
-	GenerateHint GenerateHint
+	Stats       *ObjectStats
+	IsTombstone bool
 }
 
 func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
@@ -65,11 +56,6 @@ func (o *CreateObjOpt) WithObjectStats(stats *ObjectStats) *CreateObjOpt {
 
 func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
 	o.IsTombstone = tombstone
-	return o
-}
-
-func (o *CreateObjOpt) WithGenerateHint(hint GenerateHint) *CreateObjOpt {
-	o.GenerateHint = hint
 	return o
 }
 
