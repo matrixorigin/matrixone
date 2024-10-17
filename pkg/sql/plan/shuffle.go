@@ -286,10 +286,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if s == nil {
 		return
 	}
-	if shouldUseHashShuffle(s.ShuffleRangeMap[colName], n.NodeType == plan.Node_JOIN) {
-		//if s.ShuffleRangeMap[colName] != nil {
-		//	logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
-		//}
+	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
@@ -590,13 +587,11 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 	}
 }
 
-func shouldUseHashShuffle(s *pb.ShuffleRange, isJoin bool) bool {
-	if isJoin {
-		return false
-	}
-	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
-		return true
-	}
+func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
+	//if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
+	//	return true
+	//}
+	//todo: fix this
 	return false
 }
 
