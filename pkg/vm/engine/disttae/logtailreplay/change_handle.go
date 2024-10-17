@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -232,6 +233,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				logutil.Info("ChangesHandle-CheckGCTS", zap.String("err", err.Error()))
 				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
 				if err2 != nil {
 					err = err2
@@ -366,6 +368,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				logutil.Info("ChangesHandle-CheckGCTS", zap.String("err", err.Error()))
 				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
 				if err2 != nil {
 					err = err2
@@ -714,10 +717,6 @@ type ChangeHandler struct {
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
 	if state.minTS.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
-	}
-	err = checkGCTS(ctx, start, fs)
-	if err != nil {
-		return
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
