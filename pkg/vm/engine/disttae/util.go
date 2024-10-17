@@ -46,6 +46,10 @@ import (
 	"strings"
 )
 
+var (
+	deleteMoTablesWithDatabaseIdAndPartitionFormat = `delete from mo_catalog.mo_tables where database_id = %v and partitioned = %v;`
+)
+
 func compPkCol(colName string, pkName string) bool {
 	dotIdx := strings.Index(colName, ".")
 	colName = colName[dotIdx+1:]

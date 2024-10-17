@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"runtime"
 	"strings"
 	"sync"
@@ -594,15 +596,18 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		rowId:        rowId,
 	}
 
-	rels, err := dbNew.Relations(ctx)
+	deleteSubTableSql := fmt.Sprintf(deleteMoTablesWithDatabaseIdAndPartitionFormat, databaseId, 0)
+	_, err = execSql(ctx, op, deleteSubTableSql)
 	if err != nil {
 		return err
 	}
-	for _, relName := range rels {
-		if err := dbNew.Delete(ctx, relName); err != nil {
-			return err
-		}
+
+	deleteTableSql := fmt.Sprintf(deleteMoTablesWithDatabaseIdAndPartitionFormat, databaseId, 1)
+	_, err = execSql(ctx, op, deleteTableSql)
+	if err != nil {
+		return err
 	}
+
 	bat, err := genDropDatabaseTuple(rowId, databaseId, name, txn.proc.Mp())
 	if err != nil {
 		return err
@@ -616,6 +621,21 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	dbNew.getTxn().deletedDatabaseMap.Store(key, databaseId)
 	return nil
+}
+
+func execSql(ctx context.Context, op client.TxnOperator, sql string) (executor.Result, error) {
+	// copy from compile.go runSqlWithResult
+	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	proc := op.GetWorkspace().(*Transaction).proc
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(op).
+		WithTimeZone(proc.GetSessionInfo().TimeZone)
+	return exec.Exec(ctx, sql, opts)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
