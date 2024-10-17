@@ -692,6 +692,13 @@ func updateInfoFromZoneMap(
 		info.AccurateObjectNumber++
 		info.BlockNumber += int64(obj.BlkCnt())
 		info.TableCnt += float64(meta.BlockHeader().Rows())
+		for _, col := range req.tableDef.Cols[:lenCols] {
+			objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
+			if objColMeta.Ndv() > meta.BlockHeader().Rows() {
+				logutil.Infof("tablename %v colname %v ndv %v objsize %v", req.tableDef.Name, col.Name, objColMeta.Ndv(), meta.BlockHeader().Rows())
+				panic("test!")
+			}
+		}
 		if !init {
 			init = true
 			for idx, col := range req.tableDef.Cols[:lenCols] {
