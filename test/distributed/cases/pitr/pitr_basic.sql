@@ -296,3 +296,39 @@ drop pitr if exists pitr10;
 drop pitr if exists pitr11;
 drop pitr if exists pitr12;
 drop database if exists db01;
+
+create pitr sys_MOCatalog_Pitr range 1 'h';
+drop pitr if exists pitr01;
+create pitr pitr01 range 1 'h';
+-- @ignore:0,2,3,4,6,7,10
+select * from mo_catalog.mo_pitr;
+-- @ignore:1,2
+show pitr;
+drop pitr if exists pitr01;
+drop pitr if exists pitr02;
+create pitr pitr02 range 1 'd';
+-- @ignore:0,2,3,4,6,7,10
+select * from mo_catalog.mo_pitr;
+-- @ignore:1,2
+show pitr;
+drop pitr if exists pitr02;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+-- @session:id=4&user=acc01:test_account&password=111
+create pitr pitr01 range 1 'mo';
+-- @ignore:1,2
+show pitr;
+-- @session
+-- @ignore:0,2,3,4,6,7,10
+select * from mo_catalog.mo_pitr;
+drop account if exists acc01;
+drop database if exists db01;
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'y';
+-- @ignore:0,2,3,4,6,7,10
+select * from mo_catalog.mo_pitr;
+-- @ignore:1,2
+show pitr;
+drop pitr if exists pitr10;
+drop database if exists db01;
