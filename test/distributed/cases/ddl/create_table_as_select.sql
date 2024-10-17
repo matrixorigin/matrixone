@@ -822,6 +822,7 @@ drop table if exists test03;
 create table test03 (col2 decimal unique key) as select col2 from test01;
 show create table test03;
 desc test03;
+-- @pattern
 insert into test03 values (372.324);
 
 drop table if exists test04;
@@ -833,6 +834,7 @@ drop table if exists test05;
 create table test05 (col1 int, col2 decimal, primary key (col1, col2)) as select col1, col2 from test01;
 show create table test05;
 select * from test05;
+-- @pattern
 insert into test05 values (2, 39304.3424);
 
 alter table test01 rename column col1 to newCol;

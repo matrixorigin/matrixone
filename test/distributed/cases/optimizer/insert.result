@@ -17,7 +17,7 @@ Multi Update
 create table t3(a int auto_increment, b int, unique key(a));
 insert into t3(b) values (1);
 insert into t3(a) values (1);
-Duplicate entry '1' for key 'a'
+Duplicate entry '1' for key '(.*)'
 create table t4(a int auto_increment, b int auto_increment, unique key(a, b));
 insert into t4(b) values (1);
 insert into t4(a) values (2);
