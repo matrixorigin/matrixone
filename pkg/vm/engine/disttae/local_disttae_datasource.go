@@ -584,12 +584,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			return err
 		}
 
-		physicalColumn.Shrink(deleted, true)
-
-		for i := range deleted {
-			deleted[i] += int64(inputRowCnt)
+		if len(deleted) > 0 {
+			for i := range deleted {
+				deleted[i] += int64(applyOffset)
+			}
+			physicalColumn.Shrink(deleted, true)
+			for i := range deleted {
+				deleted[i] += int64(inputRowCnt)
+			}
+			outBatch.Shrink(deleted, true)
 		}
-		outBatch.Shrink(deleted, true)
 
 		minTS = types.MaxTs()
 		applyOffset = physicalColumn.Length()
