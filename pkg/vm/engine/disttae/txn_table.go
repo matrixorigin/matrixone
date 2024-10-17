@@ -1974,7 +1974,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		return getNonSortedPKSearchFuncByPKVec(keys)
+		return LinearSearchOffsetByValFactory(keys)
 	}
 
 	cacheVectors := containers.NewVectors(1)
@@ -2002,7 +2002,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc([]*vector.Vector{&cacheVectors[0]})
+		sels := searchFunc(&cacheVectors[0])
 		release()
 		if len(sels) > 0 {
 			return true, nil
