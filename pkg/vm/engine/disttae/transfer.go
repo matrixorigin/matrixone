@@ -371,15 +371,11 @@ func doTransferRowids(
 		pkColumName,
 		objectio.PhysicalAddr_Attr,
 	}
-	buildBatch := func() *batch.Batch {
-		bat := batch.NewWithSize(2)
-		bat.Attrs = append(bat.Attrs, attrs...)
-
-		bat.Vecs[0] = vector.NewVec(*readPKColumn.GetType())
-		bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-		return bat
+	attrTypes := []types.Type{
+		*readPKColumn.GetType(),
+		objectio.RowidType,
 	}
-	bat := buildBatch()
+	bat := batch.NewWithSchema(false, attrs, attrTypes)
 	defer func() {
 		bat.Clean(mp)
 	}()
