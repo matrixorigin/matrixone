@@ -166,24 +166,28 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 			if s.ShuffleRangeMap[colName] != nil {
 				overlap = s.ShuffleRangeMap[colName].Overlap
 			}
-			if overlap < 0.2 {
+			if overlap < overlapThreshold/2 {
 				info.ColumnNDVs[i] = info.TableCnt * rate
 				continue
 			}
-			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < 0.4 {
+			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold {
 				info.ColumnNDVs[i] = info.TableCnt * rate
 				continue
 			}
 			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
 			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
-			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < 0.4 {
-				info.ColumnNDVs[i] = info.TableCnt * rate * math.Pow((1-overlap), 2)
+			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold {
+				info.ColumnNDVs[i] = info.TableCnt * rate * (1 - overlap)
 				continue
 			}
 
-			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > 0.4 {
+			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > overlapThreshold {
 				if info.NDVinMaxOBJ[i]/info.MaxNDVs[i] > 0.95 && rateMax < 0.3 {
-					info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+					if info.NDVinMinOBJ[i] == info.NDVinMaxOBJ[i] && info.NDVinMaxOBJ[i] == info.MaxNDVs[i] {
+						info.ColumnNDVs[i] = info.MaxNDVs[i]
+					} else {
+						info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+					}
 				} else {
 					info.ColumnNDVs[i] = info.MaxNDVs[i] / math.Pow(overlap, 2)
 				}
@@ -1570,7 +1574,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 	if overlap > overlapThreshold {
 		return 1
 	}
-	ret := sel * math.Pow(1000, overlap/2)
+	ret := sel * math.Pow(1000, overlap/3)
 	if ret > 1 {
 		ret = 1
 	}
