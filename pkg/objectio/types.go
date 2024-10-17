@@ -40,7 +40,7 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int64
+type ReadFilterSearchFuncType func(*vector.Vector) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool

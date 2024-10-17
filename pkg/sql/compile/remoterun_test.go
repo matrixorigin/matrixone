@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -242,6 +243,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&indexbuild.IndexBuild{},
 		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
+		&postdml.PostDml{
+			PostDmlCtx: &postdml.PostDmlCtx{FullText: &postdml.PostDmlFullTextCtx{}}},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -316,6 +319,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.ShuffleBuild), ShuffleBuild: &pipeline.Shufflebuild{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
+		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
