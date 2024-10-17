@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -569,6 +570,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
+		return op
+	case vm.PostDml:
+		t := sourceOp.(*postdml.PostDml)
+		op := postdml.NewArgument()
+		op.PostDmlCtx = t.PostDmlCtx
+		op.SetInfo(&info)
 		return op
 	}
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
@@ -2016,4 +2023,30 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
+	oldCtx := n.PostDmlCtx
+	delCtx := &postdml.PostDmlCtx{
+		Ref:                    oldCtx.Ref,
+		AddAffectedRows:        oldCtx.AddAffectedRows,
+		PrimaryKeyIdx:          oldCtx.PrimaryKeyIdx,
+		PrimaryKeyName:         oldCtx.PrimaryKeyName,
+		IsDelete:               oldCtx.IsDelete,
+		IsInsert:               oldCtx.IsInsert,
+		IsDeleteWithoutFilters: oldCtx.IsDeleteWithoutFilters,
+	}
+
+	if oldCtx.FullText != nil {
+		delCtx.FullText = &postdml.PostDmlFullTextCtx{
+			SourceTableName: oldCtx.FullText.SourceTableName,
+			IndexTableName:  oldCtx.FullText.IndexTableName,
+			Parts:           oldCtx.FullText.Parts,
+			AlgoParams:      oldCtx.FullText.AlgoParams,
+		}
+	}
+
+	op := postdml.NewArgument()
+	op.PostDmlCtx = delCtx
+	return op
 }

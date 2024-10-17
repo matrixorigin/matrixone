@@ -144,6 +144,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "CROSS APPLY"
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
+	case plan.Node_POSTDML:
+		pname = "Post DML"
 	default:
 		panic("error node type")
 	}
@@ -209,6 +211,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
+			}
+		case plan.Node_POSTDML:
+			buf.WriteString(" on ")
+			if ndesc.Node.PostDmlCtx != nil && ndesc.Node.PostDmlCtx.Ref != nil {
+				buf.WriteString(ndesc.Node.PostDmlCtx.Ref.GetSchemaName() + "." + ndesc.Node.PostDmlCtx.Ref.GetObjName())
 			}
 		}
 	}

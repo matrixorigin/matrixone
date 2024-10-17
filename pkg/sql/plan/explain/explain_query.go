@@ -80,6 +80,7 @@ const (
 	Label_Material          = "Material"
 	Label_Dedup_Join        = "Dedup join"
 	Label_Apply             = "Apply"
+	Label_PostDml           = "PostDml"
 )
 
 const (

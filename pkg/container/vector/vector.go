@@ -343,6 +343,64 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
+// WARNING: GetAny() return value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the GetFixedAtWithTypeCheck() to get the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
+func GetAny(vec *Vector, i int) any {
+	switch vec.typ.Oid {
+	case types.T_bool:
+		return GetFixedAtNoTypeCheck[bool](vec, i)
+	case types.T_bit:
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
+	case types.T_int8:
+		return GetFixedAtNoTypeCheck[int8](vec, i)
+	case types.T_int16:
+		return GetFixedAtNoTypeCheck[int16](vec, i)
+	case types.T_int32:
+		return GetFixedAtNoTypeCheck[int32](vec, i)
+	case types.T_int64:
+		return GetFixedAtNoTypeCheck[int64](vec, i)
+	case types.T_uint8:
+		return GetFixedAtNoTypeCheck[uint8](vec, i)
+	case types.T_uint16:
+		return GetFixedAtNoTypeCheck[uint16](vec, i)
+	case types.T_uint32:
+		return GetFixedAtNoTypeCheck[uint32](vec, i)
+	case types.T_uint64:
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
+	case types.T_float32:
+		return GetFixedAtNoTypeCheck[float32](vec, i)
+	case types.T_float64:
+		return GetFixedAtNoTypeCheck[float64](vec, i)
+	case types.T_date:
+		return GetFixedAtNoTypeCheck[types.Date](vec, i)
+	case types.T_datetime:
+		return GetFixedAtNoTypeCheck[types.Datetime](vec, i)
+	case types.T_time:
+		return GetFixedAtNoTypeCheck[types.Time](vec, i)
+	case types.T_timestamp:
+		return GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
+	case types.T_enum:
+		return GetFixedAtNoTypeCheck[types.Enum](vec, i)
+	case types.T_decimal64:
+		return GetFixedAtNoTypeCheck[types.Decimal64](vec, i)
+	case types.T_decimal128:
+		return GetFixedAtNoTypeCheck[types.Decimal128](vec, i)
+	case types.T_uuid:
+		return GetFixedAtNoTypeCheck[types.Uuid](vec, i)
+	case types.T_TS:
+		return GetFixedAtNoTypeCheck[types.TS](vec, i)
+	case types.T_Rowid:
+		return GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+	case types.T_Blockid:
+		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return vec.GetBytesAt(i)
+	}
+	return nil
+}
+
 func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
@@ -2862,6 +2920,9 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 	return nil
 }
 
+// WARNING: AppendAny() append value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the AppendFixed() to append the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
 func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
