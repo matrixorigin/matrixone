@@ -460,7 +460,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		rel, err := database.GetRelationByName(schema.Name)
 		readSchema := rel.Schema(false)
 		assert.Nil(t, err)
-		obj, err := rel.CreateNonAppendableObject(false, nil)
+		obj, err := rel.CreateNonAppendableObject(nil)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
@@ -543,7 +543,7 @@ func TestCreateObject(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
-	obj, err := rel.CreateNonAppendableObject(false, nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -9381,9 +9381,7 @@ func TestDeletesInMerge(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	obj := testutil.GetOneBlockMeta(rel)
-	task, _ := jobs.NewMergeObjectsTask(
-		nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime,
-		common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
+	task, _ := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
 	task.Execute(ctx)
 	{
 		txn, rel := tae.GetRelation()

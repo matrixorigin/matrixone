@@ -17,6 +17,7 @@ package merge
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -44,6 +45,10 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if obj.IsTombstone {
 		return false
 	}
+	ts := obj.CreatedAt.ToTimestamp().ToStdTime()
+	if ts.Before(time.Now().Add(-2 * time.Minute)) {
+		return false
+	}
 	if obj.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
@@ -68,7 +73,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
+		return []reviseResult{{objs: objs, kind: taskHostKind}}
 	}
 	return nil
 }

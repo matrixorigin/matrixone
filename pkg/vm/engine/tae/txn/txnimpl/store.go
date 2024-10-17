@@ -633,12 +633,12 @@ func (store *txnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj han
 	return db.CreateObject(tid, isTombstone)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableObject(tid, opt, isTombstone)
+	return db.CreateNonAppendableObject(tid, opt)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {

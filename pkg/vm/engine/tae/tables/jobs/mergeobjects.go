@@ -274,11 +274,13 @@ func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
-	commitEntry := &api.MergeCommitEntry{}
-	commitEntry.DbId = task.did
-	commitEntry.TblId = task.tid
-	commitEntry.TableName = task.schema.Name
-	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
+	commitEntry := &api.MergeCommitEntry{
+		DbId:       task.did,
+		TblId:      task.tid,
+		TableName:  task.schema.Name,
+		StartTs:    task.txn.GetStartTS().ToTimestamp(),
+		MergedObjs: make([][]byte, 0, len(task.mergedObjs)),
+	}
 	for _, o := range task.mergedObjs {
 		obj := *o.GetObjectStats()
 		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
@@ -424,8 +426,8 @@ func HandleMergeEntryInTxn(
 			return nil, err
 		}
 		obj, err := rel.CreateNonAppendableObject(
-			isTombstone,
-			new(objectio.CreateObjOpt).WithObjectStats(objstats).WithIsTombstone(isTombstone))
+			&objectio.CreateObjOpt{Stats: objstats, IsTombstone: isTombstone},
+		)
 		if err != nil {
 			return nil, err
 		}

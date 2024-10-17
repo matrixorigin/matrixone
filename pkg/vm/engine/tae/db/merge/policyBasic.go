@@ -240,7 +240,7 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 			}
 		}
 		if len(dnobjs) > 1 {
-			return []reviseResult{{dnobjs, TaskHostDN}}
+			return []reviseResult{{objs: dnobjs, kind: TaskHostDN}}
 		}
 		return nil
 	}
@@ -248,7 +248,7 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	schedCN := func() []reviseResult {
 		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs, config)
-		return []reviseResult{{cnobjs, TaskHostCN}}
+		return []reviseResult{{objs: cnobjs, kind: TaskHostCN}}
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {

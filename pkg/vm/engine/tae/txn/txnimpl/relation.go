@@ -183,13 +183,13 @@ func (h *txnRelation) CreateObject(isTombstone bool) (obj handle.Object, err err
 	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone)
 }
 
-func (h *txnRelation) CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (h *txnRelation) CreateNonAppendableObject(opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	if opt == nil {
 		opt = &objectio.CreateObjOpt{
 			Stats: objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false),
 		}
 	}
-	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone, opt)
+	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), opt)
 }
 
 func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) {

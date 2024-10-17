@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -44,7 +43,7 @@ type ObjectEntry struct {
 	objData     data.Object
 	ObjectState uint8
 
-	HasPrintedPrepareComapct atomic.Bool
+	HasPrintedPrepareCompact atomic.Bool
 }
 
 func (entry *ObjectEntry) ID() *objectio.ObjectId {
@@ -227,15 +226,14 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 func NewObjectEntry(
 	table *TableEntry,
 	txn txnif.AsyncTxn,
-	stats objectio.ObjectStats,
 	dataFactory ObjectDataFactory,
-	isTombstone bool,
+	opts *objectio.CreateObjOpt,
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		table: table,
 		ObjectNode: ObjectNode{
 			SortHint:    table.GetDB().catalog.NextObject(),
-			IsTombstone: isTombstone,
+			IsTombstone: opts.IsTombstone,
 		},
 		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
@@ -243,7 +241,7 @@ func NewObjectEntry(
 		CreateNode:  *txnbase.NewTxnMVCCNodeWithTxn(txn),
 		ObjectState: ObjectState_Create_Active,
 		ObjectMVCCNode: ObjectMVCCNode{
-			ObjectStats: stats,
+			ObjectStats: *opts.Stats,
 		},
 	}
 	if dataFactory != nil {
@@ -512,10 +510,10 @@ func (entry *ObjectEntry) CheckPrintPrepareCompactLocked(duration time.Duration)
 
 // TODO: REMOVEME
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
-	if entry.HasPrintedPrepareComapct.Load() {
+	if entry.HasPrintedPrepareCompact.Load() {
 		return
 	}
-	entry.HasPrintedPrepareComapct.Store(true)
+	entry.HasPrintedPrepareCompact.Store(true)
 	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
 	lastNode := entry.GetLastMVCCNode()
 	startTS := lastNode.GetStart()

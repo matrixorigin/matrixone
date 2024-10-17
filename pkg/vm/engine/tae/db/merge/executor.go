@@ -161,12 +161,14 @@ func (e *executor) OnExecDone(v any) {
 	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
-func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+func (e *executor) executeFor(entry *catalog.TableEntry, r reviseResult) {
 	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
 		return
 	}
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema(false).Name)
 
+	mobjs := r.objs
+	kind := r.kind
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
 	}

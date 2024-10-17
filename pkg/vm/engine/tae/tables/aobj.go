@@ -111,7 +111,7 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 func (obj *aobject) PrepareCompact() bool {
 	if obj.RefCount() > 0 {
 		if obj.meta.Load().CheckPrintPrepareCompactLocked(1 * time.Second) {
-			if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
+			if !obj.meta.Load().HasPrintedPrepareCompact.Load() {
 				logutil.Infof("object ref count is %d", obj.RefCount())
 			}
 			obj.meta.Load().PrintPrepareCompactDebugLog()
@@ -147,8 +147,8 @@ func (obj *aobject) PrepareCompact() bool {
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
 			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
-				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
-					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
+				if !obj.meta.Load().HasPrintedPrepareCompact.Load() {
+					obj.meta.Load().HasPrintedPrepareCompact.Store(true)
 					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
 				}
 			}
