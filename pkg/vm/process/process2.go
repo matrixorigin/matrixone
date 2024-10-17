@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hayageek/threadsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -82,8 +84,9 @@ func NewTopProcess(
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 
 		// 3. other fields.
-		logger:   util.GetLogger(sid),
-		UnixTime: time.Now().UnixNano(),
+		logger:         util.GetLogger(sid),
+		UnixTime:       time.Now().UnixNano(),
+		PostDmlSqlList: threadsafe.NewSlice[string](),
 	}
 
 	proc := &Process{

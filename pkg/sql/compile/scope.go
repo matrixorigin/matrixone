@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -230,6 +231,17 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	if c.IsTpQuery() && !c.hasMergeOp {
+		lenPrescopes := len(s.PreScopes)
+		for i := lenPrescopes - 1; i >= 0; i-- {
+			err := s.PreScopes[i].MergeRun(c)
+			if err != nil {
+				return err
+			}
+		}
+		return s.ParallelRun(c)
+	}
+
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
@@ -339,16 +351,12 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	select {
-	case <-s.Proc.Ctx.Done():
-		// this clean-up action shouldn't be called before context check.
-		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
+	if s.Proc.Ctx.Err() != nil {
 		runErr = nil
-
-	default:
-		p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 	}
+	// this clean-up action shouldn't be called before context check.
+	// because the clean-up action will cancel the context, and error will be suppressed.
+	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
@@ -649,18 +657,6 @@ func (s *Scope) setRootOperator(op vm.Operator) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
-}
-
-func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
-	vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-		leafOp.Release()
-		if leafOpParent == nil {
-			s.RootOp = dstLeafOp
-		} else {
-			leafOpParent.GetOperatorBase().SetChild(dstLeafOp, 0)
-		}
-		return nil
-	})
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.

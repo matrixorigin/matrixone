@@ -3045,6 +3045,30 @@ var (
 			output: "show databases {snapshot = sp01}",
 		},
 		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc dfc ghc)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc- +abc IN BOOLEAN MODE)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc% IN NATURAL LANGUAGE MODE)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc gg* WITH QUERY EXPANSION)",
+		},
+		{
+			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
+		},
+		{
+			input:  "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+		},
+		{
 			input:  "create table t1 (a int) with retention period 1 day",
 			output: "create table t1 (a int) with retention period 1 day",
 		},
