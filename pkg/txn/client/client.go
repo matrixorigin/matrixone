@@ -464,7 +464,7 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 			return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 		}
 
-		if !op.options.WaitPausedDisabled() {
+		if op.options.WaitPausedDisabled() {
 			return moerr.NewInvalidStateNoCtx("txn client is in pause state")
 		}
 
