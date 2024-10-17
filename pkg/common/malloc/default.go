@@ -73,6 +73,16 @@ func newDefault(delta *Config) (allocator Allocator) {
 		}
 	}()
 
+	// peak inuse tracking
+	defer func() {
+		allocator = NewInuseTrackingAllocator(
+			allocator,
+			func(inuse uint64) {
+				GlobalPeakInuseTracker.UpdateMalloc(inuse)
+			},
+		)
+	}()
+
 	if config.Allocator == nil {
 		config.Allocator = ptrTo("mmap")
 	}
