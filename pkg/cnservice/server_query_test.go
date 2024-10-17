@@ -930,6 +930,19 @@ func Test_service_handleGetReplicaCount(t *testing.T) {
 			wantErr: nil,
 			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: mockReplicaCount}},
 		},
+		{
+			name: "disabled",
+			fields: fields{
+				shardService: nil,
+			},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: 0}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
