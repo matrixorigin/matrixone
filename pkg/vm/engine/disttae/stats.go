@@ -718,5 +718,11 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 	}
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
 	plan2.AdjustNDV(info, baseTableDef, req.statsInfo)
+
+	for _, coldef := range baseTableDef.Cols[:len(baseTableDef.Cols)-1] {
+		colName := coldef.Name
+		logutil.Infof("debug: table %v  col %v ndv %v", baseTableDef.Name, colName, req.statsInfo.NdvMap[colName])
+	}
+
 	return nil
 }

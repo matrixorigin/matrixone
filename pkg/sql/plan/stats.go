@@ -190,7 +190,6 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
-		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
