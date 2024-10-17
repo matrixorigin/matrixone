@@ -203,7 +203,11 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 
 			//don't know how to calc ndv, just guess
 			if overlap > overlapThreshold {
-				info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+				if info.AccurateObjectNumber > 100 {
+					info.ColumnNDVs[i] /= 30
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+				}
 			} else {
 				info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
 			}
