@@ -502,15 +502,20 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		}
 	}
 
-	var physicalColumn vector.Vector
-	if physicalColumnPos := slices.Index(
+	var (
+		physicalColumn    vector.Vector
+		physicalColumnPtr *vector.Vector
+		physicalColumnPos int
+	)
+	if physicalColumnPos = slices.Index(
 		outBatch.Attrs,
 		objectio.PhysicalAddr_Attr,
 	); physicalColumnPos == -1 {
 		physicalColumn.ResetWithNewType(&objectio.RowidType)
+		physicalColumnPtr = &physicalColumn
 		defer physicalColumn.Free(mp)
 	} else {
-		physicalColumn = *outBatch.Vecs[physicalColumnPos]
+		physicalColumnPtr = outBatch.Vecs[physicalColumnPos]
 	}
 
 	applyPolicy := engine.TombstoneApplyPolicy(
@@ -548,7 +553,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 
 			if err = vector.AppendFixed(
-				&physicalColumn,
+				physicalColumnPtr,
 				entry.RowID,
 				false,
 				mp,
@@ -557,6 +562,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 
 			for i := range outBatch.Attrs {
+				if i == physicalColumnPos {
+					continue
+				}
 				idx := 2 /*rowid and commits*/ + seqNums[i]
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
@@ -578,25 +586,32 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 		}
 
-		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](&physicalColumn)
+		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](physicalColumnPtr)
 		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
 		if err != nil {
 			return err
 		}
 
 		if len(deleted) > 0 {
-			for i := range deleted {
-				deleted[i] += int64(applyOffset)
+			if physicalColumnPos == -1 {
+				for i := range deleted {
+					deleted[i] += int64(applyOffset)
+				}
+				physicalColumnPtr.Shrink(deleted, true)
+				for i := range deleted {
+					deleted[i] += int64(inputRowCnt)
+				}
+				outBatch.Shrink(deleted, true)
+			} else {
+				for i := range deleted {
+					deleted[i] += int64(applyOffset)
+				}
+				outBatch.Shrink(deleted, true)
 			}
-			physicalColumn.Shrink(deleted, true)
-			for i := range deleted {
-				deleted[i] += int64(inputRowCnt)
-			}
-			outBatch.Shrink(deleted, true)
 		}
 
 		minTS = types.MaxTs()
-		applyOffset = physicalColumn.Length()
+		applyOffset = physicalColumnPtr.Length()
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
