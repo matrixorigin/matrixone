@@ -152,21 +152,6 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 	}
 }
 
-func (ht *Int64HashMap) FindBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
-	if hashes[0] == 0 {
-		Int64BatchHash(keysPtr, &hashes[0], n)
-	}
-
-	for i, hash := range hashes {
-		if zValues[i] == 0 {
-			values[i] = 0
-			continue
-		}
-		cell := ht.findCell(hash)
-		values[i] = cell.Mapped
-	}
-}
-
 func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
 		blockId := idx / ht.blockCellCnt

@@ -39,7 +39,6 @@ type StringHashMap struct {
 	blockCellCnt    uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
-	//confCnt     uint64
 
 	cellCnt             uint64
 	elemCnt             uint64
@@ -150,44 +149,6 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
-	Int192BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
-	Int256BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
-	Int320BatchGenHashStates(&keys[0], &states[0], len(keys))
-
-	for i := range keys {
-		cell := ht.findCell(&states[i])
-		values[i] = cell.Mapped
-	}
-}
-
-func (ht *StringHashMap) FindStringBatchWithRing(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64) {
-	// XXX I think it is no use now.
-}
-
-func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64) {
-	for i := range states {
 		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}
@@ -328,17 +289,14 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 	return nil
 }
 
-func (ht *StringHashMap) Cardinality() uint64 {
-	return ht.elemCnt
-}
-
 func (ht *StringHashMap) Size() int64 {
-	// 33 is the origin size of StringHashMaps
-	ret := int64(33)
+	// 88 is the origin size of StringHashMaps
+	ret := int64(88)
 	for i := range ht.rawData {
+		ret += 24
 		ret += int64(len(ht.rawData[i]))
-		// 32 is the len of ht.cells[i]
-		ret += 32
+		ret += 24
+		ret += int64(32 * len(ht.cells[i]))
 	}
 	return ret
 }
