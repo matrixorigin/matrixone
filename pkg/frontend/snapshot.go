@@ -74,6 +74,8 @@ var (
 
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
+	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s'"
+
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	needSkipTablesInMocatalog = map[string]int8{
@@ -754,6 +756,18 @@ func restoreToDatabaseOrTable(
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
+		// check whether the db is master db
+		var isMasterDb bool
+		isMasterDb, err = checkDatabaseIsMaster(toCtx, sid, bh, snapshotName, dbName)
+		if err != nil {
+			return err
+		}
+		if isMasterDb {
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master db: %v, which has been referenced by foreign keys", snapshotName, dbName))
+			return
+		}
+
+		// drop db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: %v", snapshotName, dbName))
 		if err = dropDb(toCtx, bh, dbName); err != nil {
 			return
@@ -1774,6 +1788,31 @@ func checkTableIsMaster(
 	tblName string) (bool, error) {
 	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// checkDatabaseIsMaster check if the database is master database
+func checkDatabaseIsMaster(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string) (bool, error) {
+	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, dbName)
+	getLogger(sid).Info(fmt.Sprintf("[%s] check database is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, sql); err != nil {
