@@ -16,8 +16,8 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"io"
+	"net/http"
 	"net/url"
 	gotrace "runtime/trace"
 	"strings"
@@ -223,6 +223,12 @@ func (a *MinioSDK) Stat(
 	err error,
 ) {
 
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -317,6 +323,11 @@ func (a *MinioSDK) Read(
 		if err != nil {
 			return nil, err
 		}
+		// eager read to expose file not found error
+		_, err = r.Read(nil)
+		if err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 
@@ -326,6 +337,11 @@ func (a *MinioSDK) Read(
 		min,
 		max,
 	)
+	if err != nil {
+		return nil, err
+	}
+	// eager read to expose file not found error
+	_, err = r.Read(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -454,6 +470,9 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			obj, err := DoWithRetry(
@@ -532,11 +551,8 @@ func (a *MinioSDK) is404(err error) bool {
 	if err == nil {
 		return false
 	}
-	var resp minio.ErrorResponse
-	if !errors.As(err, &resp) {
-		return false
-	}
-	return resp.Code == "NoSuchKey"
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || resp.StatusCode == http.StatusNotFound
 }
 
 func minioValidateEndpoint(args *ObjectStorageArguments) (isSecure bool, err error) {
