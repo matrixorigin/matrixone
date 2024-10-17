@@ -169,6 +169,7 @@ type TestSender struct {
 		sync.Mutex
 		cancels []context.CancelFunc
 	}
+	action string
 }
 
 // NewTestSender create test TxnSender
@@ -201,6 +202,10 @@ func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
 
 // Send TxnSender send
 func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	if s.action == "return_err_and_reset" {
+		s.action = ""
+		return nil, moerr.NewInternalErrorNoCtx("return error")
+	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseTestSenderSend)
 	s.mu.Lock()
 	s.mu.cancels = append(s.mu.cancels, cancel)
