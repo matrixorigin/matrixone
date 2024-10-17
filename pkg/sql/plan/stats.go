@@ -166,17 +166,17 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 			if s.ShuffleRangeMap[colName] != nil {
 				overlap = s.ShuffleRangeMap[colName].Overlap
 			}
-			if overlap < overlapThreshold/2 {
+			if overlap < overlapThreshold/3 {
 				info.ColumnNDVs[i] = info.TableCnt * rate
 				continue
 			}
-			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold {
+			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold/2 {
 				info.ColumnNDVs[i] = info.TableCnt * rate
 				continue
 			}
 			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
 			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
-			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold {
+			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold/2 {
 				info.ColumnNDVs[i] = info.TableCnt * rate * (1 - overlap)
 				continue
 			}
