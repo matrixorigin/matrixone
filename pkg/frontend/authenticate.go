@@ -8245,7 +8245,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 
 	configVar := make(map[tree.DatabaseConfig]string, 0)
 	configVar[tree.MYSQL_COMPATIBILITY_MODE] = "version_compatibility"
-	configVar[tree.UNIQUE_CHECK_ON_AUTOINCR] = "unique_check_on_autoincr"
 
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
@@ -8307,27 +8306,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 				return rtnErr
 			}
 
-			rtnErr = bh.Exec(ctx, sql)
-		case tree.UNIQUE_CHECK_ON_AUTOINCR:
-			valueCheck := func(value string) error {
-				switch value {
-				case "None":
-				case "Check":
-				case "Error":
-				default:
-					return moerr.NewBadConfigf(ctx, "unique_check_on_autoincr %s", value)
-				}
-				return nil
-			}
-
-			if rtnErr = valueCheck(updateConfig); rtnErr != nil {
-				return rtnErr
-			}
-
-			sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, configVar[configTyp])
-			if rtnErr != nil {
-				return rtnErr
-			}
 			rtnErr = bh.Exec(ctx, sql)
 		default:
 			panic("unknown database config type")
@@ -8410,9 +8388,6 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	versionValue, _ := ses.GetSessionSysVar("version")
 	variableValue1 := getVariableValue(versionValue)
 
-	variableName2 := "unique_check_on_autoincr"
-	variableValue2 := "None"
-
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
 		//if create sys database, do nothing
@@ -8449,16 +8424,6 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName1, variableValue1, false)
 
 			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
-
-			sql = fmt.Sprintf(initMoMysqlCompatibilityModeFormat, accountId, accountName, dbName, variableName2, variableValue2, false)
-
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return rtnErr
-			}
 			return rtnErr
 		}
 		err = insertRecordFunc()
@@ -8467,11 +8432,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 		}
 	}
 
-	ses.SetConfig(dbName, variableName1, variableValue1)
-	ses.SetConfig(dbName, variableName2, variableValue2)
-
 	return nil
-
 }
 
 func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
@@ -8510,8 +8471,6 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			return err
 		}
 	}
-	ses.DeleteConfig(ctx, datname, "version_compatibility")
-	ses.DeleteConfig(ctx, datname, "unique_check_on_autoincr")
 	return nil
 }
 
@@ -8544,47 +8503,6 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
 		return defaultConfig, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		resultConfig, err = erArray[0].GetString(ctx, 0, 0)
-		if err != nil {
-			return defaultConfig, err
-		}
-	}
-
-	return resultConfig, err
-}
-
-func GetUniqueCheckOnAutoIncr(ctx context.Context, ses *Session, dbName string) (ret string, err error) {
-	var erArray []ExecResult
-	var sql string
-	var resultConfig string
-	defaultConfig := "None"
-	variableName := "unique_check_on_autoincr"
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return defaultConfig, err
-	}
-
-	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variableName)
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return defaultConfig, err
-	}
-
-	// risky : this error is actually dropped to pass TestSession_Migrate
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return defaultConfig, nil
 	}
 
 	if execResultArrayHasData(erArray) {

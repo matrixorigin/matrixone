@@ -231,7 +231,7 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) 
 	return databaseId, nil
 }
 
-func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+func (c *compilerContext) GetConfig(varName, dbName, tblName string) (string, error) {
 	switch varName {
 	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
 	case "unique_check_on_autoincr":
