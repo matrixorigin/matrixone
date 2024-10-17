@@ -178,6 +178,18 @@ message PreInsert {
   plan.Expr cluster_by_expr  = 9;
 }
 
+message PostDml {
+  // PostDmlCtx
+  plan.ObjectRef ref = 1;
+  bool add_affected_rows = 2;
+  int32 primary_key_idx = 3;
+  string primary_key_name = 4;
+  bool is_delete = 5;
+  bool is_insert = 6;
+  bool is_delete_without_filters = 7;
+  plan.PostDmlFullTextCtx full_text = 8;
+}
+
 message LockTarget {
   uint64 table_id           	  = 1;
   int32 primary_col_idx_in_bat  = 2;
@@ -502,6 +514,7 @@ message Instruction{
   Shufflebuild shuffle_build = 49;
   Indexbuild index_build = 50;
   Apply apply = 51;
+  PostDml post_dml = 52;
 }
 
 message AnalysisList {
