@@ -344,6 +344,8 @@ func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
 		return mp.GetUserName()
 	case DBNAME:
 		return mp.GetDatabaseName()
+	case PEER:
+		return mp.Peer()
 	}
 	return ""
 }
