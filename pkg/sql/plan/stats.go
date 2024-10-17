@@ -189,7 +189,7 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 						info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
 					}
 				} else {
-					info.ColumnNDVs[i] = info.MaxNDVs[i] / math.Pow(overlap, 2)
+					info.ColumnNDVs[i] = info.MaxNDVs[i] / (1 - rateMax)
 				}
 				continue
 			}
