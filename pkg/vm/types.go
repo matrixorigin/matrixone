@@ -52,6 +52,7 @@ const (
 	Mark
 	IndexJoin
 	IndexBuild
+	DedupJoin
 
 	Merge
 	MergeTop
@@ -555,7 +556,7 @@ func CannotRemote(op Operator) bool {
 }
 
 type ModificationArgument interface {
-	AffectedRows() uint64
+	GetAffectedRows() uint64
 }
 
 // doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.

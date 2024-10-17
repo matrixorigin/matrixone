@@ -766,7 +766,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
-			node.Stats.Selectivity = selectivity_out
+			node.Stats.Selectivity = selectivity
+
+		case plan.Node_DEDUP:
+			node.Stats.Outcnt = rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
@@ -993,7 +999,9 @@ func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
 	}
 	var cost float64
 	var canGetCost bool
-	if len(exprs) == 2 {
+	if len(exprs) == 1 {
+		cost, canGetCost = getCost(nil, exprs[0], nil)
+	} else if len(exprs) == 2 {
 		if exprs[0].Typ.Id != exprs[1].Typ.Id {
 			return false
 		}
@@ -1036,9 +1044,13 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 		return 0, false
 	}
 
-	switch start.Typ.Id {
+	switch end.Typ.Id {
 	case int32(types.T_int32):
-		startNum, flag1 = getInt32Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt32Val(start)
+		}
 		endNum, flag2 = getInt32Val(end)
 		flag3 = true
 		if step != nil {
@@ -1048,7 +1060,11 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			return 0, false
 		}
 	case int32(types.T_int64):
-		startNum, flag1 = getInt64Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt64Val(start)
+		}
 		endNum, flag2 = getInt64Val(end)
 		flag3 = true
 		if step != nil {
