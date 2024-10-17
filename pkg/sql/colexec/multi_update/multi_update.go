@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,7 +51,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 	eng := update.Engine
 
-	if update.ToWriteS3 {
+	switch update.Action {
+	case UpdateWriteS3:
 		if update.ctr.s3Writer == nil {
 			writer, err := newS3Writer(update)
 			if err != nil {
@@ -70,7 +72,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.Source = rel
 			updateCtx.PartitionSources = partitionRels
 		}
-	} else {
+	case UpdateWriteTable:
 		for _, updateCtx := range update.MultiUpdateCtx {
 			ref := updateCtx.ObjRef
 			partitionNames := updateCtx.PartitionTableNames
@@ -82,6 +84,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.PartitionSources = partitionRels
 		}
 	}
+
 	mainCtx := update.MultiUpdateCtx[0]
 	if len(mainCtx.DeleteCols) > 0 && len(mainCtx.InsertCols) > 0 {
 		update.ctr.action = actionUpdate
@@ -108,10 +111,16 @@ func (update *MultiUpdate) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.Stop()
 	}()
 
-	if update.ToWriteS3 {
+	switch update.Action {
+	case UpdateWriteS3:
 		return update.update_s3(proc, analyzer)
+	case UpdateWriteTable:
+		return update.update(proc, analyzer)
+	case UpdateFlushS3Info:
+	default:
 	}
-	return update.update(proc, analyzer)
+
+	panic(fmt.Sprintf("unexpected multi_update.UpdateAction: %#v", update.Action))
 }
 
 func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

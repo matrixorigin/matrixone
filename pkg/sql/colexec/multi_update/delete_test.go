@@ -94,8 +94,8 @@ func buildDeleteTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 
 	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := false
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteTable
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
@@ -105,8 +105,8 @@ func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 
 	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 200, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := true
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 

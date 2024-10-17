@@ -315,13 +315,13 @@ func buildTestCase(
 	eng engine.Engine,
 	inputBats []*batch.Batch,
 	affectRows uint64,
-	toWriteS3 bool) *testCase {
+	action UpdateAction) *testCase {
 
 	retCase := &testCase{
 		op: &MultiUpdate{
 			ctr:                    container{},
 			MultiUpdateCtx:         multiUpdateCtxs,
-			ToWriteS3:              toWriteS3,
+			Action:                 action,
 			IsOnduplicateKeyUpdate: false,
 			Engine:                 eng,
 			OperatorBase: vm.OperatorBase{

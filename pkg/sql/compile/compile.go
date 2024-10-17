@@ -3260,12 +3260,21 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	currentFirstFlag := c.anal.isFirst
-	// Not write S3
-	for i := range ss {
-		multiUpdateArg := constructMultiUpdate(n, c.e)
-		multiUpdateArg.ToWriteS3 = toWriteS3
-		multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(multiUpdateArg)
+	if toWriteS3 {
+		for i := range ss {
+			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg.Action = multi_update.UpdateWriteS3
+			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(multiUpdateArg)
+		}
+		//todo
+	} else {
+		for i := range ss {
+			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg.Action = multi_update.UpdateWriteTable
+			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(multiUpdateArg)
+		}
 	}
 	c.anal.isFirst = false
 	return ss, nil

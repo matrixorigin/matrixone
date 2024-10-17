@@ -853,7 +853,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
 			AffectedRows:  t.GetAffectedRows(),
-			ToWriteS3:     t.ToWriteS3,
+			Action:        uint32(t.Action),
 			UpdateCtxList: updateCtxList,
 			SegmentMap:    t.SegmentMap,
 		}
@@ -1358,7 +1358,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := multi_update.NewArgument()
 		t := opr.GetMultiUpdate()
 		arg.SetAffectedRows(t.AffectedRows)
-		arg.ToWriteS3 = t.ToWriteS3
+		arg.Action = multi_update.UpdateAction(t.Action)
 		arg.SegmentMap = t.SegmentMap
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))

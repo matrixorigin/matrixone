@@ -545,7 +545,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*multi_update.MultiUpdate)
 		op := multi_update.NewArgument()
 		op.MultiUpdateCtx = t.MultiUpdateCtx
-		op.ToWriteS3 = t.ToWriteS3
+		op.Action = t.Action
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.Engine = t.Engine
 		op.SegmentMap = t.SegmentMap
