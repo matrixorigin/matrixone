@@ -109,7 +109,7 @@ var upg_mo_indexes_add_IndexAlgoTableType = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_INDEXES,
 	UpgType:   versions.ADD_COLUMN,
-	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(23) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
+	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType)
 		if err != nil {

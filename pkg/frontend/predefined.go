@@ -296,7 +296,7 @@ var (
 			name                varchar(64) not null,
 			type                varchar(11) not null,
 			algo                varchar(11),
-			algo_table_type     varchar(23),
+			algo_table_type     varchar(11),
 			algo_params         varchar(2048),
 			is_visible          tinyint not null,
 			hidden              tinyint not null,
@@ -344,18 +344,18 @@ var (
 		)`, catalog.MO_CATALOG, catalog.MOForeignKeys)
 
 	MoCatalogMoTablePartitionsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-    		  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-    		  PRIMARY KEY table_id (table_id, name)
-			)`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+			table_id bigint unsigned NOT NULL,
+			database_id bigint unsigned not null,
+			number smallint unsigned NOT NULL,
+			name varchar(64) NOT NULL,
+			partition_type varchar(50) NOT NULL,
+			partition_expression varchar(2048) NULL,
+			description_utf8 text,
+			comment varchar(2048) NOT NULL,
+			options text,
+			partition_table_name varchar(1024) NOT NULL,
+			PRIMARY KEY table_id (table_id, name)
+		)`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 )
 
 // step3InitSQLs
