@@ -342,7 +342,7 @@ func (tbl *txnTable) TransferDeletes(
 						seqnums,
 						schema.GetPrimaryKey().Idx,
 						true,
-						false,
+						true,
 						schema.Version,
 					)
 					sinker = engine_util.NewSinker(
@@ -351,56 +351,60 @@ func (tbl *txnTable) TransferDeletes(
 						schema.Types(),
 						factory,
 						common.WorkspaceAllocator,
-						tbl.store.rt.Fs.Service)
+						tbl.store.rt.Fs.Service,
+						engine_util.WithMemorySizeThreshold(common.Const1MBytes))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 			}
 		}
 		if sinker != nil {
+			sinker.Sync(ctx)
 			stats, bats := sinker.GetResult()
 			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats...)
 
-			schema := tbl.getSchema(true)
-			seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
-			name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-			writer, err := blockio.NewBlockWriterNew(
-				tbl.store.rt.Fs.Service,
-				name,
-				schema.Version,
-				seqnums,
-				true,
-			)
-			if err != nil {
-				return err
-			}
-
-			writer.SetPrimaryKeyWithType(
-				uint16(objectio.TombstonePrimaryKeyIdx),
-				index.HBF,
-				index.ObjectPrefixFn,
-				index.BlockPrefixFn,
-			)
-
-			for _, bat := range bats {
-				for _, vec := range bat.Vecs {
-					if vec == nil {
-						// this task has been canceled
-						return nil
-					}
-				}
-				_, err = writer.WriteBatch(bat)
+			if len(bats) != 0 {
+				schema := tbl.getSchema(true)
+				seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
+				name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+				writer, err := blockio.NewBlockWriterNew(
+					tbl.store.rt.Fs.Service,
+					name,
+					schema.Version,
+					seqnums,
+					true,
+				)
 				if err != nil {
 					return err
 				}
+
+				writer.SetPrimaryKeyWithType(
+					uint16(objectio.TombstonePrimaryKeyIdx),
+					index.HBF,
+					index.ObjectPrefixFn,
+					index.BlockPrefixFn,
+				)
+
+				for _, bat := range bats {
+					for _, vec := range bat.Vecs {
+						if vec == nil {
+							// this task has been canceled
+							return nil
+						}
+					}
+					_, err = writer.WriteBatch(bat)
+					if err != nil {
+						return err
+					}
+				}
+				_, _, err = writer.Sync(context.Background())
+				if err != nil {
+					return err
+				}
+				writerStats := writer.GetObjectStats()
+				objStats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
+				objectio.SetObjectStats(objStats, &writerStats)
+				tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *objStats)
 			}
-			_, _, err = writer.Sync(context.Background())
-			if err != nil {
-				return err
-			}
-			writerStats := writer.GetObjectStats()
-			objStats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
-			objectio.SetObjectStats(objStats, &writerStats)
-			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *objStats)
 			logutil.Info(
 				"TN-TRANSFER-TOMBSTONE-FILES",
 				zap.String("table", tbl.GetLocalSchema(false).Name),
