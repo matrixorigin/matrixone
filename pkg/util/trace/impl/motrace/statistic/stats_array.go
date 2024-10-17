@@ -548,3 +548,58 @@ func EnsureStatsInfoCanBeFound(ctx context.Context, from context.Context) contex
 	ctx = context.WithValue(ctx, statsInfoKey{}, v)
 	return ctx
 }
+
+type StatsInfo2 struct {
+	ParseStageInfo struct {
+		ParseDuration  time.Duration `json:"ParseDuration"`
+		ParseStartTime time.Time     `json:"ParseStartTime"`
+	}
+
+	// 计划阶段特殊统计信息
+	PlanStageInfo struct {
+		PlanDuration       time.Duration `json:"PlanDuration"`
+		PlanStartTime      time.Time     `json:"PlanStartTime"`
+		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
+		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
+		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
+		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
+	}
+
+	// 编译阶段特殊统计信息
+	CompileStageInfo struct {
+		CompileDuration  time.Duration `json:"CompileDuration"`
+		CompileStartTime time.Time     `json:"CompileStartTime"`
+		CompileS3Request S3Request     `json:"CompileS3Request"`
+		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
+		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
+	}
+
+	PrepareRunStageInfo struct {
+		// ScopePrepareDuration belongs to concurrent merge time
+		ScopePrepareDuration      int64     `json:"ScopePrepareDuration"`      // unit: ns
+		CompilePreRunOnceDuration int64     `json:"CompilePreRunOnceDuration"` // unit: ns
+		ScopePrepareS3Request     S3Request `json:"ScopePrepareS3Request"`
+		// It belongs to independent statistics, which occurs during the `PrepareRun` stage, only for analysis reference.
+		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
+	}
+
+	// 执行阶段特殊统计信息
+	ExecuteStageInfo struct {
+		ExecutionDuration  time.Duration `json:"ExecutionDuration"`
+		ExecutionStartTime time.Time     `json:"ExecutionStartTime"`
+		ExecutionEndTime   time.Time     `json:"ExecutionEndTime"`
+
+		// time consumption of output operator response to the query result set
+		OutputDuration int64 `json:"OutputDuration"` // unit: ns
+	}
+
+	IOAccessTime int64
+	// S3 FileService blocking wait time
+	S3FSPrefetchFileIOMergerTime int64
+	WaitActiveCost               time.Duration `json:"WaitActive"`
+}
+
+func XX() {
+	statsInfo := new(StatsInfo2)
+	statsInfo.ParseStageInfo.ParseDuration = 1
+}

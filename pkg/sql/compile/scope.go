@@ -112,6 +112,11 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.DataSource.Rel = nil
 		s.DataSource.R = nil
 	}
+
+	if s.ScopeAnalyzer != nil {
+		s.ScopeAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -129,12 +134,12 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 // Run read data from storage engine and run the instructions of scope.
 // Note: The prepare time for executing the `scope`.`Run()` method is very short, and no statistics are done
 func (s *Scope) Run(c *Compile) (err error) {
-	//if s.ScopeAnalyzer == nil {
-	//	s.ScopeAnalyzer = NewScopeAnalyzer()
-	//}
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
 	//s.ScopeAnalyzer.Reset()
-	//s.ScopeAnalyzer.Start()
-	//defer s.ScopeAnalyzer.Stop()
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
 	var p *pipeline.Pipeline
 	defer func() {
@@ -156,7 +161,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}
 
 	if s.DataSource == nil {
-		//s.ScopeAnalyzer.Stop()
+		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
 		_, err = p.MergeRun(s.Proc)
 	} else {
@@ -166,7 +171,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
-			//s.ScopeAnalyzer.Stop()
+			s.ScopeAnalyzer.Stop()
 			_, err = p.ConstRun(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
@@ -189,7 +194,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
 
-			//s.ScopeAnalyzer.Stop()
+			s.ScopeAnalyzer.Stop()
 			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
 	}
@@ -246,7 +251,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
-	s.ScopeAnalyzer.Reset()
+	//s.ScopeAnalyzer.Reset()
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
@@ -346,17 +351,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	//s.ScopeAnalyzer.Reset()
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	if !s.canRemote(c, true) {
 		return s.MergeRun(c)
 	}
-
-	if s.ScopeAnalyzer == nil {
-		s.ScopeAnalyzer = NewScopeAnalyzer()
-	} else {
-		s.ScopeAnalyzer.Reset()
-	}
-	s.ScopeAnalyzer.Start()
-	defer s.ScopeAnalyzer.Stop()
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
@@ -432,7 +436,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	}
 
 	if parallelScope == s {
-		s.ScopeAnalyzer.Stop()
+		//s.ScopeAnalyzer.Stop()
 		return parallelScope.Run(c)
 	}
 
