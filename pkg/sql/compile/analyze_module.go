@@ -483,7 +483,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 			cpuTimeVal := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
 				int64(statsInfo.ParseDuration+
 					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
 				cpuTimeVal,
@@ -493,7 +493,7 @@ func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.St
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption()))
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
 			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
 				statsInfo.BuildPlanStatsDuration,

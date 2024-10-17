@@ -135,6 +135,19 @@ type testHandler struct {
 	status      uint16
 }
 
+func (h *testHandler) close() {
+	if h.mysqlProto != nil {
+		tcpConn := h.mysqlProto.GetTcpConnection()
+		if tcpConn != nil {
+			_ = tcpConn.Close()
+		}
+		h.mysqlProto.Close()
+	}
+	if h.conn != nil {
+		_ = h.conn.Close()
+	}
+}
+
 type option func(s *testCNServer)
 
 func withBeforeHandle(f func()) option {
@@ -273,6 +286,7 @@ func (s *testCNServer) Start() error {
 }
 
 func testHandle(h *testHandler) {
+	defer h.close()
 	// read extra info from proxy.
 	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
@@ -518,6 +532,7 @@ func TestServerConn_Create(t *testing.T) {
 	sc, err = newServerConn(cn1, nil, nil, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
+	sc.Close()
 }
 
 func TestServerConn_Connect(t *testing.T) {
@@ -540,6 +555,7 @@ func TestServerConn_Connect(t *testing.T) {
 	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
+	defer sc.Close()
 	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second*3)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
@@ -593,6 +609,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
+	defer sc.Close()
 	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second*3)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))

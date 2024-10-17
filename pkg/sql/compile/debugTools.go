@@ -86,6 +86,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableFunction:           "tablefunction",
 	vm.OnDuplicateKey:          "on duplicate key",
 	vm.Apply:                   "apply",
+	vm.PostDml:                 "postdml",
 }
 
 var debugMagicNames = map[magicType]string{

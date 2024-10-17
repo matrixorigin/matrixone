@@ -80,6 +80,7 @@ const (
 	Label_Unknown           = "Unknown"
 	Label_Meterial          = "Meterial"
 	Label_Apply             = "Apply"
+	Label_PostDml           = "PostDml"
 )
 
 const (
