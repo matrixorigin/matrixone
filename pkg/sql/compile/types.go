@@ -308,6 +308,8 @@ type Compile struct {
 	filterExprExes []colexec.ExpressionExecutor
 
 	isPrepare bool
+
+	hasMergeOp bool
 }
 
 type RemoteReceivRegInfo struct {
