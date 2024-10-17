@@ -511,7 +511,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		outBatch.Attrs,
 		objectio.PhysicalAddr_Attr,
 	); physicalColumnPos == -1 {
-		physicalColumn.ResetWithNewType(&objectio.RowidType)
+		physicalColumn.SetType(objectio.RowidType)
 		physicalColumnPtr = &physicalColumn
 		defer physicalColumn.Free(mp)
 	} else {
