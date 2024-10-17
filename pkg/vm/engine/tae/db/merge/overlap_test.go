@@ -1,3 +1,17 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package merge
 
 import (
@@ -134,7 +148,7 @@ func createCSVWriter(filename string) (*csv.Writer, *os.File, error) {
 	return writer, f, nil
 }
 
-func TestMergeOverlap(t *testing.T) {
+func BenchmarkMergeOverlap(b *testing.B) {
 	entryChan := make(chan *mergeEntry, 1)
 
 	go func() {
@@ -160,13 +174,13 @@ func TestMergeOverlap(t *testing.T) {
 
 	csvWriter, f, err := createCSVWriter("output.csv")
 	if err != nil {
-		t.Fatal(err)
+		b.Fatal(err)
 	}
 	defer f.Close()
 	defer func() {
 		csvWriter.Flush()
 		if err = csvWriter.Error(); err != nil {
-			t.Fatal(err)
+			b.Fatal(err)
 		}
 	}()
 
@@ -192,7 +206,7 @@ func TestMergeOverlap(t *testing.T) {
 			}
 			err = csvWriter.Write(record)
 			if err != nil {
-				t.Fatal(err)
+				b.Fatal(err)
 			}
 			csvWriter.Flush()
 			continue
@@ -209,7 +223,7 @@ func TestMergeOverlap(t *testing.T) {
 		}
 		err = csvWriter.Write(record)
 		if err != nil {
-			t.Fatal(err)
+			b.Fatal(err)
 		}
 		csvWriter.Flush()
 		entries = append(entries, outputs...)
