@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -310,14 +312,15 @@ func getVarlenaCols(bats []*batch.Batch, idx int) (cols []struct {
 	return
 }
 
-func (w *S3Writer) FlushTailBatch(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+func (w *S3Writer) FlushTailBatch(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	if w.batSize >= TagS3SizeForMOLogger {
-		return w.SortAndSync(proc)
+		return w.SortAndSync(ctx, proc)
 	}
 	return nil, objectio.ObjectStats{}, w.writeBatsToBlockInfoBat(proc.GetMPool())
 }
 
-func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+// SortAndSync sort block data and write block data to S3
+func (w *S3Writer) SortAndSync(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	if len(w.batches) == 0 {
 		return nil, objectio.ObjectStats{}, nil
 	}
@@ -339,7 +342,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 			}
 			w.batches[i].Clean(proc.GetMPool())
 		}
-		return w.sync(proc)
+		return w.sync(ctx, proc)
 	}
 
 	for i := range w.batches {
@@ -368,7 +371,7 @@ func (w *S3Writer) SortAndSync(proc *process.Process) ([]objectio.BlockInfo, obj
 	); err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
-	return w.sync(proc)
+	return w.sync(ctx, proc)
 }
 
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
@@ -465,8 +468,8 @@ func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objecti
 
 // sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice.
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) sync(proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := w.writer.Sync(proc.Ctx)
+func (w *S3Writer) sync(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+	blocks, _, err := w.writer.Sync(ctx)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}

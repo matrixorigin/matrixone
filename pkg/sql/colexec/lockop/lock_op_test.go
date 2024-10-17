@@ -21,6 +21,10 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,14 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 var testFunc = func(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -335,6 +337,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 			arg.ctr.hasNewVersionInRange = func(
 				proc *process.Process,
 				rel engine.Relation,
+				analyzer process.Analyzer,
 				tableID uint64,
 				eng engine.Engine,
 				vec *vector.Vector,

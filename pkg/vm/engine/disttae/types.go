@@ -500,11 +500,11 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	//free batches
 	txn.CleanToFreeBatches()
 	//merge writes for the last statement
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))

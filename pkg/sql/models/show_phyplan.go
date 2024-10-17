@@ -35,6 +35,7 @@ const (
 	AnalyzeOption
 )
 
+// ExplainPhyPlan used to `mo_explan_phy` internal function
 func ExplainPhyPlan(phy *PhyPlan, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {

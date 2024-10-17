@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -285,7 +286,7 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 	return false
 }
 
-func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+func (ip *internalProtocol) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	mrs := execCtx.ses.GetMysqlResultSet()
 	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
 	if err != nil {

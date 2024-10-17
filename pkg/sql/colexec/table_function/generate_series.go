@@ -162,7 +162,7 @@ func (g *generateSeriesArg) free(tf *TableFunction, proc *process.Process, pipel
 	}
 }
 
-func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	var err error
 	var startVec, endVec, stepVec *vector.Vector
 	// get result type, this should happen in parpare.

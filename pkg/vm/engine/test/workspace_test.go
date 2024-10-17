@@ -368,7 +368,7 @@ func Test_CNTransferTombstoneObjects2(t *testing.T) {
 		require.NoError(t, err)
 
 		w.StashBatch(rel.GetProcess().(*process.Process), tombstoneBat)
-		_, ss, err := w.SortAndSync(rel.GetProcess().(*process.Process))
+		_, ss, err := w.SortAndSync(ctx, rel.GetProcess().(*process.Process))
 		require.NoError(t, err)
 
 		require.Equal(t, bat.Length(), int(ss.Rows()))
