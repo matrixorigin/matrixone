@@ -322,11 +322,12 @@ func (tbl *txnTable) TransferDeletes(
 						nil,
 					)
 					readTombstoneDuration += time.Since(tReadTombstone)
-					defer closeFunc()
 					if err != nil {
+						closeFunc()
 						return err
 					}
 					err = transferFn(vectors[1], vectors[0])
+					closeFunc()
 					if err != nil {
 						return err
 					}
