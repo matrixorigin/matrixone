@@ -494,15 +494,10 @@ func mustValueCanRead(
 					return true
 				},
 			)
-			//logutil.Infof("xxxx txn:%s execute select value from %s where id=%d, actual:%d",
-			//	txn.Txn().Txn().DebugString(),
-			//	table, id, actual)
 			//for test issue-19202
-			if actual == 0 {
-				logutil.Infof("xxxx txn:%s execute select value from %s where id=%d",
-					txn.Txn().Txn().DebugString(),
-					table, id)
-			}
+			logutil.Infof("xxxx txn:%s execute select value from %s where id=%d, actual:%d, min:%s",
+				txn.Txn().Txn().DebugString(),
+				table, id, actual, min.DebugString())
 			return nil
 		},
 		executor.Options{}.
