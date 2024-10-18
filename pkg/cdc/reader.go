@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -85,13 +84,16 @@ func NewTableReader(
 	return reader
 }
 
-func (reader *tableReader) Close() {}
+func (reader *tableReader) Close() {
+	reader.sinker.Close()
+}
 
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
+		reader.Close()
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
@@ -110,15 +112,16 @@ func (reader *tableReader) Run(
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v\n", reader.info, err)
 
 			// if stale read, try to restart reader
-			var moErr *moerr.Error
-			if errors.As(err, &moErr) && moErr.ErrorCode() == moerr.ErrStaleRead {
+			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
 				if err = reader.restartFunc(reader.info); err != nil {
 					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v\n", reader.info, err)
 					return
 				}
+				logutil.Errorf("cdc tableReader(%v) restart successfully\n", reader.info)
 				continue
 			}
 
+			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit\n", reader.info)
 			return
 		}
 	}
