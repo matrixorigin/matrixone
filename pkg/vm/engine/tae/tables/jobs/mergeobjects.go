@@ -69,6 +69,9 @@ type mergeObjectsTask struct {
 	targetObjSize uint32
 
 	createAt time.Time
+
+	segmentID *objectio.Segmentid
+	num       uint16
 }
 
 func NewMergeObjectsTask(
@@ -94,6 +97,7 @@ func NewMergeObjectsTask(
 		blkCnt:           make([]int, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
+		segmentID:        objectio.NewSegmentid(),
 	}
 
 	database, err := txn.GetDatabaseByID(task.did)
@@ -309,14 +313,17 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	return blockio.ConstructWriter(
+	writer := blockio.ConstructWriterWithSegmentID(
+		task.segmentID,
+		task.num,
 		task.schema.Version,
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,
 		task.isTombstone,
-		task.rt.Fs.Service,
-	)
+		task.rt.Fs.Service)
+	task.num++
+	return writer
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
