@@ -83,25 +83,33 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+	case args.IsMinio ||
+		// 天翼云
+		strings.Contains(args.Endpoint, "ctyunapi.cn") ||
+		// 腾讯云
+		strings.Contains(args.Endpoint, "myqcloud.com"):
+		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		// 阿里云
 		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case strings.EqualFold(args.Endpoint, "disk"):
+		// disk based
 		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	default:
+		// AWS SDK
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
