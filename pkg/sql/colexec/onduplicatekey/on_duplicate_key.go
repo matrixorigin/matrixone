@@ -302,7 +302,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 			if expr, exists := updateExpr[attr]; exists {
 				runExpr := plan2.DeepCopyExpr(expr)
 				resetColPos(runExpr, columnCount)
-				newVec, err := colexec.EvalExpressionOnce(proc, runExpr, []*batch.Batch{evalBatch})
+				newVec, err := colexec.GetWritableResultFromExpression(proc, runExpr, []*batch.Batch{evalBatch})
 				if err != nil {
 					newBatch.Clean(proc.Mp())
 					return nil, err
