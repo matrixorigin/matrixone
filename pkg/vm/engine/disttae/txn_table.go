@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -995,7 +996,7 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Name != catalog.Row_ID {
+			if !objectio.IsPhysicalAddr(attr.Attr.Name) {
 				defs = append(defs, tbl.defs[i])
 			}
 		}
@@ -1063,7 +1064,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Name: name,
 					}
 				}
-				if attr.Attr.Name == catalog.Row_ID {
+				if objectio.IsPhysicalAddr(attr.Attr.Name) {
 					hasRowId = true
 				}
 				i++
@@ -1401,7 +1402,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 	attrs = append(attrs, &engine.Attribute{
 		IsHidden: true,
 		IsRowId:  true,
-		Name:     catalog.Row_ID,
+		Name:     objectio.PhysicalAddr_Attr,
 		Type:     types.New(types.T_Rowid, 0, 0),
 		Primary:  true,
 	})
@@ -1561,7 +1562,7 @@ func (tbl *txnTable) Delete(
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
 	//for S3 delete
-	if name != catalog.Row_ID {
+	if !objectio.IsPhysicalAddr(name) {
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
@@ -1973,10 +1974,10 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		return getNonSortedPKSearchFuncByPKVec(keys)
+		return LinearSearchOffsetByValFactory(keys)
 	}
 
-	cacheBat := batch.EmptyBatchWithSize(1)
+	cacheVectors := containers.NewVectors(1)
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
@@ -1988,7 +1989,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			[]types.Type{pkType},
 			fs,
 			blk.MetaLocation(),
-			&cacheBat,
+			cacheVectors,
 			tbl.proc.Load().GetMPool(),
 			fileservice.Policy(0),
 		)
@@ -2001,7 +2002,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(cacheBat.Vecs)
+		sels := searchFunc(&cacheVectors[0])
 		release()
 		if len(sels) > 0 {
 			return true, nil

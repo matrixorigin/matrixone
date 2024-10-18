@@ -17,14 +17,13 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 const (
@@ -69,7 +69,7 @@ const (
 		`"%d",` + //checkpoint_str
 		`"%t",` + //no_full
 		`"%s",` + //incr_config
-		`"",` + //reserved0
+		`'%s',` + //additional_config
 		`"",` + //reserved1
 		`"",` + //reserved2
 		`"",` + //reserved3
@@ -82,7 +82,8 @@ const (
 		`sink_password, ` +
 		`tables, ` +
 		`filters, ` +
-		`no_full ` +
+		`no_full, ` +
+		`additional_config ` +
 		`from ` +
 		`mo_catalog.mo_cdc_task ` +
 		`where ` +
@@ -190,6 +191,7 @@ func getSqlForNewCdcTask(
 	checkpoint uint64,
 	noFull bool,
 	incrConfig string,
+	additionalConfigStr string,
 ) string {
 	return fmt.Sprintf(insertNewCdcTaskFormat,
 		accId,
@@ -217,6 +219,7 @@ func getSqlForNewCdcTask(
 		checkpoint,
 		noFull,
 		incrConfig,
+		additionalConfigStr,
 	)
 }
 
@@ -356,6 +359,16 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		noFull = true
 	}
 
+	additionalConfig := make(map[string]any)
+	additionalConfig[cdc2.InitSnapshotSplitTxn] = true
+	if cdcTaskOptionsMap[cdc2.InitSnapshotSplitTxn] == "false" {
+		additionalConfig[cdc2.InitSnapshotSplitTxn] = false
+	}
+	additionalConfigBytes, err := json.Marshal(additionalConfig)
+	if err != nil {
+		return err
+	}
+
 	details := &task.Details{
 		//account info that create cdc
 		AccountID: creatorAccInfo.GetTenantID(),
@@ -435,6 +448,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			0,
 			noFull,
 			"",
+			string(additionalConfigBytes),
 		)
 
 		//insert cdc record into the mo_cdc_task
@@ -962,17 +976,16 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri cdc2.UriInfo
-	tables  cdc2.PatternTuples
-	filters cdc2.PatternTuples
-	startTs types.TS
-	noFull  string
+	sinkUri              cdc2.UriInfo
+	tables               cdc2.PatternTuples
+	filters              cdc2.PatternTuples
+	startTs              types.TS
+	noFull               string
+	initSnapshotSplitTxn bool
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
-	readers              []cdc2.Reader
-	sinkers              []cdc2.Sinker
 	holdCh               chan int
 }
 
@@ -1015,7 +1028,8 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
-			cdc.close(true, true)
+			close(cdc.activeRoutine.Pause)
+			close(cdc.activeRoutine.Cancel)
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1107,8 +1121,6 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	go cdc.sunkWatermarkUpdater.Run(ctx, cdc.activeRoutine)
 
 	// create exec pipelines
-	cdc.readers = make([]cdc2.Reader, 0, len(dbTableInfos))
-	cdc.sinkers = make([]cdc2.Sinker, 0, len(dbTableInfos))
 	for _, info = range dbTableInfos {
 		if err = cdc.addExecPipelineForTable(info, txnOp); err != nil {
 			return
@@ -1203,6 +1215,21 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 
 	cdc.startTs = types.TS{}
 	cdc.noFull = noFull
+
+	// additionalConfig
+	additionalConfigStr, err := res.GetString(ctx, 0, 6)
+	if err != nil {
+		return err
+	}
+	additionalConfig := make(map[string]interface{})
+	if err = json.Unmarshal([]byte(additionalConfigStr), &additionalConfig); err != nil {
+		return err
+	}
+
+	cdc.initSnapshotSplitTxn = true
+	if val, ok := additionalConfig[cdc2.InitSnapshotSplitTxn]; ok {
+		cdc.initSnapshotSplitTxn = val.(bool)
+	}
 
 	return nil
 }
@@ -1326,7 +1353,7 @@ func (cdc *CdcTask) Pause() (err error) {
 		}
 	}()
 
-	cdc.close(true, false)
+	close(cdc.activeRoutine.Pause)
 	return
 }
 
@@ -1341,7 +1368,7 @@ func (cdc *CdcTask) Cancel() (err error) {
 		}
 	}()
 
-	cdc.close(false, true)
+	close(cdc.activeRoutine.Cancel)
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
@@ -1349,25 +1376,6 @@ func (cdc *CdcTask) Cancel() (err error) {
 	// let Start() go
 	cdc.holdCh <- 1
 	return
-}
-
-func (cdc *CdcTask) close(closePause, closeCancel bool) {
-	if closePause {
-		close(cdc.activeRoutine.Pause)
-	}
-	if closeCancel {
-		close(cdc.activeRoutine.Cancel)
-	}
-
-	for _, reader := range cdc.readers {
-		reader.Close()
-	}
-	cdc.readers = nil
-
-	for _, sinker := range cdc.sinkers {
-		sinker.Close()
-	}
-	cdc.sinkers = nil
 }
 
 func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
@@ -1395,11 +1403,11 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
 		cdc.activeRoutine,
+		cdc.initSnapshotSplitTxn,
 	)
 	if err != nil {
 		return err
 	}
-	cdc.sinkers = append(cdc.sinkers, sinker)
 
 	// make reader
 	reader := cdc2.NewTableReader(
@@ -1413,7 +1421,6 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		tableDef,
 		cdc.ResetWatermarkForTable,
 	)
-	cdc.readers = append(cdc.readers, reader)
 	go reader.Run(ctx, cdc.activeRoutine)
 
 	return nil

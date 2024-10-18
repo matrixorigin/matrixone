@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,16 +68,6 @@ func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
 		} else {
 			bat.Vecs[i] = vector.NewVec(t)
 		}
-	}
-	return bat
-}
-
-func EmptyBatchWithSize(n int) Batch {
-	bat := Batch{
-		Vecs: make([]*vector.Vector, n),
-	}
-	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
 	}
 	return bat
 }

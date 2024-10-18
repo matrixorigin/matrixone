@@ -126,18 +126,16 @@ type CSVParser struct {
 	allowEmptyLine   bool
 	quotedNullIsText bool
 	unescapedQuote   bool
+	isLastChunk      bool
 
 	reader io.Reader
 	// stores data that has NOT been parsed yet, it shares same memory as appendBuf.
 	buf []byte
 	// used to read data from the reader, the data will be moved to other buffers.
-	blockBuf    []byte
-	isLastChunk bool
+	blockBuf []byte
 
 	// The list of column names of the last INSERT statement.
 	columns []string
-
-	lastRow []Field
 
 	// the reader position we have parsed, if the underlying reader is not
 	// a compressed file, it's the file position we have parsed too.
@@ -149,8 +147,6 @@ type CSVParser struct {
 	// cache
 	remainBuf *bytes.Buffer
 	appendBuf *bytes.Buffer
-
-	reuseRow bool
 
 	// see csv.Reader
 	comment byte
@@ -167,7 +163,6 @@ func NewCSVParser(
 	reader io.Reader,
 	blockBufSize int64,
 	shouldParseHeader bool,
-	reuseRow bool,
 ) (*CSVParser, error) {
 	// see csv.Reader
 	if !validDelim(rune(cfg.FieldsTerminatedBy[0])) || (cfg.Comment != 0 && !validDelim(rune(cfg.Comment))) || cfg.Comment == cfg.FieldsTerminatedBy[0] {
@@ -241,16 +236,10 @@ func NewCSVParser(
 		allowEmptyLine:    cfg.AllowEmptyLine,
 		quotedNullIsText:  cfg.QuotedNullIsText,
 		unescapedQuote:    cfg.UnescapedQuote,
-		reuseRow:          reuseRow,
 	}, nil
 }
-func (parser *CSVParser) Read() (row []Field, err error) {
-	if parser.reuseRow {
-		row, err = parser.readRow(parser.lastRow)
-		parser.lastRow = row
-	} else {
-		row, err = parser.readRow(nil)
-	}
+func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
+	row, err = parser.readRow(lastRow)
 	return row, err
 }
 

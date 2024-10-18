@@ -36,6 +36,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -46,6 +47,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -56,6 +58,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "mo",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -66,6 +69,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "y",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
@@ -76,6 +80,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(-2)*time.Hour).UnixNano(), pitr)
@@ -86,6 +91,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(2)*time.Hour).UnixNano(), pitr)
@@ -96,6 +102,7 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
+			createTime:   "2024-05-01 00:00:00",
 			modifiedTime: "2024-05-01 00:00:00",
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(25)*time.Hour).UnixNano(), pitr)
@@ -934,6 +941,168 @@ func Test_doRestorePitr(t *testing.T) {
 		err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
+
+	// normal account
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			TimeStamp:      nanoTimeFormat(ts),
+			SrcAccountName: "sys",
+		}
+
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"ACCOUNT",
+			uint64(1),
+			"acc01",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc01")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			TimeStamp:      nanoTimeFormat(ts),
+			SrcAccountName: "sys",
+		}
+
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"acc01",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc01")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
 }
 
 func Test_doRestorePitrValid(t *testing.T) {
@@ -1187,4 +1356,1094 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_doRestorePitr_Account(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName: "",
+			TimeStamp:   nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"ACCOUNT",
+			uint64(0),
+			"sys",
+			"",
+			"",
+			uint64(0),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, ses.GetTenantName())
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1")
+		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName: "acc01",
+			TimeStamp:   nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"ACCOUNT",
+			uint64(1),
+			"acc01",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc01")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName: "acc01",
+			TimeStamp:   nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"ACCOUNT",
+			uint64(2),
+			"acc02",
+			"",
+			"",
+			uint64(2),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc02")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc01'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(1), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName: "acc01",
+			TimeStamp:   nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"ACCOUNT",
+			uint64(2),
+			"acc02",
+			"",
+			"",
+			uint64(2),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc02")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			SrcAccountName: "acc01",
+			TimeStamp:      nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc01")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc01'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(1), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			SrcAccountName: "acc01",
+			TimeStamp:      nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc01")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			SrcAccountName: "acc02",
+			TimeStamp:      nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc02")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc01'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(1), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc02'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(2), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			SrcAccountName: "acc02",
+			TimeStamp:      nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc02")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc02'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(2), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+		stmt := &tree.RestorePitr{
+			Level: tree.RESTORELEVELACCOUNT,
+			Name:  "pitr01",
+
+			AccountName:    "acc01",
+			SrcAccountName: "acc02",
+			TimeStamp:      nanoTimeFormat(ts),
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		mrs = newMrsForPitrRecord([][]interface{}{{
+			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+			"pitr01",
+			uint64(0),
+			"2024-05-01 00:00:00",
+			"2024-05-01 00:00:00",
+			"CLUSTER",
+			uint64(1),
+			"",
+			"",
+			"",
+			uint64(1),
+			uint8(1),
+			"d",
+		}})
+		bh.sql2result[sql] = mrs
+
+		resovleTs, err := doResolveTimeStamp(stmt.TimeStamp)
+		assert.NoError(t, err)
+		sql, err = getSqlForCheckAccountWithPitr(ctx, resovleTs, "acc02")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"1"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'acc01'"
+		mrs = newMrsForPitrRecord([][]interface{}{{uint64(1), "acc01", "open", uint64(1), nil}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = "show databases"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show databases {MO_TS = %d}", resovleTs)
+		mrs = newMrsForSqlForShowDatabases([][]interface{}{
+			{"db1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, err = getSqlForCheckDatabaseWithPitr(ctx, resovleTs, "db1")
+		assert.NoError(t, err)
+		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		bh.sql2result[sql] = mrs
+
+		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
 }
