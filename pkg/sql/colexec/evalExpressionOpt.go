@@ -33,17 +33,7 @@ var doNothingFunc = func() {}
 func GetReadonlyResultFromNoColumnExpression(
 	proc *process.Process,
 	planExpr *plan.Expr) (vec *vector.Vector, freeMethod func(), err error) {
-
-	var executor ExpressionExecutor
-	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-		return nil, nil, err
-	}
-	if vec, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
-		executor.Free()
-		return nil, nil, err
-	}
-
-	return vec, executor.Free, nil
+	return getReadonlyResultFromExpression(proc, planExpr, fixedOnlyOneRowBatch)
 }
 
 // GetWritableResultFromNoColumnExpression has the same requirement for input expression.
@@ -51,24 +41,7 @@ func GetReadonlyResultFromNoColumnExpression(
 func GetWritableResultFromNoColumnExpression(
 	proc *process.Process,
 	planExpr *plan.Expr) (vec *vector.Vector, err error) {
-
-	var executor ExpressionExecutor
-	var srcVector *vector.Vector
-	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-		return nil, err
-	}
-	if srcVector, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
-		executor.Free()
-		return nil, err
-	}
-	if succeed := modifyResultOwnerToOuter(executor); succeed {
-		executor.Free()
-		return srcVector, nil
-	}
-
-	vec, err = srcVector.Dup(proc.Mp())
-	executor.Free()
-	return vec, err
+	return GetWritableResultFromExpression(proc, planExpr, fixedOnlyOneRowBatch)
 }
 
 // GetReadonlyResultFromExpression return a readonly result and its free method from expression and input data.
@@ -81,6 +54,12 @@ func GetReadonlyResultFromExpression(
 		return data[col.Col.RelPos].Vecs[col.Col.ColPos], doNothingFunc, nil
 	}
 
+	return getReadonlyResultFromExpression(proc, planExpr, data)
+}
+
+func getReadonlyResultFromExpression(
+	proc *process.Process,
+	planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, freeMethod func(), err error) {
 	var executor ExpressionExecutor
 	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
 		return nil, nil, err
@@ -99,21 +78,14 @@ func GetWritableResultFromExpression(
 	planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, err error) {
 
 	var executor ExpressionExecutor
-	var srcVector *vector.Vector
-	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-		return nil, err
-	}
-	if srcVector, err = executor.Eval(proc, data, nil); err != nil {
+	if executor, err = NewExpressionExecutor(proc, planExpr); err == nil {
+		if vec, err = executor.Eval(proc, data, nil); err == nil {
+			if !modifyResultOwnerToOuter(executor) {
+				vec, err = vec.Dup(proc.Mp())
+			}
+		}
 		executor.Free()
-		return nil, err
 	}
-	if succeed := modifyResultOwnerToOuter(executor); succeed {
-		executor.Free()
-		return srcVector, nil
-	}
-
-	vec, err = srcVector.Dup(proc.Mp())
-	executor.Free()
 	return vec, err
 }
 
