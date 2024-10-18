@@ -501,6 +501,10 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
+			if op.opts.options.WaitPausedDisabled() {
+				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
+			}
+
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
 			// Wait until the txn client's state changed to normal, and it will probably take

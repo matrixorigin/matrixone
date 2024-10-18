@@ -17,14 +17,13 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 const (
@@ -69,7 +69,7 @@ const (
 		`"%d",` + //checkpoint_str
 		`"%t",` + //no_full
 		`"%s",` + //incr_config
-		`"",` + //reserved0
+		`'%s',` + //additional_config
 		`"",` + //reserved1
 		`"",` + //reserved2
 		`"",` + //reserved3
@@ -82,7 +82,8 @@ const (
 		`sink_password, ` +
 		`tables, ` +
 		`filters, ` +
-		`no_full ` +
+		`no_full, ` +
+		`additional_config ` +
 		`from ` +
 		`mo_catalog.mo_cdc_task ` +
 		`where ` +
@@ -190,6 +191,7 @@ func getSqlForNewCdcTask(
 	checkpoint uint64,
 	noFull bool,
 	incrConfig string,
+	additionalConfigStr string,
 ) string {
 	return fmt.Sprintf(insertNewCdcTaskFormat,
 		accId,
@@ -217,6 +219,7 @@ func getSqlForNewCdcTask(
 		checkpoint,
 		noFull,
 		incrConfig,
+		additionalConfigStr,
 	)
 }
 
@@ -356,6 +359,16 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		noFull = true
 	}
 
+	additionalConfig := make(map[string]any)
+	additionalConfig[cdc2.InitSnapshotSplitTxn] = true
+	if cdcTaskOptionsMap[cdc2.InitSnapshotSplitTxn] == "false" {
+		additionalConfig[cdc2.InitSnapshotSplitTxn] = false
+	}
+	additionalConfigBytes, err := json.Marshal(additionalConfig)
+	if err != nil {
+		return err
+	}
+
 	details := &task.Details{
 		//account info that create cdc
 		AccountID: creatorAccInfo.GetTenantID(),
@@ -435,6 +448,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			0,
 			noFull,
 			"",
+			string(additionalConfigBytes),
 		)
 
 		//insert cdc record into the mo_cdc_task
@@ -962,11 +976,12 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri cdc2.UriInfo
-	tables  cdc2.PatternTuples
-	filters cdc2.PatternTuples
-	startTs types.TS
-	noFull  string
+	sinkUri              cdc2.UriInfo
+	tables               cdc2.PatternTuples
+	filters              cdc2.PatternTuples
+	startTs              types.TS
+	noFull               string
+	initSnapshotSplitTxn bool
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
@@ -1201,6 +1216,21 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	cdc.startTs = types.TS{}
 	cdc.noFull = noFull
 
+	// additionalConfig
+	additionalConfigStr, err := res.GetString(ctx, 0, 6)
+	if err != nil {
+		return err
+	}
+	additionalConfig := make(map[string]interface{})
+	if err = json.Unmarshal([]byte(additionalConfigStr), &additionalConfig); err != nil {
+		return err
+	}
+
+	cdc.initSnapshotSplitTxn = true
+	if val, ok := additionalConfig[cdc2.InitSnapshotSplitTxn]; ok {
+		cdc.initSnapshotSplitTxn = val.(bool)
+	}
+
 	return nil
 }
 
@@ -1373,6 +1403,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
 		cdc.activeRoutine,
+		cdc.initSnapshotSplitTxn,
 	)
 	if err != nil {
 		return err
