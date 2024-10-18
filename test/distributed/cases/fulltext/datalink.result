@@ -13,10 +13,8 @@ id    fpath
 2    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/file-sample_100kB.docx
 drop table datasrc;
 create table datasrc (id bigint primary key, fpath datalink, fpath2 datalink, fulltext(fpath, fpath2));
-
 insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf', 'file:///$resources/fulltext/chinese.pdf');
-
 select * from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
-
+id    fpath    fpath2
+0    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/mo.pdf    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/chinese.pdf
 drop table datasrc;
-
