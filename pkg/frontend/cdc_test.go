@@ -1246,6 +1246,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -2418,6 +2420,8 @@ func Test_handleShowCdc(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
