@@ -500,7 +500,12 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	default:
 		ret = 0.1
 	}
-	if !ok || ret < 0 || ret > 1 {
+	if ret < 0 {
+		// val out of range, return low sel
+		return 0.00000001
+	}
+	if !ok || ret > 1 {
+		//somwthing error happened
 		return 0.1
 	}
 	return ret
@@ -756,14 +761,14 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo, isPrepare bool) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr, isPrepare)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1271,7 +1276,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s, builder.isPrepareStatement)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
 		if builder.optimizerHints != nil {
 			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
 				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
@@ -1591,13 +1596,16 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, isPrepare bool) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
 	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
 		//speicial handle for isnull
 		return sel
 	}
-	if isPrepare {
+	//check strict filter, otherwise can not estimate outcnt by min/max val
+	_, _, _, _, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if hasDynamicParam {
+		// assume dynamic parameter always has low selectivity
 		if sel <= 0.02 {
 			return sel * 50
 		} else {
