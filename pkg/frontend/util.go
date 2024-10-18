@@ -392,13 +392,13 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 				defines.EngineKey{},
 				ses.GetTxnHandler().GetStorage()))
 
-		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(ses.txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
 			return nil, err
 		}
 
 		value, err := getValueFromVector(ctx, vec, ses, planExpr)
-		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
+		free()
 		return value, err
 	}
 }

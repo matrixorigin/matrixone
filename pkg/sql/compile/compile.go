@@ -2704,18 +2704,18 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
 		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
 			// get limit
-			vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Limit)
 			if err != nil {
 				panic(err)
 			}
-			defer vec1.Free(c.proc.Mp())
+			defer free1()
 
 			// get offset
-			vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
+			vec2, free2, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Offset)
 			if err != nil {
 				panic(err)
 			}
-			defer vec2.Free(c.proc.Mp())
+			defer free2()
 
 			limit, offset := vector.MustFixedColWithTypeCheck[uint64](vec1)[0], vector.MustFixedColWithTypeCheck[uint64](vec2)[0]
 			topN := limit + offset
@@ -3766,18 +3766,10 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
-		return true
+	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
+		return true //avoid bugs
 	}
-
-	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
-		return true
-	}
-
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
 func collectTombstones(
