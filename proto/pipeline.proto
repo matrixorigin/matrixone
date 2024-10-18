@@ -133,7 +133,7 @@ message Insert{
 
 message MultiUpdate {
   uint64 affected_rows = 1;
-  bool ToWriteS3 = 2;
+  uint32 Action = 2;
   uint32 IBucket = 3;
   uint32 NBucket = 4;
   map<string,int32> SegmentMap = 5;
