@@ -61,7 +61,7 @@ Project
                     Filter Cond: (t3.c1 <> 2)
                     Limit: 10
 explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  Sort
         Sort Key: t1.c1 INTERNAL
@@ -69,14 +69,12 @@ Project
         ->  Join
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t2 [ForceOneCN]
-                    Runtime Filter Probe: t2.c1
+              ->  Table Scan on d1.t2
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 10
                     Send Message: [tag 2 , type MsgTopValue]
-                    ->  Table Scan on d1.t1 [ForceOneCN]
+                    ->  Table Scan on d1.t1
                           Sort Key: c1 INTERNAL
                           Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
@@ -92,7 +90,7 @@ c1    c1    c2    c3
 9    9    9    9
 10    10    10    10
 explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  Sort
         Sort Key: t1.c1 INTERNAL
@@ -100,14 +98,12 @@ Project
         ->  Join
               Join Type: RIGHT
               Join Cond: (t2.c1 = t1.c1)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t2 [ForceOneCN]
-                    Runtime Filter Probe: t2.c1
+              ->  Table Scan on d1.t2
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 30
                     Send Message: [tag 2 , type MsgTopValue]
-                    ->  Table Scan on d1.t1 [ForceOneCN]
+                    ->  Table Scan on d1.t1
                           Sort Key: c1 INTERNAL
                           Recv Message: [tag 2 , type MsgTopValue]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;

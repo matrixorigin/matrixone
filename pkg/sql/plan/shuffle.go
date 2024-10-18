@@ -34,12 +34,12 @@ const (
 	threshHoldForRightJoinShuffle   = 8192
 	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
-	threshHoldForHashShuffle        = 8000000
+	threshHoldForHashShuffle        = 2000000
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 
-	overlapThreshold = 0.55
+	overlapThreshold = 0.95
 	uniformThreshold = 0.3
 )
 
@@ -287,9 +287,6 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		return
 	}
 	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-		//if s.ShuffleRangeMap[colName] != nil {
-		//	logutil.Infof("shuffle debug: colname %v, uniform %v, overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
-		//}
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
@@ -591,7 +588,10 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
+	if s == nil || math.IsNaN(s.Overlap) {
+		return true
+	}
+	if s.Overlap > overlapThreshold && s.Result == nil {
 		return true
 	}
 	return false
