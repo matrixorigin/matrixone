@@ -242,7 +242,15 @@ func (tbl *txnTable) TransferDeletes(
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
 		tGetSoftdeleteObjects := time.Now()
-		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		startTS := tbl.transferedTS.Next()
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType.SkipTargetOldCommitted() {
+			txnStartTS := tbl.store.txn.GetStartTS()
+			if txnStartTS.GT(&startTS) {
+				startTS = tbl.transferedTS.Next()
+			}
+		}
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
 		sort.Slice(softDeleteObjects, func(i, j int) bool {
 			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
 		})
