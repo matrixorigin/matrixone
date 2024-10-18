@@ -445,8 +445,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
 						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
 				}
-				sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
-				continue
+				if table.pk == pk {
+					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+					continue
+				}
+				createAt = table.createAt
 			}
 			table = &tableInfo{
 				accountID: account,
@@ -516,11 +519,19 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		table.deleteAt = del.ts
 		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
+		if len(sm.tablePKIndex[pk]) != 0 {
+			continue
+		}
 
 		if sm.tableIDIndex[table.tid] == nil {
 			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
 			// there may be no record of the create table entry, only the delete entry
 			continue
+		}
+		if len(sm.tablePKIndex[pk]) == 0 {
+			if sm.tableIDIndex[table.tid] != nil && table.pk != sm.tableIDIndex[table.tid].pk {
+				continue
+			}
 		}
 		sm.tableIDIndex[table.tid] = table
 		sm.tables[table.accountID][table.tid] = table
@@ -1439,6 +1450,13 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		}
 	}
 	return nil
+}
+
+// for test
+func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.tableIDIndex[tid].pk
 }
 
 func (sm *SnapshotMeta) String() string {

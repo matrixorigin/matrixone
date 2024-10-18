@@ -109,7 +109,7 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 	}
 }
 
-func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow bool) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -159,7 +159,7 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow 
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false, reuseRow)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
@@ -187,12 +187,14 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
 
-	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR), true)
+	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR))
 	if err != nil {
 		return 0, err
 	}
+
+	var lastRow []csvparser.Field
 	for skipLines > 0 {
-		_, err = csvReader.Read()
+		lastRow, err = csvReader.Read(lastRow)
 		if err != nil {
 			if err == io.EOF {
 				param.Tail.IgnoredLines = 0
