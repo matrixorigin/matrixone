@@ -297,7 +297,10 @@ drop pitr if exists pitr11;
 drop pitr if exists pitr12;
 drop database if exists db01;
 
-create pitr sys_MOCatalog_Pitr range 1 'h';
+-- @ignore:1,2
+show pitr;
+create pitr sys_mo_catalog_pitr range 1 'h';
+drop pitr if exists sys_mo_catalog_pitr;
 drop pitr if exists pitr01;
 create pitr pitr01 range 1 'h';
 -- @ignore:0,2,3,4,6,7,10
@@ -331,4 +334,6 @@ select * from mo_catalog.mo_pitr;
 -- @ignore:1,2
 show pitr;
 drop pitr if exists pitr10;
+-- @ignore:0,2,3,4,6,7,10
+select * from mo_catalog.mo_pitr;
 drop database if exists db01;

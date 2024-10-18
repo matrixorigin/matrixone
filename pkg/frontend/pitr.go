@@ -91,7 +91,7 @@ type pitrRecord struct {
 }
 
 const (
-	SYSMOCATALOGPITR = "sys_MOCatalog_Pitr"
+	SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
 )
 
 func getSqlForCreatePitr(ctx context.Context, pitrId, pitrName string, createAcc uint64, createTime, modifitedTime string, level string, accountId uint64, accountName, databaseName, tableName string, objectId uint64, pitrLength uint8, pitrValue string) (string, error) {
@@ -196,9 +196,9 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s';", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", stmt.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s';", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", createAccount)
 		}
 	case tree.PITRLEVELDATABASE:
 		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s';", stmt.DatabaseName)
@@ -604,6 +604,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		return err
 	}
 
+	// handle sys_mo_catalog_pitr
 	sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
 	getLogger(ses.GetService()).Info("get system account mo_catalog pitr", zap.String("sql", sql))
 	bh.ClearExecResultSet()
@@ -731,6 +732,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 	var (
 		sql       string
 		pitrExist bool
+		erArray   []ExecResult
 	)
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -779,6 +781,28 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
+		}
+
+		// handle sys_mo_catalog_pitr
+		sql = fmt.Sprintf(getPitrFormat+" where pitr_name != '%s';", SYSMOCATALOGPITR)
+		getLogger(ses.GetService()).Info("get system account mo_catalog pitr", zap.String("sql", sql))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		if !execResultArrayHasData(erArray) {
+			// drop sysMoCatalogPitr
+			sql = getSqlForDropPitr(SYSMOCATALOGPITR, sysAccountID)
+			getLogger(ses.GetService()).Info("drop sys mo_catalog pitr", zap.String("sql", sql))
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return err

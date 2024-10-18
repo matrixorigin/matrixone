@@ -36,7 +36,7 @@ import (
 const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
-const SYSMOCATALOGPITR = "sys_MOCatalog_Pitr"
+const SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
