@@ -4063,12 +4063,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.AddCompileS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 	} else {
 		// add current CN
@@ -4119,12 +4119,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 				stats := statistic.StatsInfoFromContext(ctx)
 				stats.AddCompileS3Request(statistic.S3Request{
-					List:        crs.FileService.S3.List.Load(),
-					Head:        crs.FileService.S3.Head.Load(),
-					Put:         crs.FileService.S3.Put.Load(),
-					Get:         crs.FileService.S3.Get.Load(),
-					Delete:      crs.FileService.S3.Delete.Load(),
-					DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+					List:      crs.FileService.S3.List.Load(),
+					Head:      crs.FileService.S3.Head.Load(),
+					Put:       crs.FileService.S3.Put.Load(),
+					Get:       crs.FileService.S3.Get.Load(),
+					Delete:    crs.FileService.S3.Delete.Load(),
+					DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 				})
 
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {

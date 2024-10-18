@@ -2875,8 +2875,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseStartTime = beginInstant
+
+	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
@@ -2888,7 +2890,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
-		statsInfo.ParseDuration = ParseDuration
+		statsInfo.ParseStage.ParseDuration = ParseDuration
 		var err2 error
 		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		if err2 != nil {
@@ -2952,8 +2954,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
-		statsInfo.ParseStartTime = beginInstant
-		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+		statsInfo.ParseStage.ParseStartTime = beginInstant
+		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
@@ -3463,13 +3465,13 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		opt(&h.marshalPlanConfig)
 	}
 
-	if h.needMarshalPlan() {
-		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
-		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
-		}
+	//if h.needMarshalPlan() {
+	h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+	h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+	if phyPlan != nil {
+		h.marshalPlan.PhyPlan = *phyPlan
 	}
+	//}
 	return h
 }
 
@@ -3573,27 +3575,49 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		val := int64(statsByte.GetTimeConsumed()) +
-			int64(statsInfo.ParseDuration+statsInfo.PlanDuration+statsInfo.CompileDuration) +
-			statsInfo.ScopePrepareDuration + statsInfo.CompilePreRunOnceDuration -
+		//val := int64(statsByte.GetTimeConsumed()) +
+		//	int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
+		//	statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+		//	(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+
+		operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
+		totalTime := operatorTimeConsumed +
+			int64(statsInfo.ParseStage.ParseDuration) +
+			int64(statsInfo.PlanStage.PlanDuration) +
+			int64(statsInfo.CompileStage.CompileDuration) +
+			statsInfo.PrepareRunStage.ScopePrepareDuration +
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
-		if val < 0 {
+		if totalTime < 0 {
 			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
-				statsInfo.ParseDuration,
-				statsInfo.PlanDuration,
-				statsInfo.CompileDuration,
-				int64(statsByte.GetTimeConsumed()),
-				statsInfo.ScopePrepareDuration+statsInfo.CompilePreRunOnceDuration,
+				statsInfo.ParseStage.ParseDuration,
+				statsInfo.PlanStage.PlanDuration,
+				statsInfo.CompileStage.CompileDuration,
+				operatorTimeConsumed,
+				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
-				val,
+				totalTime,
 			)
+
+			//ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+			//	uuid.UUID(h.stmt.StatementID).String(),
+			//	h.stmt.StatementType,
+			//	statsInfo.ParseStage.ParseDuration,
+			//	statsInfo.PlanStage.PlanDuration,
+			//	statsInfo.CompileStage.CompileDuration,
+			//	int64(statsByte.GetTimeConsumed()),
+			//	statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+			//	statsInfo.IOAccessTimeConsumption,
+			//	statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
+			//	val,
+			//)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
-			statsByte.WithTimeConsumed(float64(val))
+			statsByte.WithTimeConsumed(float64(totalTime))
 		}
 	}
 

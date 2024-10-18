@@ -618,12 +618,12 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		ctx := c.proc.GetTopContext()
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
@@ -876,12 +876,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 
 		if err != nil {
@@ -1005,12 +1005,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 
 	}

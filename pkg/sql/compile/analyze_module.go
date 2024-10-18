@@ -487,45 +487,45 @@ func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInf
 	return buffer
 }
 
-func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
-	if option.Analyze {
-		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
-		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%dns, MemorySize:%dbytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
-			gblStats.OperatorTimeConsumed,
-			gblStats.MemorySize,
-			anal.phyPlan.S3IOInputCount,
-			anal.phyPlan.S3IOOutputCount,
-			queryResult.AffectRows,
-		))
-
-		if statsInfo != nil {
-			buffer.WriteString("\n")
-			cpuTimeVal := gblStats.OperatorTimeConsumed + statsInfo.BuildReaderDuration +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-
-			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
-				cpuTimeVal,
-				gblStats.OperatorTimeConsumed,
-				statsInfo.BuildReaderDuration,
-				statsInfo.ParseDuration,
-				statsInfo.CompileDuration,
-				statsInfo.PlanDuration,
-				statsInfo.IOAccessTimeConsumption,
-				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
-
-			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
-				statsInfo.BuildPlanStatsDuration,
-				statsInfo.BuildPlanResolveVarDuration,
-			))
-
-			buffer.WriteString(fmt.Sprintf("CompileTableScanDuration: %dns",
-				statsInfo.CompileTableScanDuration,
-			))
-		}
-	}
-}
+//func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
+//	if option.Analyze {
+//		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
+//		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%dns, MemorySize:%dbytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
+//			gblStats.OperatorTimeConsumed,
+//			gblStats.MemorySize,
+//			anal.phyPlan.S3IOInputCount,
+//			anal.phyPlan.S3IOOutputCount,
+//			queryResult.AffectRows,
+//		))
+//
+//		if statsInfo != nil {
+//			buffer.WriteString("\n")
+//			cpuTimeVal := gblStats.OperatorTimeConsumed + statsInfo.BuildReaderDuration +
+//				int64(statsInfo.ParseDuration+
+//					statsInfo.CompileDuration+
+//					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+//
+//			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
+//				cpuTimeVal,
+//				gblStats.OperatorTimeConsumed,
+//				statsInfo.BuildReaderDuration,
+//				statsInfo.ParseDuration,
+//				statsInfo.CompileDuration,
+//				statsInfo.PlanDuration,
+//				statsInfo.IOAccessTimeConsumption,
+//				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
+//
+//			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
+//				statsInfo.BuildPlanStatsDuration,
+//				statsInfo.BuildPlanResolveVarDuration,
+//			))
+//
+//			buffer.WriteString(fmt.Sprintf("CompileTableScanDuration: %dns",
+//				statsInfo.CompileTableScanDuration,
+//			))
+//		}
+//	}
+//}
 
 func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
 	if option.Analyze || option.Verbose {
@@ -540,71 +540,76 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
+			//buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+			//	gblStats.S3ListRequest+statsInfo.PlanStage.BuildPlanS3Request.List+statsInfo.CompileStage.CompileS3Request.List+statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
+			//	gblStats.S3HeadRequest+statsInfo.PlanStage.BuildPlanS3Request.Head+statsInfo.CompileStage.CompileS3Request.Head+statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
+			//	gblStats.S3PutRequest+statsInfo.PlanStage.BuildPlanS3Request.Put+statsInfo.CompileStage.CompileS3Request.Put+statsInfo.PrepareRunStage.ScopePrepareS3Request.Put,
+			//	gblStats.S3GetRequest+statsInfo.PlanStage.BuildPlanS3Request.Get+statsInfo.CompileStage.CompileS3Request.Get+statsInfo.PrepareRunStage.ScopePrepareS3Request.Get,
+			//	gblStats.S3DeleteRequest+statsInfo.PlanStage.BuildPlanS3Request.Delete+statsInfo.CompileStage.CompileS3Request.Delete+statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
+			//	gblStats.S3DeleteMultiRequest+statsInfo.PlanStage.BuildPlanS3Request.DeleteMul+statsInfo.CompileStage.CompileS3Request.DeleteMul+statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
+			//))
+			// 使用 calculateS3Requests 函数
+			list, head, put, get, delete, deleteMul := calcTotalS3Requests(gblStats, statsInfo)
 			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-				gblStats.S3ListRequest+statsInfo.BuildPlanS3Request.List+statsInfo.CompileS3Request.List+statsInfo.ScopePrepareS3Request.List,
-				gblStats.S3HeadRequest+statsInfo.BuildPlanS3Request.Head+statsInfo.CompileS3Request.Head+statsInfo.ScopePrepareS3Request.Head,
-				gblStats.S3PutRequest+statsInfo.BuildPlanS3Request.Put+statsInfo.CompileS3Request.Put+statsInfo.ScopePrepareS3Request.Put,
-				gblStats.S3GetRequest+statsInfo.BuildPlanS3Request.Get+statsInfo.CompileS3Request.Get+statsInfo.ScopePrepareS3Request.Get,
-				gblStats.S3DeleteRequest+statsInfo.BuildPlanS3Request.Delete+statsInfo.CompileS3Request.Delete+statsInfo.ScopePrepareS3Request.Delete,
-				gblStats.S3DeleteMultiRequest+statsInfo.BuildPlanS3Request.DeleteMulti+statsInfo.CompileS3Request.DeleteMulti+statsInfo.ScopePrepareS3Request.DeleteMulti,
+				list, head, put, get, delete, deleteMul,
 			))
 
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
-				int64(statsInfo.ParseDuration+statsInfo.PlanDuration+statsInfo.CompileDuration) +
-				statsInfo.ScopePrepareDuration + statsInfo.CompilePreRunOnceDuration -
+				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
+				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
 			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d)\n",
-				statsInfo.ParseDuration,
-				statsInfo.PlanDuration,
-				statsInfo.CompileDuration,
+				statsInfo.ParseStage.ParseDuration,
+				statsInfo.PlanStage.PlanDuration,
+				statsInfo.CompileStage.CompileDuration,
 				gblStats.OperatorTimeConsumed,
-				gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration,
+				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.PlanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.PlanStage.PlanDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.BuildPlanS3Request.List,
-					statsInfo.BuildPlanS3Request.Head,
-					statsInfo.BuildPlanS3Request.Put,
-					statsInfo.BuildPlanS3Request.Get,
-					statsInfo.BuildPlanS3Request.Delete,
-					statsInfo.BuildPlanS3Request.DeleteMulti,
+					statsInfo.PlanStage.BuildPlanS3Request.List,
+					statsInfo.PlanStage.BuildPlanS3Request.Head,
+					statsInfo.PlanStage.BuildPlanS3Request.Put,
+					statsInfo.PlanStage.BuildPlanS3Request.Get,
+					statsInfo.PlanStage.BuildPlanS3Request.Delete,
+					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
 				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.BuildPlanStatsDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.CompileS3Request.List,
-					statsInfo.CompileS3Request.Head,
-					statsInfo.CompileS3Request.Put,
-					statsInfo.CompileS3Request.Get,
-					statsInfo.CompileS3Request.Delete,
-					statsInfo.CompileS3Request.DeleteMulti,
+					statsInfo.CompileStage.CompileS3Request.List,
+					statsInfo.CompileStage.CompileS3Request.Head,
+					statsInfo.CompileStage.CompileS3Request.Put,
+					statsInfo.CompileStage.CompileS3Request.Get,
+					statsInfo.CompileStage.CompileS3Request.Delete,
+					statsInfo.CompileStage.CompileS3Request.DeleteMul,
 				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileTableScanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.CompilePreRunOnceDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.CompilePreRunOnceDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.BuildReaderDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.ScopePrepareS3Request.List,
-					statsInfo.ScopePrepareS3Request.Head,
-					statsInfo.ScopePrepareS3Request.Put,
-					statsInfo.ScopePrepareS3Request.Get,
-					statsInfo.ScopePrepareS3Request.Delete,
-					statsInfo.ScopePrepareS3Request.DeleteMulti,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Put,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Get,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
 				))
 
 				//-------------------------------------------------------------------------------------------------------
@@ -629,7 +634,16 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			buffer.WriteString("Physical Plan Deployment:")
 		}
 	}
+}
 
+func calcTotalS3Requests(gblStats GblStats, statsInfo *statistic.StatsInfo) (list, head, put, get, delete, deleteMul int64) {
+	list = gblStats.S3ListRequest + statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.CompileStage.CompileS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.List
+	head = gblStats.S3HeadRequest + statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.CompileStage.CompileS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Head
+	put = gblStats.S3PutRequest + statsInfo.PlanStage.BuildPlanS3Request.Put + statsInfo.CompileStage.CompileS3Request.Put + statsInfo.PrepareRunStage.ScopePrepareS3Request.Put
+	get = gblStats.S3GetRequest + statsInfo.PlanStage.BuildPlanS3Request.Get + statsInfo.CompileStage.CompileS3Request.Get + statsInfo.PrepareRunStage.ScopePrepareS3Request.Get
+	delete = gblStats.S3DeleteRequest + statsInfo.PlanStage.BuildPlanS3Request.Delete + statsInfo.CompileStage.CompileS3Request.Delete + statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete
+	deleteMul = gblStats.S3DeleteMultiRequest + statsInfo.PlanStage.BuildPlanS3Request.DeleteMul + statsInfo.CompileStage.CompileS3Request.DeleteMul + statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul
+	return
 }
 
 func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
@@ -771,7 +785,7 @@ func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
 	// Accumulate stats from the current operator
 	if op.OpStats != nil && op.NodeIdx >= 0 {
 		stats.OperatorTimeConsumed += op.OpStats.TimeConsumed
-		stats.MemorySize += op.OpStats.WaitTimeConsumed
+		stats.MemorySize += op.OpStats.MemorySize
 		stats.NetWorkSize += op.OpStats.NetworkIO
 		stats.DiskIOSize += op.OpStats.DiskIO
 		stats.S3ListRequest += op.OpStats.S3List

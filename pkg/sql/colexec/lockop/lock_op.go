@@ -252,12 +252,12 @@ func LockTable(
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:        analyzer.GetOpStats().S3List,
-			Head:        analyzer.GetOpStats().S3Head,
-			Put:         analyzer.GetOpStats().S3Put,
-			Get:         analyzer.GetOpStats().S3Get,
-			Delete:      analyzer.GetOpStats().S3Delete,
-			DeleteMulti: analyzer.GetOpStats().S3DeleteMulti,
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMulti,
 		})
 	}()
 
@@ -312,12 +312,12 @@ func LockRows(
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:        analyzer.GetOpStats().S3List,
-			Head:        analyzer.GetOpStats().S3Head,
-			Put:         analyzer.GetOpStats().S3Put,
-			Get:         analyzer.GetOpStats().S3Get,
-			Delete:      analyzer.GetOpStats().S3Delete,
-			DeleteMulti: analyzer.GetOpStats().S3DeleteMulti,
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMulti,
 		})
 	}()
 

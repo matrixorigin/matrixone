@@ -888,12 +888,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		}
 
 		stats.AddBuildPlanS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 
 	} else {
@@ -906,12 +906,12 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		}
 
 		stats.AddBuildPlanS3Request(statistic.S3Request{
-			List:        crs.FileService.S3.List.Load(),
-			Head:        crs.FileService.S3.Head.Load(),
-			Put:         crs.FileService.S3.Put.Load(),
-			Get:         crs.FileService.S3.Get.Load(),
-			Delete:      crs.FileService.S3.Delete.Load(),
-			DeleteMulti: crs.FileService.S3.DeleteMulti.Load(),
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 		})
 	}
 

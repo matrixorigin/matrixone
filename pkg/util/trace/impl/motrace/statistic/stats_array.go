@@ -248,8 +248,65 @@ var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 
 type statsInfoKey struct{}
 
-// statistic info of sql
 type StatsInfo struct {
+	ParseStage struct {
+		ParseDuration  time.Duration `json:"ParseDuration"`
+		ParseStartTime time.Time     `json:"ParseStartTime"`
+	}
+
+	// 计划阶段特殊统计信息
+	PlanStage struct {
+		PlanDuration       time.Duration `json:"PlanDuration"`
+		PlanStartTime      time.Time     `json:"PlanStartTime"`
+		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
+		// The following attributes belong to independent statistics, which occurs during the `buildPlan` stage, only for analysis reference.
+		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
+		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
+	}
+
+	// 编译阶段特殊统计信息
+	CompileStage struct {
+		CompileDuration  time.Duration `json:"CompileDuration"`
+		CompileStartTime time.Time     `json:"CompileStartTime"`
+		CompileS3Request S3Request     `json:"CompileS3Request"`
+		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
+		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
+	}
+
+	PrepareRunStage struct {
+		// ScopePrepareDuration belongs to concurrent merge time
+		ScopePrepareDuration      int64     `json:"ScopePrepareDuration"`      // unit: ns
+		CompilePreRunOnceDuration int64     `json:"CompilePreRunOnceDuration"` // unit: ns
+		ScopePrepareS3Request     S3Request `json:"ScopePrepareS3Request"`
+		// It belongs to independent statistics, which occurs during the `PrepareRun` stage, only for analysis reference.
+		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
+	}
+
+	// 执行阶段特殊统计信息
+	ExecuteStage struct {
+		ExecutionDuration  time.Duration `json:"ExecutionDuration"`
+		ExecutionStartTime time.Time     `json:"ExecutionStartTime"`
+		ExecutionEndTime   time.Time     `json:"ExecutionEndTime"`
+
+		// time consumption of output operator response to the query result set
+		OutputDuration int64 `json:"OutputDuration"` // unit: ns
+	}
+
+	// FileService(S3 or localFS) Read Data time Consumption
+	IOAccessTimeConsumption int64
+	// S3 FileService Prefetch File IOMerge time Consumption
+	S3FSPrefetchFileIOMergerTimeConsumption int64
+
+	// Local FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
+	LocalFSReadIOMergerTimeConsumption int64
+	// S3 FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
+	S3FSReadIOMergerTimeConsumption int64
+
+	WaitActiveCost time.Duration `json:"WaitActive"`
+}
+
+// statistic info of sql
+type StatsInfoX struct {
 	ParseDuration     time.Duration `json:"ParseDuration"`
 	PlanDuration      time.Duration `json:"PlanDuration"`
 	CompileDuration   time.Duration `json:"CompileDuration"`
@@ -298,72 +355,72 @@ type StatsInfo struct {
 
 // S3Request 结构用于记录每种 S3 操作的次数
 type S3Request struct {
-	List        int64 `json:"List"`
-	Head        int64 `json:"Head"`
-	Put         int64 `json:"Put"`
-	Get         int64 `json:"Get"`
-	Delete      int64 `json:"Delete"`
-	DeleteMulti int64 `json:"DeleteMulti"`
+	List      int64 `json:"List"`
+	Head      int64 `json:"Head"`
+	Put       int64 `json:"Put"`
+	Get       int64 `json:"Get"`
+	Delete    int64 `json:"Delete"`
+	DeleteMul int64 `json:"DeleteMul"`
 }
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
 		return
 	}
-	if !stats.CompileStartTime.IsZero() {
+	if !stats.CompileStage.CompileStartTime.IsZero() {
 		return
 	}
-	stats.CompileStartTime = time.Now()
+	stats.CompileStage.CompileStartTime = time.Now()
 }
 
 func (stats *StatsInfo) CompileEnd() {
 	if stats == nil {
 		return
 	}
-	stats.CompileDuration = time.Since(stats.CompileStartTime)
+	stats.CompileStage.CompileDuration = time.Since(stats.CompileStage.CompileStartTime)
 }
 
 func (stats *StatsInfo) PlanStart() {
 	if stats == nil {
 		return
 	}
-	stats.PlanStartTime = time.Now()
+	stats.PlanStage.PlanStartTime = time.Now()
 }
 
 func (stats *StatsInfo) PlanEnd() {
 	if stats == nil {
 		return
 	}
-	stats.PlanDuration = time.Since(stats.PlanStartTime)
+	stats.PlanStage.PlanDuration = time.Since(stats.PlanStage.PlanStartTime)
 }
 
 func (stats *StatsInfo) ExecutionStart() {
 	if stats == nil {
 		return
 	}
-	stats.ExecutionStartTime = time.Now()
+	stats.ExecuteStage.ExecutionStartTime = time.Now()
 }
 
 func (stats *StatsInfo) ExecutionEnd() {
 	if stats == nil {
 		return
 	}
-	stats.ExecutionEndTime = time.Now()
-	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
+	stats.ExecuteStage.ExecutionEndTime = time.Now()
+	stats.ExecuteStage.ExecutionDuration = stats.ExecuteStage.ExecutionEndTime.Sub(stats.ExecuteStage.ExecutionStartTime)
 }
 
 func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.OutputDuration, int64(d))
+	atomic.AddInt64(&stats.ExecuteStage.OutputDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddBuidReaderTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.BuildReaderDuration, int64(d))
+	atomic.AddInt64(&stats.PrepareRunStage.BuildReaderDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
@@ -412,14 +469,14 @@ func (stats *StatsInfo) ResetBuildReaderTimeConsumption() {
 	if stats == nil {
 		return
 	}
-	atomic.StoreInt64(&stats.BuildReaderDuration, 0)
+	atomic.StoreInt64(&stats.PrepareRunStage.BuildReaderDuration, 0)
 }
 
 func (stats *StatsInfo) ResetCompilePreRunOnceDuration() {
 	if stats == nil {
 		return
 	}
-	atomic.StoreInt64(&stats.CompilePreRunOnceDuration, 0)
+	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceDuration, 0)
 }
 
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
@@ -435,65 +492,64 @@ func (stats *StatsInfo) AddBuildPlanStatsConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.BuildPlanStatsDuration, int64(d))
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.BuildPlanResolveVarDuration, int64(d))
+	atomic.AddInt64(&stats.PlanStage.BuildPlanResolveVarDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddCompileTableScanConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.CompileTableScanDuration, int64(d))
+	atomic.AddInt64(&stats.CompileStage.CompileTableScanDuration, int64(d))
 }
 
-// --------------------------------------------------------------------------------------------------------------
 func (stats *StatsInfo) AddBuildPlanS3Request(sreq S3Request) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.BuildPlanS3Request.List, sreq.List)
-	atomic.AddInt64(&stats.BuildPlanS3Request.Head, sreq.Head)
-	atomic.AddInt64(&stats.BuildPlanS3Request.Put, sreq.Put)
-	atomic.AddInt64(&stats.BuildPlanS3Request.Get, sreq.Get)
-	atomic.AddInt64(&stats.BuildPlanS3Request.Delete, sreq.Delete)
-	atomic.AddInt64(&stats.BuildPlanS3Request.DeleteMulti, sreq.DeleteMulti)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.DeleteMul, sreq.DeleteMul)
 }
 
 func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.CompileS3Request.List, sreq.List)
-	atomic.AddInt64(&stats.CompileS3Request.Head, sreq.Head)
-	atomic.AddInt64(&stats.CompileS3Request.Put, sreq.Put)
-	atomic.AddInt64(&stats.CompileS3Request.Get, sreq.Get)
-	atomic.AddInt64(&stats.CompileS3Request.Delete, sreq.Delete)
-	atomic.AddInt64(&stats.CompileS3Request.DeleteMulti, sreq.DeleteMulti)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.CompileStage.CompileS3Request.DeleteMul, sreq.DeleteMul)
 }
 
 func (stats *StatsInfo) AddScopePrepareS3Request(sreq S3Request) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.ScopePrepareS3Request.List, sreq.List)
-	atomic.AddInt64(&stats.ScopePrepareS3Request.Head, sreq.Head)
-	atomic.AddInt64(&stats.ScopePrepareS3Request.Put, sreq.Put)
-	atomic.AddInt64(&stats.ScopePrepareS3Request.Get, sreq.Get)
-	atomic.AddInt64(&stats.ScopePrepareS3Request.Delete, sreq.Delete)
-	atomic.AddInt64(&stats.ScopePrepareS3Request.DeleteMulti, sreq.DeleteMulti)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.List, sreq.List)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Head, sreq.Head)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Put, sreq.Put)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Get, sreq.Get)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.DeleteMul, sreq.DeleteMul)
 }
 
 func (stats *StatsInfo) AddScopePrepareDuration(d int64) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.ScopePrepareDuration, d)
+	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareDuration, d)
 }
 
 // NOTE: CompilePreRunOnceDuration is a one-time statistic and does not require accumulation
@@ -501,7 +557,7 @@ func (stats *StatsInfo) StoreCompilePreRunOnceDuration(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.StoreInt64(&stats.CompilePreRunOnceDuration, int64(d))
+	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceDuration, int64(d))
 }
 
 //--------------------------------------------------------------------------------------------------------------
@@ -548,59 +604,4 @@ func EnsureStatsInfoCanBeFound(ctx context.Context, from context.Context) contex
 	}
 	ctx = context.WithValue(ctx, statsInfoKey{}, v)
 	return ctx
-}
-
-type StatsInfo2 struct {
-	ParseStageInfo struct {
-		ParseDuration  time.Duration `json:"ParseDuration"`
-		ParseStartTime time.Time     `json:"ParseStartTime"`
-	}
-
-	// 计划阶段特殊统计信息
-	PlanStageInfo struct {
-		PlanDuration       time.Duration `json:"PlanDuration"`
-		PlanStartTime      time.Time     `json:"PlanStartTime"`
-		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
-		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
-		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
-		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
-	}
-
-	// 编译阶段特殊统计信息
-	CompileStageInfo struct {
-		CompileDuration  time.Duration `json:"CompileDuration"`
-		CompileStartTime time.Time     `json:"CompileStartTime"`
-		CompileS3Request S3Request     `json:"CompileS3Request"`
-		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
-		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
-	}
-
-	PrepareRunStageInfo struct {
-		// ScopePrepareDuration belongs to concurrent merge time
-		ScopePrepareDuration      int64     `json:"ScopePrepareDuration"`      // unit: ns
-		CompilePreRunOnceDuration int64     `json:"CompilePreRunOnceDuration"` // unit: ns
-		ScopePrepareS3Request     S3Request `json:"ScopePrepareS3Request"`
-		// It belongs to independent statistics, which occurs during the `PrepareRun` stage, only for analysis reference.
-		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
-	}
-
-	// 执行阶段特殊统计信息
-	ExecuteStageInfo struct {
-		ExecutionDuration  time.Duration `json:"ExecutionDuration"`
-		ExecutionStartTime time.Time     `json:"ExecutionStartTime"`
-		ExecutionEndTime   time.Time     `json:"ExecutionEndTime"`
-
-		// time consumption of output operator response to the query result set
-		OutputDuration int64 `json:"OutputDuration"` // unit: ns
-	}
-
-	IOAccessTime int64
-	// S3 FileService blocking wait time
-	S3FSPrefetchFileIOMergerTime int64
-	WaitActiveCost               time.Duration `json:"WaitActive"`
-}
-
-func XX() {
-	statsInfo := new(StatsInfo2)
-	statsInfo.ParseStageInfo.ParseDuration = 1
 }

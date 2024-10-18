@@ -895,7 +895,7 @@ type S3Request struct {
 	Put         int64 `json:"Put"`
 	Get         int64 `json:"Get"`
 	Delete      int64 `json:"Delete"`
-	DeleteMulti int64 `json:"DeleteMulti"`
+	DeleteMulti int64 `json:"DeleteMul"`
 }
 
 func (ses *Session) GetErrInfo() *errInfo {
