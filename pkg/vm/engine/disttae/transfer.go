@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -292,6 +293,8 @@ func batchTransferToTombstones(
 	entryPositions := vector.MustFixedColWithTypeCheck[int32](searchEntryPos)
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
+
+	fmt.Println("target row ids len", len(rowids))
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
 		entry := txnWrites[entryPositions[pos]]
 		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
