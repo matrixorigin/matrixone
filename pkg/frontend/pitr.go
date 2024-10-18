@@ -813,7 +813,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 				return rtnErr
 			}
 			if !accountExist {
-				return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+				return moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", fromAccount, nanoTimeFormat(ts))
 			}
 			// mock snapshot
 			var snapshotName string
