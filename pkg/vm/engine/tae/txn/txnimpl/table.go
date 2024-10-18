@@ -51,6 +51,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	TransferSinkerBufferSize          = common.Const1MBytes * 5
+	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
+)
+
 type txnEntries struct {
 	entries []txnif.TxnEntry
 	mask    *roaring.Bitmap
@@ -353,7 +358,8 @@ func (tbl *txnTable) TransferDeletes(
 						factory,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
-						engine_util.WithMemorySizeThreshold(common.Const1MBytes))
+						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
+						engine_util.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()
