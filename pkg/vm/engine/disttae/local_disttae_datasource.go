@@ -373,6 +373,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 					e := iter.Entry()
 					rows = fmt.Sprintf("%s, [%s, %s]", rows, e.RowID.String(), e.Time.ToString())
 				}
+				iter.Close()
 				logutil.Infof("xxxx IterateInmemData, txn:%s, ls.ps:%v,rows:%s, table name:%s, tid:%v, outBatch:%s",
 					ls.table.db.op.Txn().DebugString(),
 					ls.pState,
