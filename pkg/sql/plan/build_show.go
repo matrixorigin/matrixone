@@ -36,6 +36,7 @@ import (
 const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
+const SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -951,7 +952,7 @@ func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 
 	offset := getOffsetFromUTC()
 
-	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, convert_tz(create_time, '+00:00', '%s')  as `CREATED_TIME`, convert_tz(modified_time, '+00:00', '%s') as MODIFIED_TIME, level as `PITR_LEVEL`, IF(account_name = '', '*', account_name)  as `ACCOUNT_NAME`, IF(database_name = '', '*', database_name) as `DATABASE_NAME`, IF(table_name = '', '*', table_name) as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", offset, offset, MO_CATALOG_DB_NAME, curAccountId)
+	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, convert_tz(create_time, '+00:00', '%s')  as `CREATED_TIME`, convert_tz(modified_time, '+00:00', '%s') as MODIFIED_TIME, level as `PITR_LEVEL`, IF(account_name = '', '*', account_name)  as `ACCOUNT_NAME`, IF(database_name = '', '*', database_name) as `DATABASE_NAME`, IF(table_name = '', '*', table_name) as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d and pitr_name != '%s' ORDER BY create_time DESC", offset, offset, MO_CATALOG_DB_NAME, curAccountId, SYSMOCATALOGPITR)
 
 	newCtx := ctx.GetContext()
 	if curAccountId != catalog.System_Account {
