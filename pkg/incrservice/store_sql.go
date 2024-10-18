@@ -72,7 +72,7 @@ func (s *sqlStore) Create(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace()
+		opts = opts.WithEnableTrace().WithDisableWaitPaused()
 	}
 
 	return s.exec.ExecTxn(
@@ -111,7 +111,7 @@ func (s *sqlStore) Allocate(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace()
+		opts = opts.WithEnableTrace().WithDisableWaitPaused()
 	}
 
 	ctxDone := func() bool {
@@ -238,8 +238,10 @@ func (s *sqlStore) UpdateMinValue(
 	// So updateMinValue will use a new txn to update the min value. To avoid w-w conflict, we need to wait this
 	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
 	if txnOp == nil {
-		opts = opts.WithWaitCommittedLogApplied().
-			WithEnableTrace()
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused()
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -265,6 +267,7 @@ func (s *sqlStore) Delete(
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
+		WithDisableWaitPaused().
 		WithWaitCommittedLogApplied()
 	res, err := s.exec.Exec(
 		ctx,
@@ -292,7 +295,7 @@ func (s *sqlStore) GetColumns(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
-		opts = opts.WithEnableTrace()
+		opts = opts.WithEnableTrace().WithDisableWaitPaused()
 	}
 
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)

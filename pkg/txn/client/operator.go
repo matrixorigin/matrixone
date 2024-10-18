@@ -187,6 +187,12 @@ func WithDisableTrace(value bool) TxnOption {
 	}
 }
 
+func WithDisableWaitPaused() TxnOption {
+	return func(tc *txnOperator) {
+		tc.options = tc.options.WithDisableWaitPaused()
+	}
+}
+
 func WithSessionInfo(info string) TxnOption {
 	return func(tc *txnOperator) {
 		tc.options.SessionInfo = info
