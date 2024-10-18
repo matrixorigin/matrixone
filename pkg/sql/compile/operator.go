@@ -1177,12 +1177,12 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
+				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 				if err != nil {
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
-				vec.Free(proc.Mp())
+				free()
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
@@ -1250,12 +1250,12 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
+					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 					if err != nil {
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
-					vec.Free(proc.Mp())
+					free()
 
 					args = f.F.Args[:len(f.F.Args)-1]
 				}
