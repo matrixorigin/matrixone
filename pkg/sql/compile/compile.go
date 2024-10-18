@@ -194,8 +194,23 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
+
+		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
+		// that cause a dml statement can not see the previous statements' operations.
+		if len(c.scopes) > 0 {
+			for i := range c.scopes {
+				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
+			}
+		}
 	} else {
 		c.TxnOffset = 0
+	}
+}
+
+func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
+	scope.TxnOffset = txnOffset
+	for i := range scope.PreScopes {
+		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
 	}
 }
 
