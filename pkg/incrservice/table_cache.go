@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -125,6 +126,9 @@ func (c *tableCache) insertAutoValues(
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
 		} else {
+			if col.ColName == catalog.FakePrimaryKeyColName {
+				continue
+			}
 			lastInsert = v
 		}
 	}
