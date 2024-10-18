@@ -76,6 +76,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -138,6 +139,9 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
+
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -188,6 +192,10 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 }
 
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
+	if ctx == nil {
+		return moerr.NewInternalError(context.Background(), "context is nil")
+	}
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	return nil
 }
 

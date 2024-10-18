@@ -165,7 +165,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 			statsInfo.Merge(parStats)
 		}
 
-		stats.AddBuildPlanS3Request(statistic.S3Request{
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
 			Put:       crs.FileService.S3.Put.Load(),
@@ -182,7 +182,7 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 			return nil, err
 		}
 
-		stats.AddBuildPlanS3Request(statistic.S3Request{
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
 			Put:       crs.FileService.S3.Put.Load(),

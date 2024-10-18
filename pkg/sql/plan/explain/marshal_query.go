@@ -739,7 +739,7 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
 			WithS3IOInputCount(float64(analyzeInfo.S3List + analyzeInfo.S3Put)).
-			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get + analyzeInfo.S3Delete + analyzeInfo.S3List + analyzeInfo.S3Put))
+			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get + analyzeInfo.S3Delete + analyzeInfo.S3List + analyzeInfo.S3DeleteMulti))
 	}
 	return
 }

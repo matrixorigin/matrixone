@@ -259,6 +259,7 @@ type StatsInfo struct {
 		PlanDuration       time.Duration `json:"PlanDuration"`
 		PlanStartTime      time.Time     `json:"PlanStartTime"`
 		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
+		BuildPlanStatsS3   S3Request     `json:"BuildPlanStatsS3"`
 		// The following attributes belong to independent statistics, which occurs during the `buildPlan` stage, only for analysis reference.
 		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
 		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
@@ -266,9 +267,11 @@ type StatsInfo struct {
 
 	// 编译阶段特殊统计信息
 	CompileStage struct {
-		CompileDuration  time.Duration `json:"CompileDuration"`
-		CompileStartTime time.Time     `json:"CompileStartTime"`
-		CompileS3Request S3Request     `json:"CompileS3Request"`
+		CompileDuration            time.Duration `json:"CompileDuration"`
+		CompileStartTime           time.Time     `json:"CompileStartTime"`
+		CompileS3Request           S3Request     `json:"CompileS3Request"`
+		CompileExpandRangesS3      S3Request     `json:"CompileExpandRangesS3"`
+		CompileHasBlockTombstoneS3 S3Request     `json:"CompileHasBlockTombstoneS3"`
 		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
 		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 	}
@@ -282,7 +285,7 @@ type StatsInfo struct {
 		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
 	}
 
-	// 执行阶段特殊统计信息
+	// 执行阶段统计信息
 	ExecuteStage struct {
 		ExecutionDuration  time.Duration `json:"ExecutionDuration"`
 		ExecutionStartTime time.Time     `json:"ExecutionStartTime"`
@@ -290,6 +293,11 @@ type StatsInfo struct {
 
 		// time consumption of output operator response to the query result set
 		OutputDuration int64 `json:"OutputDuration"` // unit: ns
+	}
+
+	// 用于记录额外操作的统计信息, 记录不包含在以上这些阶段中
+	OtherStage struct {
+		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`
 	}
 
 	// FileService(S3 or localFS) Read Data time Consumption
@@ -521,6 +529,18 @@ func (stats *StatsInfo) AddBuildPlanS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.PlanStage.BuildPlanS3Request.DeleteMul, sreq.DeleteMul)
 }
 
+func (stats *StatsInfo) AddBuildPlanStatsS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.List, sreq.List)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.Head, sreq.Head)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.Put, sreq.Put)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.Get, sreq.Get)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsS3.DeleteMul, sreq.DeleteMul)
+}
+
 func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	if stats == nil {
 		return
@@ -533,6 +553,32 @@ func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.DeleteMul, sreq.DeleteMul)
 }
 
+// CompileExpandRangesS3Request
+func (stats *StatsInfo) CompileExpandRangesS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.List, sreq.List)
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Head, sreq.Head)
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Put, sreq.Put)
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Get, sreq.Get)
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.DeleteMul, sreq.DeleteMul)
+}
+
+// AddCompileHasBlockTombstoneS3Request
+func (stats *StatsInfo) AddCompileHasBlockTombstoneS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.List, sreq.List)
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Head, sreq.Head)
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Put, sreq.Put)
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Get, sreq.Get)
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.DeleteMul, sreq.DeleteMul)
+}
+
 func (stats *StatsInfo) AddScopePrepareS3Request(sreq S3Request) {
 	if stats == nil {
 		return
@@ -543,6 +589,18 @@ func (stats *StatsInfo) AddScopePrepareS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Get, sreq.Get)
 	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.Delete, sreq.Delete)
 	atomic.AddInt64(&stats.PrepareRunStage.ScopePrepareS3Request.DeleteMul, sreq.DeleteMul)
+}
+
+func (stats *StatsInfo) AddTxnIncrStatementS3Request(sreq S3Request) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.List, sreq.List)
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.Head, sreq.Head)
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.Put, sreq.Put)
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.Get, sreq.Get)
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.Delete, sreq.Delete)
+	atomic.AddInt64(&stats.OtherStage.TxnIncrStatementS3.DeleteMul, sreq.DeleteMul)
 }
 
 func (stats *StatsInfo) AddScopePrepareDuration(d int64) {

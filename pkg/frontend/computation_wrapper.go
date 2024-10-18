@@ -174,6 +174,7 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	return checkPrivilege(sid, ids, reqCtx, ses)
 }
 
+// Compile build logical plan and then build physical plan `Compile` object
 func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
 	var originSQL string
 	var span trace.Span
@@ -430,7 +431,20 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
-	defer stats.CompileEnd()
+	crs := new(perfcounter.CounterSet)
+	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
+	defer func() {
+		stats.AddCompileS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+		stats.CompileEnd()
+	}()
+
 	defer func() {
 		if err != nil && retCompile != nil {
 			retCompile.SetIsPrepare(false)

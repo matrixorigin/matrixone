@@ -887,7 +887,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			statsInfo.Merge(parStats)
 		}
 
-		stats.AddBuildPlanS3Request(statistic.S3Request{
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
 			Put:       crs.FileService.S3.Put.Load(),
@@ -905,7 +905,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			return cached, err
 		}
 
-		stats.AddBuildPlanS3Request(statistic.S3Request{
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
 			Put:       crs.FileService.S3.Put.Load(),

@@ -4062,7 +4062,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 
 		stats := statistic.StatsInfoFromContext(ctx)
-		stats.AddCompileS3Request(statistic.S3Request{
+		stats.CompileExpandRangesS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
 			Put:       crs.FileService.S3.Put.Load(),
@@ -4118,7 +4118,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				}
 
 				stats := statistic.StatsInfoFromContext(ctx)
-				stats.AddCompileS3Request(statistic.S3Request{
+				stats.AddCompileHasBlockTombstoneS3Request(statistic.S3Request{
 					List:      crs.FileService.S3.List.Load(),
 					Head:      crs.FileService.S3.Head.Load(),
 					Put:       crs.FileService.S3.Put.Load(),

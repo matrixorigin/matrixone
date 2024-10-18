@@ -1921,7 +1921,19 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	stats := statistic.StatsInfoFromContext(reqCtx)
 	stats.PlanStart()
-	defer stats.PlanEnd()
+	crs := new(perfcounter.CounterSet)
+	reqCtx = perfcounter.AttachBuildPlanMarkKey(reqCtx, crs)
+	defer func() {
+		stats.AddBuildPlanS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+		stats.PlanEnd()
+	}()
 
 	isPrepareStmt := false
 	if ses != nil {
@@ -2558,10 +2570,22 @@ func executeStmtWithIncrStmt(ses FeSession,
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	//3. increase statement id
-	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
+
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
+	err = txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	if err != nil {
 		return err
 	}
+	stats := statistic.StatsInfoFromContext(newCtx)
+	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
+		List:      crs.FileService.S3.List.Load(),
+		Head:      crs.FileService.S3.Head.Load(),
+		Put:       crs.FileService.S3.Put.Load(),
+		Get:       crs.FileService.S3.Get.Load(),
+		Delete:    crs.FileService.S3.Delete.Load(),
+		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+	})
 
 	defer func() {
 		if ses.GetTxnHandler() == nil {
@@ -3465,13 +3489,13 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		opt(&h.marshalPlanConfig)
 	}
 
-	//if h.needMarshalPlan() {
-	h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-	h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
-	if phyPlan != nil {
-		h.marshalPlan.PhyPlan = *phyPlan
+	if h.needMarshalPlan() {
+		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+		if phyPlan != nil {
+			h.marshalPlan.PhyPlan = *phyPlan
+		}
 	}
-	//}
 	return h
 }
 
@@ -3575,11 +3599,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		//val := int64(statsByte.GetTimeConsumed()) +
-		//	int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
-		//	statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
-		//	(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-
 		operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
 		totalTime := operatorTimeConsumed +
 			int64(statsInfo.ParseStage.ParseDuration) +
@@ -3602,23 +3621,25 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 				totalTime,
 			)
-
-			//ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
-			//	uuid.UUID(h.stmt.StatementID).String(),
-			//	h.stmt.StatementType,
-			//	statsInfo.ParseStage.ParseDuration,
-			//	statsInfo.PlanStage.PlanDuration,
-			//	statsInfo.CompileStage.CompileDuration,
-			//	int64(statsByte.GetTimeConsumed()),
-			//	statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
-			//	statsInfo.IOAccessTimeConsumption,
-			//	statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
-			//	val,
-			//)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
 			statsByte.WithTimeConsumed(float64(totalTime))
 		}
+
+		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.PlanStage.BuildPlanS3Request.Put
+		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.PlanStage.BuildPlanS3Request.Get + statsInfo.PlanStage.BuildPlanS3Request.Delete + statsInfo.PlanStage.BuildPlanS3Request.DeleteMul
+
+		compileS3Input := statsInfo.CompileStage.CompileS3Request.List + statsInfo.CompileStage.CompileS3Request.Put
+		compileS3Output := statsInfo.CompileStage.CompileS3Request.Head + statsInfo.CompileStage.CompileS3Request.Get + statsInfo.CompileStage.CompileS3Request.Delete + statsInfo.CompileStage.CompileS3Request.DeleteMul
+
+		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.Put
+		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Get + statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete + statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul
+
+		totalS3Input := statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input)
+		totalS3Output := statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output)
+
+		statsByte.WithS3IOInputCount(totalS3Input)
+		statsByte.WithS3IOOutputCount(totalS3Output)
 	}
 
 	return

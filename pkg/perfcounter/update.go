@@ -28,8 +28,26 @@ func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*Coun
 	//checkStack3()
 	var counterSets CounterSets
 
-	if counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet); ok && counter != nil {
-		fn(counter)
+	//if counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet); ok && counter != nil {
+	//	fn(counter)
+	//}
+
+	if ctx.Value(InternalExecutorKey{}) != nil {
+		// context 中存在 InternalExecutorKey, 说明是内部执行器
+		// no code here
+	} else {
+		// context 中不存在 InternalExecutorKey, 说明是走的是通用执行器
+		if counter1, ok := ctx.Value(ExecPipelineMarkKey{}).(*CounterSet); ok && counter1 != nil {
+			// no code here
+		} else if counter2, ok := ctx.Value(CompilePlanMarkKey{}).(*CounterSet); ok && counter2 != nil {
+			fn(counter2)
+		} else if counter3, ok := ctx.Value(BuildPlanMarkKey{}).(*CounterSet); ok && counter3 != nil {
+			fn(counter3)
+		}
+
+		if counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet); ok && counter != nil {
+			fn(counter)
+		}
 	}
 
 	// from context

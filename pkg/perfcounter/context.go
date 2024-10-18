@@ -87,3 +87,43 @@ func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
 	counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet)
 	return counter, ok
 }
+
+// 内部执行器context KEY
+type InternalExecutorKey struct{}
+
+func AttachInternalExecutorKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, InternalExecutorKey{}, struct{}{})
+}
+
+// ctx = perfcounter.AttachInternalExecutorKey(ctx)
+
+// 通用执行器context KEY
+type GenericExecutorKey struct{}
+
+func AttachGenericExecutorKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, GenericExecutorKey{}, struct{}{})
+}
+
+type ParserMarkKey struct{}
+
+func AttachParserMarkKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ParserMarkKey{}, struct{}{})
+}
+
+type BuildPlanMarkKey struct{}
+
+func AttachBuildPlanMarkKey(ctx context.Context, counter *CounterSet) context.Context {
+	return context.WithValue(ctx, BuildPlanMarkKey{}, counter)
+}
+
+type CompilePlanMarkKey struct{}
+
+func AttachCompilePlanMarkKey(ctx context.Context, counter *CounterSet) context.Context {
+	return context.WithValue(ctx, CompilePlanMarkKey{}, counter)
+}
+
+type ExecPipelineMarkKey struct{}
+
+func AttachExecPipelineKey(ctx context.Context, counter *CounterSet) context.Context {
+	return context.WithValue(ctx, ExecPipelineMarkKey{}, counter)
+}
