@@ -131,10 +131,10 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 220, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 220, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 	action := UpdateWriteS3
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
