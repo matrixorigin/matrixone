@@ -132,7 +132,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	}
 }
 
-func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
+func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
 	iter1 := entry.MakeDataObjectIt()
 	defer iter1.Release()
 	for iter1.Next() {
