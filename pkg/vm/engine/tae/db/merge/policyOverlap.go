@@ -79,7 +79,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind, zmPolicy}}
+		return []reviseResult{{objs, taskHostKind}}
 	}
 	return nil
 }

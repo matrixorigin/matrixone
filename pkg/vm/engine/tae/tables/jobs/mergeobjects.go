@@ -45,13 +45,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	BasicPolicy uint8 = iota
-	CompactPolicy
-	ZMPolicy
-	TombstonePolicy
-)
-
 type mergeObjectsTask struct {
 	*tasks.BaseTask
 	txn               txnif.AsyncTxn
@@ -84,7 +77,6 @@ type mergeObjectsTask struct {
 func NewMergeObjectsTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
-	policy uint8,
 	mergedObjs []*catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 	targetObjSize uint32,
@@ -105,10 +97,7 @@ func NewMergeObjectsTask(
 		blkCnt:           make([]int, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
-	}
-
-	if policy == ZMPolicy {
-		task.segmentID = objectio.NewSegmentid()
+		segmentID:        objectio.NewSegmentid(),
 	}
 
 	database, err := txn.GetDatabaseByID(task.did)
@@ -324,28 +313,17 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
 
-	if task.segmentID != nil {
-		writer := blockio.ConstructWriterWithSegmentID(
-			task.segmentID,
-			task.num,
-			task.schema.Version,
-			seqnums,
-			sortkeyPos,
-			sortkeyIsPK,
-			task.isTombstone,
-			task.rt.Fs.Service)
-		task.num++
-		return writer
-	}
-
-	return blockio.ConstructWriter(
+	writer := blockio.ConstructWriterWithSegmentID(
+		task.segmentID,
+		task.num,
 		task.schema.Version,
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,
 		task.isTombstone,
-		task.rt.Fs.Service,
-	)
+		task.rt.Fs.Service)
+	task.num++
+	return writer
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
