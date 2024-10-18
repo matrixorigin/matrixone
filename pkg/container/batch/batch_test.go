@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +47,19 @@ func init() {
 func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := tc.bat.MarshalBinary()
+		require.NoError(t, err)
+
+		rbat := new(Batch)
+		err = rbat.UnmarshalBinary(data)
+		require.NoError(t, err)
+		for i, vec := range rbat.Vecs {
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
+		}
+	}
+
+	var buf bytes.Buffer
+	for _, tc := range tcs {
+		data, err := tc.bat.MarshalBinaryWithBuffer(&buf)
 		require.NoError(t, err)
 
 		rbat := new(Batch)
