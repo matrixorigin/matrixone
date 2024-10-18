@@ -18,3 +18,5 @@ select 1
 select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
 exist
 1
+select statement_id, account, `user`, `database`, host, statement from system.statement_info where host = '' and request_at > date_sub(now(), interval 5 minute) limit 10;
+statement_id account user database host statement
