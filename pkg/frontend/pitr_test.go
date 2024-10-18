@@ -1289,7 +1289,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys' and level = 'account';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1297,7 +1297,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount' and level = 'account';",
 		},
 		{
 			createAccount:   "sys",
@@ -1306,7 +1306,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:       tree.PITRLEVELACCOUNT,
 				AccountName: "testAccountName",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName' and level = 'account';",
 		},
 		{
 			createAccount:   "sys",
@@ -1315,7 +1315,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and level = 'database';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1324,7 +1324,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and level = 'database';",
 		},
 		{
 			createAccount:   "sys",
@@ -1334,7 +1334,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable' and level = 'table';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1344,7 +1344,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable' and level = 'table';",
 		},
 	}
 
