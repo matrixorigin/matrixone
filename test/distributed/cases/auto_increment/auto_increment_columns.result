@@ -829,3 +829,31 @@ select last_insert_id();
 last_insert_id()
 10
 Drop table auto_increment02;
+Drop table if exists auto_increment03;
+Create table auto_increment03(col1 int auto_increment unique key, col2 int auto_increment unique)auto_increment = 10;
+Select * from auto_increment03;
+col1    col2
+select last_insert_id();
+last_insert_id()
+10
+Insert into auto_increment03 values();
+Select * from auto_increment03;
+col1    col2
+10    10
+select last_insert_id();
+last_insert_id()
+10
+insert into auto_increment03 values(100,100);
+select last_insert_id();
+last_insert_id()
+10
+insert into auto_increment03 (col1)values(1000);
+select last_insert_id();
+last_insert_id()
+101
+Select * from auto_increment03;
+col1    col2
+10    10
+100    100
+1000    101
+Drop table auto_increment03;

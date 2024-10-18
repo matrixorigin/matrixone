@@ -484,3 +484,17 @@ Insert into auto_increment02 values(10);
 Select * from auto_increment02;
 select last_insert_id();
 Drop table auto_increment02;
+
+Drop table if exists auto_increment03;
+Create table auto_increment03(col1 int auto_increment unique key, col2 int auto_increment unique)auto_increment = 10;
+Select * from auto_increment03;
+select last_insert_id();
+Insert into auto_increment03 values();
+Select * from auto_increment03;
+select last_insert_id();
+insert into auto_increment03 values(100,100);
+select last_insert_id();
+insert into auto_increment03 (col1)values(1000);
+select last_insert_id();
+Select * from auto_increment03;
+Drop table auto_increment03;
