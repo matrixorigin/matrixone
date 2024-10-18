@@ -22,6 +22,9 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,8 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 )
 
 var _ queryservice.QueryService = &mockQueryService{}
@@ -337,7 +338,7 @@ func Test_gettingInfo(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("moCachePrepare() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("tvf.start error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -396,7 +397,7 @@ func Test_gettingInfo(t *testing.T) {
 				return
 			}
 
-			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
@@ -453,7 +454,7 @@ func Test_gettingInfo(t *testing.T) {
 				return
 			}
 
-			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
@@ -628,7 +629,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 				return
 			}
 
-			err = tvfst.start(tt.args.arg, tt.args.proc, 0)
+			err = tvfst.start(tt.args.arg, tt.args.proc, 0, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("tvfst.start (%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}

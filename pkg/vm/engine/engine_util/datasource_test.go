@@ -19,6 +19,9 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
@@ -46,6 +47,7 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	}
 
 	proc := testutil.NewProc()
+	ctx := proc.Ctx
 	proc.Base.FileService = testutil.NewSharedFS()
 
 	bat := batch.NewWithSize(3)
@@ -66,7 +68,7 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	assert.Nil(t, err)
 
 	writer.StashBatch(proc, bat)
-	_, ss, err := writer.SortAndSync(proc)
+	_, ss, err := writer.SortAndSync(ctx, proc)
 	assert.Nil(t, err)
 
 	require.Equal(t, len(rowIds)/2, int(ss.Rows()))

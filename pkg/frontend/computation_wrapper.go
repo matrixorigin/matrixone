@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -173,7 +174,8 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	return checkPrivilege(sid, ids, reqCtx, ses)
 }
 
-func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
+// Compile build logical plan and then build physical plan `Compile` object
+func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
 	var originSQL string
 	var span trace.Span
 	execCtx := any.(*ExecCtx)
@@ -409,7 +411,7 @@ func createCompile(
 	originSQL string,
 	stmt tree.Statement,
 	plan *plan2.Plan,
-	fill func(*batch.Batch) error,
+	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 ) (retCompile *compile.Compile, err error) {
 
@@ -429,7 +431,20 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
-	defer stats.CompileEnd()
+	crs := new(perfcounter.CounterSet)
+	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
+	defer func() {
+		stats.AddCompileS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+		stats.CompileEnd()
+	}()
+
 	defer func() {
 		if err != nil && retCompile != nil {
 			retCompile.SetIsPrepare(false)
@@ -463,11 +478,11 @@ func createCompile(
 	})
 
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch) error { return nil }
+		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
 	}
 
 	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch) error { return nil }
+		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
 	}
 
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)

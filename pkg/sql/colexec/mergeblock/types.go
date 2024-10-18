@@ -14,6 +14,8 @@
 package mergeblock
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -23,12 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(MergeBlock)
@@ -163,6 +165,7 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Proc
 }
 
 func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
+	analyzer process.Analyzer,
 	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
 ) error {
 	// bat comes from old CN, no object stats vec in it.
@@ -196,11 +199,16 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 		destVec := mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
 
 		if needLoad {
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 			// comes from old version cn
-			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(proc.Ctx, blkInfo.MetaLocation(), fs)
+			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
 			if err != nil {
 				return err
 			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {
@@ -214,7 +222,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 	return nil
 }
 
-func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) error {
+func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	// meta loc and object stats
 	mergeBlock.GetMetaLocBat(bat, proc)
 	tblIdx := vector.MustFixedColWithTypeCheck[int16](bat.GetVector(0))
@@ -245,7 +253,7 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 
 	// exist blk info, split it
 	if hasObject {
-		if err := splitObjectStats(mergeBlock, proc, bat, blkInfosVec, tblIdx); err != nil {
+		if err := splitObjectStats(mergeBlock, proc, analyzer, bat, blkInfosVec, tblIdx); err != nil {
 			return err
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 
 	gomock "github.com/golang/mock/gomock"
@@ -94,7 +95,7 @@ func (mr *MockComputationWrapperMockRecorder) Clear() *gomock.Call {
 }
 
 // Compile mocks base method.
-func (m *MockComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
+func (m *MockComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Compile", any, fill)
 	ret0, _ := ret[0].(interface{})

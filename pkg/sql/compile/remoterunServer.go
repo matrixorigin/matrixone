@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -390,7 +391,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
-	c.fill = func(b *batch.Batch) error {
+	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
 		return receiver.sendBatch(b)
 	}
 

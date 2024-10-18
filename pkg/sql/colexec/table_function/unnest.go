@@ -141,7 +141,7 @@ func unnestPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) 
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
 // always return one batch per nthRow.
-func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	var err error
 	jsonVec := tf.ctr.argVecs[0]
 

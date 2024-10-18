@@ -39,7 +39,7 @@ func processlistPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) 
 	return &st, nil
 }
 
-func (s *processlistState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *processlistState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 

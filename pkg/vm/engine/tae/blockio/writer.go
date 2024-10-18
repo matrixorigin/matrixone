@@ -168,7 +168,7 @@ func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) object
 	return w.writer.GetObjectStats(opts...)
 }
 
-// WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
+// WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew, write batch to memroy cache, not S3
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
