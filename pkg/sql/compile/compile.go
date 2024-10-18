@@ -3766,18 +3766,10 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
-		return true
+	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
+		return true //avoid bugs
 	}
-
-	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
-		return true
-	}
-
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
 func collectTombstones(
