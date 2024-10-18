@@ -965,6 +965,7 @@ var (
 		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		"mo_data_key":                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
