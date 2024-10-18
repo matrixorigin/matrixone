@@ -341,21 +341,9 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if sinker == nil {
-					schema := tbl.getSchema(true)
-
-					seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
-					factory := engine_util.NewFSinkerImplFactory(
-						seqnums,
-						schema.GetPrimaryKey().Idx,
-						true,
-						true,
-						schema.Version,
-					)
-					sinker = engine_util.NewSinker(
-						schema.GetPrimaryKey().Idx,
-						schema.Attrs(),
-						schema.Types(),
-						factory,
+					sinker = engine_util.NewTombstoneSinker(
+						objectio.HiddenColumnSelection_None,
+						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs.Service,
 						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
