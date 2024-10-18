@@ -1719,10 +1719,8 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 }
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
-	ses.ResetFPrints()
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
-	defer ses.ResetFPrints()
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
