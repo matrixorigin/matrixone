@@ -159,7 +159,7 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (bat *Batch) MarshalBinaryWithBuffer(buf bytes.Buffer) ([]byte, error) {
+func (bat *Batch) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 	buf.Reset()
 	// row count.
 	rl := int64(bat.rowCount)
@@ -174,7 +174,7 @@ func (bat *Batch) MarshalBinaryWithBuffer(buf bytes.Buffer) ([]byte, error) {
 			return nil, err
 		}
 		buf.Write(types.EncodeInt32(&size))
-		err = bat.Vecs[i].MarshalBinaryWithBuffer(&buf)
+		err = bat.Vecs[i].MarshalBinaryWithBuffer(buf)
 		if err != nil {
 			return nil, err
 		}

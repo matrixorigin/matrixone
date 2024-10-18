@@ -52,7 +52,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
+		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -97,7 +97,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if regIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
 					err = errEncode
 					break
@@ -137,7 +137,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -241,7 +241,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
+	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}
