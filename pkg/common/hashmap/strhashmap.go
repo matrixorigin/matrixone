@@ -85,10 +85,6 @@ func (m *StrHashMap) Size() int64 {
 	return m.hashMap.Size()
 }
 
-func (m *StrHashMap) Cardinality() uint64 {
-	return m.hashMap.Cardinality()
-}
-
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
