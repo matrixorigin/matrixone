@@ -95,9 +95,9 @@ func Test_StorageUsageCache(t *testing.T) {
 
 		gathered := cache.GatherAllAccSize()
 		for accId := range gathered {
-			totalSize -= gathered[accId]
+			totalSize -= gathered[accId][0]
 
-			size, exist := cache.GatherAccountSize(accId)
+			size, _, exist := cache.GatherAccountSize(accId)
 			require.True(t, exist)
 			require.Equal(t, gathered[accId], size)
 		}
@@ -112,7 +112,7 @@ func Test_StorageUsageCache(t *testing.T) {
 				continue
 			}
 
-			gsize, exist := cache.GatherAccountSize(preAccId)
+			gsize, _, exist := cache.GatherAccountSize(preAccId)
 			require.True(t, exist)
 			require.Equal(t, size, gsize)
 

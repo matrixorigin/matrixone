@@ -77,6 +77,7 @@ const (
 		"		db_tbl_counts.db_count," +
 		"		db_tbl_counts.tbl_count," +
 		"		CAST(0 AS DOUBLE) AS size," +
+		"		CAST(0 AS DOUBLE) AS snapshot_size," +
 		"		ma.comments" +
 		"		%s" + // possible placeholder for object count
 		"	FROM" +
@@ -104,6 +105,7 @@ const (
 	idxOfDbCount
 	idxOfTableCount
 	idxOfSize
+	idxOfSnapshotSize
 	idxOfComment
 )
 
@@ -206,8 +208,8 @@ func handleStorageUsageResponse_V0(
 	fs fileservice.FileService,
 	usage *cmd_util.StorageUsageResp_V0,
 	logger SessionLogger,
-) (map[int64]uint64, error) {
-	result := make(map[int64]uint64, 0)
+) (map[int64][]uint64, error) {
+	result := make(map[int64][]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
@@ -228,7 +230,10 @@ func handleStorageUsageResponse_V0(
 		size := uint64(0)
 		length := len(accIDVec)
 		for i := 0; i < length; i++ {
-			result[int64(accIDVec[i])] += sizeVec[i]
+			if result[int64(accIDVec[i])] == nil {
+				result[int64(accIDVec[i])] = make([]uint64, 2)
+			}
+			result[int64(accIDVec[i])][0] += sizeVec[i]
 			size += sizeVec[i]
 		}
 
@@ -237,7 +242,7 @@ func handleStorageUsageResponse_V0(
 
 	// [account_id, db_id, table_id, obj_id, table_total_size]
 	for _, info := range usage.BlockEntries {
-		result[int64(info.Info[0])] += info.Info[3]
+		result[int64(info.Info[0])][0] += info.Info[3]
 	}
 
 	return result, nil
@@ -245,18 +250,22 @@ func handleStorageUsageResponse_V0(
 
 func handleStorageUsageResponse(
 	ctx context.Context,
-	usage *cmd_util.StorageUsageResp_V2,
-) (map[int64]uint64, error) {
-	result := make(map[int64]uint64, 0)
+	usage *cmd_util.StorageUsageResp_V3,
+) (map[int64][]uint64, error) {
+	result := make(map[int64][]uint64, 0)
 
 	for x := range usage.AccIds {
-		result[usage.AccIds[x]] += usage.Sizes[x]
+		if result[usage.AccIds[x]] == nil {
+			result[usage.AccIds[x]] = make([]uint64, 2)
+		}
+		result[usage.AccIds[x]][0] += usage.Sizes[x]
+		result[usage.AccIds[x]][1] += usage.SnapshotSizes[x]
 	}
 
 	return result, nil
 }
 
-func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed bool) {
+func checkStorageUsageCache(accIds [][]int64) (result map[int64][]uint64, succeed bool) {
 	cnUsageCache.Lock()
 	defer cnUsageCache.Unlock()
 
@@ -264,23 +273,25 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed 
 		return nil, false
 	}
 
-	result = make(map[int64]uint64)
+	result = make(map[int64][]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
-			size, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
+			size, snapshotSize, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
 			if !exist {
 				// one missed, update all
 				return nil, false
 			}
 
-			result[accIds[x][y]] = size
+			result[accIds[x][y]][0] = size
+			result[accIds[x][y]][1] = snapshotSize
+
 		}
 	}
 
 	return result, true
 }
 
-func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
+func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 
 	if len(usages.AccIds) == 0 {
 		return
@@ -295,8 +306,9 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
 	// step 2: update
 	for x := range usages.AccIds {
 		usage := logtail.UsageData{
-			AccId: uint64(usages.AccIds[x]),
-			Size:  usages.Sizes[x],
+			AccId:        uint64(usages.AccIds[x]),
+			Size:         usages.Sizes[x],
+			SnapshotSize: usages.SnapshotSizes[x],
 			ObjectAbstract: logtail.ObjectAbstract{
 				TotalObjCnt: int(usages.ObjCnts[x]),
 				TotalBlkCnt: int(usages.BlkCnts[x]),
@@ -313,7 +325,7 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
 
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64]uint64, error) {
+func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64][]uint64, error) {
 	if len(accIds) == 0 {
 		return nil, nil
 	}
@@ -339,12 +351,11 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 		if err != nil {
 			return nil, err
 		}
-
 		// step 3: handling these pulled data
 		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
 
 	} else {
-		usage, ok := response.(*cmd_util.StorageUsageResp_V2)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V3)
 		if !ok || usage.Magic != logtail.StorageUsageMagic {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
@@ -467,7 +478,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	for x := range accIds {
 		for y := range accIds[x] {
-			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], usage[accIds[x][y]], y)
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], usage[accIds[x][y]][0], y)
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSnapshotSize], usage[accIds[x][y]][1], y)
 			if accIds[x][y] != sysAccountID {
 				updateCount(accInfosBatches[x].Vecs[idxOfDbCount], specialDBCnt, y)
 				updateCount(accInfosBatches[x].Vecs[idxOfTableCount], specialTableCnt, y)

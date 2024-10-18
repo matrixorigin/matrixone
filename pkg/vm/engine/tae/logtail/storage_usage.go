@@ -295,10 +295,11 @@ func (c *StorageUsageCache) ClearForUpdate() {
 	c.data.Clear()
 }
 
-func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64]uint64) {
-	usages = make(map[uint64]uint64)
+func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64][]uint64) {
+	usages = make(map[uint64][]uint64, 2)
 	c.data.Scan(func(item UsageData) bool {
-		usages[item.AccId] += item.Size
+		usages[item.AccId][0] += item.Size
+		usages[item.AccId][1] += item.SnapshotSize
 		return true
 	})
 
@@ -320,7 +321,7 @@ func (c *StorageUsageCache) GatherObjectAbstractForAccounts() (abstract map[uint
 	return
 }
 
-func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist bool) {
+func (c *StorageUsageCache) GatherAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	iter := c.data.Iter()
 	defer iter.Release()
 
@@ -335,8 +336,10 @@ func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist boo
 	}
 
 	size += iter.Item().Size
+	snapshotSize += iter.Item().SnapshotSize
 	for iter.Next() && iter.Item().AccId == id {
 		size += iter.Item().Size
+		snapshotSize += iter.Item().SnapshotSize
 	}
 
 	exist = true
@@ -478,7 +481,7 @@ func (m *TNUsageMemo) HasUpdate() bool {
 	return m.pending
 }
 
-func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint64) (size, snapshotSize uint64, exist bool) {
 	return cache.GatherAccountSize(id)
 }
 
@@ -486,7 +489,7 @@ func (m *TNUsageMemo) GatherObjectAbstractForAllAccount() map[uint64]ObjectAbstr
 	return m.cache.GatherObjectAbstractForAccounts()
 }
 
-func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
 
@@ -574,11 +577,11 @@ func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
 	return size
 }
 
-func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.newAccCache, id)
 }
 
-func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64]uint64) {
+func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64][]uint64) {
 	return m.cache.GatherAllAccSize()
 }
 
