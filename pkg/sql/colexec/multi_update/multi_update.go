@@ -16,9 +16,11 @@ package multi_update
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -50,7 +52,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 	eng := update.Engine
 
-	if update.ToWriteS3 {
+	switch update.Action {
+	case UpdateWriteS3:
 		if update.ctr.s3Writer == nil {
 			writer, err := newS3Writer(update)
 			if err != nil {
@@ -59,8 +62,22 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			update.ctr.s3Writer = writer
 		}
 
-		writer := update.ctr.s3Writer
-		for _, updateCtx := range writer.updateCtxs {
+	case UpdateFlushS3Info:
+		//resort updateCtxs
+		writer, err := newS3Writer(update)
+		if err != nil {
+			return err
+		}
+
+		update.MultiUpdateCtx = writer.updateCtxs
+
+		err = writer.free(proc)
+		if err != nil {
+			return err
+		}
+		writer.updateCtxs = nil
+
+		for _, updateCtx := range update.MultiUpdateCtx {
 			ref := updateCtx.ObjRef
 			partitionNames := updateCtx.PartitionTableNames
 			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
@@ -70,7 +87,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.Source = rel
 			updateCtx.PartitionSources = partitionRels
 		}
-	} else {
+
+	case UpdateWriteTable:
 		for _, updateCtx := range update.MultiUpdateCtx {
 			ref := updateCtx.ObjRef
 			partitionNames := updateCtx.PartitionTableNames
@@ -82,6 +100,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			updateCtx.PartitionSources = partitionRels
 		}
 	}
+
 	mainCtx := update.MultiUpdateCtx[0]
 	if len(mainCtx.DeleteCols) > 0 && len(mainCtx.InsertCols) > 0 {
 		update.ctr.action = actionUpdate
@@ -108,10 +127,17 @@ func (update *MultiUpdate) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.Stop()
 	}()
 
-	if update.ToWriteS3 {
+	switch update.Action {
+	case UpdateWriteS3:
 		return update.update_s3(proc, analyzer)
+	case UpdateWriteTable:
+		return update.update(proc, analyzer)
+	case UpdateFlushS3Info:
+		return update.updateFlushS3Info(proc, analyzer)
+	default:
 	}
-	return update.update(proc, analyzer)
+
+	panic(fmt.Sprintf("unexpected multi_update.UpdateAction: %#v", update.Action))
 }
 
 func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -145,11 +171,14 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 	}
 
 	if ctr.state == vm.Eval {
-		err := ctr.s3Writer.flushTailAndWriteToWorkspace(proc, update)
+		ctr.state = vm.End
+		err := ctr.s3Writer.flushTailAndWriteToOutput(proc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
-		return vm.NewCallResult(), nil
+		result := vm.NewCallResult()
+		result.Batch = ctr.s3Writer.outputBat
+		return result, nil
 	}
 
 	return vm.CancelResult, nil
@@ -171,6 +200,67 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 	}
 
 	analyzer.Output(input.Batch)
+
+	return input, nil
+}
+
+func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return input, err
+	}
+
+	if input.Batch == nil || input.Batch.IsEmpty() {
+		return input, nil
+	}
+
+	actions := vector.MustFixedColNoTypeCheck[uint8](input.Batch.Vecs[0])
+	updateCtxIdx := vector.MustFixedColNoTypeCheck[uint16](input.Batch.Vecs[1])
+	partitionIdx := vector.MustFixedColNoTypeCheck[uint16](input.Batch.Vecs[2])
+	rowCounts := vector.MustFixedColNoTypeCheck[uint64](input.Batch.Vecs[3])
+	nameData, nameArea := vector.MustVarlenaRawData(input.Batch.Vecs[4])
+	batData, batArea := vector.MustVarlenaRawData(input.Batch.Vecs[5])
+
+	ctx := proc.Ctx
+	bat := batch.NewOffHeapEmpty()
+	defer func() {
+		bat.Clean(proc.Mp())
+	}()
+
+	for i, action := range actions {
+		updateCtx := update.MultiUpdateCtx[updateCtxIdx[i]]
+		isPartition := len(updateCtx.PartitionTableIDs) > 0
+		bat.CleanOnlyData()
+		if err := bat.UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+			return input, err
+		}
+
+		switch actionType(action) {
+		case actionDelete:
+			update.addDeleteAffectRows(updateCtx.TableType, rowCounts[i])
+			name := nameData[i].UnsafeGetString(nameArea)
+			if isPartition {
+				err = updateCtx.PartitionSources[partitionIdx[i]].Delete(ctx, bat, name)
+			} else {
+				err = updateCtx.Source.Delete(ctx, bat, name)
+			}
+		case actionInsert:
+			update.addInsertAffectRows(updateCtx.TableType, rowCounts[i])
+			if isPartition {
+				err = updateCtx.PartitionSources[partitionIdx[i]].Write(ctx, bat)
+			} else {
+				err = updateCtx.Source.Write(ctx, bat)
+			}
+		case actionUpdate:
+			err = update.updateOneBatch(proc, bat)
+		default:
+			panic("unexpected multi_update.actionType")
+		}
+
+		if err != nil {
+			return vm.CancelResult, err
+		}
+	}
 
 	return input, nil
 }

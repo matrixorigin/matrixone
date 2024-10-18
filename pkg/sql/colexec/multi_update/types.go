@@ -27,6 +27,14 @@ var _ vm.Operator = new(MultiUpdate)
 
 const opName = "MultiUpdate"
 
+type UpdateAction int
+
+const (
+	UpdateWriteTable UpdateAction = iota
+	UpdateWriteS3
+	UpdateFlushS3Info
+)
+
 type UpdateTableType int
 
 const (
@@ -60,7 +68,7 @@ type MultiUpdate struct {
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
 
-	ToWriteS3              bool
+	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 
 	Engine engine.Engine
