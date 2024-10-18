@@ -1,56 +1,22 @@
 set experimental_fulltext_index=1;
 create table datasrc (id bigint primary key, fpath datalink, fulltext(fpath));
-insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf');
+insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf'),
+(2, 'file:///$resources/fulltext/file-sample_100kB.docx');
 select * from datasrc where match(fpath) against('matrixone');
 id    fpath
 0    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/mo.pdf
 select * from datasrc where match(fpath) against('慢慢地' in natural language mode);
 id    fpath
 1    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/chinese.pdf
+select * from datasrc where match(fpath) against('Nulla facilisi' in natural language mode);
+id    fpath
+2    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/file-sample_100kB.docx
 drop table datasrc;
 create table datasrc (id bigint primary key, fpath datalink, fpath2 datalink, fulltext(fpath, fpath2));
 
 insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf', 'file:///$resources/fulltext/chinese.pdf');
-internal error: panic runtime error: slice bounds out of range [:8389] with capacity 8192: 
-runtime.goPanicSliceAcap
-	/usr/local/go/src/runtime/panic.go:141
-github.com/matrixorigin/matrixone/pkg/sql/colexec/apply.(*container).probe
-	/Users/eric/github/matrixone/pkg/sql/colexec/apply/apply.go:174
-github.com/matrixorigin/matrixone/pkg/sql/colexec/apply.(*Apply).Call
-	/Users/eric/github/matrixone/pkg/sql/colexec/apply/apply.go:117
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/eric/github/matrixone/pkg/vm/types.go:498
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/Users/eric/github/matrixone/pkg/sql/colexec/projection/projection.go:68
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/eric/github/matrixone/pkg/vm/types.go:498
-github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert.(*PreInsert).Call
-	/Users/eric/github/matrixone/pkg/sql/colexec/preinsert/preinsert.go:188
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/eric/github/matrixone/pkg/vm/types.go:498
-github.com/matrixorigin/matrixone/pkg/sql/colexec/insert.(*Insert).insert_table
-	/Users/eric/github/matrixone/pkg/sql/colexec/insert/insert.go:212
-github.com/matrixorigin/matrixone/pkg/sql/colexec/insert.(*Insert).Call
-	/Users/eric/github/matrixone/pkg/sql/colexec/insert/insert.go:108
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).run
-	/Users/eric/github/matrixone/pkg/vm/pipeline/pipeline.go:80
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).MergeRun
-	/Users/eric/github/matrixone/pkg/vm/pipeline/pipeline.go:67
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/eric/github/matrixone/pkg/sql/compile/scope.go:151
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/eric/github/matrixone/pkg/sql/compile/scope.go:403
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/eric/github/matrixone/pkg/sql/compile/scope.go:288
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/eric/github/matrixone/pkg/sql/compile/compile.go:313
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce.func1
-	/Users/eric/github/matrixone/pkg/sql/compile/compile.go:474
-github.com/panjf2000/ants/v2.(*goWorker).run.func1
-	/Users/eric/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/worker.go:67
-runtime.goexit
-	/usr/local/go/src/runtime/asm_arm64.s:1223
+
 select * from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
-id    fpath    fpath2
+
 drop table datasrc;
 

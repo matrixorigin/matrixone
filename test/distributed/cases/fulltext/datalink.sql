@@ -2,11 +2,14 @@ set experimental_fulltext_index=1;
 
 create table datasrc (id bigint primary key, fpath datalink, fulltext(fpath));
 
-insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf');
+insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf'), 
+(2, 'file:///$resources/fulltext/file-sample_100kB.docx');
 
 select * from datasrc where match(fpath) against('matrixone');
 
 select * from datasrc where match(fpath) against('慢慢地' in natural language mode);
+
+select * from datasrc where match(fpath) against('Nulla facilisi' in natural language mode);
 
 drop table datasrc;
 
