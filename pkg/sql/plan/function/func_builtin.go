@@ -1020,46 +1020,77 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 // XXX I just copy this function.
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
-		area := vec.GetArea()
-		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
-		if !vec.GetNulls().Any() {
-			for i := 0; i < n; i++ {
-				keys[i] = append(keys[i], byte(0))
-				keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+		if vec.IsConst() {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			data := vs[0].GetByteSlice(area)
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
 			}
 		} else {
-			nsp := vec.GetNulls()
-			for i := 0; i < n; i++ {
-				hasNull := nsp.Contains(uint64(i + start))
-				if hasNull {
-					keys[i] = append(keys[i], byte(1))
-				} else {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					hasNull := nsp.Contains(uint64(i + start))
+					if hasNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+					}
 				}
 			}
 		}
 	}
 
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
-		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
-		if !vec.GetNulls().Any() {
-			for i := 0; i < n; i++ {
-				keys[i] = append(keys[i], byte(0))
-				keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+		if vec.IsConst() {
+			data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), vec.GetType().Size)
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
 			}
 		} else {
-			nsp := vec.GetNulls()
-			for i := 0; i < n; i++ {
-				isNull := nsp.Contains(uint64(i + start))
-				if isNull {
-					keys[i] = append(keys[i], byte(1))
-				} else {
+			data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					isNull := nsp.Contains(uint64(i + start))
+					if isNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+					}
+				}
 			}
 		}
+
 	}
 
 	encodeHashKeys := func(keys [][]byte, vecs []*vector.Vector, start, count int) {

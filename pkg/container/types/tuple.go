@@ -33,9 +33,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 /*
@@ -543,4 +545,223 @@ func Unpack(b []byte) (Tuple, error) {
 func UnpackWithSchema(b []byte) (Tuple, []T, error) {
 	t, _, schema, err := decodeTuple(b)
 	return t, schema, err
+}
+
+func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
+	items := make([]string, len(types))
+
+	offset := 0
+	for i := 0; i < len(items) && offset < len(b); i++ {
+		var (
+			item    string
+			itemLen int
+		)
+
+		switch {
+		case b[offset] == nilCode:
+			item = "null"
+			itemLen = 1
+		case b[offset] == int8Code:
+			item, itemLen = stringifyInt(int8Code, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == int16Code:
+			item, itemLen = stringifyInt(int16Code, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == int32Code:
+			item, itemLen = stringifyInt(int32Code, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == int64Code:
+			item, itemLen = stringifyInt(int64Code, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == uint8Code:
+			item, itemLen = stringifyUint(uint8Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == uint16Code:
+			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == uint32Code:
+			item, itemLen = stringifyUint(uint32Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == uint64Code:
+			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == trueCode:
+			item = "true"
+			itemLen = 1
+		case b[offset] == falseCode:
+			item = "false"
+			itemLen = 1
+		case b[offset] == float32Code:
+			item, itemLen = stringifyFloat32(b[offset:])
+		case b[offset] == float64Code:
+			item, itemLen = stringifyFloat64(b[offset:])
+		case b[offset] == dateCode:
+			item, itemLen = stringifyInt(dateCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == datetimeCode:
+			item, itemLen = stringifyInt(datetimeCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == timestampCode:
+			item, itemLen = stringifyInt(timestampCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == timeCode:
+			item, itemLen = stringifyInt(timeCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == decimal64Code:
+			item, itemLen = stringifyDecimal64(b[offset+1:], types[i].Scale)
+		case b[offset] == decimal128Code:
+			item, itemLen = stringifyDecimal128(b[offset+1:], types[i].Scale)
+		case b[offset] == stringTypeCode:
+			item, itemLen = stringifyBytes(b[offset+1:])
+			itemLen += 1
+		case b[offset] == bitCode:
+			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == enumCode:
+			// TODO: need to verify @YANGGMM
+			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
+			itemLen += 1
+		case b[offset] == uuidCode:
+			item, itemLen = stringifyUuid(b[offset:])
+			// off += 1
+		default:
+			return nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[offset])
+		}
+
+		items[i] = item
+		offset += itemLen
+	}
+
+	return items, nil
+}
+
+func stringifyBytes(b []byte) (string, int) {
+	idx := findTerminator(b[1:])
+	return string(bytes.ReplaceAll(b[1:idx+1], []byte{0x00, 0xFF}, []byte{0x00})), idx + 2
+}
+
+func stringifyInt(code byte, b []byte, scale int32) (string, int) {
+	loc := time.Local
+	if b[0] == intZeroCode {
+		switch code {
+		case dateCode:
+			return Date(0).String(), 1
+		case timeCode:
+			return Time(0).String2(scale), 1
+		case datetimeCode:
+			return Datetime(0).String2(scale), 1
+		case timestampCode:
+			return Timestamp(0).String2(loc, scale), 1
+		default:
+			return "0", 1
+		}
+	}
+
+	var neg bool
+
+	n := int(b[0]) - intZeroCode
+	if n < 0 {
+		n = -n
+		neg = true
+	}
+
+	bp := make([]byte, 8)
+	copy(bp[8-n:], b[1:n+1])
+
+	var ret int64
+	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+
+	if neg {
+		switch code {
+		case dateCode:
+			return Date(ret - int64(sizeLimits[n])).String(), n + 1
+		case timeCode:
+			return Time(ret - int64(sizeLimits[n])).String2(scale), n + 1
+		case datetimeCode:
+			return Datetime(ret - int64(sizeLimits[n])).String2(scale), n + 1
+		case timestampCode:
+			return Timestamp(ret-int64(sizeLimits[n])).String2(loc, scale), n + 1
+		default:
+			return strconv.FormatInt(ret-int64(sizeLimits[n]), 10), n + 1
+		}
+	}
+	switch code {
+	case dateCode:
+		return Date(ret).String(), n + 1
+	case timeCode:
+		return Time(ret).String2(scale), n + 1
+	case datetimeCode:
+		return Datetime(ret).String2(scale), n + 1
+	case timestampCode:
+		return Timestamp(ret).String2(loc, scale), n + 1
+	//case enumCode:
+	//	return Enum(ret), n + 1
+	default:
+		return strconv.FormatInt(ret, 10), n + 1
+	}
+}
+
+func stringifyUint(code byte, b []byte) (string, int) {
+	if b[0] == intZeroCode {
+		return "0", 1
+	}
+	n := int(b[0]) - intZeroCode
+
+	bp := make([]byte, 8)
+	copy(bp[8-n:], b[1:n+1])
+
+	var ret uint64
+	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+
+	return strconv.FormatUint(ret, 10), n + 1
+}
+
+func stringifyFloat32(b []byte) (string, int) {
+	bp := make([]byte, 4)
+	copy(bp, b[1:])
+	adjustFloatBytes(bp, false)
+	var ret float32
+	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+	return strconv.FormatFloat(float64(ret), 'G', -1, 32), 5
+}
+
+func stringifyFloat64(b []byte) (string, int) {
+	bp := make([]byte, 8)
+	copy(bp, b[1:])
+	adjustFloatBytes(bp, false)
+	var ret float64
+	binary.Read(bytes.NewBuffer(bp), binary.BigEndian, &ret)
+	return strconv.FormatFloat(ret, 'G', -1, 64), 9
+}
+
+func stringifyDecimal64(b []byte, scale int32) (string, int) {
+	bp := make([]byte, 8)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 4; i++ {
+		bp[i] ^= bp[7-i]
+		bp[7-i] ^= bp[i]
+		bp[i] ^= bp[7-i]
+	}
+	ret := *(*Decimal64)(unsafe.Pointer(&bp[0]))
+	return ret.Format(scale), 9
+}
+
+func stringifyDecimal128(b []byte, scale int32) (string, int) {
+	bp := make([]byte, 16)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 8; i++ {
+		bp[i] ^= bp[15-i]
+		bp[15-i] ^= bp[i]
+		bp[i] ^= bp[15-i]
+	}
+	ret := *(*Decimal128)(unsafe.Pointer(&bp[0]))
+	return ret.Format(scale), 17
+}
+
+func stringifyUuid(b []byte) (string, int) {
+	var ret Uuid
+	copy(ret[:], b[1:])
+	return ret.String(), 17
 }

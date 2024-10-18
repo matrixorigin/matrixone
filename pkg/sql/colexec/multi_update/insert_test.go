@@ -122,8 +122,8 @@ func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 
 	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := false
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteTable
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
@@ -131,10 +131,10 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 500, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 220, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := true
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
@@ -190,10 +190,10 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		insertCols: []int{0, 1, 2, 3},
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		TableType:  UpdateMainTable,
+		InsertCols: []int{0, 1, 2, 3},
 	}
 	colCount := 4
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
@@ -214,10 +214,10 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			insertCols: []int{4, 0},
+			ObjRef:     uniqueObjRef,
+			TableDef:   uniqueTableDef,
+			TableType:  UpdateUniqueIndexTable,
+			InsertCols: []int{4, 0},
 		})
 		colCount += 1
 	}
@@ -241,24 +241,22 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			secondaryPkPos += 1
 		}
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			insertCols: []int{secondaryPkPos, 0},
+			ObjRef:     secondaryIdxObjRef,
+			TableDef:   secondaryIdxTableDef,
+			TableType:  UpdateSecondaryIndexTable,
+			InsertCols: []int{secondaryPkPos, 0},
 		})
 		colCount += 1
 	}
 
 	if isPartition {
-		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]int32, len(tableDef.Partition.PartitionTableNames))
-			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = int32(i*1000 + j)
-			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
+		for j := range tableDef.Partition.PartitionTableNames {
+			partTblIDs[j] = uint64(1000 + j)
 		}
+		updateCtxs[0].NewPartitionIdx = colCount
+		updateCtxs[0].PartitionTableIDs = partTblIDs
+		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs

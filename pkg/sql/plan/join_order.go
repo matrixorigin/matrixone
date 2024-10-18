@@ -557,9 +557,9 @@ func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.BindingTags) > 0 {
 		tags = append(tags, node.BindingTags...)
-		if node.NodeType != plan.Node_JOIN {
-			return tags
-		}
+		//if node.NodeType != plan.Node_JOIN {
+		//	return tags
+		//}
 	}
 
 	for _, childID := range builder.qry.Nodes[nodeID].Children {

@@ -280,7 +280,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY DEDUP
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -632,7 +632,7 @@ import (
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join apply_type
+%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -5860,6 +5860,15 @@ join_table:
             Right: $3,
         }
     }
+|   table_reference dedup_join table_factor join_condition
+    {
+        $$ = &tree.JoinTableExpr{
+            Left: $1,
+            JoinType: $2,
+            Right: $3,
+            Cond: $4,
+        }
+    }
 
 apply_table:
     table_reference apply_type table_factor
@@ -5911,6 +5920,12 @@ outer_join:
 |   RIGHT OUTER JOIN
     {
         $$ = tree.JOIN_TYPE_RIGHT
+    }
+
+dedup_join:
+    DEDUP JOIN
+    {
+        $$ = tree.JOIN_TYPE_DEDUP
     }
 
 values_stmt:
@@ -10814,6 +10829,7 @@ name_confict:
 |   DATE
 |   DATABASE
 |   DAY
+|   DEDUP
 |   HOUR
 |   IF
 |   INTERVAL
@@ -12101,6 +12117,7 @@ equal_opt:
 //|   SUBJECT
 //|   DATABASE
 //|   DATABASES
+//|   DEDUP
 //|   DEFAULT
 //|   DELETE
 //|   DESC
@@ -12140,7 +12157,7 @@ equal_opt:
 //|   LAST
 //|   LEFT
 //|   LIKE
-//|	ILIKE
+//|   ILIKE
 //|   LIMIT
 //|   LOCALTIME
 //|   LOCALTIMESTAMP
@@ -12168,7 +12185,7 @@ equal_opt:
 //|   REQUIRE
 //|   REPEAT
 //|   ROW_COUNT
-//|    REFERENCES
+//|   REFERENCES
 //|   RECURSIVE
 //|   REVERSE
 //|   SCHEMA

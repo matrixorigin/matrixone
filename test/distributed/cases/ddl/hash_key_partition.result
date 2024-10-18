@@ -587,7 +587,7 @@ select * from `%!%p3%!%p_table_15`;
 col1    col2    col3    col4
 create table p_table_16(col1 bigint,col2 date,col3 varchar(25),col4 decimal(6,4),primary key(col1,col2,col3))partition by key(col2)partitions 8;
 insert into p_table_16 values (1000,'1999-09-29','res1',0.12),(6000,'1999-10-01','opt1',0.89),(729,'1999-10-02','res2',0.32),(6000,'1999-10-01','opt1',0.64), (6000,'1999-10-01','opt1',0.55),(206,'1999-10-30','oop1',0.87);
-Duplicate entry '(6000,1999-10-01,opt1)' for key '__mo_cpkey_col'
+Duplicate entry '(6000,1999-10-01,opt1)' for key '(col1,col2,col3)'
 insert into p_table_16 values (1000,'0001-09-29','res1',0.12),(6000,'1999-10-11','opt1',0.89);
 select * from p_table_16;
 col1    col2    col3    col4
