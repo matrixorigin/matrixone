@@ -4,13 +4,13 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr01;
 create pitr pitr01 for account acc01 range 1 'h';
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr;
+select * from mo_catalog.mo_pitr order by create_time;
 -- @ignore:0,1
 select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 -- @ignore:0,2,3,4,6,7,10
-select * from mo_catalog.mo_pitr;
+select * from mo_catalog.mo_pitr order by create_time;
 -- @ignore:0,1
 select account_id, account_name from mo_catalog.mo_account where account_name = 'acc01';
 drop account if exists acc01;
