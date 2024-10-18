@@ -26,5 +26,5 @@ func Test_NewTestConfig(t *testing.T) {
 
 	cfg := NewTestConfig("", ccfg)
 	_, err := cfg.ClientFactory()
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }
