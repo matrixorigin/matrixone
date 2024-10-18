@@ -508,6 +508,9 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		return err
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
+
+	// each statement's start snapshot
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	txn.statementID++
 
 	return txn.handleRCSnapshot(ctx, commit)
@@ -757,21 +760,19 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
+
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
-			txn.op,
-			0,
-			"before execute")
+			txn.op, 0, "before execute")
 		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
+			ctx, timestamp.Timestamp{}); err != nil {
 			return err
 		}
 		txn.resetSnapshot()
 	}
-	//Transfer row ids for deletes in RC isolation
-	return txn.transferInmemTombstoneLocked(ctx, commit)
+
+	return nil
 }
 
 // Entry represents a delete/insert

@@ -40,6 +40,7 @@ func WithTrasnferBuffer(buffer *containers.OneSchemaBatchBuffer) TransferOption 
 }
 
 func ConstructCNTombstoneObjectsTransferFlow(
+	ctx context.Context,
 	start, end types.TS,
 	table *txnTable,
 	txn *Transaction,
@@ -47,7 +48,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	fs fileservice.FileService,
 ) (*TransferFlow, error) {
 
-	ctx := table.proc.Load().Ctx
+	//ctx := table.proc.Load().Ctx
 	state, err := table.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
@@ -175,7 +176,7 @@ func (flow *TransferFlow) fillDefaults() {
 			engine_util.WithBuffer(flow.buffer, false),
 			engine_util.WithMemorySizeThreshold(mpool.MB*16),
 			engine_util.WithTailSizeCap(0),
-			// engine_util.WithAllMergeSorted(),
+			//engine_util.WithAllMergeSorted(),
 		)
 	}
 }
