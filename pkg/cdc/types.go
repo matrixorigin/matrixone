@@ -45,6 +45,8 @@ const (
 
 	SASCommon = "common"
 	SASError  = "error"
+
+	InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
 )
 
 var (
