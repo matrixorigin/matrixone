@@ -177,6 +177,11 @@ func (opts Options) WithDisableTrace() Options {
 	return opts
 }
 
+func (opts Options) WithDisableWaitPaused() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithDisableWaitPaused())
+	return opts
+}
+
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
