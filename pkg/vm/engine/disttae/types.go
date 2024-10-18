@@ -509,8 +509,12 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
-	// each statement's start snapshot
-	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+	if txn.op.Txn().IsRCIsolation() {
+		// each statement's start snapshot
+		// will be used by transfer than between statements
+		txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+	}
+
 	txn.statementID++
 
 	return txn.handleRCSnapshot(ctx, commit)
