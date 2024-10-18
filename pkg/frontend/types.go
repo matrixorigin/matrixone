@@ -462,7 +462,7 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
-	GetConfig(ctx context.Context, dbName, varName string) (any, error)
+	GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSysVars() *SystemVariables

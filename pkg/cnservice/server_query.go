@@ -485,7 +485,9 @@ func (s *service) handleGetReplicaCount(
 	resp *query.Response,
 	_ *morpc.Buffer,
 ) error {
-	resp.GetReplicaCount.Count = s.shardService.ReplicaCount()
+	if s.shardService != nil {
+		resp.GetReplicaCount.Count = s.shardService.ReplicaCount()
+	}
 	return nil
 }
 
