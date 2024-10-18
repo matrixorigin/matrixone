@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -30,6 +31,7 @@ type objOverlapPolicy struct {
 	objects     []*catalog.ObjectEntry
 	objectsSize int
 
+	segmentIDs         map[objectio.Segmentid]int
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
 
@@ -37,6 +39,7 @@ func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
 		objects:            make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
+		segmentIDs:         make(map[objectio.Segmentid]int),
 	}
 }
 
@@ -55,10 +58,18 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	}
 	m.objects = append(m.objects, obj)
 	m.objectsSize += int(obj.OriginSize())
+	m.segmentIDs[obj.ObjectName().SegmentId()]++
 	return true
 }
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+	for segmentID, count := range m.segmentIDs {
+		if count > 3 {
+			m.objects = slices.DeleteFunc(m.objects, func(entry *catalog.ObjectEntry) bool {
+				return entry.ObjectName().SegmentId() == segmentID
+			})
+		}
+	}
 	if len(m.objects) < 2 {
 		return nil
 	}
@@ -68,7 +79,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	objs, taskHostKind := m.reviseDataObjs(config)
 	objs = controlMem(objs, mem)
 	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
+		return []reviseResult{{objs, taskHostKind, zmPolicy}}
 	}
 	return nil
 }
@@ -136,6 +147,7 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 	m.objectsSize = 0
+	clear(m.segmentIDs)
 }
 
 type entrySet struct {

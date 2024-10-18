@@ -100,10 +100,10 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	o.filterValidTombstones()
 	results := make([]reviseResult, 0, len(o.objects)+len(o.tombstones))
 	for _, obj := range o.objects {
-		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN})
+		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN, compactPolicy})
 	}
 	if len(o.tombstoneStats) > 0 {
-		results = append(results, reviseResult{o.tombstones, TaskHostDN})
+		results = append(results, reviseResult{o.tombstones, TaskHostDN, compactPolicy})
 	}
 	return results
 }

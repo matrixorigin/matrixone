@@ -161,11 +161,14 @@ func (e *executor) OnExecDone(v any) {
 	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
-func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+func (e *executor) executeFor(entry *catalog.TableEntry, r reviseResult) {
 	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
 		return
 	}
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema(false).Name)
+
+	mobjs := r.objs
+	kind := r.kind
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
@@ -232,18 +235,18 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 		}
 
 		if len(objs) > 0 {
-			e.scheduleMergeObjects(objScopes, objs, objectBlkCnt, entry, false)
+			e.scheduleMergeObjects(objScopes, r.policy, objs, objectBlkCnt, entry, false)
 		}
 		if len(tombstones) > 1 {
-			e.scheduleMergeObjects(tombstoneScopes, tombstones, tombstoneBlkCnt, entry, true)
+			e.scheduleMergeObjects(tombstoneScopes, r.policy, tombstones, tombstoneBlkCnt, entry, true)
 		}
 	}
 }
-func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.ObjectEntry, blkCnt int, entry *catalog.TableEntry, isTombstone bool) {
+func (e *executor) scheduleMergeObjects(scopes []common.ID, policy uint8, mobjs []*catalog.ObjectEntry, blkCnt int, entry *catalog.TableEntry, isTombstone bool) {
 	osize, esize := estimateMergeConsume(mobjs)
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
+		return jobs.NewMergeObjectsTask(ctx, txn, policy, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 	if err != nil {

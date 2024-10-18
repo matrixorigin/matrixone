@@ -37,7 +37,7 @@ func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []re
 	if len(t.tombstones) < 2 {
 		return nil
 	}
-	return []reviseResult{{t.tombstones, TaskHostDN}}
+	return []reviseResult{{t.tombstones, TaskHostDN, tPolicy}}
 }
 
 func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {
