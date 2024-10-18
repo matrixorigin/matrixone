@@ -159,34 +159,35 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (bat *Batch) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
-	buf.Reset()
+func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
+	w.Reset()
 	// row count.
 	rl := int64(bat.rowCount)
-	buf.Write(types.EncodeInt64(&rl))
+	w.Write(types.EncodeInt64(&rl))
 
 	// Vecs
 	l := int32(len(bat.Vecs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
-		size, err := bat.Vecs[i].GetMarshalLength()
+		var size uint32
+		offset := w.Len()
+		w.Write(types.EncodeUint32(&size))
+		err := bat.Vecs[i].MarshalBinaryWithBuffer(w)
 		if err != nil {
 			return nil, err
 		}
-		buf.Write(types.EncodeInt32(&size))
-		err = bat.Vecs[i].MarshalBinaryWithBuffer(buf)
-		if err != nil {
-			return nil, err
-		}
+		size = uint32(w.Len() - offset)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&size))
 	}
 
 	// Attrs
 	l = int32(len(bat.Attrs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(bat.Attrs[i]))
-		buf.Write(types.EncodeInt32(&size))
-		n, _ := buf.WriteString(bat.Attrs[i])
+		w.Write(types.EncodeInt32(&size))
+		n, _ := w.WriteString(bat.Attrs[i])
 		if int32(n) != size {
 			panic("unexpected length for string")
 		}
@@ -203,17 +204,17 @@ func (bat *Batch) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 	}
 
 	l = int32(len(aggInfos))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(aggInfos[i]))
-		buf.Write(types.EncodeInt32(&size))
-		buf.Write(aggInfos[i])
+		w.Write(types.EncodeInt32(&size))
+		w.Write(aggInfos[i])
 	}
 
-	buf.Write(types.EncodeInt32(&bat.Recursive))
-	buf.Write(types.EncodeInt32(&bat.ShuffleIDX))
+	w.Write(types.EncodeInt32(&bat.Recursive))
+	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
 
-	return buf.Bytes(), nil
+	return w.Bytes(), nil
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {

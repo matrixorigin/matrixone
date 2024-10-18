@@ -621,64 +621,6 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (v *Vector) GetMarshalLength() (int32, error) {
-	marshalLength := 0
-	// write class
-	//buf.WriteByte(uint8(v.class))
-	marshalLength += 1
-
-	// write type
-	data := types.EncodeType(&v.typ)
-	//buf.Write(data)
-	marshalLength += len(data)
-
-	// write length
-	//length := uint32(v.length)
-	//buf.Write(types.EncodeUint32(&length))
-	marshalLength += 4
-
-	// write dataLen, data
-	dataLen := uint32(v.typ.TypeSize())
-	if !v.IsConst() {
-		dataLen *= uint32(v.length)
-	} else if v.IsConstNull() {
-		dataLen = 0
-	}
-	//buf.Write(types.EncodeUint32(&dataLen))
-	marshalLength += 4
-	if dataLen > 0 {
-		//buf.Write(v.data[:dataLen])
-		marshalLength += int(dataLen)
-	}
-
-	// write areaLen, area
-	areaLen := uint32(len(v.area))
-	//buf.Write(types.EncodeUint32(&areaLen))
-	marshalLength += 4
-	if areaLen > 0 {
-		//buf.Write(v.area)
-		marshalLength += len(v.area)
-	}
-
-	// write nspLen, nsp
-	nspData, err := v.nsp.Show()
-	if err != nil {
-		return 0, err
-	}
-	nspLen := uint32(len(nspData))
-	//buf.Write(types.EncodeUint32(&nspLen))
-	marshalLength += 4
-	if nspLen > 0 {
-		//buf.Write(nspData)
-		marshalLength += len(nspData)
-	}
-
-	//buf.Write(types.EncodeBool(&v.sorted))
-	marshalLength += 1
-
-	return int32(marshalLength), nil
-}
-
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 
 	// write class
