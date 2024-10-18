@@ -30,12 +30,13 @@ type Profiler[T any, P interface {
 	*T
 	SampleValues[P]
 }] struct {
+
+	// pcs -> locations -> samples
+	pcsToSample       sync.Map // _PCs -> *SampleInfo[P], caching, may be flush
+	locationsToSample sync.Map // hashsum([]*Locations) -> *SampleInfo[P]
+
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
-	samples   sync.Map // SampleKey -> *SampleInfo[P]
-
-	mu            sync.Mutex
-	mergedSamples map[uint64]*MergedSample[P]
 
 	// special samples
 	stackOmittedSample SampleInfo[T]
@@ -46,7 +47,6 @@ type Profiler[T any, P interface {
 type SampleInfo[T any] struct {
 	Values    T
 	Locations []*profile.Location
-	Scale     int64
 }
 
 type SampleValues[T any] interface {
@@ -54,7 +54,6 @@ type SampleValues[T any] interface {
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
 	Values() []int64
-	Merge(from T)
 }
 
 type LocationKey struct {
@@ -67,24 +66,13 @@ type FunctionKey struct {
 	Name string
 }
 
-type SampleKey struct {
-	PCs _PCs
-}
-
-type _PCs = [128]uintptr
-
-type MergedSample[T any] struct {
-	Location []*profile.Location
-	Value    T
-}
+type _PCs [128]uintptr
 
 func NewProfiler[T any, P interface {
 	*T
 	SampleValues[P]
 }]() *Profiler[T, P] {
-	ret := &Profiler[T, P]{
-		mergedSamples: make(map[uint64]*MergedSample[P]),
-	}
+	ret := &Profiler[T, P]{}
 
 	ret.stackOmittedSample.Locations = []*profile.Location{
 		ret.getMockLocation("| stack omitted |"),
@@ -104,13 +92,6 @@ func (p *Profiler[T, P]) Sample(
 		// omit stack
 		return &p.stackOmittedSample.Values
 	}
-
-	defer func() {
-		// merge
-		if fastrand()%1024 == 0 {
-			p.merge(true)
-		}
-	}()
 
 	skip += 2 // runtime.Callers, p.Sample
 
@@ -206,23 +187,42 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 }
 
 func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs, scale int64) P {
-	key := SampleKey{
-		PCs: pcs,
-	}
-
-	if v, ok := p.samples.Load(key); ok {
+	// get from cache
+	if v, ok := p.pcsToSample.Load(pcs); ok {
 		return v.(*SampleInfo[P]).Values
 	}
 
+	// get from locations
+	locations := p.getLocationsFromPCs(pcs)
+	locationsHashSum := hashLocations(locations)
+	if v, ok := p.locationsToSample.Load(locationsHashSum); ok {
+		// set cache
+		p.setPCsToSample(pcs, v.(*SampleInfo[P]))
+		return v.(*SampleInfo[P]).Values
+	}
+
+	// create new sample
 	var value T
 	P(&value).Init()
-	v, _ := p.samples.LoadOrStore(key, &SampleInfo[P]{
+	v, _ := p.locationsToSample.LoadOrStore(locationsHashSum, &SampleInfo[P]{
 		Values:    &value,
-		Locations: p.getLocationsFromPCs(pcs),
-		Scale:     scale,
+		Locations: locations,
 	})
+	// set cache
+	p.setPCsToSample(pcs, v.(*SampleInfo[P]))
 
 	return v.(*SampleInfo[P]).Values
+}
+
+func (p *Profiler[T, P]) setPCsToSample(pcs _PCs, info *SampleInfo[P]) {
+	// flush
+	if fastrand()%1024 == 0 {
+		p.pcsToSample.Range(func(k, v any) bool {
+			p.pcsToSample.Delete(k)
+			return true
+		})
+	}
+	p.pcsToSample.Store(pcs, info)
 }
 
 func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
@@ -255,41 +255,6 @@ func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
 	return locations
 }
 
-func (p *Profiler[T, P]) merge(try bool) {
-	if try {
-		if !p.mu.TryLock() {
-			return
-		}
-		defer p.mu.Unlock()
-	} else {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-	}
-
-	p.samples.Range(func(k, _ any) bool {
-		v, ok := p.samples.LoadAndDelete(k)
-		if !ok {
-			return true
-		}
-		info := v.(*SampleInfo[P])
-
-		locationsKey := getLocationsKey(info.Locations)
-
-		sample, ok := p.mergedSamples[locationsKey]
-		if !ok {
-			sample = &MergedSample[P]{
-				Location: info.Locations,
-				Value:    info.Values,
-			}
-			p.mergedSamples[locationsKey] = sample
-		} else {
-			sample.Value.Merge(info.Values)
-		}
-
-		return true
-	})
-}
-
 var hashSeed = maphash.MakeSeed()
 
 var hasherPool = sync.Pool{
@@ -300,7 +265,7 @@ var hasherPool = sync.Pool{
 	},
 }
 
-func getLocationsKey(locations []*profile.Location) uint64 {
+func hashLocations(locations []*profile.Location) uint64 {
 	hasher := hasherPool.Get().(*maphash.Hash)
 	defer func() {
 		hasher.Reset()
@@ -327,17 +292,20 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 		DefaultSampleType: ptr.DefaultSampleType(),
 	}
 
-	p.merge(false)
+	prof.Sample = append(prof.Sample, &profile.Sample{
+		Location: p.stackOmittedSample.Locations,
+		Value:    P(&p.stackOmittedSample.Values).Values(),
+	})
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	for _, sample := range p.mergedSamples {
+	p.locationsToSample.Range(func(k, v any) bool {
+		info := v.(*SampleInfo[P])
+		values := info.Values.Values()
 		prof.Sample = append(prof.Sample, &profile.Sample{
-			Location: sample.Location,
-			Value:    sample.Value.Values(),
+			Location: info.Locations,
+			Value:    values,
 		})
-	}
+		return true
+	})
 
 	p.locations.Range(func(k, v any) bool {
 		location := v.(*profile.Location)
