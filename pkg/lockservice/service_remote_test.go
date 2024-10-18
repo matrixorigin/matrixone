@@ -597,8 +597,8 @@ func runBindChangedTests(
 			fn(ctx, alloc, l1, l2, table1)
 		},
 		func(c *Config) {
-			c.KeepBindDuration.Duration = time.Millisecond * 50
-			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+			c.KeepBindDuration.Duration = time.Second
+			c.KeepRemoteLockDuration.Duration = time.Second
 
 			c.RPC.BackendOptions = append(c.RPC.BackendOptions,
 				morpc.WithBackendFilter(func(m morpc.Message, s string) bool {
