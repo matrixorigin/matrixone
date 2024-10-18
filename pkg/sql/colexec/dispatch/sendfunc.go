@@ -78,12 +78,12 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
+func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (err error) {
 	var queryDone bool
 
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex == batIndex {
+		if shuffleIndex == batIndex {
 			queryDone, err = ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
 				return err
@@ -95,7 +95,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex == batIndex {
+		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
@@ -129,13 +129,13 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	return nil
 }
 
-func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 
 	// send to remote first because send to spool will modify the bat.Agg.
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
@@ -151,7 +151,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	// send to matched local.
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
 				return err
