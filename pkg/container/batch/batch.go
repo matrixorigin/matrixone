@@ -104,35 +104,32 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	// --------------------------------------------------------------------
 	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
 	// --------------------------------------------------------------------
-	var buf bytes.Buffer
+	var w bytes.Buffer
 
 	// row count.
 	rl := int64(bat.rowCount)
-	buf.Write(types.EncodeInt64(&rl))
+	w.Write(types.EncodeInt64(&rl))
 
 	// Vecs
 	l := int32(len(bat.Vecs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		data, err := bat.Vecs[i].MarshalBinary()
 		if err != nil {
 			return nil, err
 		}
 		size := int32(len(data))
-		buf.Write(types.EncodeInt32(&size))
-		buf.Write(data)
+		w.Write(types.EncodeInt32(&size))
+		w.Write(data)
 	}
 
 	// Attrs
 	l = int32(len(bat.Attrs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(bat.Attrs[i]))
-		buf.Write(types.EncodeInt32(&size))
-		n, _ := buf.WriteString(bat.Attrs[i])
-		if int32(n) != size {
-			panic("unexpected length for string")
-		}
+		w.Write(types.EncodeInt32(&size))
+		w.WriteString(bat.Attrs[i])
 	}
 
 	// AggInfos
@@ -146,17 +143,17 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	}
 
 	l = int32(len(aggInfos))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(aggInfos[i]))
-		buf.Write(types.EncodeInt32(&size))
-		buf.Write(aggInfos[i])
+		w.Write(types.EncodeInt32(&size))
+		w.Write(aggInfos[i])
 	}
 
-	buf.Write(types.EncodeInt32(&bat.Recursive))
-	buf.Write(types.EncodeInt32(&bat.ShuffleIDX))
+	w.Write(types.EncodeInt32(&bat.Recursive))
+	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
 
-	return buf.Bytes(), nil
+	return w.Bytes(), nil
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
