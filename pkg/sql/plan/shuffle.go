@@ -588,10 +588,12 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 }
 
 func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
-	//if s == nil || math.IsNaN(s.Overlap) || s.Overlap > overlapThreshold {
-	//	return true
-	//}
-	//todo: fix this
+	if s == nil || math.IsNaN(s.Overlap) {
+		return true
+	}
+	if s.Overlap > overlapThreshold && s.Result == nil {
+		return true
+	}
 	return false
 }
 

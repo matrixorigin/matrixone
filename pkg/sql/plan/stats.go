@@ -148,10 +148,6 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 	if info.AccurateObjectNumber > 1 {
 		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
-			if coldef.Name == "c_name" {
-				logutil.Infof("test")
-			}
-
 			if info.ColumnNDVs[i] > s.TableCnt {
 				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
 			}
@@ -742,14 +738,14 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo, isPrepare bool) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr, sortOrder)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr, isPrepare)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1257,7 +1253,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s, builder.isPrepareStatement)
 		if builder.optimizerHints != nil {
 			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
 				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
@@ -1577,27 +1573,24 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, sortOrder int) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, isPrepare bool) float64 {
 	sel := expr.Selectivity
 	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
 		//speicial handle for isnull
 		return sel
 	}
-	if s == nil || s.ShuffleRangeMap[colname] == nil {
-		if sel <= 0.01 {
-			return sel * 100
+	if isPrepare || s == nil || s.ShuffleRangeMap[colname] == nil {
+		if sel <= 0.02 {
+			return sel * 50
 		} else {
 			return 1
 		}
-	}
-	if sortOrder == 0 || sortOrder == 1 {
-		return sel * math.Pow(10, float64(sortOrder+1))
 	}
 	overlap := s.ShuffleRangeMap[colname].Overlap
 	if overlap > overlapThreshold {
 		return 1
 	}
-	ret := sel * math.Pow(1000, overlap/3)
+	ret := sel * 100 / (1 - overlap)
 	if ret > 1 {
 		ret = 1
 	}
