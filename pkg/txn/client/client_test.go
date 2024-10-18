@@ -259,7 +259,7 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	c.mu.state = paused
 
 	op := &txnOperator{}
-	op.opts.options = op.opts.options.WithDisableWaitPaused()
+	op.options = op.options.WithDisableWaitPaused()
 
 	require.Error(t, c.openTxn(op))
 }
