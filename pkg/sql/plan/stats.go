@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"runtime"
 	"sort"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -717,7 +717,11 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
-		w += 4
+		if expr.Typ.Width < types.VarlenaInlineSize {
+			w += 1
+		} else {
+			w += float64(expr.Typ.Width)
+		}
 	case int32(types.T_json), int32(types.T_datalink):
 		w += 32
 	}
@@ -732,6 +736,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 8
 		case "in":
 			w += 3
+		case "or":
+			w += 8
 		case "<>", "!=":
 			w += 2
 		case "<", "<=":

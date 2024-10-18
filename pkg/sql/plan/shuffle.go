@@ -34,7 +34,7 @@ const (
 	threshHoldForRightJoinShuffle   = 8192
 	threshHoldForShuffleJoin        = 120000
 	threshHoldForHybirdShuffle      = 4000000
-	threshHoldForHashShuffle        = 8000000
+	threshHoldForHashShuffle        = 5000000
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
