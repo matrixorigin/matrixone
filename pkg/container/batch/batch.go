@@ -176,7 +176,7 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		size = uint32(w.Len() - offset)
+		size = uint32(w.Len() - offset - 4)
 		buf := w.Bytes()
 		copy(buf[offset:], types.EncodeUint32(&size))
 	}
