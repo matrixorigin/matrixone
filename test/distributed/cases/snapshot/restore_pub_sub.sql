@@ -434,7 +434,7 @@ drop publication if exists pub10;
 create publication pub10 database test01 table table01 account acc01;
 
 drop snapshot if exists sp10;
-create snapshot sp01 for account sys;
+create snapshot sp10 for account sys;
 
 drop table if exists table02;
 create table table02 (col1 int, col3 decimal);
@@ -452,7 +452,7 @@ drop database if exists sub02;
 create database sub02 from sys publication pub11;
 -- @session
 
-restore account sys from snapshot sp01;
+restore account sys from snapshot sp10;
 
 -- @ignore:5,6
 show publications;
@@ -472,7 +472,7 @@ drop database sub02;
 
 drop publication pub10;
 drop database test01;
-drop snapshot sp01;
+drop snapshot sp10;
 drop account acc01;
 drop account acc02;
 drop account acc03;
