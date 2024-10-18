@@ -247,7 +247,7 @@ func (tbl *txnTable) TransferDeletes(
 		if dedupType.SkipTargetOldCommitted() {
 			txnStartTS := tbl.store.txn.GetStartTS()
 			if txnStartTS.GT(&startTS) {
-				startTS = tbl.transferedTS.Next()
+				startTS = txnStartTS
 			}
 		}
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
