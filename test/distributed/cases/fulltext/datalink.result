@@ -2,19 +2,19 @@ set experimental_fulltext_index=1;
 create table datasrc (id bigint primary key, fpath datalink, fulltext(fpath));
 insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf'),
 (2, 'file:///$resources/fulltext/file-sample_100kB.docx');
-select * from datasrc where match(fpath) against('matrixone');
-id    fpath
-0    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/mo.pdf
-select * from datasrc where match(fpath) against('慢慢地' in natural language mode);
-id    fpath
-1    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/chinese.pdf
-select * from datasrc where match(fpath) against('Nulla facilisi' in natural language mode);
-id    fpath
-2    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/file-sample_100kB.docx
+select id from datasrc where match(fpath) against('matrixone');
+id
+0
+select id from datasrc where match(fpath) against('慢慢地' in natural language mode);
+id
+1
+select id from datasrc where match(fpath) against('Nulla facilisi' in natural language mode);
+id
+2
 drop table datasrc;
 create table datasrc (id bigint primary key, fpath datalink, fpath2 datalink, fulltext(fpath, fpath2));
 insert into datasrc values (0, 'file:///$resources/fulltext/mo.pdf', 'file:///$resources/fulltext/chinese.pdf');
-select * from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
-id    fpath    fpath2
-0    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/mo.pdf    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/fulltext/chinese.pdf
+select id from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
+id
+0
 drop table datasrc;
