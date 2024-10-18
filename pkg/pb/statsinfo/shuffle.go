@@ -236,6 +236,7 @@ func (s *ShuffleRange) Eval() {
 		}
 	}
 	s.Overlap /= float64(s.Sz) * float64(s.Sz)
+	s.Overlap *= 2
 
 	step := float64(s.Sz) / float64(k)
 	if float64(nulls) >= step {

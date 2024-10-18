@@ -116,9 +116,14 @@ type InfoFromZoneMap struct {
 	ColumnZMs            []objectio.ZoneMap
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
+	MaxNDVs              []float64
+	NDVinMaxOBJ          []float64
+	NDVinMinOBJ          []float64
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
 	ColumnSize           []int64
+	MaxOBJSize           uint32
+	MinOBJSize           uint32
 	BlockNumber          int64
 	AccurateObjectNumber int64
 	ApproxObjectNumber   int64
@@ -130,11 +135,88 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
+		MaxNDVs:       make([]float64, lenCols),
+		NDVinMaxOBJ:   make([]float64, lenCols),
+		NDVinMinOBJ:   make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
 		ColumnSize:    make([]int64, lenCols),
 		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
+}
+
+func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
+	if info.AccurateObjectNumber > 1 {
+		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+			if info.ColumnNDVs[i] > s.TableCnt {
+				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
+			}
+			colName := coldef.Name
+			rate := info.ColumnNDVs[i] / info.TableCnt
+			if info.ColumnNDVs[i] < 3 {
+				info.ColumnNDVs[i] *= (4 - info.ColumnNDVs[i])
+				continue
+			}
+			if info.MaxNDVs[i] < 50 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
+				continue
+			}
+			if info.MaxNDVs[i] < 500 && rate < 0.01 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
+				continue
+			}
+			overlap := 1.0
+			if s.ShuffleRangeMap[colName] != nil {
+				overlap = s.ShuffleRangeMap[colName].Overlap
+			}
+			if overlap < overlapThreshold/3 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold/2 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
+			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
+			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold/2 {
+				info.ColumnNDVs[i] = info.TableCnt * rate * (1 - overlap)
+				continue
+			}
+
+			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > overlapThreshold {
+				if info.NDVinMaxOBJ[i]/info.MaxNDVs[i] > 0.95 && rateMax < 0.3 {
+					if info.NDVinMinOBJ[i] == info.NDVinMaxOBJ[i] && info.NDVinMaxOBJ[i] == info.MaxNDVs[i] {
+						info.ColumnNDVs[i] = info.MaxNDVs[i]
+					} else {
+						info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+					}
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] / (1 - rateMax)
+				}
+				continue
+			}
+
+			//don't know how to calc ndv, just guess
+			if overlap > overlapThreshold {
+				if info.AccurateObjectNumber > 100 {
+					info.ColumnNDVs[i] /= 30
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+				}
+			} else {
+				info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
+			}
+		}
+	}
+
+	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+		colName := coldef.Name
+		s.NdvMap[colName] = info.ColumnNDVs[i]
+		if s.NdvMap[colName] > s.TableCnt {
+			s.NdvMap[colName] = s.TableCnt * 0.99
+		}
+	}
 }
 
 func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.StatsInfo) {
@@ -147,11 +229,9 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
 	s.TableName = tableDef.Name
-	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	//set info in statsInfo
+
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
-		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
@@ -310,6 +390,14 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 		return -1
 	}
 	return s.NdvMap[col.Name]
+}
+
+func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
+	s := builder.getStatsInfoByCol(col)
+	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
+		return 1.0
+	}
+	return s.ShuffleRangeMap[col.Name].Overlap
 }
 
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
@@ -650,14 +738,14 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo, isPrepare bool) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr, sortOrder)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr, isPrepare)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1165,7 +1253,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s, builder.isPrepareStatement)
 		if builder.optimizerHints != nil {
 			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
 				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
@@ -1485,27 +1573,24 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, sortOrder int) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr, isPrepare bool) float64 {
 	sel := expr.Selectivity
 	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
 		//speicial handle for isnull
 		return sel
 	}
-	if s == nil || s.ShuffleRangeMap[colname] == nil {
-		if sel <= 0.01 {
-			return sel * 100
+	if isPrepare || s == nil || s.ShuffleRangeMap[colname] == nil {
+		if sel <= 0.02 {
+			return sel * 50
 		} else {
 			return 1
 		}
-	}
-	if sortOrder == 0 || sortOrder == 1 {
-		return sel * math.Pow(10, float64(sortOrder+1))
 	}
 	overlap := s.ShuffleRangeMap[colname].Overlap
 	if overlap > overlapThreshold {
 		return 1
 	}
-	ret := sel * math.Pow(1000, overlap/2)
+	ret := sel * 100 / (1 - overlap)
 	if ret > 1 {
 		ret = 1
 	}

@@ -149,23 +149,27 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				return
 			}
 
-			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-				switch col := probeExprs[0].Expr.(type) {
-				case *plan.Expr_Col:
-					ctx := builder.ctxByNode[leftChild.NodeId]
-					if ctx == nil {
-						return
-					}
-					if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
-						tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-						if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+			switch col := probeExprs[0].Expr.(type) {
+			case *plan.Expr_Col:
+				ctx := builder.ctxByNode[leftChild.NodeId]
+				if ctx == nil {
+					return
+				}
+				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+						if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 							return
 						}
 					}
-
-				default:
+					if builder.getColOverlap(col.Col) > overlapThreshold {
+						return
+					}
+				} else {
 					return
 				}
+			default:
+				return
 			}
 		}
 
