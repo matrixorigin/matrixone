@@ -187,7 +187,7 @@ type ParseLineHandler struct {
 	moCsvLineArray [][]csvparser.Field
 }
 
-func newReaderWithParam(param *ExternalParam, reuseRow bool) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -237,7 +237,7 @@ func newReaderWithParam(param *ExternalParam, reuseRow bool) (*csvparser.CSVPars
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, reuseRow)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false)
 }
 
 type ParquetHandler struct {
