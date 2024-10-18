@@ -53,7 +53,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := types.Encode(bat)
+		encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}

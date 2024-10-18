@@ -159,6 +159,63 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (bat *Batch) MarshalBinaryWithBuffer(buf bytes.Buffer) ([]byte, error) {
+	buf.Reset()
+	// row count.
+	rl := int64(bat.rowCount)
+	buf.Write(types.EncodeInt64(&rl))
+
+	// Vecs
+	l := int32(len(bat.Vecs))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size, err := bat.Vecs[i].GetMarshalLength()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(types.EncodeInt32(&size))
+		err = bat.Vecs[i].MarshalBinaryWithBuffer(&buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Attrs
+	l = int32(len(bat.Attrs))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(bat.Attrs[i]))
+		buf.Write(types.EncodeInt32(&size))
+		n, _ := buf.WriteString(bat.Attrs[i])
+		if int32(n) != size {
+			panic("unexpected length for string")
+		}
+	}
+
+	// AggInfos
+	aggInfos := make([][]byte, len(bat.Aggs))
+	for i, exec := range bat.Aggs {
+		data, err := aggexec.MarshalAggFuncExec(exec)
+		if err != nil {
+			return nil, err
+		}
+		aggInfos[i] = data
+	}
+
+	l = int32(len(aggInfos))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(aggInfos[i]))
+		buf.Write(types.EncodeInt32(&size))
+		buf.Write(aggInfos[i])
+	}
+
+	buf.Write(types.EncodeInt32(&bat.Recursive))
+	buf.Write(types.EncodeInt32(&bat.ShuffleIDX))
+
+	return buf.Bytes(), nil
+}
+
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.UnmarshalBinaryWithAnyMp(data, nil)
 }
