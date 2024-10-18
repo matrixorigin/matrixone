@@ -205,41 +205,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
-// EvalExpressionOnce
-// todo: return (vector, free method, error) may be better.
-func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
-	executor, err := NewExpressionExecutor(proc, planExpr)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		executor.Free()
-	}()
-
-	vec, err := executor.Eval(proc, batches, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// some cases that we have no need to duplicate the result because we only use it once.
-	if e, ok := executor.(*FunctionExpressionExecutor); ok {
-		if !e.folded.canFold {
-			e.resultVector = nil
-			return vec, nil
-		} else {
-			e.folded.foldVector = nil
-			return vec, nil
-		}
-	}
-	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
-		e.resultVector = nil
-		return vec, nil
-	}
-
-	// I'm not sure if dup is good. but ok now.
-	return vec.Dup(proc.Mp())
-}
-
 // FixedVectorExpressionExecutor
 // the content of its vector is fixed.
 // e.g.

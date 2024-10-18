@@ -15,14 +15,14 @@
 package colexec
 
 import (
-    "github.com/matrixorigin/matrixone/pkg/container/batch"
-    "github.com/matrixorigin/matrixone/pkg/container/vector"
-    "github.com/matrixorigin/matrixone/pkg/pb/plan"
-    "github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var fixedOnlyOneRowBatch = []*batch.Batch{
-    batch.EmptyForConstFoldBatch,
+	batch.EmptyForConstFoldBatch,
 }
 var doNothingFunc = func() {}
 
@@ -31,80 +31,106 @@ var doNothingFunc = func() {}
 // expression cannot take any column expression,
 // for example, 'a+1' is an invalid expression because a is a column expression.
 func GetReadonlyResultFromNoColumnExpression(
-    proc *process.Process,
-    planExpr *plan.Expr) (vec *vector.Vector, freeMethod func(), err error) {
+	proc *process.Process,
+	planExpr *plan.Expr) (vec *vector.Vector, freeMethod func(), err error) {
 
-    var executor ExpressionExecutor
-    if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-        return nil, nil, err
-    }
-    if vec, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
-        executor.Free()
-        return nil, nil, err
-    }
+	var executor ExpressionExecutor
+	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
+		return nil, nil, err
+	}
+	if vec, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
+		executor.Free()
+		return nil, nil, err
+	}
 
-    return vec, executor.Free, nil
+	return vec, executor.Free, nil
 }
 
 // GetWritableResultFromNoColumnExpression has the same requirement for input expression.
 // this function returns a writable / editable vector whose memory will belong to caller.
 func GetWritableResultFromNoColumnExpression(
-    proc *process.Process,
-    planExpr *plan.Expr) (vec *vector.Vector, err error) {
+	proc *process.Process,
+	planExpr *plan.Expr) (vec *vector.Vector, err error) {
 
-    var executor ExpressionExecutor
-    var srcVector *vector.Vector
-    if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-        return nil, err
-    }
-    if srcVector, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
-        executor.Free()
-        return nil, err
-    }
+	var executor ExpressionExecutor
+	var srcVector *vector.Vector
+	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
+		return nil, err
+	}
+	if srcVector, err = executor.Eval(proc, fixedOnlyOneRowBatch, nil); err != nil {
+		executor.Free()
+		return nil, err
+	}
+	if succeed := modifyResultOwnerToOuter(executor); succeed {
+		executor.Free()
+		return srcVector, nil
+	}
 
-    vec, err = srcVector.Dup(proc.Mp())
-    executor.Free()
-    return vec, err
+	vec, err = srcVector.Dup(proc.Mp())
+	executor.Free()
+	return vec, err
 }
 
 // GetReadonlyResultFromExpression return a readonly result and its free method from expression and input data.
 func GetReadonlyResultFromExpression(
-    proc *process.Process,
-    planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, freeMethod func(), err error) {
+	proc *process.Process,
+	planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, freeMethod func(), err error) {
 
-    // specific situation that no need to generate executor and do evaluation.
-    if col, isSimpleCol := planExpr.Expr.(*plan.Expr_Col); isSimpleCol {
-        return data[col.Col.RelPos].Vecs[col.Col.ColPos], doNothingFunc, nil
-    }
+	// specific situation that no need to generate executor and do evaluation.
+	if col, isSimpleCol := planExpr.Expr.(*plan.Expr_Col); isSimpleCol {
+		return data[col.Col.RelPos].Vecs[col.Col.ColPos], doNothingFunc, nil
+	}
 
-    var executor ExpressionExecutor
-    if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-        return nil, nil, err
-    }
-    if vec, err = executor.Eval(proc, data, nil); err != nil {
-        executor.Free()
-        return nil, nil, err
-    }
+	var executor ExpressionExecutor
+	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
+		return nil, nil, err
+	}
+	if vec, err = executor.Eval(proc, data, nil); err != nil {
+		executor.Free()
+		return nil, nil, err
+	}
 
-    return vec, executor.Free, nil
+	return vec, executor.Free, nil
 }
 
 // GetWritableResultFromExpression return a writable result and its free method from expression and input data.
 func GetWritableResultFromExpression(
-    proc *process.Process,
-    planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, err error) {
+	proc *process.Process,
+	planExpr *plan.Expr, data []*batch.Batch) (vec *vector.Vector, err error) {
 
-    var executor ExpressionExecutor
-    var srcVector *vector.Vector
-    if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
-        return nil, err
-    }
-    if srcVector, err = executor.Eval(proc, data, nil); err != nil {
-        executor.Free()
-        return nil, err
-    }
+	var executor ExpressionExecutor
+	var srcVector *vector.Vector
+	if executor, err = NewExpressionExecutor(proc, planExpr); err != nil {
+		return nil, err
+	}
+	if srcVector, err = executor.Eval(proc, data, nil); err != nil {
+		executor.Free()
+		return nil, err
+	}
+	if succeed := modifyResultOwnerToOuter(executor); succeed {
+		executor.Free()
+		return srcVector, nil
+	}
 
-    vec, err = srcVector.Dup(proc.Mp())
-    executor.Free()
-    return vec, err
+	vec, err = srcVector.Dup(proc.Mp())
+	executor.Free()
+	return vec, err
+}
+
+// modifyResultOwnerToOuter change the owner of expression result outer to make sure that
+// the free method of executor cannot clean the result memory.
+func modifyResultOwnerToOuter(executor ExpressionExecutor) (succeed bool) {
+	// constant expression.
+	if c, ok := executor.(*FixedVectorExpressionExecutor); ok {
+		c.resultVector = nil
+		return true
+	}
+	// function expression.
+	if f, ok := executor.(*FunctionExpressionExecutor); ok {
+		f.resultVector = nil
+		f.folded.foldVector = nil
+		return true
+	}
+
+	return false
 }
