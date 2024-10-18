@@ -330,8 +330,9 @@ func isMoTable(tid uint64) bool {
 }
 
 type tombstone struct {
-	pk types.Tuple
-	ts types.TS
+	rowid types.Rowid
+	pk    types.Tuple
+	ts    types.TS
 }
 
 func (sm *SnapshotMeta) updateTableInfo(
@@ -467,7 +468,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 	}
 
-	deletes := make([]tombstone, 0)
+	deleteRows := make([]tombstone, 0)
 	for _, info := range tTombstones {
 		if info.stats.BlkCnt() != 1 {
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
@@ -484,6 +485,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 
 		commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
@@ -494,24 +496,27 @@ func (sm *SnapshotMeta) updateTableInfo(
 				logutil.Infof("yyyy skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
 				continue
 			}
-			deletes = append(deletes, tombstone{
-				pk: pk,
-				ts: commitTs,
+			deleteRows = append(deleteRows, tombstone{
+				rowid: rowIDVec[i],
+				pk:    pk,
+				ts:    commitTs,
 			})
 		}
 	}
-	sort.Slice(deletes, func(i, j int) bool {
-		ts2 := deletes[j].ts
-		return deletes[i].ts.LT(&ts2)
+	sort.Slice(deleteRows, func(i, j int) bool {
+		ts2 := deleteRows[j].ts
+		return deleteRows[i].ts.LT(&ts2)
 	})
 
-	for _, del := range deletes {
+	for _, del := range deleteRows {
 		pk := del.pk.ErrString(nil)
 		if sm.tablePKIndex[pk] == nil {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
-			panic(fmt.Sprintf("delete table %v not found @ %v, start is %v, end is %v", del.pk.ErrString(nil), del.ts.ToString(), startts.ToString(), endts.ToString()))
+			logutil.Warnf("[UpdateTableInfoWarn] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
+				del.pk.ErrString(nil), del.rowid.String(), del.ts.ToString(), startts.ToString(), endts.ToString())
+			continue
 		}
 		table := sm.tablePKIndex[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {

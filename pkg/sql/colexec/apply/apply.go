@@ -48,10 +48,7 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	}
 
 	if apply.ctr.sels == nil {
-		apply.ctr.sels = make([]int32, colexec.DefaultBatchSize)
-		for i := range apply.ctr.sels {
-			apply.ctr.sels[i] = int32(i)
-		}
+		apply.ctr.sels = make([]int32, 0)
 	}
 
 	err = apply.TableFunction.ApplyPrepare(proc)
@@ -171,6 +168,9 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				if rp.Rel == 0 {
 					err = ctr.rbat.Vecs[j].UnionMulti(ctr.inbat.Vecs[rp.Pos], int64(i), rowCountIncrease, proc.Mp())
 				} else {
+					for len(ctr.sels) < rowCountIncrease {
+						ctr.sels = append(ctr.sels, int32(len(ctr.sels)))
+					}
 					err = ctr.rbat.Vecs[j].UnionInt32(tfResult.Batch.Vecs[rp.Pos], ctr.sels[:rowCountIncrease], proc.Mp())
 				}
 				if err != nil {
