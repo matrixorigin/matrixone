@@ -97,7 +97,8 @@ func (p *PartitionState) HandleLogtailEntry(
 			//TODO::debug for #19202, remove it later.
 			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(entry.TableName) {
 				bat, _ := batch.ProtoBatchToBatch(entry.Bat)
-				logutil.Infof("xxxx HandleLogtailEntry,table name:%s, tid:%v, bat:%s",
+				logutil.Infof("xxxx HandleLogtailEntry,ps:%p,table name:%s, tid:%v, bat:%s",
+					p,
 					entry.TableName,
 					p.tid,
 					common.MoBatchToString(bat, 10))
