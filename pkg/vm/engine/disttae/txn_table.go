@@ -471,13 +471,6 @@ func (tbl *txnTable) CollectTombstones(
 ) (engine.Tombstoner, error) {
 	tombstone := engine_util.NewEmptyTombstoneData()
 
-	defer func() {
-		if tbl.tableName == "t1" {
-			logutil.Infof("xxxx CollectTombstones, txn:%s, table:%s, txn offset:%v, tombstone:%s",
-				tbl.db.op.Txn().DebugString(), tbl.tableName, txnOffset, tombstone.String())
-		}
-	}()
-
 	//collect uncommitted tombstones
 
 	if policy&engine.Policy_CollectUncommittedTombstones != 0 {
@@ -571,12 +564,6 @@ func (tbl *txnTable) Ranges(
 	txnOffset int,
 ) (data engine.RelData, err error) {
 	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
-	defer func() {
-		if tbl.tableName == "t1" {
-			logutil.Infof("xxxx ranges, txn:%s, table:%s, blks cnt:%v, uncommitted objs:%v",
-				tbl.db.op.Txn().DebugString(), tbl.tableName, data.DataCnt(), len(unCommittedObjs))
-		}
-	}()
 	return tbl.doRanges(
 		ctx,
 		exprs,
@@ -1750,13 +1737,6 @@ func (tbl *txnTable) BuildReaders(
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(engine_util.EmptyReader)}, nil
-	}
-
-	if tbl.tableName == "t1" {
-		logutil.Infof("xxxx BuildReaders, txn:%s, table:%s, txnOffset:%v",
-			tbl.db.op.Txn().DebugString(),
-			tbl.tableName,
-			txnOffset)
 	}
 
 	if orderBy && num != 1 {

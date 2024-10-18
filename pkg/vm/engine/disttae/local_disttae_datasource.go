@@ -715,7 +715,6 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 func (ls *LocalDisttaeDataSource) GetTombstones(
 	ctx context.Context, bid *objectio.Blockid,
 ) (deletedRows objectio.Bitmap, err error) {
-
 	deletedRows = objectio.GetReusableBitmap()
 
 	if ls.category == engine.ShardingRemoteDataSource {
@@ -816,7 +815,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+	if len(s3FlushedDeletes.data) == 0 {
 		return
 	}
 
