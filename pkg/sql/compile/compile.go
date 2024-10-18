@@ -429,7 +429,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -438,7 +437,6 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -3766,7 +3764,11 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
+	ret := len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
+	if !ret {
+		c.printPipeline()
+	}
+	return ret
 }
 
 func collectTombstones(
