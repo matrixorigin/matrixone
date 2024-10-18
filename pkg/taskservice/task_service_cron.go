@@ -41,7 +41,7 @@ type crons struct {
 
 func (s *taskService) StartScheduleCronTask() {
 	if !s.crons.state.canStart() {
-		s.rt.Logger().Info("cron task scheduler started or is stopping")
+		s.rt.Logger().Debug("cron task scheduler started or is stopping")
 		return
 	}
 
@@ -57,7 +57,7 @@ func (s *taskService) StartScheduleCronTask() {
 
 func (s *taskService) StopScheduleCronTask() {
 	if !s.crons.state.canStop() {
-		s.rt.Logger().Info("cron task scheduler stopped or is stopping")
+		s.rt.Logger().Debug("cron task scheduler stopped or is stopping")
 		return
 	}
 

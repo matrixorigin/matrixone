@@ -825,7 +825,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+	if len(s3FlushedDeletes.data) == 0 {
 		return
 	}
 
