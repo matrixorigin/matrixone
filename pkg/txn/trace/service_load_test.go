@@ -15,29 +15,25 @@
 package trace
 
 import (
+	"context"
+	"os"
+	"path"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func Test_AddTableFilter(t *testing.T) {
+func Test_writeToMO(t *testing.T) {
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "select rel_id from mo_tables where relname") {
-			memRes := executor.NewMemResult(
-				[]types.Type{types.New(types.T_uint64, 64, 0)},
-				mpool.MustNewZero())
-			memRes.NewBatch()
-			executor.AppendFixedRows[uint64](memRes, 0, []uint64{3})
-			return memRes.GetResult(), nil
-		}
-		if strings.HasPrefix(sql, "insert into trace_table_filters (table_id, table_name, columns) values") {
+		if strings.HasPrefix(sql, "insert into t1 values") {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
 		}
 		return executor.Result{}, nil
@@ -47,38 +43,62 @@ func Test_AddTableFilter(t *testing.T) {
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
 	}
-	err := serv.AddTableFilter("t1", []string{"a"})
+	err := serv.writeToMO(loadAction{
+		sql: "insert into t1 values (1)",
+	})
 	assert.Error(t, err)
 }
 
-func Test_ClearTableFilters(t *testing.T) {
+func Test_writeToS3(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "truncate table trace_table_filters") {
+		if strings.HasPrefix(sql, "insert into t1 values") {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
 		}
 		return executor.Result{}, nil
 	})
 
+	tDir := os.TempDir()
+	dir := path.Join(tDir, "/local")
+	assert.NoError(t, os.RemoveAll(dir))
+	defer func() {
+		_ = os.RemoveAll(dir)
+	}()
+
+	c := fileservice.Config{
+		Name:    defines.ETLFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fs, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer fs.Close()
+
 	serv := &service{
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
+		logger:   logger,
 	}
-	err := serv.ClearTableFilters()
-	assert.Error(t, err)
-}
+	serv.options.fs = fs
 
-func Test_RefreshTableFilters(t *testing.T) {
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "select table_id, columns from trace_table_filters") {
-			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
-		}
-		return executor.Result{}, nil
+	tPath := tDir + "/" + "test"
+	assert.NoError(t, os.RemoveAll(tPath))
+	defer func() {
+		_ = os.RemoveAll(tPath)
+	}()
+
+	err = os.WriteFile(tPath, []byte("abc"), 0755)
+
+	err = serv.writeToS3(loadAction{
+		file: tPath,
 	})
-
-	serv := &service{
-		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
-		executor: exec,
-	}
-	err := serv.RefreshTableFilters()
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }

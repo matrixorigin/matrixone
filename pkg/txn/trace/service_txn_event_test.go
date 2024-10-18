@@ -21,23 +21,14 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func Test_AddTableFilter(t *testing.T) {
+func Test_AddTxnFilter(t *testing.T) {
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "select rel_id from mo_tables where relname") {
-			memRes := executor.NewMemResult(
-				[]types.Type{types.New(types.T_uint64, 64, 0)},
-				mpool.MustNewZero())
-			memRes.NewBatch()
-			executor.AppendFixedRows[uint64](memRes, 0, []uint64{3})
-			return memRes.GetResult(), nil
-		}
-		if strings.HasPrefix(sql, "insert into trace_table_filters (table_id, table_name, columns) values") {
+		if strings.HasPrefix(sql, "insert into trace_txn_filters (method, value) values") {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
 		}
 		return executor.Result{}, nil
@@ -47,13 +38,13 @@ func Test_AddTableFilter(t *testing.T) {
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
 	}
-	err := serv.AddTableFilter("t1", []string{"a"})
+	err := serv.AddTxnFilter(userMethod, "abc")
 	assert.Error(t, err)
 }
 
-func Test_ClearTableFilters(t *testing.T) {
+func Test_ClearTxnFilters(t *testing.T) {
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "truncate table trace_table_filters") {
+		if strings.HasPrefix(sql, "truncate table trace_txn_filters") {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
 		}
 		return executor.Result{}, nil
@@ -63,13 +54,13 @@ func Test_ClearTableFilters(t *testing.T) {
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
 	}
-	err := serv.ClearTableFilters()
+	err := serv.ClearTxnFilters()
 	assert.Error(t, err)
 }
 
-func Test_RefreshTableFilters(t *testing.T) {
+func Test_RefreshTxnFilters(t *testing.T) {
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "select table_id, columns from trace_table_filters") {
+		if strings.HasPrefix(sql, "select method, value from trace_txn_filters") {
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
 		}
 		return executor.Result{}, nil
@@ -79,6 +70,26 @@ func Test_RefreshTableFilters(t *testing.T) {
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
 	}
-	err := serv.RefreshTableFilters()
+	err := serv.RefreshTxnFilters()
 	assert.Error(t, err)
+}
+
+func Test_doAddTxnError(t *testing.T) {
+	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "return err") {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
+		}
+		return executor.Result{}, nil
+	})
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	serv := &service{
+		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
+		executor: exec,
+		logger:   logger,
+	}
+	serv.doAddTxnError("return err")
 }

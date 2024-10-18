@@ -19,6 +19,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/stretchr/testify/require"
 )
 
 func testConfig(objectMinOSize uint32, maxOneRun int) *BasicPolicyConfig {
@@ -326,4 +327,38 @@ func TestPolicyCompact(t *testing.T) {
 	newSortedTombstoneEntryWithTableEntry(t, tbl, txn3, types.Rowid{0}, types.Rowid{1})
 	require.NoError(t, txn3.Commit(context.Background()))
 	require.False(t, p.onObject(entry1, defaultBasicConfig))
+}
+
+func Test_timeout(t *testing.T) {
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	p := newObjCompactPolicy(fs)
+
+	cata := catalog.MockCatalog()
+	defer cata.Close()
+	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
+	txnMgr.Start(context.Background())
+	defer txnMgr.Stop()
+	txn1, _ := txnMgr.StartTxn(nil)
+	db, err := cata.CreateDBEntry("db", "", "", txn1)
+	require.NoError(t, err)
+	catalog.MockSchema(1, 0)
+	tbl, err := db.CreateTableEntry(catalog.MockSchema(1, 0), txn1, nil)
+	require.NoError(t, err)
+	require.NoError(t, txn1.Commit(context.Background()))
+
+	p.resetForTable(tbl)
+
+	txn3, _ := txnMgr.StartTxn(nil)
+	ent3 := newSortedTombstoneEntryWithTableEntry(t, tbl, txn3, types.Rowid{0}, types.Rowid{1})
+	ent3.IsTombstone = false
+	originSizes := ent3.ObjectStats[149 : 149+4]
+	minSizeBytes := types.EncodeUint32(&defaultBasicConfig.ObjectMinOsize)
+	copy(originSizes, minSizeBytes)
+
+	require.NoError(t, txn3.Commit(context.Background()))
+	p.tombstoneStats = []objectio.ObjectStats{
+		ent3.ObjectStats,
+	}
+	require.False(t, p.onObject(ent3, defaultBasicConfig))
 }
