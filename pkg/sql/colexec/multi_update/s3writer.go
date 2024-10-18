@@ -84,6 +84,8 @@ type s3Writer struct {
 	deleteBuf []*batch.Batch
 	insertBuf []*batch.Batch
 
+	outputBat *batch.Batch
+
 	batchSize      uint64
 	flushThreshold uint64
 
@@ -529,7 +531,7 @@ func (writer *s3Writer) fillInsertBlockInfo(
 	return
 }
 
-func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, update *MultiUpdate) (err error) {
+func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process) (err error) {
 	onlyDelete := writer.action == actionDelete
 	if !onlyDelete && writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
@@ -539,13 +541,17 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 		}
 	}
 
+	if writer.outputBat == nil {
+		writer.outputBat = makeS3OutputBatch()
+	}
+	mp := proc.GetMPool()
+
 	//write delete block info to workspace
 	for i, partBlockInfos := range writer.deleteBlockInfo {
 		if len(partBlockInfos) == 1 {
 			// normal table
 			if partBlockInfos[0] != nil && partBlockInfos[0].bat.RowCount() > 0 {
-				update.addDeleteAffectRows(writer.updateCtxs[i].TableType, partBlockInfos[0].rawRowCount)
-				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, partBlockInfos[0].bat, partBlockInfos[0].name)
+				err = writer.addBatchToOutput(mp, actionDelete, i, 0, partBlockInfos[0].rawRowCount, partBlockInfos[0].name, partBlockInfos[0].bat)
 				if err != nil {
 					return
 				}
@@ -554,8 +560,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// partition table
 			for partIdx, blockInfo := range partBlockInfos {
 				if blockInfo != nil && blockInfo.bat.RowCount() > 0 {
-					update.addDeleteAffectRows(writer.updateCtxs[i].TableType, blockInfo.rawRowCount)
-					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockInfo.bat, blockInfo.name)
+					err = writer.addBatchToOutput(mp, actionDelete, i, partIdx, blockInfo.rawRowCount, blockInfo.name, blockInfo.bat)
 					if err != nil {
 						return
 					}
@@ -570,19 +575,14 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// normal table
 			for blockID, blockData := range blocks[0] {
 				name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
-				update.addDeleteAffectRows(writer.updateCtxs[i].TableType, uint64(blockData.bat.RowCount()))
-				err = writer.updateCtxs[i].Source.Delete(proc.Ctx, blockData.bat, name)
-				if err != nil {
-					return
-				}
+				err = writer.addBatchToOutput(mp, actionDelete, i, 0, uint64(blockData.bat.RowCount()), name, blockData.bat)
 			}
 		} else {
 			// partition table
 			for partIdx, blockDatas := range blocks {
 				for blockID, blockData := range blockDatas {
 					name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
-					update.addDeleteAffectRows(writer.updateCtxs[i].TableType, uint64(blockData.bat.RowCount()))
-					err = writer.updateCtxs[i].PartitionSources[partIdx].Delete(proc.Ctx, blockData.bat, name)
+					err = writer.addBatchToOutput(mp, actionDelete, i, partIdx, uint64(blockData.bat.RowCount()), name, blockData.bat)
 					if err != nil {
 						return
 					}
@@ -597,8 +597,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			// normal table
 			if bats[0] != nil && bats[0].RowCount() > 0 {
 				resetMergeBlockForOldCN(proc, bats[0])
-				update.addInsertAffectRows(writer.updateCtxs[i].TableType, writer.insertBlockRowCount[i][0])
-				err = writer.updateCtxs[i].Source.Write(proc.Ctx, bats[0])
+				err = writer.addBatchToOutput(mp, actionInsert, i, 0, writer.insertBlockRowCount[i][0], "", bats[0])
 				if err != nil {
 					return
 				}
@@ -608,8 +607,7 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			for partIdx, bat := range bats {
 				if bat != nil && bat.RowCount() > 0 {
 					resetMergeBlockForOldCN(proc, bat)
-					update.addInsertAffectRows(writer.updateCtxs[i].TableType, writer.insertBlockRowCount[i][partIdx])
-					err = writer.updateCtxs[i].PartitionSources[partIdx].Write(proc.Ctx, bat)
+					err = writer.addBatchToOutput(mp, actionInsert, i, partIdx, writer.insertBlockRowCount[i][partIdx], "", bat)
 					if err != nil {
 						return
 					}
@@ -628,8 +626,9 @@ func (writer *s3Writer) flushTailAndWriteToWorkspace(proc *process.Process, upda
 			}
 		}
 	}()
+
 	for i, bat := range bats {
-		err = update.updateOneBatch(proc, bat)
+		err = writer.addBatchToOutput(mp, actionUpdate, 0, 0, 0, "", bat)
 		if err != nil {
 			return
 		}
@@ -685,6 +684,9 @@ func (writer *s3Writer) reset(proc *process.Process) (err error) {
 			writer.deleteBuf[i].CleanOnlyData()
 		}
 	}
+	if writer.outputBat != nil {
+		writer.outputBat.CleanOnlyData()
+	}
 	writer.batchSize = 0
 	return
 }
@@ -737,5 +739,70 @@ func (writer *s3Writer) free(proc *process.Process) (err error) {
 	}
 	writer.deleteBlockMap = nil
 
+	if writer.outputBat != nil {
+		writer.outputBat.Clean(proc.Mp())
+		writer.outputBat = nil
+	}
+
 	return
+}
+
+func (writer *s3Writer) addBatchToOutput(
+	mp *mpool.MPool,
+	action actionType,
+	idx int,
+	partIdx int,
+	rowCount uint64,
+	name string,
+	bat *batch.Batch) (err error) {
+	output := writer.outputBat
+
+	err = vector.AppendFixed(output.Vecs[0], uint8(action), false, mp)
+	if err != nil {
+		return
+	}
+
+	err = vector.AppendFixed(output.Vecs[1], uint16(idx), false, mp)
+	if err != nil {
+		return
+	}
+
+	err = vector.AppendFixed(output.Vecs[2], uint16(partIdx), false, mp)
+	if err != nil {
+		return
+	}
+
+	err = vector.AppendFixed(output.Vecs[3], rowCount, false, mp)
+	if err != nil {
+		return
+	}
+
+	err = vector.AppendBytes(output.Vecs[4], []byte(name), false, mp)
+	if err != nil {
+		return
+	}
+
+	var val []byte
+	val, err = bat.MarshalBinary()
+	if err != nil {
+		return
+	}
+
+	err = vector.AppendBytes(output.Vecs[5], val, false, mp)
+	if err != nil {
+		return
+	}
+	output.SetRowCount(output.Vecs[0].Length())
+	return
+}
+
+func makeS3OutputBatch() *batch.Batch {
+	bat := batch.NewWithSize(6)
+	bat.Vecs[0] = vector.NewVec(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
+	bat.Vecs[1] = vector.NewVec(types.T_uint16.ToType())  // index of update.UpdateCtxs
+	bat.Vecs[2] = vector.NewVec(types.T_uint16.ToType())  // index of partitions
+	bat.Vecs[3] = vector.NewVec(types.T_uint64.ToType())  // rowCount of s3 blocks
+	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType()) // name for delete. empty for insert
+	bat.Vecs[5] = vector.NewVec(types.T_text.ToType())    // originBatch.MarshalBinary()
+	return bat
 }

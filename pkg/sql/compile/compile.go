@@ -3267,7 +3267,12 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(multiUpdateArg)
 		}
-		//todo
+
+		rs := c.newMergeScope(ss)
+		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
+		rs.setRootOperator(multiUpdateArg)
+		ss = []*Scope{rs}
 	} else {
 		for i := range ss {
 			multiUpdateArg := constructMultiUpdate(n, c.e)
