@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -98,7 +97,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if regIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := types.Encode(bat)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
 				if errEncode != nil {
 					err = errEncode
 					break
@@ -138,7 +137,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := types.Encode(bat)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -242,7 +241,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := types.Encode(bat)
+	encodeData, errEncode := bat.MarshalBinaryWithBuffer(ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}
