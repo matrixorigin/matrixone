@@ -89,37 +89,12 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 }
 
-func readFileWithExtension(fpath string, proc *process.Process) ([]byte, error) {
-
-	fs := proc.GetFileService()
-	moUrl, offsetSize, err := function.ParseDatalink(fpath, proc)
-	if err != nil {
-		return nil, err
-	}
-
-	r, err := function.ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
-	if err != nil {
-		return nil, err
-	}
-
-	defer r.Close()
-
-	fileBytes, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-
-	ext := filepath.Ext(fpath)
-	if ext != ".pdf" {
-		return fileBytes, nil
-	}
-
-	pdfr, err := pdf.NewReader(bytes.NewReader(fileBytes), int64(len(fileBytes)))
-	if err != nil {
-		return nil, err
-	}
-
+func getPdfContent(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
+	pdfr, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
 
 	npage := pdfr.NumPage()
 	for i := 1; i <= npage; i++ {
@@ -146,9 +121,36 @@ func readFileWithExtension(fpath string, proc *process.Process) ([]byte, error) 
 		buf.WriteString(line)
 	}
 
-	fileBytes = []byte(strings.TrimSpace(buf.String()))
+	return []byte(strings.TrimSpace(buf.String())), nil
+}
 
-	return fileBytes, nil
+func getContentFromFile(fpath string, proc *process.Process) ([]byte, error) {
+
+	fs := proc.GetFileService()
+	moUrl, offsetSize, err := function.ParseDatalink(fpath, proc)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := function.ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+	if err != nil {
+		return nil, err
+	}
+
+	defer r.Close()
+
+	fileBytes, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(fpath))
+	switch ext {
+	case ".pdf":
+		return getPdfContent(fileBytes)
+	default:
+		return fileBytes, nil
+	}
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
@@ -200,7 +202,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
 				// datalink
-				b, err := readFileWithExtension(data, proc)
+				b, err := getContentFromFile(data, proc)
 				if err != nil {
 					return err
 				}
