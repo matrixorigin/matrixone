@@ -1600,13 +1600,24 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
+func getOverlap(s *pb.StatsInfo, colname string) float64 {
+	if s == nil || s.ShuffleRangeMap[colname] == nil {
+		return 1.0
+	}
+	return s.ShuffleRangeMap[colname].Overlap
+}
+
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
 	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
 		//speicial handle for isnull
 		return sel
 	}
-	//check strict filter, otherwise can not estimate outcnt by min/max val
+	overlap := getOverlap(s, colname)
+	if overlap < overlapThreshold/2 {
+		//very good overlap
+		return sel
+	}
 	_, _, _, _, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
 	if hasDynamicParam {
 		// assume dynamic parameter always has low selectivity
@@ -1616,16 +1627,12 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 			return 1
 		}
 	}
-	if s == nil || s.ShuffleRangeMap[colname] == nil {
+	if overlap > overlapThreshold {
 		if sel <= 0.002 {
 			return sel * 500
 		} else {
 			return 1
 		}
-	}
-	overlap := s.ShuffleRangeMap[colname].Overlap
-	if overlap > overlapThreshold {
-		return 1
 	}
 	ret := sel * 100 / (1 - overlap)
 	if ret > 1 {

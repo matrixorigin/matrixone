@@ -49,7 +49,6 @@ Project
         Runtime Filter Build: #[-1,0]
         ->  Table Scan on d1.t1 [ForceOneCN]
               Filter Cond: t1.c3 in ([1 5 10 20])
-              Block Filter Cond: t1.c3 in ([1 5 10 20])
               Runtime Filter Probe: t1.__mo_cpkey_col
         ->  Table Scan on d1.t1i1(index) [ForceOneCN]
               Filter Cond: prefix_in(#[0,0])
@@ -105,7 +104,6 @@ Project
         Runtime Filter Build: #[-1,0]
         ->  Table Scan on d1.t1 [ForceOneCN]
               Filter Cond: t1.c3 BETWEEN 4 AND 7, (t1.c5 = 5)
-              Block Filter Cond: t1.c3 BETWEEN 4 AND 7
               Runtime Filter Probe: t1.__mo_cpkey_col
         ->  Table Scan on d1.t1i1(index) [ForceOneCN]
               Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = 5)
