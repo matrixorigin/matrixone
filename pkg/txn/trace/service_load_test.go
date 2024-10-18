@@ -96,6 +96,7 @@ func Test_writeToS3(t *testing.T) {
 	}()
 
 	err = os.WriteFile(tPath, []byte("abc"), 0755)
+	assert.NoError(t, err)
 
 	err = serv.writeToS3(loadAction{
 		file: tPath,
