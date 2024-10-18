@@ -1609,8 +1609,8 @@ func getOverlap(s *pb.StatsInfo, colname string) float64 {
 
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
-	if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
-		//speicial handle for isnull
+	switch expr.GetF().Func.ObjName {
+	case "isnull", "is_null", "prefix_eq", "prefix_in": //special handle
 		return sel
 	}
 	overlap := getOverlap(s, colname)
