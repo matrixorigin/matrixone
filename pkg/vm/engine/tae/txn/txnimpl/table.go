@@ -373,7 +373,7 @@ func (tbl *txnTable) TransferDeletes(
 				"TN-TRANSFER-TOMBSTONE-FILES",
 				zap.String("table", tbl.GetLocalSchema(false).Name),
 				zap.String("phase", phase),
-				zap.String("from", tbl.transferedTS.Next().ToString()),
+				zap.String("from", startTS.ToString()),
 				zap.String("to", ts.ToString()),
 				zap.Int("s-cnt", len(softDeleteObjects)),
 				zap.String("txn", tbl.store.txn.String()),
