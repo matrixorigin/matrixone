@@ -499,7 +499,6 @@ func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 
 // TODO: REMOVEME
 func (entry *ObjectEntry) CheckPrintPrepareCompact() bool {
-
 	return entry.CheckPrintPrepareCompactLocked(30 * time.Minute)
 }
 
