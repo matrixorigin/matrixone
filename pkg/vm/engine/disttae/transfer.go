@@ -20,7 +20,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -370,17 +369,13 @@ func doTransferRowids(
 
 	attrs := []string{
 		pkColumName,
-		catalog.Row_ID,
+		objectio.PhysicalAddr_Attr,
 	}
-	buildBatch := func() *batch.Batch {
-		bat := batch.NewWithSize(2)
-		bat.Attrs = append(bat.Attrs, attrs...)
-
-		bat.Vecs[0] = vector.NewVec(*readPKColumn.GetType())
-		bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-		return bat
+	attrTypes := []types.Type{
+		*readPKColumn.GetType(),
+		objectio.RowidType,
 	}
-	bat := buildBatch()
+	bat := batch.NewWithSchema(true, attrs, attrTypes)
 	defer func() {
 		bat.Clean(mp)
 	}()
