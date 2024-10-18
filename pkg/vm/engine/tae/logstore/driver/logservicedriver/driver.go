@@ -18,12 +18,14 @@ import (
 	"context"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -32,12 +34,12 @@ const (
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeoutDuration, moerr.CauseRetryWithTimeout)
 	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
-			return ErrRetryTimeOut
+			return moerr.AttachCause(ctx, ErrRetryTimeOut)
 		default:
 			if fn() {
 				return nil

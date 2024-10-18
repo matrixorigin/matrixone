@@ -172,10 +172,11 @@ func transferRequest2OtherCNs(
 	clusterservice.GetMOCluster(
 		proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferRequest2OtherCNs)
 			defer cancel()
 
 			resp, err = proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		},
 	)
