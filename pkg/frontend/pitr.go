@@ -887,6 +887,8 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		restoreLevel tree.RestoreLevel
 		ts           int64
 		pitrExist    bool
+		sortedFkTbls []string
+		fkTableMap   map[string]*tableInfo
 	)
 	// reslove timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
@@ -943,8 +945,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	if len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
 			fromAccount := string(stmt.SrcAccountName)
-			var fromAccountId uint32
-			var toAccountId uint32
+			var (
+				fromAccountId uint32
+				toAccountId   uint32
+			)
+
 			if len(fromAccount) == 0 {
 				fromAccount = pitr.accountName
 				fromAccountId = uint32(pitr.accountId)
@@ -1005,13 +1010,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			}
 
 			// get topo sorted tables with foreign key
-			sortedFkTbls, rtnErr := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+			sortedFkTbls, rtnErr = fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
 			if rtnErr != nil {
 				return
 			}
 
 			// get foreign key table infos
-			fkTableMap, rtnErr := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
+			fkTableMap, rtnErr = getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
 			if rtnErr != nil {
 				return
 			}
@@ -1067,13 +1072,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
 
 	// get foreign key table infos
-	fkTableMap, err := getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls)
+	fkTableMap, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, dbName, tblName, sortedFkTbls)
 	if err != nil {
 		return
 	}
@@ -1291,7 +1296,10 @@ func restoreToDatabaseOrTableWithPitr(
 		return
 	}
 
-	var createDbSql string
+	var (
+		createDbSql string
+		tableInfos  []*tableInfo
+	)
 	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
 	if err != nil {
 		return
@@ -1354,7 +1362,7 @@ func restoreToDatabaseOrTableWithPitr(
 		}
 	}
 
-	tableInfos, err := getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
+	tableInfos, err = getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -1464,7 +1472,11 @@ func getTableInfoWithPitr(
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to get table info: datatabse `%s`, table `%s`, ts %d", pitrName, dbName, tblName, ts))
-	tableInfos, err := showFullTablesWitsTs(ctx,
+	var (
+		tableInfos []*tableInfo
+		err        error
+	)
+	tableInfos, err = showFullTablesWitsTs(ctx,
 		sid,
 		bh,
 		pitrName,
@@ -1567,14 +1579,19 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	dbName string,
 	tblName string) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop cur fk tables", pitrName))
+	var (
+		sortedFkTbls  []string
+		curFkTableMap map[string]*tableInfo
+		isMasterTable bool
+	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, "", dbName, tblName)
 	if err != nil {
 		return
 	}
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, "", dbName, tblName, sortedFkTbls)
+	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, "", dbName, tblName, sortedFkTbls)
 	if err != nil {
 		return
 	}
@@ -1583,7 +1600,6 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	for i := len(sortedFkTbls) - 1; i >= 0; i-- {
 		key := sortedFkTbls[i]
 		if tblInfo := curFkTableMap[key]; tblInfo != nil {
-			var isMasterTable bool
 			isMasterTable, err = checkTableIsMaster(ctx, sid, bh, "", tblInfo.dbName, tblInfo.tblName)
 			if err != nil {
 				return err
