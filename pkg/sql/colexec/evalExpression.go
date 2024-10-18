@@ -978,8 +978,6 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 	return nil
 }
 
-var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
-
 func getConstZM(
 	ctx context.Context,
 	expr *plan.Expr,
@@ -1099,20 +1097,18 @@ func EvaluateFilterByZoneMap(
 	}
 
 	if len(columnMap) == 0 {
-		// XXX should we need to check expr.oid = bool or not ?
-
-		vec, err := EvalExpressionOnce(proc, expr, noColumnBatchForZoneMap)
+		vec, free, err := GetReadonlyResultFromNoColumnExpression(proc, expr)
 		if err != nil {
 			return true
 		}
 		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
-				vec.Free(proc.Mp())
+				free()
 				return true
 			}
 		}
-		vec.Free(proc.Mp())
+		free()
 		return false
 	}
 
@@ -1394,11 +1390,14 @@ func GetExprZoneMap(
 						if vecs[arg.AuxId] != nil {
 							vecs[arg.AuxId].Free(proc.Mp())
 						}
-						if vecs[arg.AuxId], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
+						if vecs[arg.AuxId], _, err = GetReadonlyResultFromNoColumnExpression(proc, arg); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
 						}
-						ivecs[i] = vecs[arg.AuxId]
+						if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
 					}
 				} else {
 					if f() {
