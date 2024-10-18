@@ -16,9 +16,7 @@ package batch
 
 import (
 	"bytes"
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -141,20 +139,9 @@ func newBatch(ts []types.Type, rows int) *Batch {
 			bat.Vecs[i] = vec
 		}
 	}
-	vp := process.NewTopProcess(
-		context.TODO(),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil)
+
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0 := aggexec.MakeAgg(
-		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
+	agg0 := aggexec.MakeAgg(aggexec.NewSimpleAggMemoryManager(mp), 0, false, []types.Type{types.T_varchar.ToType()}...)
 	bat.Aggs = []aggexec.AggFuncExec{agg0}
 	bat.Attrs = []string{"1"}
 	return bat
