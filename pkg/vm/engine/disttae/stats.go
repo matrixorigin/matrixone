@@ -749,7 +749,12 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 		if req.statsInfo.ShuffleRangeMap[colName] != nil {
 			overlap = req.statsInfo.ShuffleRangeMap[colName].Overlap
 		}
-		logutil.Infof("debug: table %v tablecnt %v  col %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v", baseTableDef.Name, info.TableCnt, colName, req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
+		if req.statsInfo.MaxValMap[colName] < req.statsInfo.MinValMap[colName] {
+			logutil.Errorf("error happended in stats!")
+		}
+		logutil.Infof("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
+			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
+			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
 	}
 	return nil
 }

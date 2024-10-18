@@ -482,6 +482,10 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	var ok bool
 	var val1, val2 float64
+	if max < min {
+		//something error happend
+		return 0.1
+	}
 	switch funcName {
 	case ">", ">=":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
