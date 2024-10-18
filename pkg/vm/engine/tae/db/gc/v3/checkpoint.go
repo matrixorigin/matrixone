@@ -737,16 +737,20 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	now := time.Now()
 
 	var (
-		tmpDelFiles      []string
-		deleteFiles      []string
-		tmpNewFiles      []string
-		newCheckpoint    *checkpoint.CheckpointEntry
-		checkpointMaxEnd types.TS
-		toMergeEntries   []*checkpoint.CheckpointEntry
-		extraErrMsg      string
+		tmpDelFiles       []string
+		deleteFiles       []string
+		tmpNewFiles       []string
+		newCheckpoint     *checkpoint.CheckpointEntry
+		checkpointMaxEnd  types.TS
+		toMergeEntries    []*checkpoint.CheckpointEntry
+		extraErrMsg       string
+		newCheckpointData *logtail.CheckpointData
 	)
 
 	defer func() {
+		if newCheckpointData != nil {
+			newCheckpointData.Close()
+		}
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
@@ -800,7 +804,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		c.mp,
 	)
 
-	if tmpDelFiles, tmpNewFiles, newCheckpoint, err = MergeCheckpoint(
+	if tmpDelFiles, tmpNewFiles, newCheckpoint, newCheckpointData, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
@@ -812,6 +816,10 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+	logtail.FillUsageBatOfCompacted(
+		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
+		newCheckpointData,
+		c.mutation.snapshotMeta)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}

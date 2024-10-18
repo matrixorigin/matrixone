@@ -48,8 +48,8 @@ func MergeCheckpoint(
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
 	pool *mpool.MPool,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
-	ckpData := logtail.NewCheckpointData(sid, pool)
+) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
+	ckpData = logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
@@ -95,7 +95,6 @@ func MergeCheckpoint(
 		for _, data := range datas {
 			data.Close()
 		}
-		ckpData.Close()
 	}()
 	if len(datas) == 0 {
 		return
@@ -190,6 +189,7 @@ func MergeCheckpoint(
 	if err != nil {
 		return
 	}
+
 	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)

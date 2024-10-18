@@ -1457,6 +1457,18 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	return nil
 }
 
+func (sm *SnapshotMeta) GetTableDropAt(tid uint64) types.TS {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.tableIDIndex[tid].deleteAt
+}
+
+func (sm *SnapshotMeta) GetAccountId(tid uint64) uint32 {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.tableIDIndex[tid].accountID
+}
+
 // for test
 func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	sm.RLock()
