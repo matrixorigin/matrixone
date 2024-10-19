@@ -321,7 +321,8 @@ func (task *mergeObjectsTask) PrepareNewWriter() *blockio.BlockWriter {
 		sortkeyPos,
 		sortkeyIsPK,
 		task.isTombstone,
-		task.rt.Fs.Service)
+		task.rt.Fs.Service,
+	)
 	task.num++
 	return writer
 }
