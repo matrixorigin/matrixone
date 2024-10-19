@@ -105,6 +105,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 				memo.AddReqTrace(uint64(id), size[0], start, "req")
 				resp.AccIds = append(resp.AccIds, int64(id))
 				resp.Sizes = append(resp.Sizes, size[0])
+				resp.SnapshotSizes = append(resp.SnapshotSizes, size[1])
 				delete(usages, uint64(id))
 				continue
 			}
