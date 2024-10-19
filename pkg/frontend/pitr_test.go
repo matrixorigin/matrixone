@@ -1289,7 +1289,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys' and level = 'account';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1297,7 +1297,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount' and level = 'account';",
 		},
 		{
 			createAccount:   "sys",
@@ -1306,7 +1306,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:       tree.PITRLEVELACCOUNT,
 				AccountName: "testAccountName",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName' and level = 'account';",
 		},
 		{
 			createAccount:   "sys",
@@ -1315,7 +1315,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and level = 'database';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1324,7 +1324,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and level = 'database';",
 		},
 		{
 			createAccount:   "sys",
@@ -1334,7 +1334,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable' and level = 'table';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1344,7 +1344,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable';",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable' and level = 'table';",
 		},
 	}
 
@@ -2446,4 +2446,135 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
+}
+
+func Test_doCreatePitr(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.CreatePitr{
+			Name: "pitr01",
+
+			Level:     tree.PITRLEVELACCOUNT,
+			PitrValue: 10,
+			PitrUnit:  "d",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+		assert.NoError(t, err)
+		mrs := newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where create_account = %d", sysAccountID) + fmt.Sprintf(" and account_name = '%s' and level = 'account';", sysAccountName)
+		mrs = newMrsForPitrRecord([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{
+				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+				"pitr01",
+				uint64(0),
+				"2024-05-01 00:00:00",
+				"2024-05-01 00:00:00",
+				"database",
+				uint64(0),
+				"sys",
+				"mo_catalog",
+				"",
+				uint64(1),
+				"d",
+				"d",
+			},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{
+				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+				"pitr01",
+				uint64(0),
+				"2024-05-01 00:00:00",
+				"2024-05-01 00:00:00",
+				"database",
+				uint64(0),
+				"sys",
+				"mo_catalog",
+				"",
+				uint64(1),
+				uint8(1),
+				uint8(1),
+			},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{
+				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+				"pitr01",
+				uint64(0),
+				"2024-05-01 00:00:00",
+				"2024-05-01 00:00:00",
+				"database",
+				uint64(0),
+				"sys",
+				"mo_catalog",
+				"",
+				uint64(1),
+				uint8(1),
+				"d",
+			},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.NoError(t, err)
+	})
+
 }
