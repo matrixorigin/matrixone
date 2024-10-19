@@ -1182,7 +1182,10 @@ func FillUsageBatOfCompacted(
 	scan(tombstones)
 	iter := usage.cache.Iter()
 	ok := iter.First()
-	for ok {
+	for {
+		if !ok {
+			break
+		}
 		val := iter.Item()
 		logutil.Infof("fill usage bat of compacted ckp: %v", val.String())
 		key := [3]uint64{val.AccId, val.DbId, val.TblId}
