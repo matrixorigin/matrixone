@@ -1135,6 +1135,11 @@ func FillUsageBatOfCompacted(
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo) {
+	now := time.Now()
+	logutil.Infof("fill usage bat of compacted ckp start")
+	defer func() {
+		logutil.Infof("fill usage bat of compacted ckp takes %v", time.Since(now))
+	}()
 	objects := data.GetObjectBatchs()
 	tombstones := data.GetTombstoneObjectBatchs()
 	usageData := make(map[[3]uint64]UsageData)
