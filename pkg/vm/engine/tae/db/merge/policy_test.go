@@ -73,6 +73,8 @@ func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
 	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
 	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
