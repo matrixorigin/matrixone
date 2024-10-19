@@ -4139,8 +4139,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	engineType := rel.GetEngineType()
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
+	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
@@ -4148,7 +4148,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
+	return putBlocksInAverage(c, relData), partialResults, partialResultTypes, nil
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
@@ -4482,7 +4482,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
+func putBlocksInAverage(c *Compile, relData engine.RelData) engine.Nodes {
 	var nodes engine.Nodes
 	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < relData.DataCnt(); i += step {
@@ -4492,7 +4492,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 						Data: relData.BuildEmptyRelData(),
 					})
 				}
@@ -4508,7 +4508,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 				node := engine.Node{
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, relData.DataCnt()),
 					Data: relData.BuildEmptyRelData(),
 				}
 
@@ -4525,7 +4525,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 						Data: relData.BuildEmptyRelData(),
 					})
 				}
@@ -4541,7 +4541,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 				node := engine.Node{
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, relData.DataCnt()),
 					Data: relData.BuildEmptyRelData(),
 				}
 
@@ -4607,25 +4607,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
-	// only memory table block
-	if relData.DataCnt() == 1 {
-		return nodes, nil
-	}
-	// only one cn
-	if len(c.cnList) == 1 {
-		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk *objectio.BlockInfo) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(blk)
-				return true, nil
-			})
-
-		return nodes, nil
-	}
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
@@ -4633,7 +4619,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
 				Data: relData.BuildEmptyRelData(),
 			})
 		}
@@ -4660,43 +4646,6 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	}
 
 	return removeEmtpyNodes(c, n, rel, relData, nodes)
-
-	//minWorkLoad := math.MaxInt32
-	//maxWorkLoad := 0
-	//// remove empty node from nodes
-	//var newNodes engine.Nodes
-	//for i := range nodes {
-	//	if nodes[i].Data.DataCnt() > maxWorkLoad {
-	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() < minWorkLoad {
-	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() > 0 {
-	//		if nodes[i].Addr != c.addr {
-	//			tombstone, err := collectTombstones(c, n, rel)
-	//			if err != nil {
-	//				return nil, err
-	//			}
-	//			nodes[i].Data.AttachTombstones(tombstone)
-	//		}
-	//		newNodes = append(newNodes, nodes[i])
-	//	}
-	//}
-	//if minWorkLoad*2 < maxWorkLoad {
-	//	logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
-	//		n.TableDef.Name,
-	//		relData.DataCnt(),
-	//		len(newNodes),
-	//		maxWorkLoad,
-	//		minWorkLoad)
-	//	logstring = logstring + " cnlist: "
-	//	for i := range c.cnList {
-	//		logstring = logstring + c.cnList[i].Addr + " "
-	//	}
-	//	c.proc.Warnf(c.proc.Ctx, logstring)
-	//}
-	//return newNodes, nil
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
@@ -4787,12 +4736,12 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, relData engine.RelData) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	nodes[0].Data = relData
 	return nodes
