@@ -225,7 +225,7 @@ func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterS
 	opAlyzr.opStats.S3Put += counter.FileService.S3.Put.Load()
 	opAlyzr.opStats.S3Get += counter.FileService.S3.Get.Load()
 	opAlyzr.opStats.S3Delete += counter.FileService.S3.Delete.Load()
-	opAlyzr.opStats.S3DeleteMulti += counter.FileService.S3.DeleteMulti.Load()
+	opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
 }
 
 func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
@@ -262,7 +262,7 @@ type OperatorStats struct {
 	S3Put            int64                `json:"S3Put,omitempty"`
 	S3Get            int64                `json:"S3Get,omitempty"`
 	S3Delete         int64                `json:"S3Delete,omitempty"`
-	S3DeleteMulti    int64                `json:"S3DeleteMulti,omitempty"`
+	S3DeleteMul      int64                `json:"S3DeleteMul,omitempty"`
 	InputBlocks      int64                `json:"-"`
 	ScanBytes        int64                `json:"-"`
 	DiskIO           int64                `json:"-"`
@@ -354,7 +354,7 @@ func (ps *OperatorStats) String() string {
 		"S3Put:%d "+
 		"S3Get:%d "+
 		"S3Delete:%d "+
-		"S3DeleteMulti:%d"+
+		"S3DeleteMul:%d"+
 		"%s",
 		ps.CallNum,
 		ps.TimeConsumed,
@@ -373,11 +373,12 @@ func (ps *OperatorStats) String() string {
 		ps.S3Put,
 		ps.S3Get,
 		ps.S3Delete,
-		ps.S3DeleteMulti,
+		ps.S3DeleteMul,
 		metricsStr)
 
 }
 
+// ReducedString used to `mo_explan_phy` internal function when show operator stats
 func (ps *OperatorStats) ReducedString() string {
 	var metricsStr string
 	if len(ps.OperatorMetrics) > 0 {
@@ -418,14 +419,3 @@ func (ps *OperatorStats) ReducedString() string {
 		metricsStr,
 	)
 }
-
-//type S3RequestKey struct{}
-//
-//func AttachS3RequestKey(ctx context.Context, counter perfcounter.CounterSet) context.Context {
-//	return context.WithValue(ctx, S3RequestKey{}, counter)
-//}
-//
-//func GetS3RequestKey(ctx context.Context) (perfcounter.CounterSet, bool) {
-//	counter, ok := ctx.Value(S3RequestKey{}).(perfcounter.CounterSet)
-//	return counter, ok
-//}

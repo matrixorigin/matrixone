@@ -257,7 +257,7 @@ func LockTable(
 			Put:       analyzer.GetOpStats().S3Put,
 			Get:       analyzer.GetOpStats().S3Get,
 			Delete:    analyzer.GetOpStats().S3Delete,
-			DeleteMul: analyzer.GetOpStats().S3DeleteMulti,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
 		})
 	}()
 
@@ -317,7 +317,7 @@ func LockRows(
 			Put:       analyzer.GetOpStats().S3Put,
 			Get:       analyzer.GetOpStats().S3Get,
 			Delete:    analyzer.GetOpStats().S3Delete,
-			DeleteMul: analyzer.GetOpStats().S3DeleteMulti,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
 		})
 	}()
 

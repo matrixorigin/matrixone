@@ -260,7 +260,7 @@ type StatsInfo struct {
 		PlanStartTime      time.Time     `json:"PlanStartTime"`
 		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
 		BuildPlanStatsS3   S3Request     `json:"BuildPlanStatsS3"`
-		// The following attributes belong to independent statistics, which occurs during the `buildPlan` stage, only for analysis reference.
+		// The following attributes belong to independent statistics during the `buildPlan` stage, only for analysis reference.
 		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
 		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
 	}
@@ -317,12 +317,12 @@ type StatsInfo struct {
 
 // S3Request structure is used to record the number of times each S3 operation is performed
 type S3Request struct {
-	List      int64 `json:"List"`
-	Head      int64 `json:"Head"`
-	Put       int64 `json:"Put"`
-	Get       int64 `json:"Get"`
-	Delete    int64 `json:"Delete"`
-	DeleteMul int64 `json:"DeleteMul"`
+	List      int64 `json:"List,omitempty"`
+	Head      int64 `json:"Head,omitempty"`
+	Put       int64 `json:"Put,omitempty"`
+	Get       int64 `json:"Get,omitempty"`
+	Delete    int64 `json:"Delete,omitempty"`
+	DeleteMul int64 `json:"DeleteMul,omitempty"`
 }
 
 func (stats *StatsInfo) CompileStart() {

@@ -150,7 +150,7 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.S3Put += op.OpStats.S3Put
 		node.AnalyzeInfo.S3Get += op.OpStats.S3Get
 		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
-		node.AnalyzeInfo.S3DeleteMulti += op.OpStats.S3DeleteMulti
+		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
 		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
 
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
@@ -796,7 +796,7 @@ func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
 		stats.S3PutRequest += op.OpStats.S3Put
 		stats.S3GetRequest += op.OpStats.S3Get
 		stats.S3DeleteRequest += op.OpStats.S3Delete
-		stats.S3DeleteMultiRequest += op.OpStats.S3DeleteMulti
+		stats.S3DeleteMultiRequest += op.OpStats.S3DeleteMul
 	}
 
 	// Recursively process child operators

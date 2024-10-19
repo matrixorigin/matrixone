@@ -720,12 +720,12 @@ const ScanBytes = "Scan Bytes"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
-const S3List = "S3 ListObjects"
-const S3Head = "S3 HeadObject"
-const S3Put = "S3 PutObject"
-const S3Get = "S3 GetObject"
-const S3Delete = "S3 DeleteObject"
-const S3DeleteMulti = "S3 DeleteMultipleObjects"
+const S3List = "S3 List Count"
+const S3Head = "S3 Head Count"
+const S3Put = "S3 Put Count"
+const S3Get = "S3 Get Count"
+const S3Delete = "S3 Delete Count"
+const S3DeleteMul = "S3 DeleteMul Count"
 
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
@@ -739,7 +739,7 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
 			WithS3IOInputCount(float64(analyzeInfo.S3List + analyzeInfo.S3Put)).
-			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get + analyzeInfo.S3Delete + analyzeInfo.S3List + analyzeInfo.S3DeleteMulti))
+			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get + analyzeInfo.S3Delete + analyzeInfo.S3List + analyzeInfo.S3DeleteMul))
 	}
 	return
 }
@@ -826,6 +826,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Value: analyzeInfo.ScanBytes,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
+			//--------------------验证后，此处代码需要删除------------
 			{
 				Name:  S3IOInputCount,
 				Value: analyzeInfo.S3IOInputCount,
@@ -836,6 +837,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Value: analyzeInfo.S3IOOutputCount,
 				Unit:  Statistic_Unit_count, //"count",
 			},
+			//----------------------------------------------------
 			{
 				Name:  S3List,
 				Value: analyzeInfo.S3List,
@@ -862,8 +864,8 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  Statistic_Unit_count, //"count",
 			},
 			{
-				Name:  S3DeleteMulti,
-				Value: analyzeInfo.S3DeleteMulti,
+				Name:  S3DeleteMul,
+				Value: analyzeInfo.S3DeleteMul,
 				Unit:  Statistic_Unit_count, //"count",
 			},
 		}

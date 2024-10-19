@@ -3643,7 +3643,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		statsByte.WithS3IOInputCount(totalS3Input)
 		statsByte.WithS3IOOutputCount(totalS3Output)
 	}
-
 	return
 }
 

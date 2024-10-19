@@ -656,6 +656,7 @@ message AnalyzeInfo {
 	int64 wait_time_consumed = 7;
 	int64 diskIO = 8;
 	int64 scan_bytes = 9;
+	// 验证后，此处代码需要删除
 	int64 s3IO_input_count = 10;
 	int64 s3IO_output_count = 11;
 	int64 networkIO = 12;
@@ -669,7 +670,7 @@ message AnalyzeInfo {
 	int64 s3_put = 20;
 	int64 s3_get = 21;
 	int64 s3_delete = 22;
-	int64 s3_delete_multi = 23;
+	int64 s3_delete_mul = 23;
 }
 
 message PartitionPrune {

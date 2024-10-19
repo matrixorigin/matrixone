@@ -37,6 +37,14 @@ const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
+
+const S3List = "S3 List Count"
+const S3Head = "S3 Head Count"
+const S3Put = "S3 Put Count"
+const S3Get = "S3 Get Count"
+const S3Delete = "S3 Delete Count"
+const S3DeleteMul = "S3 DeleteMul Count"
+
 const Network = "Network"
 
 type ExplainData struct {
@@ -242,6 +250,13 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
 		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
 
+		gS3ListCount := NewStatisticValue(S3List, "count")
+		gS3HeadCount := NewStatisticValue(S3Head, "count")
+		gS3PutCount := NewStatisticValue(S3Put, "count")
+		gS3GetCount := NewStatisticValue(S3Get, "count")
+		gS3DeleteCount := NewStatisticValue(S3Delete, "count")
+		gS3DeleteMulCount := NewStatisticValue(S3DeleteMul, "count")
+
 		// network
 		gNetwork := NewStatisticValue(Network, "byte")
 
@@ -289,11 +304,31 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 				if ioValue.Name == ScanBytes {
 					gS3IOByte.Value += ioValue.Value
 				}
+				// -----------------验证后，此处代码需要删除------------
 				if ioValue.Name == S3IOInputCount {
 					gS3IOInputCount.Value += ioValue.Value
 				}
 				if ioValue.Name == S3IOOutputCount {
 					gS3IOOutputCount.Value += ioValue.Value
+				}
+				//--------------------------------------------------
+				if ioValue.Name == S3List {
+					gS3ListCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3Head {
+					gS3HeadCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3Put {
+					gS3PutCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3Get {
+					gS3GetCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3Delete {
+					gS3DeleteCount.Value += ioValue.Value
+				}
+				if ioValue.Name == S3DeleteMul {
+					gS3DeleteMulCount.Value += ioValue.Value
 				}
 			}
 
