@@ -177,6 +177,10 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 			}
 			ctr.buf.SetRowCount(bat.RowCount())
 			ctr.buf.ShuffleIDX = bat.ShuffleIDX
+			err := ctr.buf.PreExtend(proc.Mp(), len(sels))
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
