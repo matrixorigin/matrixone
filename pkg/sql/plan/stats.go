@@ -1507,7 +1507,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1522,8 +1522,14 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 				return ExecTypeAP_MULTICN
 			}
 		}
-		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
-			ret = ExecTypeAP_ONECN
+		if isPrepare {
+			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+				ret = ExecTypeAP_ONECN
+			}
+		} else {
+			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+				ret = ExecTypeAP_ONECN
+			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
 			ret = ExecTypeAP_ONECN
@@ -1533,7 +1539,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL) {
+	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1545,7 +1551,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL) {
+	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
