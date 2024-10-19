@@ -146,7 +146,7 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	results := s.policies.revise(s.executor.CPUPercent(), int64(s.executor.memAvailBytes()))
 	for _, r := range results {
 		if len(r.objs) > 0 {
-			s.executor.executeFor(tableEntry, r)
+			s.executor.executeFor(tableEntry, r.objs, r.kind)
 		}
 	}
 	return
