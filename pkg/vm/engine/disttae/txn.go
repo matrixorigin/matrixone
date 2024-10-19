@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"math"
 
 	// "strings"
@@ -1207,7 +1208,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
-	// TODO ghs fixme
 	if err := txn.transferTombstonesByCommit(ctx); err != nil {
 		return nil, err
 	}
@@ -1245,10 +1245,51 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 		return nil
 	}
 
-	return transferTombstones(
-		ctx, txn,
+	return txn.transferTombstones(
+		ctx,
 		types.TimestampToTS(txn.timestamps[0]),
 		types.TimestampToTS(txn.op.SnapshotTS()))
+}
+
+func (txn *Transaction) transferTombstones(
+	ctx context.Context,
+	start, end types.TS,
+) (err error) {
+
+	if skipTransfer(ctx, txn) {
+		return nil
+	}
+
+	if err = txn.op.UpdateSnapshot(
+		ctx, timestamp.Timestamp{}); err != nil {
+		return err
+	}
+	end = types.TimestampToTS(txn.op.SnapshotTS())
+
+	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
+		return err
+	}
+
+	return transferTombstoneObjects(ctx, txn, start, end)
+}
+
+func skipTransfer(
+	ctx context.Context,
+	txn *Transaction) bool {
+
+	if ctx.Value(UT_ForceTransCheck{}) != nil {
+		return false
+	}
+
+	if time.Since(txn.start) < transferTxnLastThreshold {
+		return true
+	}
+
+	if !txn.op.Txn().IsRCIsolation() {
+		return true
+	}
+
+	return false
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
