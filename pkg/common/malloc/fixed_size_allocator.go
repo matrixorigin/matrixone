@@ -15,5 +15,5 @@
 package malloc
 
 type FixedSizeAllocator interface {
-	Allocate(hint Hints) ([]byte, Deallocator, error)
+	Allocate(hint Hints, clearSize uint64) ([]byte, Deallocator, error)
 }
