@@ -1184,6 +1184,7 @@ func FillUsageBatOfCompacted(
 	ok := iter.First()
 	for ok {
 		val := iter.Item()
+		logutil.Infof("fill usage bat of compacted ckp: %v", val.String())
 		key := [3]uint64{val.AccId, val.DbId, val.TblId}
 		ud, ok := usageData[key]
 		if val.SnapshotSize == 0 && !ok {
