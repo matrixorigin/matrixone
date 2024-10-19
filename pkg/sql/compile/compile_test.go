@@ -319,17 +319,21 @@ func TestPutBlocksInAverage(t *testing.T) {
 	id := make([]byte, 8)
 	binary.LittleEndian.PutUint64(id, 1)
 	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
 	relData := &memoryengine.MemRelationData{
 		Shards: ranges,
 	}
+	putBlocksInAverage(testCompile, relData)
+	ranges.Append(id)
+	putBlocksInAverage(testCompile, relData)
+	ranges.Append(id)
+	putBlocksInAverage(testCompile, relData)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	putBlocksInAverage(testCompile, relData)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
 	putBlocksInAverage(testCompile, relData)
 }
 
