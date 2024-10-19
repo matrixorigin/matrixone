@@ -200,6 +200,7 @@ func TestKill(t *testing.T) {
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
