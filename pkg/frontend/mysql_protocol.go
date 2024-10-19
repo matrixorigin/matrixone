@@ -290,6 +290,8 @@ func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
 		return mp.GetDatabaseName()
 	case AuthString:
 		return string(mp.GetAuthString())
+	case PEER:
+		return mp.Peer()
 	}
 	return ""
 }
