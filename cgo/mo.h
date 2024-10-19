@@ -69,4 +69,7 @@ int32_t Logic_VecOr(void *r, void *a, void  *b, uint64_t n, uint64_t *anulls, ui
 int32_t Logic_VecXor(void *r, void *a, void  *b, uint64_t n, uint64_t *nulls, int32_t flag);
 int32_t Logic_VecNot(void *r, void *a, uint64_t n, uint64_t *nulls, int32_t flag);
 
+/* xcall */
+int32_t XCall(int64_t runtimeId, int64_t funcId, uint8_t *errStr, uint64_t* args, uint64_t len);
+
 #endif /* _MO_H_ */
