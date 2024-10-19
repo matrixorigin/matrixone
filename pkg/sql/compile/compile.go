@@ -4148,7 +4148,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, relData), partialResults, partialResultTypes, nil
+	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
@@ -4482,22 +4482,22 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-func putBlocksInAverage(c *Compile, reldata engine.RelData) engine.Nodes {
+func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
-	step := (reldata.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < reldata.DataCnt(); i += step {
+	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < relData.DataCnt(); i += step {
 		j := i / step
-		if i+step >= reldata.DataCnt() {
+		if i+step >= relData.DataCnt() {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, reldata.DataCnt()),
-						Data: reldata.BuildEmptyRelData(),
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+						Data: relData.BuildEmptyRelData(),
 					})
 				}
 
-				engine.ForRangeShardID(i, reldata.DataCnt(), reldata,
+				engine.ForRangeShardID(i, relData.DataCnt(), relData,
 					func(shardID uint64) (bool, error) {
 						nodes[0].Data.AppendShardID(shardID)
 						return true, nil
@@ -4508,11 +4508,11 @@ func putBlocksInAverage(c *Compile, reldata engine.RelData) engine.Nodes {
 				node := engine.Node{
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, reldata.DataCnt()),
-					Data: reldata.BuildEmptyRelData(),
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: relData.BuildEmptyRelData(),
 				}
 
-				engine.ForRangeShardID(i, reldata.DataCnt(), reldata,
+				engine.ForRangeShardID(i, relData.DataCnt(), relData,
 					func(shardID uint64) (bool, error) {
 						node.Data.AppendShardID(shardID)
 						return true, nil
@@ -4525,13 +4525,13 @@ func putBlocksInAverage(c *Compile, reldata engine.RelData) engine.Nodes {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, reldata.DataCnt()),
-						Data: reldata.BuildEmptyRelData(),
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+						Data: relData.BuildEmptyRelData(),
 					})
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
 
-				engine.ForRangeShardID(i, i+step, reldata,
+				engine.ForRangeShardID(i, i+step, relData,
 					func(shardID uint64) (bool, error) {
 						nodes[0].Data.AppendShardID(shardID)
 						return true, nil
@@ -4541,11 +4541,11 @@ func putBlocksInAverage(c *Compile, reldata engine.RelData) engine.Nodes {
 				node := engine.Node{
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, reldata.DataCnt()),
-					Data: reldata.BuildEmptyRelData(),
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: relData.BuildEmptyRelData(),
 				}
 
-				engine.ForRangeShardID(i, i+step, reldata,
+				engine.ForRangeShardID(i, i+step, relData,
 					func(shardID uint64) (bool, error) {
 						node.Data.AppendShardID(shardID)
 						return true, nil
