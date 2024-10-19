@@ -5283,7 +5283,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
-		if isClusterTable(dbName, string(st.Names[0].ObjectName)) {
+		if len(st.Names) > 1 && isClusterTable(dbName, string(st.Names[0].ObjectName)) {
 			clusterTable = true
 			clusterTableOperation = clusterTableDrop
 		}
