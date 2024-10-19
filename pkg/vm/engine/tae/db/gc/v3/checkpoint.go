@@ -723,6 +723,8 @@ func (c *checkpointCleaner) filterCheckpoints(
 func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	checkpointLowWaterMark *types.TS,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *logtail.PitrInfo,
 ) (err error) {
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
@@ -819,7 +821,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	logtail.FillUsageBatOfCompacted(
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 		newCheckpointData,
-		c.mutation.snapshotMeta)
+		c.mutation.snapshotMeta,
+		accountSnapshots,
+		pitrs)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
@@ -1052,7 +1056,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	if waterMark.GT(&scanMark) {
 		waterMark = scanMark
 	}
-	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer)
+	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer, accountSnapshots, pitrs)
 	if err != nil {
 		extraErrMsg = fmt.Sprintf("mergeCheckpointFilesLocked %v failed", waterMark.ToString())
 	}

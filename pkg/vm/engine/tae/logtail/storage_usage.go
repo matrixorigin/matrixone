@@ -1129,10 +1129,19 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 		zap.String("applied deletes", log1))
 }
 
-func FillUsageBatOfCompacted(usage *TNUsageMemo, data *CheckpointData, meta *SnapshotMeta) {
+func FillUsageBatOfCompacted(
+	usage *TNUsageMemo,
+	data *CheckpointData,
+	meta *SnapshotMeta,
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *PitrInfo) {
 	objects := data.GetObjectBatchs()
 	tombstones := data.GetTombstoneObjectBatchs()
 	usageData := make(map[[3]uint64]UsageData)
+	tableSnapshots, tablePitrs := meta.AccountToTableSnapshots(
+		accountSnapshots,
+		pitrs,
+	)
 	scan := func(bat *containers.Batch) {
 		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
 			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
@@ -1147,9 +1156,12 @@ func FillUsageBatOfCompacted(usage *TNUsageMemo, data *CheckpointData, meta *Sna
 					continue
 				}
 			}
-			buf := bat.Vecs[0].GetDownstreamVector().GetRawBytesAt(i)
-			stats := (objectio.ObjectStats)(buf)
 			accountId := uint64(meta.GetAccountId(tableID[i]))
+			if len(tableSnapshots[tableID[i]]) == 0 && tablePitrs[tableID[i]].IsEmpty() {
+				continue
+			}
+			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
 			key := [3]uint64{accountId, dbid[i], tableID[i]}
 			snapSize := usageData[key].SnapshotSize
 			snapSize += uint64(stats.ObjectLocation().Extent().Length())
