@@ -165,6 +165,7 @@ func NewFlushTableTailTask(
 		return
 	}
 	task.schema = rel.Schema(false).(*catalog.Schema)
+	task.BaseTask = tasks.NewBaseTask(task, tasks.FlushTableTailTask, ctx)
 
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
@@ -227,8 +228,6 @@ func NewFlushTableTailTask(
 			task.transMappings[i] = make(api.TransferMap)
 		}
 	}
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.FlushTableTailTask, ctx)
 
 	task.createAt = time.Now()
 	return
