@@ -512,6 +512,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 
+		// todo: does this following codes really work?
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i := range t.RemoteRegs {
