@@ -3936,9 +3936,9 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(&blk)
+						relData.AppendBlockInfo(blk)
 						return true, nil
 					})
 			}
@@ -3958,9 +3958,9 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(&blk)
+						relData.AppendBlockInfo(blk)
 						return true, nil
 					})
 			}
@@ -4094,13 +4094,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
-			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
-					newRelData.AppendBlockInfo(&blk)
+					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
@@ -4193,7 +4193,7 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 	return partialResults, partialResultTypes, columnMap
 }
 
-func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
+func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
 	if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 		partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 		return nil
@@ -4619,8 +4619,8 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// only one cn
 	if len(c.cnList) == 1 {
 		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk objectio.BlockInfo) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(&blk)
+			func(blk *objectio.BlockInfo) (bool, error) {
+				nodes[0].Data.AppendBlockInfo(blk)
 				return true, nil
 			})
 
@@ -4701,11 +4701,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
 			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-			nodes[index].Data.AppendBlockInfo(&blk)
+			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 }
@@ -4727,8 +4727,8 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 		1,
 		cnt,
 		relData,
-		func(blk objectio.BlockInfo) (bool, error) {
-			nodes[1].Data.AppendBlockInfo(&blk)
+		func(blk *objectio.BlockInfo) (bool, error) {
+			nodes[1].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 
@@ -4745,7 +4745,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var index uint64
 
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 			if err != nil {
@@ -4761,7 +4761,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 			if !zm.IsInited() {
 				// a block with all null will send to first CN
-				nodes[0].Data.AppendBlockInfo(&blk)
+				nodes[0].Data.AppendBlockInfo(blk)
 				return false, nil
 			}
 			if !init {
@@ -4780,7 +4780,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			} else {
 				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 			}
-			nodes[index].Data.AppendBlockInfo(&blk)
+			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 
