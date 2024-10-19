@@ -72,11 +72,6 @@ func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 	}
 	dispatcher.Lock()
 	if err = dispatcher.checkConflictLocked(scopes); err != nil {
-		// str := ""
-		// for scope := range dispatcher.actives {
-		// 	str = fmt.Sprintf("%s%s,", str, scope.String())
-		// }
-		// logutil.Warnf("ActiveScopes: %s, Incomming: %s", str, common.IDArraryString(scopes))
 		dispatcher.Unlock()
 		return
 	}
