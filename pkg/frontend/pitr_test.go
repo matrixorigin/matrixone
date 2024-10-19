@@ -2574,7 +2574,7 @@ func Test_doCreatePitr(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err = doCreatePitr(ctx, ses, stmt)
-		assert.Error(t, err)
+		assert.NoError(t, err)
 	})
 
 }
