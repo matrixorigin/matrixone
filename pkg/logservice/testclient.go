@@ -82,7 +82,7 @@ func newFS() *fileservice.FileServices {
 		panic(err)
 	}
 	fs, err := fileservice.NewFileServices(
-		"",
+		defines.SharedFileServiceName,
 		local,
 		s3,
 		etl,
