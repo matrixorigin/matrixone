@@ -315,16 +315,21 @@ func TestPutBlocksInAverage(t *testing.T) {
 		proc: testutil.NewProcess(),
 	}
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
-
 	var ranges memoryengine.ShardIdSlice
 	id := make([]byte, 8)
 	binary.LittleEndian.PutUint64(id, 1)
 	ranges.Append(id)
-
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
+	ranges.Append(id)
 	relData := &memoryengine.MemRelationData{
 		Shards: ranges,
 	}
-
 	putBlocksInAverage(testCompile, relData)
 }
 

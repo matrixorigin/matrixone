@@ -4587,17 +4587,17 @@ func removeEmtpyNodes(
 		}
 	}
 	if minCnt*2 < maxCnt {
-		warnString := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
+		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
 			n.TableDef.Name,
 			relData.DataCnt(),
 			len(newnodes),
 			maxCnt,
 			minCnt)
-		warnString = warnString + " cnlist: "
+		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
-			warnString = warnString + c.cnList[i].Addr + " "
+			logstring = logstring + c.cnList[i].Addr + " "
 		}
-		c.proc.Warn(c.proc.Ctx, warnString)
+		c.proc.Warn(c.proc.Ctx, logstring)
 	}
 	return newnodes, nil
 }
