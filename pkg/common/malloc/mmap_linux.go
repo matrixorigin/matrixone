@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints) {
+func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
 	// no need to clear, since re-visiting a MADV_DONTNEED-advised page will zero it
 }
 
