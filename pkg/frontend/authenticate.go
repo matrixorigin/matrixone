@@ -5260,6 +5260,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+		if isClusterTable(dbName, string(st.Table.ObjectName)) {
+			clusterTable = true
+			clusterTableOperation = clusterTableModify
+		}
 	case *tree.RenameTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -5278,6 +5282,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
+		}
+		if len(st.Names) > 1 && isClusterTable(dbName, string(st.Names[0].ObjectName)) {
+			clusterTable = true
+			clusterTableOperation = clusterTableDrop
 		}
 	case *tree.DropView:
 		objType = objectTypeDatabase
@@ -6379,13 +6387,19 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 
 	//double check privilege of drop table
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
-		switch dropTable := stmt.(type) {
+		switch st := stmt.(type) {
 		case *tree.DropTable:
-			dbName := string(dropTable.Names[0].SchemaName)
+			dbName := string(st.Names[0].SchemaName)
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
 			}
-			return isClusterTable(dbName, string(dropTable.Names[0].ObjectName)), nil
+			return isClusterTable(dbName, string(st.Names[0].ObjectName)), nil
+		case *tree.AlterTable:
+			dbName := string(st.Table.SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			return isClusterTable(dbName, string(st.Table.ObjectName)), nil
 		}
 	}
 

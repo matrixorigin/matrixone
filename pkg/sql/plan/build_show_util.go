@@ -74,7 +74,9 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
-			(accountId != catalog.System_Account || IsSnapshotValid(snapshot)) {
+			(accountId != catalog.System_Account || IsSnapshotValid(snapshot) || useDbName) {
+			// useDbName reuse in build alter table sql
+			// if use in other place, need to check or add a new parameter
 			continue
 		}
 
