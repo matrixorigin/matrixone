@@ -26,13 +26,12 @@ import (
 // to be filled in it, and then written to the object
 // file at one time
 type ObjectBuffer struct {
-	buf    *bytes.Buffer
+	buf    bytes.Buffer
 	vector fileservice.IOVector
 }
 
 func NewObjectBuffer(name string) *ObjectBuffer {
 	buffer := &ObjectBuffer{
-		buf: new(bytes.Buffer),
 		vector: fileservice.IOVector{
 			FilePath: name,
 		},
