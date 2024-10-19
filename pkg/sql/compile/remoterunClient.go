@@ -132,14 +132,6 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 
 			if node.RootOp.OpType() == vm.Dispatch {
 				t := node.RootOp.(*dispatch.Dispatch)
-				if len(t.RemoteRegs) > 0 {
-					s.Proc.Infof(
-						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other remote pipeline tree.",
-						s.Proc.GetTxnOperator().Txn().ID, s)
-
-					return false
-				}
 				for i := range t.LocalRegs {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
 						s.Proc.Infof(

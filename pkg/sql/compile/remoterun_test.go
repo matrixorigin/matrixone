@@ -709,30 +709,6 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
 
-	// a pipeline holds a dispatch send to remote should return false.
-	{
-		// s0, pre: s1
-		s0 := &Scope{
-			Proc:   proc.NewContextChildProc(1),
-			RootOp: dispatch.NewArgument(),
-		}
-
-		s1 := &Scope{
-			Proc: proc.NewContextChildProc(0),
-		}
-		op1 := dispatch.NewArgument()
-		op1.RemoteRegs = []colexec.ReceiveInfo{
-			{
-				NodeAddr: "remote1",
-			},
-		}
-		s1.RootOp = op1
-
-		s0.PreScopes = append(s0.PreScopes, s1)
-
-		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
-	}
-
 	// a pipeline holds an invalid connector should return false.
 	{
 		// s0, pre: s1
