@@ -367,8 +367,17 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 		//TODO::add debug for #19202, remove it later.
 		if ls.category == engine.ShardingRemoteDataSource {
 			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(ls.table.tableName) {
-				logutil.Infof("xxxx IterateInmemData, txn:%s, table name:%s, tid:%v, outBatch:%s",
+				rows := ""
+				iter := ls.pState.NewRowsIter(types.MaxTs(), nil, false)
+				for iter.Next() {
+					e := iter.Entry()
+					rows = fmt.Sprintf("%s, [%s, %s]", rows, e.RowID.String(), e.Time.ToString())
+				}
+				iter.Close()
+				logutil.Infof("xxxx IterateInmemData, txn:%s, ls.ps:%p,rows:%s, table name:%s, tid:%v, outBatch:%s",
 					ls.table.db.op.Txn().DebugString(),
+					ls.pState,
+					rows,
 					ls.table.tableName,
 					ls.table.tableId,
 					common.MoBatchToString(outBatch, 10),
@@ -816,7 +825,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+	if len(s3FlushedDeletes.data) == 0 {
 		return
 	}
 
