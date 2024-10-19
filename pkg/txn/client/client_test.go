@@ -262,3 +262,13 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 		},
 		WithMaxActiveTxn(1))
 }
+
+func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
+	c := &txnClient{}
+	c.mu.state = paused
+
+	op := &txnOperator{}
+	op.opts.options = op.opts.options.WithDisableWaitPaused()
+
+	require.Error(t, c.openTxn(op))
+}

@@ -416,19 +416,36 @@ func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef 
 	return nil
 }
 
-func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineHashOnPK != 0 {
-		return
+		return nil
 	}
 	node := builder.qry.Nodes[nodeID]
-	if len(node.Children) > 0 {
-		for _, child := range node.Children {
-			determineHashOnPK(child, builder)
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if node.TableDef.Pkey == nil {
+			return nil
 		}
+		tag := uint64(node.BindingTags[0]) << 32
+		colMap := make(map[uint64][]uint64)
+		for _, name := range node.TableDef.Pkey.Names {
+			k := tag | uint64(node.TableDef.Name2ColIndex[name])
+			colMap[k] = []uint64{k}
+		}
+		return colMap
 	}
 
 	if node.NodeType != plan.Node_JOIN {
-		return
+		for i := range node.Children {
+			determineHashOnPK(node.Children[i], builder)
+		}
+		return nil
+	}
+
+	leftColMap := determineHashOnPK(node.Children[0], builder)
+	rightColMap := determineHashOnPK(node.Children[1], builder)
+	if rightColMap == nil {
+		return nil
 	}
 
 	leftTags := make(map[int32]bool)
@@ -448,34 +465,73 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		}
 	}
 
-	hashCols := make([]*plan.ColRef, 0)
-	for _, cond := range exprs {
+	exprLeftCols := make([]uint64, len(exprs))
+	exprRightCols := make([]uint64, len(exprs))
+	for i, cond := range exprs {
 		switch condImpl := cond.Expr.(type) {
 		case *plan.Expr_F:
-			expr := condImpl.F.Args[1]
+			expr := condImpl.F.Args[0]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
-				hashCols = append(hashCols, exprImpl.Col)
+				exprLeftCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
+			}
+			expr = condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}
 		}
 	}
 
-	if len(hashCols) == 0 {
-		return
+	rightColKey := make([]uint64, len(exprs))
+	for key, value := range rightColMap {
+		find := false
+		for _, col := range value {
+			for i, rightCol := range exprRightCols {
+				if col == rightCol {
+					rightColKey[i] = ^key
+					find = true
+					break
+				}
+			}
+			if find {
+				break
+			}
+		}
+		if !find {
+			return nil
+		}
 	}
 
-	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
-	if tableDef == nil {
-		return
-	}
-	hashColPos := make([]int32, len(hashCols))
-	for i := range hashCols {
-		hashColPos[i] = hashCols[i].ColPos
-	}
-	if containsAllPKs(hashColPos, tableDef) {
-		node.Stats.HashmapStats.HashOnPK = true
+	node.Stats.HashmapStats.HashOnPK = true
+	if leftColMap == nil {
+		return nil
 	}
 
+	leftColKey := make([]uint64, len(exprs))
+	for key, value := range leftColMap {
+		find := false
+		for _, col := range value {
+			for i, leftCol := range exprLeftCols {
+				if col == leftCol {
+					leftColKey[i] = ^key
+					find = true
+					break
+				}
+			}
+			if find {
+				break
+			}
+		}
+	}
+
+	for i := range leftColKey {
+		if leftColKey[i] != 0 && rightColKey[i] != 0 {
+			leftColMap[^leftColKey[i]] = append(leftColMap[^leftColKey[i]], rightColMap[^rightColKey[i]]...)
+		}
+	}
+
+	return leftColMap
 }
 
 func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) (float64, bool) {
