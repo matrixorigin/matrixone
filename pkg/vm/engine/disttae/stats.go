@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"math"
 	"runtime"
 	"sync"
 	"time"
@@ -573,62 +572,6 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	updated = true
 }
 
-func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
-	if !zm.IsInited() {
-		return -1 /*for new added column, its zonemap will be empty and not initialized*/
-	}
-	switch t.Oid {
-	case types.T_bool:
-		return 2
-	case types.T_bit:
-		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
-	case types.T_int8:
-		return float64(types.DecodeFixed[int8](zm.GetMaxBuf())) - float64(types.DecodeFixed[int8](zm.GetMinBuf())) + 1
-	case types.T_int16:
-		return float64(types.DecodeFixed[int16](zm.GetMaxBuf())) - float64(types.DecodeFixed[int16](zm.GetMinBuf())) + 1
-	case types.T_int32:
-		return float64(types.DecodeFixed[int32](zm.GetMaxBuf())) - float64(types.DecodeFixed[int32](zm.GetMinBuf())) + 1
-	case types.T_int64:
-		return float64(types.DecodeFixed[int64](zm.GetMaxBuf())) - float64(types.DecodeFixed[int64](zm.GetMinBuf())) + 1
-	case types.T_uint8:
-		return float64(types.DecodeFixed[uint8](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint8](zm.GetMinBuf())) + 1
-	case types.T_uint16:
-		return float64(types.DecodeFixed[uint16](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint16](zm.GetMinBuf())) + 1
-	case types.T_uint32:
-		return float64(types.DecodeFixed[uint32](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint32](zm.GetMinBuf())) + 1
-	case types.T_uint64:
-		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
-	case types.T_decimal64:
-		return types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMaxBuf()), t.Scale) -
-			types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMinBuf()), t.Scale) + 1
-	case types.T_decimal128:
-		return types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMaxBuf()), t.Scale) -
-			types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMinBuf()), t.Scale) + 1
-	case types.T_float32:
-		return float64(types.DecodeFixed[float32](zm.GetMaxBuf())) - float64(types.DecodeFixed[float32](zm.GetMinBuf())) + 1
-	case types.T_float64:
-		return types.DecodeFixed[float64](zm.GetMaxBuf()) - types.DecodeFixed[float64](zm.GetMinBuf()) + 1
-	case types.T_timestamp:
-		return float64(types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Timestamp](zm.GetMinBuf())) + 1
-	case types.T_date:
-		return float64(types.DecodeFixed[types.Date](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Date](zm.GetMinBuf())) + 1
-	case types.T_time:
-		return float64(types.DecodeFixed[types.Time](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Time](zm.GetMinBuf())) + 1
-	case types.T_datetime:
-		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
-	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		//NDV Function
-		// An aggregate function that returns an approximate value similar to the result of COUNT(DISTINCT col),
-		// the "number of distinct values".
-		return -1
-	case types.T_enum:
-		return float64(types.DecodeFixed[types.Enum](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Enum](zm.GetMinBuf())) + 1
-	default:
-		return -1
-	}
-}
-
 func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 	switch typ.Oid {
 	case types.T_bit:
@@ -691,7 +634,8 @@ func updateInfoFromZoneMap(
 		meta := objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
 		info.BlockNumber += int64(obj.BlkCnt())
-		info.TableCnt += float64(meta.BlockHeader().Rows())
+		objSize := meta.BlockHeader().Rows()
+		info.TableCnt += float64(objSize)
 		if !init {
 			init = true
 			for idx, col := range req.tableDef.Cols[:lenCols] {
@@ -699,7 +643,13 @@ func updateInfoFromZoneMap(
 				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
-				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+				ndv := float64(objColMeta.Ndv())
+				info.ColumnNDVs[idx] = ndv
+				info.MaxNDVs[idx] = ndv
+				info.NDVinMinOBJ[idx] = ndv
+				info.NDVinMaxOBJ[idx] = ndv
+				info.MaxOBJSize = objSize
+				info.MinOBJSize = objSize
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
@@ -729,7 +679,24 @@ func updateInfoFromZoneMap(
 				}
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+				ndv := float64(objColMeta.Ndv())
+
+				info.ColumnNDVs[idx] += ndv
+				if ndv > info.MaxNDVs[idx] {
+					info.MaxNDVs[idx] = ndv
+				}
+				if objSize > info.MaxOBJSize {
+					info.MaxOBJSize = objSize
+					info.NDVinMaxOBJ[idx] = ndv
+				} else if objSize == info.MaxOBJSize && ndv > info.NDVinMaxOBJ[idx] {
+					info.NDVinMaxOBJ[idx] = ndv
+				}
+				if objSize < info.MinOBJSize {
+					info.MinOBJSize = objSize
+					info.NDVinMinOBJ[idx] = ndv
+				} else if objSize == info.MinOBJSize && ndv < info.NDVinMinOBJ[idx] {
+					info.NDVinMinOBJ[idx] = ndv
+				}
 				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
@@ -757,48 +724,8 @@ func updateInfoFromZoneMap(
 	return nil
 }
 
-func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
-	lenCols := len(tableDef.Cols) - 1 /* row-id */
-
-	if info.AccurateObjectNumber > 1 {
-		for idx := range tableDef.Cols[:lenCols] {
-			rate := info.ColumnNDVs[idx] / info.TableCnt
-			if rate > 1 {
-				rate = 1
-			}
-			if rate < 0.2 {
-				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
-				if plan2.GetSortOrder(tableDef, int32(idx)) == -1 { //non sorted column, need to adjust ndv down
-					if info.ColumnNDVs[idx] < 50000 && info.ColumnNDVs[idx] > 500 {
-						info.ColumnNDVs[idx] /= math.Pow(info.ColumnNDVs[idx], 0.2)
-					}
-				} else if info.ColumnNDVs[idx] > 500 { //sorted column, need to adjust ndv up
-					info.ColumnNDVs[idx] *= math.Pow(info.ColumnNDVs[idx], 0.2)
-					if info.ColumnSize[idx] > 0 {
-						info.ColumnNDVs[idx] *= math.Pow(float64(info.ColumnSize[idx]), 0.2)
-					}
-				}
-			}
-			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
-			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
-				info.ColumnNDVs[idx] = ndvUsingZonemap
-			}
-
-			if info.ColumnNDVs[idx] < 3 {
-				info.ColumnNDVs[idx] *= (4 - info.ColumnNDVs[idx])
-			}
-
-			if info.ColumnNDVs[idx] > info.TableCnt {
-				info.ColumnNDVs[idx] = info.TableCnt
-			}
-		}
-	}
-}
-
 // UpdateStats is the main function to calculate and update the stats for scan node.
-func UpdateStats(
-	ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor,
-) error {
+func UpdateStats(ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -808,13 +735,26 @@ func UpdateStats(
 	if req.approxObjectNum == 0 {
 		return nil
 	}
-
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
 	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
-	adjustNDV(info, baseTableDef)
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
+	plan2.AdjustNDV(info, baseTableDef, req.statsInfo)
+
+	for i, coldef := range baseTableDef.Cols[:len(baseTableDef.Cols)-1] {
+		colName := coldef.Name
+		overlap := 1.0
+		if req.statsInfo.ShuffleRangeMap[colName] != nil {
+			overlap = req.statsInfo.ShuffleRangeMap[colName].Overlap
+		}
+		if req.statsInfo.MaxValMap[colName] < req.statsInfo.MinValMap[colName] {
+			logutil.Errorf("error happended in stats!")
+		}
+		logutil.Infof("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
+			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
+			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
+	}
 	return nil
 }

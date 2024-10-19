@@ -1624,7 +1624,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		ReCalcNodeStats(rootID, builder, true, false, true)
+		ReCalcNodeStats(rootID, builder, true, true, true)
 		builder.partitionPrune(rootID)
 
 		determineHashOnPK(rootID, builder)
