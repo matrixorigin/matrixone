@@ -413,6 +413,66 @@ drop database test07;
 drop database test08;
 drop snapshot sp06;
 
+
+
+
+-- restore account should success, if the table corresponding to the restored timestamp does not exist,
+-- do not restore the table
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists table01;
+create table table01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into table01 values (1, null, 'database');
+insert into table01 values (2, 38291.32132, 'database');
+insert into table01 values (3, null, 'database management system');
+insert into table01 values (4, 10, null);
+insert into table01 values (1, -321.321, null);
+insert into table01 values (2, -1, null);
+
+drop publication if exists pub10;
+create publication pub10 database test01 table table01 account acc01;
+
+drop snapshot if exists sp10;
+create snapshot sp10 for account sys;
+
+drop table if exists table02;
+create table table02 (col1 int, col3 decimal);
+insert into table02 values(1, 2);
+drop publication if exists pub11;
+create publication pub11 database test01 table table02 account acc02;
+
+-- @session:id=1&user=acc01:test_account&password=111
+drop database if exists sub01;
+create database sub01 from sys publication pub10;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+drop database if exists sub02;
+create database sub02 from sys publication pub11;
+-- @session
+
+restore account sys from snapshot sp10;
+
+-- @ignore:5,6
+show publications;
+show databases;
+
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
+show subscriptions;
+drop database sub01;
+-- @session
+
+-- @session:id=2&user=acc02:test_account&password=111
+-- @ignore:5,7
+show subscriptions;
+drop database sub02;
+-- @session
+
+drop publication pub10;
+drop database test01;
+drop snapshot sp10;
 drop account acc01;
 drop account acc02;
 drop account acc03;
