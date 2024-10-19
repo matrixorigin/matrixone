@@ -29,12 +29,12 @@ type CounterSet struct {
 
 type FileServiceCounterSet struct {
 	S3 struct {
-		List        stats.Counter // listObjects   列举所有Object             [Put类请求]
-		Head        stats.Counter // statObject    查看Object包含的所有meta信息 [Get类请求]
-		Put         stats.Counter // putObject     上传Object                 [Put类请求]
-		Get         stats.Counter // getObject     下载Object                 [Get类请求]
-		Delete      stats.Counter // deleteObject  删除单个Object              [Put类请求]
-		DeleteMulti stats.Counter // deleteObjects 删除多个Object              [Put类请求]
+		List        stats.Counter // listObjects:List all Objects  [Put type request]
+		Head        stats.Counter // statObject:View all meta information contained in the object [Get type request]
+		Put         stats.Counter // putObject:Upload an Object   [Put type request]
+		Get         stats.Counter // getObject:Download an Object   [Get type request]
+		Delete      stats.Counter // deleteObject:Delete a single Object [Put type request]
+		DeleteMulti stats.Counter // deleteObjects:Delete multiple Objects [Put type request]
 	}
 
 	Cache struct {
@@ -44,20 +44,20 @@ type FileServiceCounterSet struct {
 			Read stats.Counter
 			Hit  stats.Counter
 		}
-		Disk struct { // 磁盘缓存
-			Read             stats.Counter // 以次数为单位
-			Hit              stats.Counter // 以次数为单位
-			GetFileContent   stats.Counter // 以次数为单位
-			SetFileContent   stats.Counter // 以次数为单位
-			OpenIOEntryFile  stats.Counter // 以次数为单位
-			OpenFullFile     stats.Counter // 以次数为单位
-			CreateFile       stats.Counter // 以次数为单位
-			StatFile         stats.Counter // 以次数为单位
-			WriteFile        stats.Counter // 以次数为单位
-			Error            stats.Counter // 以次数为单位
-			Evict            stats.Counter // 以次数为单位
-			EvictPending     stats.Counter // 以次数为单位
-			EvictImmediately stats.Counter // 以次数为单位
+		Disk struct {
+			Read             stats.Counter
+			Hit              stats.Counter
+			GetFileContent   stats.Counter
+			SetFileContent   stats.Counter
+			OpenIOEntryFile  stats.Counter
+			OpenFullFile     stats.Counter
+			CreateFile       stats.Counter
+			StatFile         stats.Counter
+			WriteFile        stats.Counter
+			Error            stats.Counter
+			Evict            stats.Counter
+			EvictPending     stats.Counter
+			EvictImmediately stats.Counter
 		}
 		Remote struct {
 			Read stats.Counter
@@ -70,10 +70,10 @@ type FileServiceCounterSet struct {
 	}
 
 	FileWithChecksum struct {
-		Read            stats.Counter // 逻辑读, bytes
-		Write           stats.Counter // 逻辑写, bytes
-		UnderlyingRead  stats.Counter // physical read bytes
-		UnderlyingWrite stats.Counter // physical write bytes
+		Read            stats.Counter // logical read, unit：bytes
+		Write           stats.Counter // logical write, unit：bytes
+		UnderlyingRead  stats.Counter // physical read, unit：bytes
+		UnderlyingWrite stats.Counter // physical write, unit：bytes
 	}
 }
 

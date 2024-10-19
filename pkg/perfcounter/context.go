@@ -77,8 +77,11 @@ func WithCounterSetFrom(ctx context.Context, fromCtx context.Context) context.Co
 }
 
 // ----------------------------------------------------------------------------------------------------------------------
+// S3RequestKey is an empty struct used as a key for attaching S3 request counters to a context, which
+// used to count the usage of S3 resources when a certain function is called
 type S3RequestKey struct{}
 
+// AttachS3RequestKey attaches a *CounterSet to the given context with an S3RequestKey.
 func AttachS3RequestKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, S3RequestKey{}, counter)
 }
@@ -88,42 +91,48 @@ func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
 	return counter, ok
 }
 
-// 内部执行器context KEY
+// Internal executor context key
 type InternalExecutorKey struct{}
 
 func AttachInternalExecutorKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, InternalExecutorKey{}, struct{}{})
 }
 
-// ctx = perfcounter.AttachInternalExecutorKey(ctx)
-
-// 通用执行器context KEY
+// Generic executor context key
 type GenericExecutorKey struct{}
 
 func AttachGenericExecutorKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, GenericExecutorKey{}, struct{}{})
 }
 
+// ParserMarkKey is an empty struct used as a key for attaching a parser mark to a context.
 type ParserMarkKey struct{}
 
+// AttachParserMarkKey attaches a parser mark (an empty struct) to the given context.
 func AttachParserMarkKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ParserMarkKey{}, struct{}{})
 }
 
+// BuildPlanMarkKey is an empty struct used as a key for attaching a build plan counter to a context.
 type BuildPlanMarkKey struct{}
 
+// AttachBuildPlanMarkKey attaches a *CounterSet to the given context with a BuildPlanMarkKey.
 func AttachBuildPlanMarkKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, BuildPlanMarkKey{}, counter)
 }
 
+// CompilePlanMarkKey is an empty struct used as a key for attaching a compile plan counter to a context.
 type CompilePlanMarkKey struct{}
 
+// AttachCompilePlanMarkKey attaches a *CounterSet to the given context with a CompilePlanMarkKey.
 func AttachCompilePlanMarkKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, CompilePlanMarkKey{}, counter)
 }
 
+// ExecPipelineMarkKey is an empty struct used as a key for attaching an execution pipeline counter to a context.
 type ExecPipelineMarkKey struct{}
 
+// AttachExecPipelineKey attaches a *CounterSet to the given context with an ExecPipelineMarkKey.
 func AttachExecPipelineKey(ctx context.Context, counter *CounterSet) context.Context {
 	return context.WithValue(ctx, ExecPipelineMarkKey{}, counter)
 }

@@ -423,7 +423,6 @@ func (c *Compile) handlePlanAnalyze(runC *Compile, queryResult *util2.RunResult,
 	c.GenPhyPlan(runC)
 	c.fillPlanNodeAnalyzeInfo(stats)
 
-	//stats.AddScopePrepareDuration()
 	if isExplainPhy {
 		topContext := c.proc.GetTopContext()
 

@@ -254,7 +254,7 @@ type StatsInfo struct {
 		ParseStartTime time.Time     `json:"ParseStartTime"`
 	}
 
-	// 计划阶段特殊统计信息
+	// Planning Phase Statistics
 	PlanStage struct {
 		PlanDuration       time.Duration `json:"PlanDuration"`
 		PlanStartTime      time.Time     `json:"PlanStartTime"`
@@ -265,7 +265,7 @@ type StatsInfo struct {
 		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
 	}
 
-	// 编译阶段特殊统计信息
+	// Compile phase statistics
 	CompileStage struct {
 		CompileDuration            time.Duration `json:"CompileDuration"`
 		CompileStartTime           time.Time     `json:"CompileStartTime"`
@@ -276,6 +276,7 @@ type StatsInfo struct {
 		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 	}
 
+	// Prepare execution phase statistics
 	PrepareRunStage struct {
 		// ScopePrepareDuration belongs to concurrent merge time
 		ScopePrepareDuration      int64     `json:"ScopePrepareDuration"`      // unit: ns
@@ -285,7 +286,7 @@ type StatsInfo struct {
 		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
 	}
 
-	// 执行阶段统计信息
+	// Execution phase statistics
 	ExecuteStage struct {
 		ExecutionDuration  time.Duration `json:"ExecutionDuration"`
 		ExecutionStartTime time.Time     `json:"ExecutionStartTime"`
@@ -296,6 +297,7 @@ type StatsInfo struct {
 	}
 
 	// 用于记录额外操作的统计信息, 记录不包含在以上这些阶段中
+	// Used to record statistics of additional operations, which are not included in the above stages
 	OtherStage struct {
 		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`
 	}
@@ -313,55 +315,7 @@ type StatsInfo struct {
 	WaitActiveCost time.Duration `json:"WaitActive"`
 }
 
-// statistic info of sql
-type StatsInfoX struct {
-	ParseDuration     time.Duration `json:"ParseDuration"`
-	PlanDuration      time.Duration `json:"PlanDuration"`
-	CompileDuration   time.Duration `json:"CompileDuration"`
-	ExecutionDuration time.Duration `json:"ExecutionDuration"`
-	// Statistics on the time consumption of the output operator in generating data for query statements
-	OutputDuration      int64 `json:"OutputDuration"`      // unit: ns
-	BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
-
-	//--------------------------------------------------------------------------------
-	// The following attributes are independent statistics for special operations in `buildPlan` phase, used for reference.
-	BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
-	BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
-
-	// The following attributes are independent statistics for special operations in `CompileQuery` phase, used for reference.
-	CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
-
-	BuildPlanS3Request    S3Request `json:"BuildPlanS3Request"`
-	CompileS3Request      S3Request `json:"CompileS3Request"`
-	ScopePrepareS3Request S3Request `json:"ScopePrepareS3Request"`
-	ScopePrepareDuration  int64     `json:"ScopePrepareDuration"` // unit: ns
-	//--------------------------------------------------------------------------------
-	CompilePreRunOnceDuration int64 `json:"CompilePreRunOnceDuration"`
-	//PipelineTimeConsumption      time.Duration
-	//PipelineBlockTimeConsumption time.Duration
-	//--------------------------------------------------------------------------------
-	IOAccessTimeConsumption int64
-	//S3ReadBytes             uint
-	//S3WriteBytes            uint
-
-	// Local FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
-	LocalFSReadIOMergerTimeConsumption int64
-	// S3 FileService blocking wait IOMerge time Consumption, which is included in IOAccessTimeConsumption
-	S3FSReadIOMergerTimeConsumption int64
-
-	// S3 FileService Prefetch File IOMerge time Consumption
-	S3FSPrefetchFileIOMergerTimeConsumption int64
-
-	ParseStartTime     time.Time `json:"ParseStartTime"`
-	PlanStartTime      time.Time `json:"PlanStartTime"`
-	CompileStartTime   time.Time `json:"CompileStartTime"`
-	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
-	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
-
-	WaitActiveCost time.Duration `json:"WaitActive"`
-}
-
-// S3Request 结构用于记录每种 S3 操作的次数
+// S3Request structure is used to record the number of times each S3 operation is performed
 type S3Request struct {
 	List      int64 `json:"List"`
 	Head      int64 `json:"Head"`

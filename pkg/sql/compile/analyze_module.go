@@ -548,7 +548,7 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			//	gblStats.S3DeleteRequest+statsInfo.PlanStage.BuildPlanS3Request.Delete+statsInfo.CompileStage.CompileS3Request.Delete+statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
 			//	gblStats.S3DeleteMultiRequest+statsInfo.PlanStage.BuildPlanS3Request.DeleteMul+statsInfo.CompileStage.CompileS3Request.DeleteMul+statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
 			//))
-			// 使用 calculateS3Requests 函数
+			// Calculate the total sum of S3 requests for each stage
 			list, head, put, get, delete, deleteMul := calcTotalS3Requests(gblStats, statsInfo)
 			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 				list, head, put, get, delete, deleteMul,
@@ -636,6 +636,9 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 	}
 }
 
+// calcTotalS3Requests calculates the total number of S3 requests (List, Head, Put, Get, Delete, DeleteMul)
+// by summing up values from global statistics (gblStats) and different stages of the execution process
+// (PlanStage, CompileStage, and PrepareRunStage) in the statsInfo.
 func calcTotalS3Requests(gblStats GblStats, statsInfo *statistic.StatsInfo) (list, head, put, get, delete, deleteMul int64) {
 	list = gblStats.S3ListRequest + statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.CompileStage.CompileS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.List
 	head = gblStats.S3HeadRequest + statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.CompileStage.CompileS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Head
