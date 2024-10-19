@@ -714,11 +714,11 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		return e, nil
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
-	defer vec.Free(proc.Mp())
+	defer free()
 	c := rule.GetConstantValue(vec, true, 0)
 	if c == nil {
 		return e, nil
@@ -993,12 +993,13 @@ func evalPartitionBoolExpr(ctx context.Context, lOriExpr *Expr, rOriExpr *Expr, 
 		return false, err
 	}
 
-	vec, err := colexec.EvalExpressionOnce(binder.builder.compCtx.GetProcess(), retExpr, []*batch.Batch{batch.EmptyForConstFoldBatch, batch.EmptyForConstFoldBatch})
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(binder.builder.compCtx.GetProcess(), retExpr)
 	if err != nil {
 		return false, err
 	}
-	fixedCol := vector.MustFixedColWithTypeCheck[bool](vec)
-	return fixedCol[0], nil
+	b := vector.MustFixedColWithTypeCheck[bool](vec)[0]
+	free()
+	return b, nil
 }
 
 // getIntConstVal Get an integer constant value, the `cExpr` must be integral constant expression
