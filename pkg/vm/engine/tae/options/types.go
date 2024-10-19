@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -30,8 +29,6 @@ import (
 )
 
 const (
-	DefaultIndexCacheSize = 256 * mpool.MB
-
 	DefaultBulkTomestoneTxnThreshold = 10000 // rows
 	DefaultLockMergePruneInterval    = time.Minute
 
