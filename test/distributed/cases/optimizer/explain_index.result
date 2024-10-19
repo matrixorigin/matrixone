@@ -37,7 +37,6 @@ Project
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t1
               Filter Cond: (t1.c3 < 30)
-              Block Filter Cond: (t1.c3 < 30)
 select count(*) from t1 where c3<30;
 count(*)
 300

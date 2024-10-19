@@ -19,6 +19,8 @@ import (
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+	ses.EnterRunSql()
+	defer ses.ExitRunSql()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
