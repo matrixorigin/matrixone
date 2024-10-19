@@ -298,36 +298,28 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 			}
 
 			for _, ioValue := range node.Statistics.IO {
-				if ioValue.Name == DiskIO {
+				switch ioValue.Name {
+				case DiskIO:
 					gDiskIO.Value += ioValue.Value
-				}
-				if ioValue.Name == ScanBytes {
+				case ScanBytes:
 					gS3IOByte.Value += ioValue.Value
-				}
 				// -----------------验证后，此处代码需要删除------------
-				if ioValue.Name == S3IOInputCount {
+				case S3IOInputCount:
 					gS3IOInputCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOOutputCount {
+				case S3IOOutputCount:
 					gS3IOOutputCount.Value += ioValue.Value
-				}
-				//--------------------------------------------------
-				if ioValue.Name == S3List {
+				// --------------------------------------------------
+				case S3List:
 					gS3ListCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3Head {
+				case S3Head:
 					gS3HeadCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3Put {
+				case S3Put:
 					gS3PutCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3Get {
+				case S3Get:
 					gS3GetCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3Delete {
+				case S3Delete:
 					gS3DeleteCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3DeleteMul {
+				case S3DeleteMul:
 					gS3DeleteMulCount.Value += ioValue.Value
 				}
 			}
@@ -343,7 +335,10 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
 		mems := []StatisticValue{*gMemorySize}
-		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount}
+		io := []StatisticValue{
+			*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount,
+			*gS3ListCount, *gS3HeadCount, *gS3PutCount, *gS3GetCount, *gS3DeleteCount, *gS3DeleteMulCount,
+		}
 		nw := []StatisticValue{*gNetwork}
 
 		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)

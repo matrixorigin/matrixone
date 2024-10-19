@@ -152,6 +152,10 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
 		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
 		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+		// -----验证后，此处代码需要删除------
+		node.AnalyzeInfo.S3IOInputCount += op.OpStats.S3Put + op.OpStats.S3List
+		node.AnalyzeInfo.S3IOOutputCount += op.OpStats.S3Head + op.OpStats.S3Get + op.OpStats.S3Delete + op.OpStats.S3DeleteMul
+		// -------------------------------
 
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
