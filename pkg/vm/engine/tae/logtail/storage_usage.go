@@ -1180,7 +1180,7 @@ func FillUsageBatOfCompacted(
 	}
 	scan(objects)
 	scan(tombstones)
-	iter := usage.cache.Iter()
+	iter := usage.cache.data.Iter()
 	ok := iter.First()
 	for {
 		if !ok {
