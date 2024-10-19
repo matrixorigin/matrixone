@@ -4564,16 +4564,16 @@ func removeEmtpyNodes(
 	rel engine.Relation,
 	relData engine.RelData,
 	nodes engine.Nodes) (engine.Nodes, error) {
-	minWorkLoad := math.MaxInt32
-	maxWorkLoad := 0
+	minCnt := math.MaxInt32
+	maxCnt := 0
 	// remove empty node from nodes
-	var newNodes engine.Nodes
+	var newnodes engine.Nodes
 	for i := range nodes {
-		if nodes[i].Data.DataCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() > maxCnt {
+			maxCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
-		if nodes[i].Data.DataCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() < minCnt {
+			minCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4583,23 +4583,23 @@ func removeEmtpyNodes(
 				}
 				nodes[i].Data.AttachTombstones(tombstone)
 			}
-			newNodes = append(newNodes, nodes[i])
+			newnodes = append(newnodes, nodes[i])
 		}
 	}
-	if minWorkLoad*2 < maxWorkLoad {
-		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
+	if minCnt*2 < maxCnt {
+		warnString := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
 			n.TableDef.Name,
 			relData.DataCnt(),
-			len(newNodes),
-			maxWorkLoad,
-			minWorkLoad)
-		logstring = logstring + " cnlist: "
+			len(newnodes),
+			maxCnt,
+			minCnt)
+		warnString = warnString + " cnlist: "
 		for i := range c.cnList {
-			logstring = logstring + c.cnList[i].Addr + " "
+			warnString = warnString + c.cnList[i].Addr + " "
 		}
-		c.proc.Warn(c.proc.Ctx, logstring)
+		c.proc.Warn(c.proc.Ctx, warnString)
 	}
-	return newNodes, nil
+	return newnodes, nil
 }
 
 func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
