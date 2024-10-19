@@ -142,6 +142,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if len(sels) != filterBat.RowCount() {
 				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
+				if err != nil {
+					return vm.CancelResult, err
+				}
 			}
 		}
 	}
