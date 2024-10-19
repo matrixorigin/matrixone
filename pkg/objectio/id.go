@@ -89,10 +89,6 @@ func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {
 	return bytes.Equal(buf, *objID)
 }
 
-func ToSegmentId(blkID *Blockid) *Segmentid {
-	return (*Segmentid)(unsafe.Pointer(blkID))
-}
-
 func IsEmptySegid(id *Segmentid) bool {
 	return bytes.Equal(id[:], emptySegmentId[:])
 }
@@ -104,32 +100,7 @@ func IsEmptyBlkid(id *Blockid) bool {
 // some id hacks
 
 // used only in some special cases
-func HackU64ToRowid(v uint64) Rowid {
-	var id Rowid
-	copy(id[:], types.EncodeUint64(&v))
-	return id
-}
-
-// used only in some special cases
-func HackRowidToU64(id Rowid) uint64 {
-	return types.DecodeUint64(id[:])
-}
-
-// used only in some special cases
-func HackBlockid2Rowid(id *Blockid) Rowid {
-	var rowid Rowid
-	copy(rowid[:], id[:])
-	return rowid
-}
-
-// used only in some special cases
-func HackSegid2Rowid(id *Segmentid) Rowid {
-	var rowid Rowid
-	copy(rowid[:], id[:])
-	return rowid
-}
-
-// used only in some special cases
+// REMOVEME: hf
 func HackObjid2Rowid(id *ObjectId) Rowid {
 	var rowid Rowid
 	copy(rowid[:], id[:])
@@ -137,6 +108,7 @@ func HackObjid2Rowid(id *ObjectId) Rowid {
 }
 
 // used only in some special cases
+// REMOVEME: hf
 func HackBytes2Rowid(bs []byte) Rowid {
 	var rowid types.Rowid
 	if size := len(bs); size <= types.RowidSize {
