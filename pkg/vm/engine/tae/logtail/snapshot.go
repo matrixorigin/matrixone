@@ -1460,12 +1460,18 @@ func (sm *SnapshotMeta) MergeTableInfo(
 func (sm *SnapshotMeta) GetTableDropAt(tid uint64) types.TS {
 	sm.RLock()
 	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return types.TS{}
+	}
 	return sm.tableIDIndex[tid].deleteAt
 }
 
 func (sm *SnapshotMeta) GetAccountId(tid uint64) uint32 {
 	sm.RLock()
 	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return 0
+	}
 	return sm.tableIDIndex[tid].accountID
 }
 
