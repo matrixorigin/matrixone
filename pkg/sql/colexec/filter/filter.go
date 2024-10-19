@@ -81,7 +81,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	filterBat := inputResult.Batch
 	var sels []int64
 	for i := range filter.ctr.allExecutors {
-		if filterBat == nil || filterBat.IsEmpty() {
+		if filterBat.IsEmpty() {
 			break
 		}
 
@@ -112,7 +112,10 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				filterBat = nil
+				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
+				if err != nil {
+					return vm.CancelResult, err
+				}
 			}
 		} else {
 			if sels == nil {
@@ -163,7 +166,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, sels []int64) (*batch.Batch, error) {
 	if len(sels) == 0 {
-		return nil, nil
+		return batch.EmptyBatch, nil
 	}
 	if bat == ctr.buf {
 		ctr.buf.Shrink(sels, false)
