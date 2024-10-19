@@ -1137,8 +1137,10 @@ func FillUsageBatOfCompacted(
 	pitrs *PitrInfo) {
 	now := time.Now()
 	logutil.Infof("fill usage bat of compacted ckp start")
+	usage.EnterProcessing()
 	defer func() {
 		logutil.Infof("fill usage bat of compacted ckp takes %v", time.Since(now))
+		usage.LeaveProcessing()
 	}()
 	objects := data.GetObjectBatchs()
 	tombstones := data.GetTombstoneObjectBatchs()
@@ -1193,6 +1195,7 @@ func FillUsageBatOfCompacted(
 		val.SnapshotSize = ud.SnapshotSize
 		update[key] = val
 	}
+	iter.Release()
 
 	for _, v := range update {
 		usage.cache.SetOrReplace(v)
