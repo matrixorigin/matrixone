@@ -2504,8 +2504,8 @@ func Test_doCreatePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		// err = doCreatePitr(ctx, ses, stmt)
-		// assert.Error(t, err)
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
 
 		sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
 		mrs = newMrsForPitrRecord([][]interface{}{
@@ -2549,5 +2549,32 @@ func Test_doCreatePitr(t *testing.T) {
 			},
 		})
 		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf(getPitrFormat+" where pitr_name = '%s';", SYSMOCATALOGPITR)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{
+				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
+				"pitr01",
+				uint64(0),
+				"2024-05-01 00:00:00",
+				"2024-05-01 00:00:00",
+				"database",
+				uint64(0),
+				"sys",
+				"mo_catalog",
+				"",
+				uint64(1),
+				uint8(1),
+				"d",
+			},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.Error(t, err)
 	})
+
 }
