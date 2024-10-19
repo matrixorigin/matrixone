@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 // +--------+---------+----------+----------+------------+
@@ -121,7 +122,10 @@ func (catalog *Catalog) InitSystemDB() {
 }
 
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
-	logutil.Infof("GC Catalog %v", ts.ToString())
+	logutil.Info(
+		"GC-InMemory-Catalog",
+		zap.String("ts", ts.ToString()),
+	)
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
 		needGC := d.DeleteBefore(ts)
