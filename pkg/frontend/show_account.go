@@ -155,7 +155,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
-		usage := &cmd_util.StorageUsageResp_V2{}
+		usage := &cmd_util.StorageUsageResp_V3{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
 		}
@@ -478,8 +478,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	for x := range accIds {
 		for y := range accIds[x] {
-			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], usage[accIds[x][y]][0], y)
-			updateStorageSize(accInfosBatches[x].Vecs[idxOfSnapshotSize], usage[accIds[x][y]][1], y)
+			var size, snapshotSize uint64
+			if len(usage[accIds[x][y]]) > 0 {
+				size = usage[accIds[x][y]][0]
+				snapshotSize = usage[accIds[x][y]][1]
+			}
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], size, y)
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSnapshotSize], snapshotSize, y)
 			if accIds[x][y] != sysAccountID {
 				updateCount(accInfosBatches[x].Vecs[idxOfDbCount], specialDBCnt, y)
 				updateCount(accInfosBatches[x].Vecs[idxOfTableCount], specialTableCnt, y)
