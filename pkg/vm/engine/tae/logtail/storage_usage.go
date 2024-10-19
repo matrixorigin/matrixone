@@ -1181,15 +1181,18 @@ func FillUsageBatOfCompacted(
 	scan(objects)
 	scan(tombstones)
 	iter := usage.cache.Iter()
-	for iter.Next() {
+	ok := iter.First()
+	for ok {
 		val := iter.Item()
 		key := [3]uint64{val.AccId, val.DbId, val.TblId}
 		ud, ok := usageData[key]
 		if val.SnapshotSize == 0 && !ok {
+			ok = iter.Next()
 			continue
 		}
 		val.SnapshotSize = ud.SnapshotSize
 		usage.cache.SetOrReplace(val)
+		ok = iter.Next()
 	}
 }
 
