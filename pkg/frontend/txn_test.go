@@ -265,6 +265,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
@@ -294,6 +296,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -327,6 +331,8 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -366,6 +372,8 @@ func Test_rollbackStatement(t *testing.T) {
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+				txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+				txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 				return txnOperator, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
