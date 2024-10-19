@@ -166,7 +166,20 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 	if bat == ctr.buf {
 		ctr.buf.Shrink(sels, false)
 	} else {
-		ctr.buf.CleanOnlyData()
+		if ctr.buf == nil {
+			ctr.buf = batch.NewWithSize(len(bat.Vecs))
+			ctr.buf.SetAttributes(bat.Attrs)
+			ctr.buf.Recursive = bat.Recursive
+			for j, vec := range bat.Vecs {
+				typ := *bat.GetVector(int32(j)).GetType()
+				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
+				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
+			}
+			ctr.buf.SetRowCount(bat.RowCount())
+			ctr.buf.ShuffleIDX = bat.ShuffleIDX
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
 		err := ctr.buf.Union(bat, sels, proc.Mp())
 		if err != nil {
 			return nil, err
