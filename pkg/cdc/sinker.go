@@ -217,6 +217,21 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	}
 
 	if data.noMoreData {
+		// output the left sql
+		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
+			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+				return
+			}
+		} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
+			s.sqlBuf = appendByte(s.sqlBuf, ')')
+			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+				return
+			}
+		}
+		// reset status
+		s.sqlBuf = s.sqlBuf[:0]
+		s.preRowType = NoOp
+
 		if s.hasBegin {
 			if err = s.mysql.Send(ctx, s.ar, "commit;"); err != nil {
 				return
@@ -266,7 +281,11 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err e
 		}
 	}()
 
-	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+	// if last row is not insert row, means this is the first snapshot batch
+	if s.preRowType != InsertRow {
+		s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+		s.preRowType = InsertRow
+	}
 
 	for i := 0; i < batchRowCount(bat); i++ {
 		// step1: get row from the batch
@@ -284,13 +303,6 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err e
 			return
 		}
 	}
-	if len(s.sqlBuf) != len(s.tsInsertPrefix) {
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	}
-
-	s.sqlBuf = s.sqlBuf[:0]
 	return
 }
 

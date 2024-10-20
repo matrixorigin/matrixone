@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,22 +14,17 @@
 
 package fileservice
 
-func ptrTo[T any](v T) *T {
-	return &v
-}
+import "testing"
 
-func ceilingDiv[T int | int64](n, by T) T {
-	res := n / by
-	if n%by == 0 {
-		return res
+func TestZeroToNil(t *testing.T) {
+	if testing.AllocsPerRun(10, func() {
+		if zeroToNil("") != nil {
+			t.Fatal()
+		}
+		if zeroToNil("foo") == nil {
+			t.Fatal()
+		}
+	}) != 0 {
+		t.Fatal()
 	}
-	return res + 1
-}
-
-func zeroToNil[T comparable](v T) *T {
-	var zero T
-	if v == zero {
-		return nil
-	}
-	return &v
 }

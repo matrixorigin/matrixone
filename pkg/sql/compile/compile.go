@@ -817,7 +817,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL())
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -3756,10 +3756,10 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 		return 1
 	}
 	ret := blocks/16 + 1
-	if ret < cpunum {
-		if cpunum > 4 && ret < 4 {
-			return 4
-		}
+	if c.isPrepare {
+		ret = blocks/64 + 1
+	}
+	if ret <= cpunum {
 		return ret
 	}
 	return cpunum
