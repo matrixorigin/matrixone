@@ -229,6 +229,77 @@ func TestClientRead(t *testing.T) {
 	RunClientTest(t, false, nil, fn)
 }
 
+func TestClientReadLsn(t *testing.T) {
+	orig := defaultLogDBMaxLogFileSize
+	defaultLogDBMaxLogFileSize = 500
+	defaultArchiverEnabled = true
+	defer func() {
+		defaultArchiverEnabled = false
+		defaultLogDBMaxLogFileSize = orig
+	}()
+	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		var lsn uint64
+		for i := 0; i < 50; i++ {
+			rec := c.GetLogRecord(16)
+			n, err := rand.Read(rec.Payload())
+			assert.Equal(t, n, 16)
+			assert.NoError(t, err)
+			lsn, err = c.Append(ctx, rec)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(4+i), lsn)
+		}
+		searchTime := time.Now()
+		for i := 0; i < 50; i++ {
+			rec := c.GetLogRecord(16)
+			n, err := rand.Read(rec.Payload())
+			assert.Equal(t, n, 16)
+			assert.NoError(t, err)
+			lsn, err = c.Append(ctx, rec)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(54+i), lsn)
+		}
+
+		// cannot read lsn by the ts
+		readLsn, err := c.ReadLsn(ctx, time.Now())
+		require.Error(t, err)
+		assert.Equal(t, uint64(0), readLsn)
+
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            lsn - 1,
+		}
+		_, err = s.store.nh.SyncRequestSnapshot(ctx, 1, opts)
+		assert.NoError(t, err)
+
+		timeout := time.NewTimer(time.Second * 5)
+		defer timeout.Stop()
+		tick := time.NewTicker(time.Millisecond * 10)
+		defer tick.Stop()
+	FOR:
+		for {
+			select {
+			case <-timeout.C:
+				panic("the lsn is not valid")
+
+			case <-tick.C:
+				lsn, err = c.ReadLsn(ctx, searchTime)
+				if err == nil && lsn != 0 {
+					t.Logf("lsn is %d", lsn)
+					break FOR
+				}
+			}
+		}
+
+		ents, lsn1, err := c.Read(ctx, lsn-10, math.MaxUint64)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, len(ents))
+		require.Equal(t, lsn-10, lsn1)
+	}
+	RunClientTest(t, false, nil, fn)
+}
+
 func TestClientTruncate(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)

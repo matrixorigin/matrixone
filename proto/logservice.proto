@@ -20,6 +20,7 @@ package logservice;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
 import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
@@ -244,6 +245,7 @@ enum MethodType {
   GET_LATEST_LSN = 24;
   GET_LEADER_ID = 25;
   CHECK_HEALTH = 26;
+  READ_LSN = 27;
 };
 
 enum RecordType {
@@ -267,6 +269,8 @@ message LogRequest {
   uint64 MaxSize      = 4;
   uint64 TNShardID    = 5;
   uint64 TNID         = 6;
+  google.protobuf.Timestamp TS = 7
+    [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
 }
 
 message TsoRequest {

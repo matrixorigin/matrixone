@@ -17,11 +17,12 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -57,7 +58,7 @@ func TestNodeHostConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DeploymentID = 1234
 	cfg.DataDir = "lalala"
-	nhConfig := getNodeHostConfig(cfg)
+	nhConfig := getNodeHostConfig(cfg, nil)
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)
 	assert.True(t, nhConfig.AddressByNodeHostID)
@@ -81,7 +82,7 @@ func getStoreTestConfig() Config {
 	cfg.LogServicePort = getTestServicePort()
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
-	cfg.UseTeeLogDB = true
+	cfg.UseTeeLogDB = false
 
 	runtime.RunTest(
 		"",
@@ -105,6 +106,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 		nil,
 		nil,
 		runtime.DefaultRuntime(),
+		nil,
 	)
 	assert.NoError(t, err)
 	runtime.DefaultRuntime().Logger().Info("1")
@@ -126,6 +128,7 @@ func TestNewStoreRetry(t *testing.T) {
 		nil,
 		nil,
 		runtime.DefaultRuntime(),
+		nil,
 	)
 	assert.NoError(t, err)
 	defer func() {
@@ -149,6 +152,7 @@ func TestNewStoreRetry(t *testing.T) {
 		nil,
 		nil,
 		runtime.DefaultRuntime(),
+		nil,
 	)
 	assert.NoError(t, err)
 	assert.NoError(t, store1.close())
@@ -160,6 +164,7 @@ func getTestStore(genCfg func() Config, startLogReplica bool, taskService taskse
 		func() taskservice.TaskService { return taskService },
 		nil,
 		runtime.DefaultRuntime(),
+		newFS(),
 	)
 	if err != nil {
 		return nil, err
@@ -188,6 +193,7 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 		nil,
 		nil,
 		runtime.DefaultRuntime(),
+		nil,
 	)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
@@ -661,7 +667,7 @@ func getTestStores() (*store, *store, error) {
 	cfg1.RaftPort = 9002
 	cfg1.GossipPort = 9011
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	store1, err := newLogStore(cfg1, nil, nil, runtime.DefaultRuntime())
+	store1, err := newLogStore(cfg1, nil, nil, runtime.DefaultRuntime(), nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -675,7 +681,7 @@ func getTestStores() (*store, *store, error) {
 	cfg2.RaftPort = 9007
 	cfg2.GossipPort = 9012
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	store2, err := newLogStore(cfg2, nil, nil, runtime.DefaultRuntime())
+	store2, err := newLogStore(cfg2, nil, nil, runtime.DefaultRuntime(), nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1302,4 +1308,74 @@ func TestCheckHealth(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		runStoreTest(t, checkFn(true, true, false, true))
 	})
+}
+
+func TestQueryLogLsn(t *testing.T) {
+	orig := defaultLogDBMaxLogFileSize
+	defaultLogDBMaxLogFileSize = 500
+	defaultArchiverEnabled = true
+	defer func() {
+		defaultArchiverEnabled = false
+		defaultLogDBMaxLogFileSize = orig
+	}()
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			lsn, err := store.append(ctx, 1, cmd)
+			assert.NoError(t, err)
+			assert.Equal(t, uint64(3+i), lsn)
+		}
+		searchTime := time.Now()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			lsn, err := store.append(ctx, 1, cmd)
+			assert.NoError(t, err)
+			assert.Equal(t, uint64(53+i), lsn)
+		}
+
+		_, err := store.queryLogLsn(ctx, 1, time.Now())
+		assert.Error(t, err)
+
+		lsn, err := store.getLatestLsn(ctx, 1)
+		assert.NoError(t, err)
+		t.Logf("lastest lsn is: %d", lsn)
+
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            lsn - 1,
+		}
+		_, err = store.nh.SyncRequestSnapshot(ctx, 1, opts)
+		assert.NoError(t, err)
+
+		timeout := time.NewTimer(time.Second * 5)
+		defer timeout.Stop()
+		tick := time.NewTicker(time.Millisecond * 10)
+		defer tick.Stop()
+		var readLsn uint64
+	FOR:
+		for {
+			select {
+			case <-timeout.C:
+				panic("the lsn is not valid")
+
+			case <-tick.C:
+				lsn, err := store.queryLogLsn(ctx, 1, searchTime)
+				if err == nil && lsn > 0 {
+					t.Logf("lsn is %d", lsn)
+					readLsn = lsn
+					break FOR
+				}
+			}
+		}
+
+		records, lsn, err1 := store.queryLog(ctx, 1, readLsn-10, math.MaxUint64)
+		assert.NoError(t, err1)
+		assert.Equal(t, readLsn-10, lsn)
+		require.NotEqual(t, 0, len(records))
+	}
+	runStoreTest(t, fn)
 }
