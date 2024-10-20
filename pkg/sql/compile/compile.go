@@ -3977,7 +3977,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var relData engine.RelData
 	var partialResults []any
 	var partialResultTypes []types.T
-	var scanNodes engine.Nodes
+	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4062,12 +4062,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	} else {
 		// add current CN
-		scanNodes = append(scanNodes, engine.Node{
+		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
 			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 		})
-		scanNodes[0].NeedExpandRanges = true
-		return scanNodes, nil, nil, nil
+		nodes[0].NeedExpandRanges = true
+		return nodes, nil, nil, nil
 	}
 
 	if len(n.AggList) > 0 && relData.DataCnt() > 1 {
@@ -4123,16 +4123,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.DataCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
-		scanNodes = make(engine.Nodes, len(c.cnList))
+		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
-			scanNodes[i] = engine.Node{
+			nodes[i] = engine.Node{
 				Id:   node.Id,
 				Addr: node.Addr,
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 				Data: engine.BuildEmptyRelData(),
 			}
 		}
-		return scanNodes, partialResults, partialResultTypes, nil
+		return nodes, partialResults, partialResultTypes, nil
 	}
 
 	engineType := rel.GetEngineType()
