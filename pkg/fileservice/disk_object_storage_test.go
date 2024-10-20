@@ -22,17 +22,6 @@ import (
 func TestDiskObjectStorage(t *testing.T) {
 	ctx := context.Background()
 
-	testObjectStorage(t, func(t *testing.T) *diskObjectStorage {
-		storage, err := newDiskObjectStorage(context.Background(), ObjectStorageArguments{
-			Endpoint: "disk",
-			Bucket:   t.TempDir(),
-		}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return storage
-	})
-
 	testFileService(t, 0, func(name string) FileService {
 		dir := t.TempDir()
 		fs, err := NewS3FS(

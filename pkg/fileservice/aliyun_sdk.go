@@ -426,6 +426,9 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			opts := []oss.Option{
