@@ -2261,8 +2261,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
-	isEq := plan2.IsEquiJoin2(node.OnList)
-	if !isEq {
+	if !plan2.IsEquiJoin2(node.OnList) {
 		panic("shuffle join only support equal join for now!")
 	}
 
