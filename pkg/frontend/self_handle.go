@@ -19,6 +19,8 @@ import (
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+	ses.EnterRunSql()
+	defer ses.ExitRunSql()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
@@ -41,19 +43,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
-		var uniqueCheckOnAuto string
 		dbName := st.Name.Compare()
 		//use database
-		err = handleChangeDB(ses, execCtx, dbName)
-		if err != nil {
-			return
-		}
-
-		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
-		if err != nil {
-			return
-		}
-		ses.SetConfig(dbName, "unique_check_on_autoincr", uniqueCheckOnAuto)
+		return handleChangeDB(ses, execCtx, dbName)
 	case *tree.MoDump:
 
 		//dump

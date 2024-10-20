@@ -110,6 +110,7 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	ctr := &apply.ctr
 
 	ctr.cleanBatch(proc.Mp())
+	ctr.sels = nil
 
 	apply.TableFunction.Free(proc, pipelineFailed, err)
 

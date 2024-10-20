@@ -673,3 +673,77 @@ create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 drop account acc_idx;
 drop table mo_instance;
 drop table if exists statement_cu;
+use mo_catalog;
+DROP TABLE IF EXISTS `mo_catalog`.`document`;
+CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
+desc document;
+Field    Type    Null    Key    Default    Extra    Comment
+id    VARCHAR(36)    NO    PRI    null        
+kb_id    BIGINT(64)    NO        null        
+name    VARCHAR(100)    NO        null        
+user    VARCHAR(100)    NO        null        
+path    VARCHAR(256)    NO        null        
+reason    VARCHAR(256)    NO        null        
+size    BIGINT(64)    NO        null        
+seg_count    BIGINT(64)    NO        null        
+data_source    TINYINT(8)    NO        null        
+doc_type    TINYINT(8)    NO        null        
+status    TINYINT(8)    NO        null        
+created_at    DATETIME(3)    YES        null        
+updated_at    DATETIME(3)    YES        null        
+account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+ALTER TABLE document add meta longtext;
+desc document;
+Field    Type    Null    Key    Default    Extra    Comment
+id    VARCHAR(36)    NO    PRI    null        
+kb_id    BIGINT(64)    NO        null        
+name    VARCHAR(100)    NO        null        
+user    VARCHAR(100)    NO        null        
+path    VARCHAR(256)    NO        null        
+reason    VARCHAR(256)    NO        null        
+size    BIGINT(64)    NO        null        
+seg_count    BIGINT(64)    NO        null        
+data_source    TINYINT(8)    NO        null        
+doc_type    TINYINT(8)    NO        null        
+status    TINYINT(8)    NO        null        
+created_at    DATETIME(3)    YES        null        
+updated_at    DATETIME(3)    YES        null        
+meta    TEXT(0)    YES        null        
+account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+DROP TABLE document;
+CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
+desc mo_catalog.document;
+Field    Type    Null    Key    Default    Extra    Comment
+id    VARCHAR(36)    NO    PRI    null        
+kb_id    BIGINT(64)    NO        null        
+name    VARCHAR(100)    NO        null        
+user    VARCHAR(100)    NO        null        
+path    VARCHAR(256)    NO        null        
+reason    VARCHAR(256)    NO        null        
+size    BIGINT(64)    NO        null        
+seg_count    BIGINT(64)    NO        null        
+data_source    TINYINT(8)    NO        null        
+doc_type    TINYINT(8)    NO        null        
+status    TINYINT(8)    NO        null        
+created_at    DATETIME(3)    YES        null        
+updated_at    DATETIME(3)    YES        null        
+account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+ALTER TABLE mo_catalog.document add meta longtext;
+desc mo_catalog.document;
+Field    Type    Null    Key    Default    Extra    Comment
+id    VARCHAR(36)    NO    PRI    null        
+kb_id    BIGINT(64)    NO        null        
+name    VARCHAR(100)    NO        null        
+user    VARCHAR(100)    NO        null        
+path    VARCHAR(256)    NO        null        
+reason    VARCHAR(256)    NO        null        
+size    BIGINT(64)    NO        null        
+seg_count    BIGINT(64)    NO        null        
+data_source    TINYINT(8)    NO        null        
+doc_type    TINYINT(8)    NO        null        
+status    TINYINT(8)    NO        null        
+created_at    DATETIME(3)    YES        null        
+updated_at    DATETIME(3)    YES        null        
+meta    TEXT(0)    YES        null        
+account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+DROP TABLE mo_catalog.document;

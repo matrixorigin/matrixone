@@ -511,7 +511,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				PipelineId:     ctx0.id,
 			}
 		}
-
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i := range t.RemoteRegs {
