@@ -342,3 +342,22 @@ func TestPolicyCompact(t *testing.T) {
 	require.NoError(t, txn3.Commit(context.Background()))
 	require.False(t, p.onObject(entry1, defaultBasicConfig))
 }
+
+func TestSegLevel(t *testing.T) {
+	require.Equal(t, 0, segLevel(1))
+	require.Equal(t, 1, segLevel(2))
+	require.Equal(t, 1, segLevel(3))
+	require.Equal(t, 2, segLevel(4))
+	require.Equal(t, 2, segLevel(5))
+	require.Equal(t, 2, segLevel(6))
+	require.Equal(t, 2, segLevel(14))
+	require.Equal(t, 2, segLevel(15))
+	require.Equal(t, 3, segLevel(16))
+	require.Equal(t, 3, segLevel(17))
+	require.Equal(t, 3, segLevel(63))
+	require.Equal(t, 4, segLevel(64))
+	require.Equal(t, 4, segLevel(65))
+	require.Equal(t, 4, segLevel(255))
+	require.Equal(t, 5, segLevel(256))
+	require.Equal(t, 5, segLevel(257))
+}

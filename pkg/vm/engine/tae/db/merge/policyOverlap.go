@@ -63,13 +63,7 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	for _, objects := range m.segments {
-		segLevel := 0
-		for i, level := range levels {
-			if len(objects) <= level {
-				segLevel = i
-				break
-			}
-		}
+		segLevel := segLevel(len(objects))
 		for obj := range objects {
 			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
 		}
@@ -87,7 +81,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
 
-		objs, taskHostKind := m.reviseLeveledObjs(i, config)
+		objs, taskHostKind := m.reviseLeveledObjs(i)
 		objs = controlMem(objs, mem)
 
 		if len(objs) > 1 {
@@ -97,7 +91,7 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseLeveledObjs(i int, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) reviseLeveledObjs(i int) ([]*catalog.ObjectEntry, TaskHostKind) {
 	slices.SortFunc(m.leveledObjects[i], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
@@ -180,4 +174,15 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
 		s.maxValue = zm.GetMaxBuf()
 	}
+}
+
+func segLevel(length int) int {
+	l := 5
+	for i, level := range levels {
+		if length < level {
+			l = i - 1
+			break
+		}
+	}
+	return l
 }
