@@ -146,6 +146,13 @@ func TestObjectStorages(t *testing.T) {
 					}
 					return storage
 				})
+				testObjectStorage(t, "qcloud", func(t *testing.T) *QCloudSDK {
+					storage, err := NewQCloudSDK(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
 
 			case strings.Contains(args.Endpoint, "aws"):
 				// AWS

@@ -85,11 +85,16 @@ func NewS3FS(
 
 	case args.IsMinio ||
 		// 天翼云
-		strings.Contains(args.Endpoint, "ctyunapi.cn") ||
-		// 腾讯云
-		strings.Contains(args.Endpoint, "myqcloud.com"):
+		strings.Contains(args.Endpoint, "ctyunapi.cn"):
 		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
+	case strings.Contains(args.Endpoint, "myqcloud.com"):
+		// 腾讯云
+		fs.storage, err = NewQCloudSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
