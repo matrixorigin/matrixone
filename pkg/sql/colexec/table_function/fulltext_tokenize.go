@@ -16,8 +16,12 @@ package table_function
 
 import (
 	"encoding/json"
+	"io"
+	"path/filepath"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/document/docx"
+	"github.com/matrixorigin/matrixone/pkg/common/document/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/monlp/tokenizer"
@@ -84,6 +89,37 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 }
 
+func getContentFromFile(fpath string, proc *process.Process) ([]byte, error) {
+
+	fs := proc.GetFileService()
+	moUrl, offsetSize, err := function.ParseDatalink(fpath, proc)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := function.ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+	if err != nil {
+		return nil, err
+	}
+
+	defer r.Close()
+
+	fileBytes, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(fpath))
+	switch ext {
+	case ".pdf":
+		return pdf.GetContent(fileBytes)
+	case ".docx":
+		return docx.GetContent(fileBytes)
+	default:
+		return fileBytes, nil
+	}
+}
+
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
@@ -130,7 +166,17 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			if i > 1 {
 				c += "\n"
 			}
-			c += tf.ctr.argVecs[i].GetStringAt(nthRow)
+			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
+			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+				// datalink
+				b, err := getContentFromFile(data, proc)
+				if err != nil {
+					return err
+				}
+				c += string(b)
+			} else {
+				c += data
+			}
 		}
 
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))

@@ -27,6 +27,7 @@ require (
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
+	github.com/dslipak/pdf v0.0.2
 	github.com/elastic/gosigar v0.14.2
 	github.com/extism/go-sdk v1.3.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
