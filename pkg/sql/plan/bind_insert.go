@@ -73,6 +73,18 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		return 0, err
 	}
 
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, onDupAction)
+}
+
+func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
+	bindCtx *BindContext,
+	dmlCtx *DMLContext,
+	lastNodeID int32,
+	colName2Idx map[string]int32,
+	skipUniqueIdx []bool,
+	onDupAction plan.Node_OnDuplicateAction,
+) (int32, error) {
+	var err error
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
 	partitionExprIdx := int32(len(selectNode.ProjectList) - 1)
@@ -425,7 +437,6 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		err        error
 	)
 
-	colName2Idx := make(map[string]int32)
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 
@@ -529,6 +540,17 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		insertColToExpr[column] = projExpr
 	}
 
+	return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+}
+
+func (builder *QueryBuilder) appendNodesForInsertStmt(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	tableDef *TableDef,
+	objRef *ObjectRef,
+	insertColToExpr map[string]*Expr,
+) (int32, map[string]int32, []bool, error) {
+	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
 	for _, col := range tableDef.Cols {
 		if col.Typ.AutoIncr {
