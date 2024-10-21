@@ -118,6 +118,7 @@ type CSVParser struct {
 	fieldIsQuoted []bool
 
 	lastRecord []field
+	LastRow    []Field
 
 	escFlavor escapeFlavor
 	// if set to true, csv parser will treat the first non-empty line as header line
