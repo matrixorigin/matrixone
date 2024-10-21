@@ -21,11 +21,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cpegeric/goword"
 	"github.com/dslipak/pdf"
 
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reader/docx"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,7 +127,7 @@ func getPdfContent(data []byte) ([]byte, error) {
 }
 
 func getDocxContent(data []byte) ([]byte, error) {
-	doc, err := goword.ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
+	doc, err := docx.ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err
 	}

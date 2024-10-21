@@ -25,7 +25,6 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
-	github.com/cpegeric/goword v0.0.0-20241021125102-39abf3143a42
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
