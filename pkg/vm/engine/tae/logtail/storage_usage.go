@@ -990,6 +990,24 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		return "", 0
 	}
 
+	iter := collector.UsageMemo.cache.data.Iter()
+	for iter.Next() {
+		val := iter.Item()
+		key := [3]uint64{val.AccId, val.DbId, val.TblId}
+		ud, ok := tblChanges[key]
+		if val.SnapshotSize == 0 {
+			continue
+		}
+		if !ok {
+			val.Size = 0
+			tblChanges[key] = val
+			continue
+		}
+		ud.SnapshotSize = val.SnapshotSize
+		tblChanges[key] = ud
+	}
+	iter.Release()
+
 	memo.GetCache().ClearForUpdate()
 
 	for uniqueTbl, usage := range tblChanges {
@@ -1192,8 +1210,8 @@ func FillUsageBatOfCompacted(
 		if val.SnapshotSize == 0 && !ok {
 			continue
 		}
-		logutil.Infof("fill usage2 bat of compacted ckp: %v", val.String())
 		val.SnapshotSize = ud.SnapshotSize
+		logutil.Infof("fill usage2 bat of compacted ckp: %v", val.String())
 		update[key] = val
 	}
 	iter.Release()
