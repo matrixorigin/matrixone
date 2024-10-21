@@ -81,10 +81,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 		}
 
-		// origin table lock
-		// index_table NOTO: lock
-		// select * from  mo_indexes  update
-
 		if retryErr != nil {
 			return retryErr
 		}
