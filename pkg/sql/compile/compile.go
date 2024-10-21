@@ -4110,30 +4110,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
-
 			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
-				crs := new(perfcounter.CounterSet)
-				newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					newCtx, &blk.BlockID, fs,
+					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
 					newRelData.AppendBlockInfo(&blk)
 					return true, nil
 				}
-
-				stats := statistic.StatsInfoFromContext(ctx)
-				stats.AddCompileHasBlockTombstoneS3Request(statistic.S3Request{
-					List:      crs.FileService.S3.List.Load(),
-					Head:      crs.FileService.S3.Head.Load(),
-					Put:       crs.FileService.S3.Put.Load(),
-					Get:       crs.FileService.S3.Get.Load(),
-					Delete:    crs.FileService.S3.Delete.Load(),
-					DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-				})
-
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
 					partialResults = nil
 					return false, nil

@@ -267,11 +267,10 @@ type StatsInfo struct {
 
 	// Compile phase statistics
 	CompileStage struct {
-		CompileDuration            time.Duration `json:"CompileDuration"`
-		CompileStartTime           time.Time     `json:"CompileStartTime"`
-		CompileS3Request           S3Request     `json:"CompileS3Request"`
-		CompileExpandRangesS3      S3Request     `json:"CompileExpandRangesS3"`
-		CompileHasBlockTombstoneS3 S3Request     `json:"CompileHasBlockTombstoneS3"`
+		CompileDuration       time.Duration `json:"CompileDuration"`
+		CompileStartTime      time.Time     `json:"CompileStartTime"`
+		CompileS3Request      S3Request     `json:"CompileS3Request"`
+		CompileExpandRangesS3 S3Request     `json:"CompileExpandRangesS3"`
 		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
 		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 	}
@@ -518,19 +517,6 @@ func (stats *StatsInfo) CompileExpandRangesS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Get, sreq.Get)
 	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.Delete, sreq.Delete)
 	atomic.AddInt64(&stats.CompileStage.CompileExpandRangesS3.DeleteMul, sreq.DeleteMul)
-}
-
-// AddCompileHasBlockTombstoneS3Request
-func (stats *StatsInfo) AddCompileHasBlockTombstoneS3Request(sreq S3Request) {
-	if stats == nil {
-		return
-	}
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.List, sreq.List)
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Head, sreq.Head)
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Put, sreq.Put)
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Get, sreq.Get)
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.Delete, sreq.Delete)
-	atomic.AddInt64(&stats.CompileStage.CompileHasBlockTombstoneS3.DeleteMul, sreq.DeleteMul)
 }
 
 func (stats *StatsInfo) AddScopePrepareS3Request(sreq S3Request) {
