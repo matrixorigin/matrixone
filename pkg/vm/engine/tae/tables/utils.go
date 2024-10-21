@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -60,6 +59,21 @@ import (
 //	return vectors[0], nil
 //}
 
+func PreparePhyAddrData(
+	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
+) (col containers.Vector, err error) {
+	col = pool.GetVector(&objectio.RowidType)
+	vec := col.GetDownstreamVector()
+	m := col.GetAllocator()
+	if err = objectio.ConstructRowidColumnTo(
+		vec, id, startRow, length, m,
+	); err != nil {
+		col.Close()
+		col = nil
+	}
+	return
+}
+
 func LoadPersistedColumnDatas(
 	ctx context.Context,
 	schema *catalog.Schema,
@@ -83,7 +97,7 @@ func LoadPersistedColumnDatas(
 		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
-			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
 				return nil, deletes, err
 			}

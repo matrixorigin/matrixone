@@ -17,10 +17,11 @@ package txnentries
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -89,8 +90,7 @@ func NewMergeObjectsEntry(
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.collectTs = rt.Now()
-		_, _, ok := fault.TriggerFault("tae: slow transfer deletes")
-		if ok {
+		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}
 		var err error

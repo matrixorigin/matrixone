@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -384,7 +386,8 @@ func (h *Handle) HandlePreCommitWrite(
 // HandlePreCommitWrite impls TxnStorage:Commit
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
+	meta txn.TxnMeta,
+) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
 	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	var txn txnif.AsyncTxn
@@ -398,13 +401,19 @@ func (h *Handle) HandleCommit(
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 		common.DoIfInfoEnabled(func() {
-			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+			_, _, injected := fault.TriggerFault(objectio.FJ_CommitSlowLog)
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || injected {
 				var tnTxnInfo string
 				if txn != nil {
 					tnTxnInfo = txn.String()
 				}
+				msg := "HandleCommit-SLOW-LOG"
+				if err != nil {
+					msg = "HandleCommit-Error"
+				}
 				logutil.Warn(
-					"SLOW-LOG",
+					msg,
+					zap.Error(err),
 					zap.Duration("commit-latency", time.Since(start)),
 					zap.String("cn-txn", meta.DebugString()),
 					zap.String("tn-txn", tnTxnInfo),
@@ -927,12 +936,13 @@ func (h *Handle) HandleWrite(
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+	_, _, injected := fault.TriggerFault(objectio.FJ_CommitDelete)
+	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) || injected {
 		schema := tb.Schema(false).(*catalog.Schema)
 		if schema.HasPK() {
+			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
-			for i := 0; i < rowIDVec.Length(); i++ {
-				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			for i := 0; i < len(rowids); i++ {
 				if isCompositeKey {
 					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
 					tuple, _ := types.Unpack(pkbuf)
@@ -940,7 +950,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 						zap.Any("detail", tuple.SQLStrings(nil)),
 					)
 				} else {
@@ -948,7 +958,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 					)
 				}
 			}
