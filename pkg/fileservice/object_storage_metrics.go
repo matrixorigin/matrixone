@@ -75,6 +75,7 @@ func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64,
 	o.numActiveRead.Inc()
 	r, err := o.upstream.Read(ctx, key, min, max)
 	if err != nil {
+		o.numActiveRead.Dec()
 		return nil, err
 	}
 	return &readCloser{
