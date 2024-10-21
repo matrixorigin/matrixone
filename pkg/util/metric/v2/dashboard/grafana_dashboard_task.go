@@ -62,8 +62,7 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 		c.getTimeSeries(
 			"Transfer page row count",
 			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
+				"sum (increase(%s[$interval]))",
 				c.getMetricWithFilter(`mo_task_transfer_page_row_sum`, ""),
 			)},
 			[]string{"count"},
@@ -72,8 +71,7 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 		c.getTimeSeries(
 			"Transfer page hit count",
 			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
+				"sum (increase(%s[$interval]))",
 				c.getMetricWithFilter(`mo_task_transfer_page_hit_count_sum`, `type="total"`),
 			)},
 			[]string{"count"},
@@ -150,8 +148,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 		c.getTimeSeries(
 			"Flush table tail Count",
 			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
+				"sum (increase(%s[$interval]))",
 				c.getMetricWithFilter(`mo_task_short_duration_seconds_count`, `type="flush_table_tail"`),
 			)},
 			[]string{"Count"},
@@ -191,13 +188,11 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 			"Merge Count",
 			[]string{
 				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
+					"sum (increase(%s[$interval]))",
 					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
 
 				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
+					"sum (increase(%s[$interval]))",
 					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge",nodetype="cn"`)),
 			},
 			[]string{
@@ -208,8 +203,7 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 		c.getTimeSeries(
 			"Merge Batch Size",
 			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
+				"sum by (increase(%s[$interval]))",
 				c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_size"`))},
 			[]string{"Size"},
 			timeseries.Axis(tsaxis.Unit("decbytes")),
