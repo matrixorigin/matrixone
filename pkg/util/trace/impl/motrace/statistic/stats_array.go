@@ -38,6 +38,7 @@ const (
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
 	StatsArrayVersion3 = 3 // ... + 1 elem: ConnType
 	StatsArrayVersion4 = 4 // ... + 2 elem: OutPacketCount, CU
+	StatsArrayVersion5 = 5 // ... + 1 elem: S3IOListCount, S3IODeleteCount
 
 	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
@@ -52,6 +53,8 @@ const (
 	StatsArrayIndexConnType        // index: 6
 	StatsArrayIndexOutPacketCnt    // index: 7, version: 4
 	StatsArrayIndexCU              // index: 8, version: 4
+	StatsArrayIndexS3IOListCount   // index: 9, version: 5
+	StatsArrayIndexS3IODeleteCount // index: 10, version: 5
 
 	StatsArrayLength
 )
@@ -61,6 +64,7 @@ const (
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
 	StatsArrayLengthV4 = 9
+	StatsArrayLengthV5 = 11
 )
 
 type ConnType float64
@@ -139,6 +143,18 @@ func (s *StatsArray) GetCU() float64 {
 	}
 	return s[StatsArrayIndexCU]
 }
+func (s *StatsArray) GetS3IOListCount() float64 {
+	if s.GetVersion() < StatsArrayVersion5 {
+		return 0
+	}
+	return s[StatsArrayIndexS3IOListCount]
+}
+func (s *StatsArray) GetS3IODeleteCount() float64 {
+	if s.GetVersion() < StatsArrayVersion5 {
+		return 0
+	}
+	return s[StatsArrayIndexS3IODeleteCount]
+}
 
 // WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
@@ -158,6 +174,15 @@ func (s *StatsArray) WithS3IOOutputCount(v float64) *StatsArray {
 	(*s)[StatsArrayIndexS3IOOutputCount] = v
 	return s
 }
+func (s *StatsArray) WithS3IOListCount(v float64) *StatsArray {
+	(*s)[StatsArrayIndexS3IOListCount] = v
+	return s
+}
+func (s *StatsArray) WithS3IODeleteCount(v float64) *StatsArray {
+	(*s)[StatsArrayIndexS3IODeleteCount] = v
+	return s
+}
+
 func (s *StatsArray) WithOutTrafficBytes(v float64) *StatsArray {
 	if s.GetVersion() >= StatsArrayVersion2 {
 		(*s)[StatsArrayIndexOutTrafficBytes] = v
@@ -192,6 +217,8 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
 	case StatsArrayVersion4:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
+	case StatsArrayVersion5:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV5])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}
@@ -323,6 +350,14 @@ type S3Request struct {
 	Delete    int64 `json:"Delete,omitempty"`
 	DeleteMul int64 `json:"DeleteMul,omitempty"`
 }
+
+// CountLIST return s.List.
+// Diff: 1) aws/aliyun treats List as PUT; 2) tencent cloud/huaweicloud treats List as GET
+// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
+func (s S3Request) CountLIST() int64   { return s.List }
+func (s S3Request) CountPUT() int64    { return s.Put }
+func (s S3Request) CountGET() int64    { return s.Head + s.Get }
+func (s S3Request) CountDELETE() int64 { return s.Delete + s.DeleteMul }
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
