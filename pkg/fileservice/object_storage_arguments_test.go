@@ -15,9 +15,16 @@
 package fileservice
 
 import (
+	"encoding/csv"
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"math/rand/v2"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -53,4 +60,82 @@ func TestObjectStorageArguments(t *testing.T) {
 		}
 
 	})
+}
+
+func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []ObjectStorageArguments) {
+
+	// disk
+	ret = append(ret, ObjectStorageArguments{
+		Name:     defaultName,
+		Endpoint: "disk",
+		Bucket:   t.TempDir(),
+	})
+
+	// s3.json
+	content, err := os.ReadFile("s3.json")
+	if err == nil {
+		if len(content) > 0 {
+			var config _TestS3Config
+			if err := json.Unmarshal(content, &config); err == nil {
+				ret = append(ret, ObjectStorageArguments{
+					Name:      defaultName,
+					Endpoint:  config.Endpoint,
+					Region:    config.Region,
+					KeyID:     config.APIKey,
+					KeySecret: config.APISecret,
+					Bucket:    config.Bucket,
+					RoleARN:   config.RoleARN,
+					KeyPrefix: fmt.Sprintf("%v", rand.Int64()),
+				})
+			}
+		}
+	}
+
+	// s3_fs_test_new.xml
+	content, err = os.ReadFile("s3_fs_test_new.xml")
+	if err == nil {
+		var spec struct {
+			XMLName xml.Name               `xml:"Spec"`
+			Cases   []S3CredentialTestCase `xml:"Case"`
+		}
+		if err := xml.Unmarshal(content, &spec); err == nil {
+			for _, kase := range spec.Cases {
+				if kase.Skip {
+					continue
+				}
+				kase.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
+				ret = append(ret, kase.ObjectStorageArguments)
+			}
+		}
+	}
+
+	// envs
+	for _, pairs := range os.Environ() {
+		name, value, ok := strings.Cut(pairs, "=")
+		if !ok {
+			continue
+		}
+		// env vars begin with TEST_S3FS_
+		if !strings.HasPrefix(name, "TEST_S3FS_") {
+			continue
+		}
+
+		// parse args
+		reader := csv.NewReader(strings.NewReader(value))
+		argStrs, err := reader.Read()
+		if err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		var args ObjectStorageArguments
+		if err := args.SetFromString(argStrs); err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
+
+		ret = append(ret, args)
+	}
+
+	return ret
 }

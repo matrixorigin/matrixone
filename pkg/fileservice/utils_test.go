@@ -12,36 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package fileservice
 
-import (
-	"unsafe"
+import "testing"
 
-	"golang.org/x/sys/unix"
-)
-
-const (
-	madv_FREE_REUSABLE = 0x7
-	madv_FREE_REUSE    = 0x8
-)
-
-func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
-	if err := unix.Madvise(
-		unsafe.Slice((*byte)(ptr), f.size),
-		madv_FREE_REUSE,
-	); err != nil {
-		panic(err)
-	}
-	if hints&NoClear == 0 {
-		clear(unsafe.Slice((*byte)(ptr), clearSize))
-	}
-}
-
-func (f *fixedSizeMmapAllocator) freeMem(ptr unsafe.Pointer) {
-	if err := unix.Madvise(
-		unsafe.Slice((*byte)(ptr), f.size),
-		madv_FREE_REUSABLE,
-	); err != nil {
-		panic(err)
+func TestZeroToNil(t *testing.T) {
+	if testing.AllocsPerRun(10, func() {
+		if zeroToNil("") != nil {
+			t.Fatal()
+		}
+		if zeroToNil("foo") == nil {
+			t.Fatal()
+		}
+	}) != 0 {
+		t.Fatal()
 	}
 }
