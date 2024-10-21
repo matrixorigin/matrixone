@@ -236,7 +236,7 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 		opt(cache)
 	}
 
-	cache.data = btree.NewBTreeG[UsageData](cache.lessFunc)
+	cache.data = btree.NewBTreeGOptions[UsageData](cache.lessFunc, btree.Options{NoLocks: true})
 	cache.data.Clear()
 
 	return cache
@@ -469,8 +469,8 @@ func (m *TNUsageMemo) MemoryUsed() float64 {
 }
 
 func (m *TNUsageMemo) EnterProcessing() {
-	m.cache.Lock()
 	m.Lock()
+	m.cache.Lock()
 }
 
 func (m *TNUsageMemo) LeaveProcessing() {
