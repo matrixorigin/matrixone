@@ -99,7 +99,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, err error) {
+	replayEntries := func(name string, ckpBat *containers.Batch) (entries []*CheckpointEntry, maxGlobalEnd types.TS, release func(), err error) {
 		reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+name)
 		if err != nil {
 			return
@@ -111,11 +111,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		if len(bats) == 0 {
 			return
 		}
-		defer func() {
+		release = func() {
 			if closeCB != nil {
 				closeCB()
 			}
-		}()
+		}
 		colNames := CheckpointSchema.Attrs()
 		colTypes := CheckpointSchema.Types()
 		var checkpointVersion int
@@ -148,7 +148,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 		for _, file := range compactedFiles {
 			compacted := containers.NewBatch()
 			defer compacted.Close()
-			entry, _, err := replayEntries(file.name, compacted)
+			entry, _, closeCB, err := replayEntries(file.name, compacted)
 			if err != nil {
 				logutil.Errorf("replay compacted checkpoint file %s failed: %v", file.name, err.Error())
 			}
@@ -159,16 +159,22 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 				panic("invalid compacted checkpoint file")
 			}
 			r.tryAddNewCompactedCheckpointEntry(entry[0])
+			closeCB()
 		}
 	}
 
 	bat := containers.NewBatch()
 	defer bat.Close()
-	entries, maxGlobalEnd, err := replayEntries(dir.Name, bat)
+	entries, maxGlobalEnd, closeCB, err := replayEntries(dir.Name, bat)
 	if err != nil {
 		logutil.Infof("replay checkpoint file %s failed: %v", dir.Name, err.Error())
 		return
 	}
+	defer func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}()
 	c.ckpEntries = entries
 
 	// step2. read checkpoint data, output is the ckpdatas
