@@ -31,18 +31,38 @@ var _ Message = new(JoinMapMsg)
 const selsDivideLength = 1024
 
 type JoinSels struct {
-	sels [][][]int32
+	sels      [][][]int32
+	allUnique bool
 }
 
 func (js *JoinSels) InitSel(len int) {
 	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
+	js.allUnique = true
 }
 
 func (js *JoinSels) Free() {
 	js.sels = nil
+	js.allUnique = false
 }
 
 func (js *JoinSels) InsertSel(k, v int32) {
+	if js.allUnique {
+		if k == v {
+			if k >= selsDivideLength {
+				return
+			}
+		} else {
+			js.allUnique = false
+			if k >= selsDivideLength {
+				js.sels = js.sels[:0]
+				var i int32 = 0
+				for ; i < v; i++ {
+					js.InsertSel(i, i)
+				}
+			}
+		}
+	}
+
 	i := k / selsDivideLength
 	j := k % selsDivideLength
 	if len(js.sels) <= int(i) {
@@ -54,10 +74,7 @@ func (js *JoinSels) InsertSel(k, v int32) {
 		}
 	}
 	if len(js.sels[i]) <= int(j) {
-		js.sels[i] = append(js.sels[i], make([]int32, 0))
-	}
-	if js.sels[i][j] == nil {
-		js.sels[i][j] = make([]int32, 0)
+		js.sels[i] = append(js.sels[i], make([]int32, 0, 4))
 	}
 	js.sels[i][j] = append(js.sels[i][j], v)
 }
