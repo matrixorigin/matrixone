@@ -16,7 +16,7 @@ package vector
 
 import (
 	"fmt"
-	rand2 "math/rand"
+	"golang.org/x/exp/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -1946,19 +1946,19 @@ func TestIntersection2VectorOrdered(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand2.Intn(ll) + ll/5
-	lenB := rand2.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a []int32 = make([]int32, lenA)
 		var b []int32 = make([]int32, lenB)
 
 		for i := 0; i < lenA; i++ {
-			a[i] = rand2.Int31() % (ll / 2)
+			a[i] = rand.Int31() % (ll / 2)
 		}
 
 		for i := 0; i < lenB; i++ {
-			b[i] = rand2.Int31() % (ll / 2)
+			b[i] = rand.Int31() % (ll / 2)
 		}
 
 		cmp := func(x, y int32) int {
@@ -1998,10 +1998,10 @@ func TestIntersection2VectorVarlen(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand2.Intn(ll) + ll/5
-	lenB := rand2.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a = make([]string, lenA)
 		var b = make([]string, lenB)
 
@@ -2009,12 +2009,12 @@ func TestIntersection2VectorVarlen(t *testing.T) {
 		vb := NewVec(types.T_text.ToType())
 
 		for i := 0; i < lenA; i++ {
-			x := rand2.Int31() % (ll / 2)
+			x := rand.Int31() % (ll / 2)
 			a[i] = fmt.Sprintf("%d", x)
 		}
 
 		for i := 0; i < lenB; i++ {
-			x := rand2.Int31() % (ll / 2)
+			x := rand.Int31() % (ll / 2)
 			b[i] = fmt.Sprintf("%d", x)
 		}
 
@@ -2063,19 +2063,19 @@ func TestUnion2VectorOrdered(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand2.Intn(ll) + ll/5
-	lenB := rand2.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a []int32 = make([]int32, lenA)
 		var b []int32 = make([]int32, lenB)
 
 		for i := 0; i < lenA; i++ {
-			a[i] = rand2.Int31() % (ll / 2)
+			a[i] = rand.Int31() % (ll / 2)
 		}
 
 		for i := 0; i < lenB; i++ {
-			b[i] = rand2.Int31() % (ll / 2)
+			b[i] = rand.Int31() % (ll / 2)
 		}
 
 		cmp := func(x, y int32) int {
@@ -2115,10 +2115,10 @@ func TestUnion2VectorVarlen(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	lenA := rand2.Intn(ll) + ll/5
-	lenB := rand2.Intn(ll) + ll/5
-
 	for range cnt {
+		lenA := rand.Intn(ll) + ll/5
+		lenB := rand.Intn(ll) + ll/5
+
 		var a = make([]string, lenA)
 		var b = make([]string, lenB)
 
@@ -2126,12 +2126,12 @@ func TestUnion2VectorVarlen(t *testing.T) {
 		vb := NewVec(types.T_text.ToType())
 
 		for i := 0; i < lenA; i++ {
-			x := rand2.Int31() % (ll / 2)
+			x := rand.Int31() % (ll / 2)
 			a[i] = fmt.Sprintf("%d", x)
 		}
 
 		for i := 0; i < lenB; i++ {
-			x := rand2.Int31() % (ll / 2)
+			x := rand.Int31() % (ll / 2)
 			b[i] = fmt.Sprintf("%d", x)
 		}
 
