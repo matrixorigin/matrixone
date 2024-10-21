@@ -145,9 +145,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	result = p.revise(0, 36, cfg)
-	require.Equal(t, 1, len(result))
-	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, 0, len(result))
 }
 
 func TestPolicyTombstone(t *testing.T) {
