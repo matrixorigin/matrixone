@@ -28,7 +28,7 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
-const selsDivideLength = 1024
+const selsDivideLength = 256
 const selsPreAlloc = 4
 
 type JoinSels struct {
