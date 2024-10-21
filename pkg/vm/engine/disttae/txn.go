@@ -1260,10 +1260,16 @@ func (txn *Transaction) transferTombstones(
 		return nil
 	}
 
+	// reset snapshot to get the latest partition state
+	if err = txn.resetSnapshot(); err != nil {
+		return err
+	}
+
 	if err = txn.op.UpdateSnapshot(
 		ctx, timestamp.Timestamp{}); err != nil {
 		return err
 	}
+
 	end = types.TimestampToTS(txn.op.SnapshotTS())
 
 	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
@@ -1282,10 +1288,6 @@ func skipTransfer(
 	}
 
 	if time.Since(txn.start) < transferTxnLastThreshold {
-		return true
-	}
-
-	if !txn.op.Txn().IsRCIsolation() {
 		return true
 	}
 
