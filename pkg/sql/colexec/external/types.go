@@ -76,14 +76,13 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	prevStr        string
-	reader         io.ReadCloser
-	plh            *ParseLineHandler
-	Fileparam      *ExFileparam
-	Zoneparam      *ZonemapFileparam
-	Filter         *FilterParam
-	MoCsvLineArray [][]csvparser.Field
-	parqh          *ParquetHandler
+	prevStr   string
+	reader    io.ReadCloser
+	plh       *ParseLineHandler
+	Fileparam *ExFileparam
+	Zoneparam *ZonemapFileparam
+	Filter    *FilterParam
+	parqh     *ParquetHandler
 }
 
 type ExFileparam struct {
@@ -181,10 +180,6 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 
 type ParseLineHandler struct {
 	csvReader *csvparser.CSVParser
-	// batch
-	batchSize int
-	// mo csv
-	moCsvLineArray [][]csvparser.Field
 }
 
 func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
