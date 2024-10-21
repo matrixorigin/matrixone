@@ -17,4 +17,6 @@ package objectio
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
+	FJ_TransferSlow  = "fj/transfer/slow"
+	FJ_FlushTimeout  = "fj/flush/timeout"
 )
