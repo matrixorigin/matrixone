@@ -17,6 +17,7 @@ package docx
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -137,4 +138,12 @@ func openWordFile(filename string) ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+func GetContent(data []byte) ([]byte, error) {
+	doc, err := ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
+	return []byte(doc), err
 }

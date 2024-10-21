@@ -15,15 +15,13 @@
 package table_function
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"path/filepath"
 	"strings"
 
-	"github.com/dslipak/pdf"
-
 	"github.com/matrixorigin/matrixone/pkg/common/document/docx"
+	"github.com/matrixorigin/matrixone/pkg/common/document/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -91,49 +89,6 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 }
 
-func getPdfContent(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	pdfr, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, err
-	}
-
-	npage := pdfr.NumPage()
-	for i := 1; i <= npage; i++ {
-
-		p := pdfr.Page(i)
-		texts := p.Content().Text
-		var lastY = 0.0
-		line := ""
-
-		for _, text := range texts {
-			if lastY != text.Y {
-				if lastY > 0 {
-					buf.WriteString(line + "\n")
-					line = text.S
-				} else {
-					line += text.S
-				}
-			} else {
-				line += text.S
-			}
-
-			lastY = text.Y
-		}
-		buf.WriteString(line)
-	}
-
-	return []byte(strings.TrimSpace(buf.String())), nil
-}
-
-func getDocxContent(data []byte) ([]byte, error) {
-	doc, err := docx.ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, err
-	}
-	return []byte(doc), err
-}
-
 func getContentFromFile(fpath string, proc *process.Process) ([]byte, error) {
 
 	fs := proc.GetFileService()
@@ -157,9 +112,9 @@ func getContentFromFile(fpath string, proc *process.Process) ([]byte, error) {
 	ext := strings.ToLower(filepath.Ext(fpath))
 	switch ext {
 	case ".pdf":
-		return getPdfContent(fileBytes)
+		return pdf.GetContent(fileBytes)
 	case ".docx":
-		return getDocxContent(fileBytes)
+		return docx.GetContent(fileBytes)
 	default:
 		return fileBytes, nil
 	}
