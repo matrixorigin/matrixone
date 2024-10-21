@@ -926,7 +926,6 @@ func RegisterCdcExecutor(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
-	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
 		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
@@ -952,7 +951,6 @@ func RegisterCdcExecutor(
 			fileService,
 			cnTxnClient,
 			cnEngine,
-			cnEngMp,
 		)
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		if err = attachToTask(ctx, T.GetID(), cdc); err != nil {
@@ -997,7 +995,6 @@ func NewCdcTask(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
-	cdcMp *mpool.MPool,
 ) *CdcTask {
 	return &CdcTask{
 		logger:      logger,
@@ -1007,7 +1004,6 @@ func NewCdcTask(
 		fileService: fileService,
 		cnTxnClient: cnTxnClient,
 		cnEngine:    cnEngine,
-		mp:          cdcMp,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -1069,9 +1065,13 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		dbTableInfos = append(dbTableInfos, info)
 	}
 
-	err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos)
-	if err != nil {
-		return err
+	// new mpool
+	if cdc.mp, err = mpool.NewMPool("cdc-"+cdc.cdcTask.TaskName, 0, mpool.NoFixed); err != nil {
+		return
+	}
+
+	if err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos); err != nil {
+		return
 	}
 
 	if firstTime {
