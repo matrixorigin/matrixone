@@ -18,6 +18,10 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestIDGenerator(t *testing.T) {
@@ -37,4 +41,26 @@ func TestIDGenerator(t *testing.T) {
 			last = id
 		}
 	}
+}
+
+var _ hakeeperIDGenerator = new(testHKClient)
+
+type testHKClient struct {
+}
+
+func (hkClient *testHKClient) AllocateID(ctx context.Context) (uint64, error) {
+	return 0, moerr.NewInternalErrorNoCtx("return error")
+}
+
+func (hkClient *testHKClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, moerr.NewInternalErrorNoCtx("return error")
+}
+
+func Test_id(t *testing.T) {
+	idGen := NewHakeeperIDGenerator(&testHKClient{})
+	_, err := idGen.NewID(context.Background())
+	assert.Error(t, err)
+
+	_, err = idGen.NewIDByKey(context.Background(), "abc")
+	assert.Error(t, err)
 }

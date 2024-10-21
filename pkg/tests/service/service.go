@@ -23,6 +23,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -39,9 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 var (
@@ -331,23 +332,23 @@ func (c *testCluster) Start() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTestTimeout, moerr.CauseTestClusterStart)
 	defer cancel()
 
 	c.mu.running = true
 	// start log services first
 	if err := c.startLogServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	// start tn services
 	if err := c.startTNServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	// start cn services
 	if err := c.startCNServices(ctx); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	return nil
@@ -615,7 +616,7 @@ func (c *testCluster) WaitHAKeeperLeader(ctx context.Context) LogService {
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for hakeeper leader",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s ", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -637,7 +638,7 @@ func (c *testCluster) WaitHAKeeperState(
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for hakeeper state",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
@@ -660,7 +661,7 @@ func (c *testCluster) WaitTNShardsReported(ctx context.Context) {
 			assert.FailNow(
 				c.t,
 				"terminated when waiting for all tn shards reported",
-				"error: %s", ctx.Err(),
+				"error: %s cause: %s", ctx.Err(), context.Cause(ctx),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)

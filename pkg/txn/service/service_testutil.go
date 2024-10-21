@@ -23,6 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -34,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // NewTestTxnService create a test TxnService for test
@@ -167,6 +169,7 @@ type TestSender struct {
 		sync.Mutex
 		cancels []context.CancelFunc
 	}
+	action string
 }
 
 // NewTestSender create test TxnSender
@@ -199,7 +202,11 @@ func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
 
 // Send TxnSender send
 func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	if s.action == "return_err_and_reset" {
+		s.action = ""
+		return nil, moerr.NewInternalErrorNoCtx("return error")
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseTestSenderSend)
 	s.mu.Lock()
 	s.mu.cancels = append(s.mu.cancels, cancel)
 	s.mu.Unlock()
@@ -213,7 +220,7 @@ func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 		resp := txn.TxnResponse{}
 		h := s.router[s.getRouteKey(req.Method, req.GetTargetTN())]
 		if err := h(ctx, &req, &resp); err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		responses = append(responses, resp)
 	}

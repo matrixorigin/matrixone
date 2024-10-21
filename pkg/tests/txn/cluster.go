@@ -20,14 +20,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 var (
@@ -68,7 +70,7 @@ func (c *cluster) Start() {
 		assert.FailNow(c.t, fmt.Sprintf("start testing cluster failed, %v", err))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTestTimeout, moerr.CauseClusterStart)
 	defer cancel()
 	c.env.WaitHAKeeperState(ctx, logservice.HAKeeperRunning)
 	c.env.WaitHAKeeperLeader(ctx)

@@ -161,7 +161,7 @@ type MOHungSpan struct {
 }
 
 func newMOHungSpan(span *MOSpan) *MOHungSpan {
-	ctx, cancel := context.WithTimeout(span.ctx, span.SpanConfig.HungThreshold())
+	ctx, cancel := context.WithTimeoutCause(span.ctx, span.SpanConfig.HungThreshold(), moerr.CauseNewMOHungSpan)
 	span.ctx = ctx
 	s := &MOHungSpan{
 		MOSpan:     span,
