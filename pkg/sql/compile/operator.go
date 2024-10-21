@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -542,6 +543,12 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.SetInfo(&info)
+		op.SetInfo(&info)
+		return op
+	case vm.PostDml:
+		t := sourceOp.(*postdml.PostDml)
+		op := postdml.NewArgument()
+		op.PostDmlCtx = t.PostDmlCtx
 		op.SetInfo(&info)
 		return op
 	}
@@ -1170,12 +1177,12 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
+				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 				if err != nil {
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
-				vec.Free(proc.Mp())
+				free()
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
@@ -1243,12 +1250,12 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
+					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 					if err != nil {
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
-					vec.Free(proc.Mp())
+					free()
 
 					args = f.F.Args[:len(f.F.Args)-1]
 				}
@@ -1891,4 +1898,30 @@ func exprRelPos(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
+	oldCtx := n.PostDmlCtx
+	delCtx := &postdml.PostDmlCtx{
+		Ref:                    oldCtx.Ref,
+		AddAffectedRows:        oldCtx.AddAffectedRows,
+		PrimaryKeyIdx:          oldCtx.PrimaryKeyIdx,
+		PrimaryKeyName:         oldCtx.PrimaryKeyName,
+		IsDelete:               oldCtx.IsDelete,
+		IsInsert:               oldCtx.IsInsert,
+		IsDeleteWithoutFilters: oldCtx.IsDeleteWithoutFilters,
+	}
+
+	if oldCtx.FullText != nil {
+		delCtx.FullText = &postdml.PostDmlFullTextCtx{
+			SourceTableName: oldCtx.FullText.SourceTableName,
+			IndexTableName:  oldCtx.FullText.IndexTableName,
+			Parts:           oldCtx.FullText.Parts,
+			AlgoParams:      oldCtx.FullText.AlgoParams,
+		}
+	}
+
+	op := postdml.NewArgument()
+	op.PostDmlCtx = delCtx
+	return op
 }

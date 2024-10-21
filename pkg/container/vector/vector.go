@@ -342,6 +342,64 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
+// WARNING: GetAny() return value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the GetFixedAtWithTypeCheck() to get the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
+func GetAny(vec *Vector, i int) any {
+	switch vec.typ.Oid {
+	case types.T_bool:
+		return GetFixedAtNoTypeCheck[bool](vec, i)
+	case types.T_bit:
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
+	case types.T_int8:
+		return GetFixedAtNoTypeCheck[int8](vec, i)
+	case types.T_int16:
+		return GetFixedAtNoTypeCheck[int16](vec, i)
+	case types.T_int32:
+		return GetFixedAtNoTypeCheck[int32](vec, i)
+	case types.T_int64:
+		return GetFixedAtNoTypeCheck[int64](vec, i)
+	case types.T_uint8:
+		return GetFixedAtNoTypeCheck[uint8](vec, i)
+	case types.T_uint16:
+		return GetFixedAtNoTypeCheck[uint16](vec, i)
+	case types.T_uint32:
+		return GetFixedAtNoTypeCheck[uint32](vec, i)
+	case types.T_uint64:
+		return GetFixedAtNoTypeCheck[uint64](vec, i)
+	case types.T_float32:
+		return GetFixedAtNoTypeCheck[float32](vec, i)
+	case types.T_float64:
+		return GetFixedAtNoTypeCheck[float64](vec, i)
+	case types.T_date:
+		return GetFixedAtNoTypeCheck[types.Date](vec, i)
+	case types.T_datetime:
+		return GetFixedAtNoTypeCheck[types.Datetime](vec, i)
+	case types.T_time:
+		return GetFixedAtNoTypeCheck[types.Time](vec, i)
+	case types.T_timestamp:
+		return GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
+	case types.T_enum:
+		return GetFixedAtNoTypeCheck[types.Enum](vec, i)
+	case types.T_decimal64:
+		return GetFixedAtNoTypeCheck[types.Decimal64](vec, i)
+	case types.T_decimal128:
+		return GetFixedAtNoTypeCheck[types.Decimal128](vec, i)
+	case types.T_uuid:
+		return GetFixedAtNoTypeCheck[types.Uuid](vec, i)
+	case types.T_TS:
+		return GetFixedAtNoTypeCheck[types.TS](vec, i)
+	case types.T_Rowid:
+		return GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+	case types.T_Blockid:
+		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return vec.GetBytesAt(i)
+	}
+	return nil
+}
+
 func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
@@ -2693,6 +2751,9 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 	return nil
 }
 
+// WARNING: AppendAny() append value with any type will cause memory escape to heap which will result in slow GC.
+// If you know the actual type, better use the AppendFixed() to append the values.
+// Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
 func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
@@ -4328,20 +4389,22 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 			break
 		}
 
+		j := idx
 		if cmp(short[i], long[idx]) == 0 {
 			if err = AppendFixed(ret, short[i], false, mp); err != nil {
 				return err
 			}
-		}
 
-		// skip the same item
-		j := idx + 1
-		for j < lenLong && cmp(long[j], long[j-1]) == 0 {
 			j++
-		}
 
-		if j >= lenLong {
-			break
+			// skip the same item
+			for j < lenLong && cmp(long[j], long[j-1]) == 0 {
+				j++
+			}
+
+			if j >= lenLong {
+				break
+			}
 		}
 
 		idx = j
@@ -4449,21 +4512,22 @@ func Intersection2VectorVarlen(
 			break
 		}
 
+		j := idx
 		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
 			if err = AppendBytes(ret, shortBytes, false, mp); err != nil {
 				return err
 			}
-		}
 
-		// skip the same item
-		j := idx + 1
-		for j < lenLong && bytes.Equal(
-			longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
+			// skip the same item
 			j++
-		}
+			for j < lenLong && bytes.Equal(
+				longCol[j].GetByteSlice(longArea), longCol[j-1].GetByteSlice(longArea)) {
+				j++
+			}
 
-		if j >= lenLong {
-			break
+			if j >= lenLong {
+				break
+			}
 		}
 
 		idx = j
@@ -4494,11 +4558,11 @@ func Union2VectorValen(
 	}
 
 	for i < lenA && j < lenB {
-		bb := colb[j].GetByteSlice(areab)
 		ba := cola[i].GetByteSlice(areaa)
+		bb := colb[j].GetByteSlice(areab)
 
 		if bytes.Compare(ba, bb) <= 0 {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 				prevVal = ba
 				if err = AppendBytes(ret, ba, false, mp); err != nil {
 					return err
@@ -4506,7 +4570,7 @@ func Union2VectorValen(
 			}
 			i++
 		} else {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 				prevVal = bb
 				if err = AppendBytes(ret, bb, false, mp); err != nil {
 					return err
@@ -4518,7 +4582,7 @@ func Union2VectorValen(
 
 	for ; i < lenA; i++ {
 		ba := cola[i].GetByteSlice(areaa)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 			prevVal = ba
 			if err = AppendBytes(ret, ba, false, mp); err != nil {
 				return err
@@ -4528,7 +4592,7 @@ func Union2VectorValen(
 
 	for ; j < lenB; j++ {
 		bb := colb[j].GetByteSlice(areab)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 			prevVal = bb
 			if err = AppendBytes(ret, bb, false, mp); err != nil {
 				return err

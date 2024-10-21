@@ -25,7 +25,7 @@ const (
 	madv_FREE_REUSE    = 0x8
 )
 
-func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints) {
+func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
 	if err := unix.Madvise(
 		unsafe.Slice((*byte)(ptr), f.size),
 		madv_FREE_REUSE,
@@ -33,7 +33,7 @@ func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints) {
 		panic(err)
 	}
 	if hints&NoClear == 0 {
-		clear(unsafe.Slice((*byte)(ptr), f.size))
+		clear(unsafe.Slice((*byte)(ptr), clearSize))
 	}
 }
 

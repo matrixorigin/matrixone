@@ -293,6 +293,8 @@ message OnUpdate {
 
 message IndexOption {
 	bool create_extra_table = 1;
+	string parser_name = 2;
+	int32 ngram_token_size = 3;
 }
 
 message PrimaryKeyDef {
@@ -323,7 +325,6 @@ message IndexDef {
 	bool table_exist        = 6;
 	string comment          = 7;
 	bool visible          = 8;
-	// currently not used
 	IndexOption option		  = 9;
 	string index_algo = 10;
 	string index_algo_table_type = 11;
@@ -746,6 +747,7 @@ message Node {
 		PARTITION = 67;
 		FUZZY_FILTER = 68;
 		APPLY = 69;
+		POSTDML = 70;
 	}
 
 	enum JoinType {
@@ -878,6 +880,7 @@ message Node {
 	Snapshot scan_snapshot = 62;
 	bool recursive_cte = 63;
 	ApplyType apply_type = 64;
+	PostDmlCtx post_dml_ctx = 65;
 
 }
 
@@ -978,6 +981,24 @@ message DeleteCtx {
 	int32 primary_key_idx = 9;
 	TruncateTable truncate_table = 10;
 	TableDef table_def 	= 11;
+}
+
+message PostDmlFullTextCtx {
+	string source_table_name = 1;
+	string index_table_name = 2;
+	repeated string parts = 3;
+	string algo_params = 4;
+}
+
+message PostDmlCtx {
+	ObjectRef ref = 1;
+	bool add_affected_rows 	= 2;
+	int32 primary_key_idx = 3;
+	string primary_key_name = 4;
+	bool is_delete = 5;
+	bool is_insert = 6;
+	bool is_delete_without_filters = 7;
+	PostDmlFullTextCtx full_text = 8;
 }
 
 message Query {

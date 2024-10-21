@@ -38,14 +38,24 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
-	name := location.Name()
+	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(
+		ctx,
+		&dataMeta,
+		name,
+		location.ID(),
+		cols,
+		typs,
+		m,
+		fs,
+		policy,
+	); err != nil {
 		return
 	}
 	release = func() {

@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"runtime"
@@ -23,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/google/pprof/profile"
+	"github.com/stretchr/testify/assert"
 )
 
 type testSampleValues struct {
@@ -81,26 +83,34 @@ func TestProfilerWrite(t *testing.T) {
 }
 
 func testProfiler(t *testing.T, w io.Writer) {
+	// new
 	profiler := NewProfiler[testSampleValues]()
+
+	// sample
 	for i := 0; i < 65536; i++ {
 		values := profiler.Sample(0, 2)
 		values.N.Add(1)
 		values = profiler.Sample(0, 2)
 		values.A.Add(2)
 	}
-	if err := profiler.Write(w); err != nil {
+
+	// write
+	buf := new(bytes.Buffer)
+	if err := profiler.Write(io.MultiWriter(w, buf)); err != nil {
 		t.Fatal(err)
 	}
-	for _, mergedSample := range profiler.mergedSamples {
-		mergedValue := mergedSample.Values[0].Merge(mergedSample.Values[1:])
-		values := mergedValue.Values()
-		for _, value := range values {
-			if value > 0 {
-				if value < 30000 {
-					t.Fatalf("got %+v", values)
-				}
-			}
+
+	// read
+	p, err := profile.Parse(buf)
+	assert.Nil(t, err)
+	counter := make([]int64, 2)
+	for _, sample := range p.Sample {
+		for i := range sample.Value {
+			counter[i] += sample.Value[i]
 		}
+	}
+	if counter[0] < 60000 || counter[1] < 120000 {
+		t.Fatalf("got %+v\n", counter)
 	}
 }
 
