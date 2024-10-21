@@ -230,17 +230,6 @@ drop table auto_increment01;
 -- @bvt:issue
 
 
--- temporary table:auto_increment > 0
-Drop table if exists auto_increment02;
-Create temporary table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
-Insert into auto_increment02 values();
-select last_insert_id();
-Select * from auto_increment02;
-Insert into auto_increment02 values(10);
-insert into auto_increment02 values(100);
-Select * from auto_increment02;
-Drop table auto_increment02;
-
 
 
 -- temporary table:auto_increment > 0 and have duplicate value

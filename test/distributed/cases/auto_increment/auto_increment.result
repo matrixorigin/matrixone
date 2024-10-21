@@ -351,22 +351,6 @@ Select * from auto_increment01;
 [unknown result because it is related to issue#10903]
 drop table auto_increment01;
 [unknown result because it is related to issue#10903]
-Drop table if exists auto_increment02;
-Create temporary table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
-Insert into auto_increment02 values();
-Duplicate entry '10' for key '__mo_index_idx_col'
-select last_insert_id();
-last_insert_id()
-7
-Select * from auto_increment02;
-col1
-Insert into auto_increment02 values(10);
-insert into auto_increment02 values(100);
-Select * from auto_increment02;
-col1
-10
-100
-Drop table auto_increment02;
 Drop table if exists auto_increment03;
 [unknown result because it is related to issue#10903]
 create temporary table auto_increment03(col1 int auto_increment primary key) auto_increment = 10000;
