@@ -109,8 +109,7 @@ func NewFlushTableTailEntry(
 			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
 			// collect deletes phase 1
 			entry.collectTs = rt.Now()
-			_, _, ok := fault.TriggerFault("tae: slow transfer deletes")
-			if ok {
+			if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 				time.Sleep(time.Second)
 			}
 			var err error
