@@ -150,9 +150,6 @@ func (m *objOverlapPolicy) reviseLeveledObjs(i int, config *BasicPolicyConfig) (
 	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}
-	if len(objs) > config.MergeMaxOneRun {
-		objs = objs[:config.MergeMaxOneRun]
-	}
 	return objs, TaskHostDN
 }
 
