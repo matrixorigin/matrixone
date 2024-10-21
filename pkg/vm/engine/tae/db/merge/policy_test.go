@@ -73,6 +73,8 @@ func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
 	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
 	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
@@ -143,9 +145,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	result = p.revise(0, 36, cfg)
-	require.Equal(t, 1, len(result))
-	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, 0, len(result))
 }
 
 func TestPolicyTombstone(t *testing.T) {
@@ -221,7 +221,9 @@ func TestObjOverlap(t *testing.T) {
 	// empty policy
 	policy := newObjOverlapPolicy()
 	objs := policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -231,7 +233,9 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry1, defaultBasicConfig))
 	require.True(t, policy.onObject(entry2, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -241,8 +245,13 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry3, defaultBasicConfig))
 	require.True(t, policy.onObject(entry4, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 1, len(objs))
-	require.Equal(t, 2, len(objs[0].objs))
+	for i, obj := range objs {
+		if i == 0 {
+			require.Equal(t, 2, len(obj.objs))
+			continue
+		}
+		require.Equal(t, 0, len(obj.objs))
+	}
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
 	policy.resetForTable(nil)
@@ -252,9 +261,11 @@ func TestObjOverlap(t *testing.T) {
 	entry6 := newTestObjectEntry(t, overlapSizeThreshold, false)
 	require.False(t, policy.onObject(entry5, defaultBasicConfig))
 	require.False(t, policy.onObject(entry6, defaultBasicConfig))
-	require.Equal(t, 0, len(policy.objects))
+	require.Equal(t, 6, len(policy.leveledObjects))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -275,7 +286,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 1, len(objs))
+	require.Equal(t, 6, len(objs))
 	require.Equal(t, 3, len(objs[0].objs))
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
@@ -289,7 +300,9 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry13, defaultBasicConfig))
 
 	objs = policy.revise(0, 0, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 }
@@ -326,4 +339,23 @@ func TestPolicyCompact(t *testing.T) {
 	newSortedTombstoneEntryWithTableEntry(t, tbl, txn3, types.Rowid{0}, types.Rowid{1})
 	require.NoError(t, txn3.Commit(context.Background()))
 	require.False(t, p.onObject(entry1, defaultBasicConfig))
+}
+
+func TestSegLevel(t *testing.T) {
+	require.Equal(t, 0, segLevel(1))
+	require.Equal(t, 1, segLevel(2))
+	require.Equal(t, 1, segLevel(3))
+	require.Equal(t, 2, segLevel(4))
+	require.Equal(t, 2, segLevel(5))
+	require.Equal(t, 2, segLevel(6))
+	require.Equal(t, 2, segLevel(14))
+	require.Equal(t, 2, segLevel(15))
+	require.Equal(t, 3, segLevel(16))
+	require.Equal(t, 3, segLevel(17))
+	require.Equal(t, 3, segLevel(63))
+	require.Equal(t, 4, segLevel(64))
+	require.Equal(t, 4, segLevel(65))
+	require.Equal(t, 4, segLevel(255))
+	require.Equal(t, 5, segLevel(256))
+	require.Equal(t, 5, segLevel(257))
 }
