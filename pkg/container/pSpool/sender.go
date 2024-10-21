@@ -66,7 +66,7 @@ func (ps *PipelineSpool) SendBatch(
 
 	msg := pipelineSpoolMessage{
 		content: dst.pointer,
-		cacheID: dst.whichCacheToUse,
+		cacheID: dst.usingCacheID,
 		err:     info,
 	}
 
@@ -88,8 +88,8 @@ func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(
 				freeBatchSignal{
-					pointer:         ps.shardPool[last].content,
-					whichCacheToUse: ps.shardPool[last].cacheID,
+					pointer:      ps.shardPool[last].content,
+					usingCacheID: ps.shardPool[last].cacheID,
 				},
 			)
 			ps.freeShardPool <- last
