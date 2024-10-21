@@ -92,6 +92,76 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	return sender, err
 }
 
+// checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
+// once it was sent to other remote node.
+//
+// it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
+func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	var regs = make(map[*process.WaitRegister]struct{})
+	var toScan []*Scope
+	// record which mergeReceivers this scope tree holds.
+	{
+		toScan = append(toScan, s)
+		for len(toScan) > 0 {
+			node := toScan[len(toScan)-1]
+			toScan = toScan[:len(toScan)-1]
+
+			if len(node.PreScopes) > 0 {
+				toScan = append(toScan, node.PreScopes...)
+			}
+
+			for i := range node.Proc.Reg.MergeReceivers {
+				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+			}
+		}
+	}
+
+	// check if there are target channels from other trees.
+	{
+		if len(s.PreScopes) > 0 {
+			toScan = append(toScan, s.PreScopes...)
+		}
+
+		for len(toScan) > 0 {
+			node := toScan[len(toScan)-1]
+			toScan = toScan[:len(toScan)-1]
+
+			if len(node.PreScopes) > 0 {
+				toScan = append(toScan, node.PreScopes...)
+			}
+
+			if node.RootOp.OpType() == vm.Dispatch {
+				t := node.RootOp.(*dispatch.Dispatch)
+				for i := range t.LocalRegs {
+					if _, ok := regs[t.LocalRegs[i]]; !ok {
+						s.Proc.Infof(
+							s.Proc.Ctx,
+							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+							s.Proc.GetTxnOperator().Txn().ID, s)
+
+						return false
+					}
+				}
+				continue
+			}
+			if node.RootOp.OpType() == vm.Connector {
+				t := node.RootOp.(*connector.Connector)
+				if _, ok := regs[t.Reg]; !ok {
+					s.Proc.Infof(
+						s.Proc.Ctx,
+						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+						s.Proc.GetTxnOperator().Txn().ID, s)
+
+					return false
+				}
+				continue
+			}
+		}
+	}
+
+	return true
+}
+
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
 	// if simpleRun is true, it indicates that this pipeline will not produce any output.
 	withoutOutput = true
