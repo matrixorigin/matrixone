@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -246,7 +247,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 			}
 		}
 		vecs = append(vecs, vec)
-		attrs = append(attrs, catalog.Row_ID)
+		attrs = append(attrs, objectio.PhysicalAddr_Attr)
 	}
 	{
 		var val types.TS

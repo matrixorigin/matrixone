@@ -93,6 +93,8 @@ type tracerProviderConfig struct {
 
 	tcpPacket bool // WithTCPPacket
 
+	MaxLogMessageSize int // WithMaxLogMessageSize
+
 	labels map[string]string
 
 	mux sync.RWMutex
@@ -235,6 +237,12 @@ func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOp
 func WithTCPPacket(count bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.tcpPacket = count
+	}
+}
+
+func WithMaxLogMessageSize(size int) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.MaxLogMessageSize = size
 	}
 }
 

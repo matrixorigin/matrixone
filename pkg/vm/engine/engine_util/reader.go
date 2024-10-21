@@ -108,7 +108,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 	for i, column := range cols {
 		column = strings.ToLower(column)
-		if column == catalog.Row_ID {
+		if objectio.IsPhysicalAddr(column) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i

@@ -16,8 +16,8 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"io"
+	"net/http"
 	"net/url"
 	gotrace "runtime/trace"
 	"strings"
@@ -70,7 +70,23 @@ func NewMinioSDK(
 				AccessKeyID:     args.KeyID,
 				SecretAccessKey: args.KeySecret,
 				SessionToken:    args.SessionToken,
+				SignerType:      credentials.SignatureV2,
+			},
+		})
+		credentialProviders = append(credentialProviders, &credentials.Static{
+			Value: credentials.Value{
+				AccessKeyID:     args.KeyID,
+				SecretAccessKey: args.KeySecret,
+				SessionToken:    args.SessionToken,
 				SignerType:      credentials.SignatureV4,
+			},
+		})
+		credentialProviders = append(credentialProviders, &credentials.Static{
+			Value: credentials.Value{
+				AccessKeyID:     args.KeyID,
+				SecretAccessKey: args.KeySecret,
+				SessionToken:    args.SessionToken,
+				SignerType:      credentials.SignatureDefault,
 			},
 		})
 	}
@@ -223,6 +239,12 @@ func (a *MinioSDK) Stat(
 	err error,
 ) {
 
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -317,6 +339,11 @@ func (a *MinioSDK) Read(
 		if err != nil {
 			return nil, err
 		}
+		// eager read to expose file not found error
+		_, err = r.Read(nil)
+		if err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 
@@ -326,6 +353,11 @@ func (a *MinioSDK) Read(
 		min,
 		max,
 	)
+	if err != nil {
+		return nil, err
+	}
+	// eager read to expose file not found error
+	_, err = r.Read(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -353,14 +385,8 @@ func (a *MinioSDK) Delete(
 		return a.deleteSingle(ctx, keys[0])
 	}
 
-	for i := 0; i < len(keys); i += 1000 {
-		end := i + 1000
-		if end > len(keys) {
-			end = len(keys)
-		}
-		if _, err := a.deleteObjects(ctx, keys[i:end]...); err != nil {
-			return err
-		}
+	if _, err := a.deleteObjects(ctx, keys...); err != nil {
+		return err
 	}
 
 	return nil
@@ -454,6 +480,9 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			obj, err := DoWithRetry(
@@ -518,6 +547,7 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 					Key: key,
 				}
 			}
+			close(objsCh)
 			for err := range errCh {
 				return nil, err.Err
 			}
@@ -532,11 +562,8 @@ func (a *MinioSDK) is404(err error) bool {
 	if err == nil {
 		return false
 	}
-	var resp minio.ErrorResponse
-	if !errors.As(err, &resp) {
-		return false
-	}
-	return resp.Code == "NoSuchKey"
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || resp.StatusCode == http.StatusNotFound
 }
 
 func minioValidateEndpoint(args *ObjectStorageArguments) (isSecure bool, err error) {

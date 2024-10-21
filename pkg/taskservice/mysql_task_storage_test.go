@@ -543,4 +543,5 @@ func TestDaemonTaskInSqlMock(t *testing.T) {
 	assert.Equal(t, 1, heartbeat)
 
 	mock.ExpectClose()
+	require.NoError(t, storage.Close())
 }
