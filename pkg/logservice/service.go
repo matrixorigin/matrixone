@@ -125,7 +125,7 @@ func NewService(
 	if service.dataSync != nil {
 		onReplicaChanged = service.dataSync.NotifyReplicaID
 	}
-	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime)
+	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime, fileService)
 	if err != nil {
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -342,6 +342,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HEALTH:
 		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
+	case pb.READ_LSN:
+		return s.handleReadLsn(ctx, req)
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -444,6 +446,18 @@ func (s *Service) handleRead(ctx context.Context, req pb.Request) (pb.Response, 
 		resp.LogResponse.LastLsn = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
+}
+
+func (s *Service) handleReadLsn(ctx context.Context, req pb.Request) (pb.Response, pb.LogRecordResponse) {
+	r := req.LogRequest
+	resp := getResponse(req)
+	lsn, err := s.store.queryLogLsn(ctx, r.ShardID, r.TS)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.Lsn = lsn
+	}
+	return resp, pb.LogRecordResponse{}
 }
 
 func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Response {
