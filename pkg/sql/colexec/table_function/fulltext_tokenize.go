@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cpegeric/goword"
 	"github.com/dslipak/pdf"
-	"github.com/fumiama/go-docx"
 
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -127,21 +127,11 @@ func getPdfContent(data []byte) ([]byte, error) {
 }
 
 func getDocxContent(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	doc, err := docx.Parse(bytes.NewReader(data), int64(len(data)))
+	doc, err := goword.ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err
 	}
-
-	for _, it := range doc.Document.Body.Items {
-		switch v := it.(type) {
-		case *docx.Paragraph:
-			buf.WriteString(v.String())
-		case *docx.Table:
-			buf.WriteString(v.String())
-		}
-	}
-	return buf.Bytes(), nil
+	return []byte(doc), err
 }
 
 func getContentFromFile(fpath string, proc *process.Process) ([]byte, error) {
