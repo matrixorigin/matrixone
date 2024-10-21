@@ -358,6 +358,34 @@ func (c *checkpointCleaner) Replay() (err error) {
 	if compacted != nil {
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
+
+		var ckpData *logtail.CheckpointData
+		if ckpData, err = c.collectCkpData(compacted); err != nil {
+			logutil.Error(
+				"GC-REPLAY-COLLECT-ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.String("checkpoint", compacted.String()),
+			)
+			return
+		}
+		pitrs, err := c.GetPITRsLocked()
+		if err != nil {
+			logutil.Errorf("GetPITRs failed, err: %v", err)
+			return
+		}
+		snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+		if err != nil {
+			logutil.Errorf("GetSnapshot failed, err: %v", err)
+			return
+		}
+		accountSnapshots := TransformToTSList(snapshots)
+		logtail.FillUsageBatOfCompacted(
+			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
+			ckpData,
+			c.mutation.snapshotMeta,
+			accountSnapshots,
+			pitrs)
 	}
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
@@ -429,6 +457,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 			}
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 		}
+
 		logutil.Info(
 			"GC-REPLAY-TRACE-INIT-TABLE-INFO",
 			zap.String("task", c.TaskNameLocked()),

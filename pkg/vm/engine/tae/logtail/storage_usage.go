@@ -1192,6 +1192,7 @@ func FillUsageBatOfCompacted(
 		if val.SnapshotSize == 0 && !ok {
 			continue
 		}
+		logutil.Infof("fill usage2 bat of compacted ckp: %v", val.String())
 		val.SnapshotSize = ud.SnapshotSize
 		update[key] = val
 	}
