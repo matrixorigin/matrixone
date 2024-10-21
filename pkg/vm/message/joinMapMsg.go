@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -53,6 +55,7 @@ func (js *JoinSels) InsertSel(k, v int32) {
 			}
 		} else {
 			js.allUnique = false
+			logutil.Infof("not all unique! k %v v %v", k, v)
 			if k >= selsDivideLength {
 				js.sels = js.sels[:0]
 				var i int32 = 0
@@ -72,6 +75,9 @@ func (js *JoinSels) InsertSel(k, v int32) {
 			s := make([][]int32, selsDivideLength)
 			js.sels = append(js.sels, s)
 		}
+	}
+	if len(js.sels) <= int(i) {
+		logutil.Infof("panic! k %v v %v i %v %v lensels %v", k, v, i, j, len(js.sels))
 	}
 	if len(js.sels[i]) <= int(j) {
 		js.sels[i] = append(js.sels[i], make([]int32, 0, 4))
