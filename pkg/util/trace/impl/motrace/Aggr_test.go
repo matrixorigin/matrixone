@@ -197,13 +197,13 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
 	for idx := 0; idx < 4; idx++ {
 	}
-	targetBytes := []byte(`[4,5,10.000,15,20,25,2,0,220.0803]`)
+	targetBytes := []byte(`[5,5,10.000,15,20,25,2,0,220.0803,0,0]`)
 	for idx := 0; idx < 4; idx++ {
 		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
 	}
 	item, _ := results[0].(*StatementInfo)
 	row := item.GetTable().GetRow(ctx)
-	targetBytes = []byte(`[4,5,2.000,15,20,25,2,0,220.0803]`) // re-calculate memory usage in FillRow
+	targetBytes = []byte(`[5,5,2.000,15,20,25,2,0,220.0803,0,0]`) // re-calculate memory usage in FillRow
 	for idx := 0; idx < 4; idx++ {
 		results[idx].(*StatementInfo).FillRow(ctx, row)
 		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
@@ -272,9 +272,9 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
 	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
+	require.Equal(t, []byte(`[5,5,10.000,15,20,25,0,0,220.0803,0,0]`), results[0].(*StatementInfo).GetStatsArrayBytes())
 	results[0].(*StatementInfo).FillRow(ctx, row) // re-calculate memory usage in FillRow
-	require.Equal(t, []byte(`[4,5,2.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
+	require.Equal(t, []byte(`[5,5,2.000,15,20,25,0,0,220.0803,0,0]`), results[0].(*StatementInfo).GetStatsArrayBytes())
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		Account:       "MO",

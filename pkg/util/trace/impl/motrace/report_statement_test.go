@@ -327,18 +327,20 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[4,228295,3600.000,1,0,0,1,3,0]")
+	wantBytes := []byte("[5,228295,3600.000,1,0,0,1,3,0,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
-	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10).WithCU(1.1234)
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10).WithCU(1.1234).
+		WithS3IOListCount(1).
+		WithS3IODeleteCount(1)
 
 	err = mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[4,228296,3601.000,1,0,0,1,13,1.1234]")
+	wantBytes = []byte("[5,228296,3601.000,1,0,0,1,13,1.1234,1,1]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }

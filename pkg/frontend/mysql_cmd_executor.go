@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -432,13 +433,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 // getDataFromPipeline: extract the data from the pipeline.
 // obj: session
-func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) error {
+func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs *perfcounter.CounterSet) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
 
 	begin := time.Now()
-	err := ses.GetResponser().RespResult(execCtx, bat)
+	err := ses.GetResponser().RespResult(execCtx, crs, bat)
 	if err != nil {
 		return err
 	}
@@ -1841,12 +1842,12 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 
@@ -1876,12 +1877,12 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 
@@ -1920,7 +1921,19 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	stats := statistic.StatsInfoFromContext(reqCtx)
 	stats.PlanStart()
-	defer stats.PlanEnd()
+	crs := new(perfcounter.CounterSet)
+	reqCtx = perfcounter.AttachBuildPlanMarkKey(reqCtx, crs)
+	defer func() {
+		stats.AddBuildPlanS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+		stats.PlanEnd()
+	}()
 
 	isPrepareStmt := false
 	if ses != nil {
@@ -2557,10 +2570,22 @@ func executeStmtWithIncrStmt(ses FeSession,
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	//3. increase statement id
-	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
+
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
+	err = txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	if err != nil {
 		return err
 	}
+	stats := statistic.StatsInfoFromContext(newCtx)
+	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
+		List:      crs.FileService.S3.List.Load(),
+		Head:      crs.FileService.S3.Head.Load(),
+		Put:       crs.FileService.S3.Put.Load(),
+		Get:       crs.FileService.S3.Get.Load(),
+		Delete:    crs.FileService.S3.Delete.Load(),
+		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+	})
 
 	defer func() {
 		if ses.GetTxnHandler() == nil {
@@ -2874,8 +2899,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseStartTime = beginInstant
+
+	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
@@ -2887,7 +2914,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
-		statsInfo.ParseDuration = ParseDuration
+		statsInfo.ParseStage.ParseDuration = ParseDuration
 		var err2 error
 		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		if err2 != nil {
@@ -2951,8 +2978,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
-		statsInfo.ParseStartTime = beginInstant
-		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+		statsInfo.ParseStage.ParseStartTime = beginInstant
+		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
@@ -3574,29 +3601,58 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		val := int64(statsByte.GetTimeConsumed()) + statsInfo.BuildReaderDuration +
-			int64(statsInfo.ParseDuration+
-				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) -
+		operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
+		totalTime := operatorTimeConsumed +
+			int64(statsInfo.ParseStage.ParseDuration) +
+			int64(statsInfo.PlanStage.PlanDuration) +
+			int64(statsInfo.CompileStage.CompileDuration) +
+			statsInfo.PrepareRunStage.ScopePrepareDuration +
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-		if val < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo(%d + %d + %d + %d + %d -%d - %d) = %d",
+
+		if totalTime < 0 {
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
-				int64(statsByte.GetTimeConsumed()),
-				statsInfo.BuildReaderDuration,
-				statsInfo.ParseDuration,
-				statsInfo.CompileDuration,
-				statsInfo.PlanDuration,
+				statsInfo.ParseStage.ParseDuration,
+				statsInfo.PlanStage.PlanDuration,
+				statsInfo.CompileStage.CompileDuration,
+				operatorTimeConsumed,
+				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
-				val)
+				totalTime,
+			)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
-			statsByte.WithTimeConsumed(float64(val))
+			statsByte.WithTimeConsumed(float64(totalTime))
 		}
-	}
 
+		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.CountPUT()
+		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.CountGET()
+		planS3List := statsInfo.PlanStage.BuildPlanS3Request.CountLIST()
+		planS3Delete := statsInfo.PlanStage.BuildPlanS3Request.CountDELETE()
+
+		compileS3Input := statsInfo.CompileStage.CompileS3Request.CountPUT()
+		compileS3Output := statsInfo.CompileStage.CompileS3Request.CountGET()
+		compileS3List := statsInfo.CompileStage.CompileS3Request.CountLIST()
+		compileS3Delete := statsInfo.CompileStage.CompileS3Request.CountDELETE()
+
+		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountPUT()
+		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountGET()
+		preRunS3List := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountLIST()
+		preRunS3Delete := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountDELETE()
+
+		totalS3Input := statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input)
+		totalS3Output := statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output)
+		totalS3List := statsByte.GetS3IOListCount() + float64(planS3List+compileS3List+preRunS3List)
+		totalS3Delete := statsByte.GetS3IODeleteCount() + float64(planS3Delete+compileS3Delete+preRunS3Delete)
+
+		statsByte.WithS3IOInputCount(totalS3Input)
+		statsByte.WithS3IOOutputCount(totalS3Output)
+		statsByte.WithS3IOListCount(totalS3List)
+		statsByte.WithS3IODeleteCount(totalS3Delete)
+	}
 	return
 }
 

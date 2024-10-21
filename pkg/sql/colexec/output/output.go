@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -73,10 +74,14 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		bat := result.Batch
 
-		if err = output.Func(bat); err != nil {
+		retrievedCounter := new(perfcounter.CounterSet)
+		if err = output.Func(bat, retrievedCounter); err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
+		analyzer.AddS3RequestCount(retrievedCounter)
+		analyzer.AddDiskIO(retrievedCounter)
+
 		// TODO: analyzer.Output(result.Batch)
 		return result, nil
 	} else {
@@ -115,10 +120,15 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
-				if err := output.Func(bat); err != nil {
+
+				retrievedCounter := new(perfcounter.CounterSet)
+				if err := output.Func(bat, retrievedCounter); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
+				analyzer.AddS3RequestCount(retrievedCounter)
+				analyzer.AddDiskIO(retrievedCounter)
+
 				result.Batch = bat
 				// same as nonBlock
 				// analyzer.Output(result.Batch)

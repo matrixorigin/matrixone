@@ -176,6 +176,8 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
+	ScopeAnalyzer *ScopeAnalyzer
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	PartialResults     []any
@@ -250,7 +252,7 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch) error
+	fill func(*batch.Batch, *perfcounter.CounterSet) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -340,4 +342,47 @@ type fuzzyCheck struct {
 type MultiTableIndex struct {
 	IndexAlgo string
 	IndexDefs map[string]*plan.IndexDef
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+type ScopeAnalyzer struct {
+	start        time.Time // Records the start time when the analyzer begins
+	isStarted    bool      // Indicates whether the analyzer has started
+	isStoped     bool      // Indicates whether the analyzer has stopped
+	TimeConsumed int64     // Stores the total time consumed between Start and Stop in nanoseconds
+}
+
+// Start begins the time tracking. It will not start if it has already started or if it has been stopped.
+func (sa *ScopeAnalyzer) Start() {
+	if sa.isStarted {
+		return
+	}
+	// Set the start time to the current time and mark the analyzer as started
+	sa.start = time.Now()
+	sa.isStarted = true
+}
+
+// Stop halts the time tracking and calculates the duration.
+// It won't perform any actions if it has not started or if it has already been stopped.
+func (sa *ScopeAnalyzer) Stop() {
+	if sa.isStoped || !sa.isStarted {
+		return
+	}
+	// Calculate the time duration since start and store it in TimeConsumed
+	duration := time.Since(sa.start)
+	sa.TimeConsumed = duration.Nanoseconds()
+	sa.isStoped = true
+}
+
+// Reset clears the analyzer's state, allowing it to start again.
+// Both isStarted and isStoped flags are reset.
+func (sa *ScopeAnalyzer) Reset() {
+	sa.TimeConsumed = 0
+	sa.isStoped = false
+	sa.isStarted = false
+}
+
+func NewScopeAnalyzer() *ScopeAnalyzer {
+	return &ScopeAnalyzer{}
 }

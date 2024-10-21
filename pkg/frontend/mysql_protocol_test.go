@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2656,7 +2657,7 @@ func (fp *testMysqlWriter) GetBool(PropertyID) bool {
 	return false
 }
 
-func (fp *testMysqlWriter) Write(ctx *ExecCtx, batch *batch.Batch) error {
+func (fp *testMysqlWriter) Write(ctx *ExecCtx, crs *perfcounter.CounterSet, batch *batch.Batch) error {
 	//TODO implement me
 	panic("implement me")
 }

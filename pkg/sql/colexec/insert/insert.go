@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -150,7 +151,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 						return vm.CancelResult, err
 					}
 
-					err = writeBatch(proc, insert.ctr.partitionS3Writers[partIdx], insert.ctr.buf)
+					err = writeBatch(proc, insert.ctr.partitionS3Writers[partIdx], insert.ctr.buf, analyzer)
 					if err != nil {
 						insert.ctr.state = vm.End
 						return vm.CancelResult, err
@@ -163,7 +164,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 				// Normal non partition table
 				// write to s3.
 				input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-				err = writeBatch(proc, insert.ctr.s3Writer, input.Batch)
+				err = writeBatch(proc, insert.ctr.s3Writer, input.Batch, analyzer)
 				if err != nil {
 					insert.ctr.state = vm.End
 					return vm.CancelResult, err
@@ -179,7 +180,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 		// If the target is partition table
 		if len(insert.InsertCtx.PartitionTableIDs) > 0 {
 			for _, writer := range insert.ctr.partitionS3Writers {
-				err := flushTailBatch(proc, writer, &result)
+				err := flushTailBatch(proc, writer, &result, analyzer)
 				if err != nil {
 					insert.ctr.state = vm.End
 					return vm.CancelResult, err
@@ -190,7 +191,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			writer := insert.ctr.s3Writer
 			// handle the last Batch that batchSize less than DefaultBlockMaxRows
 			// for more info, refer to the comments about reSizeBatch
-			err := flushTailBatch(proc, writer, &result)
+			err := flushTailBatch(proc, writer, &result, analyzer)
 			if err != nil {
 				insert.ctr.state = vm.End
 				return result, err
@@ -234,10 +235,15 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 			if err != nil {
 				return input, err
 			}
-			err = insert.ctr.partitionSources[partIdx].Write(proc.Ctx, insert.ctr.buf)
+
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = insert.ctr.partitionSources[partIdx].Write(newCtx, insert.ctr.buf)
 			if err != nil {
 				return input, err
 			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	} else {
 		insert.ctr.buf.CleanOnlyData()
@@ -251,11 +257,16 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 		insert.ctr.buf.SetRowCount(input.Batch.RowCount())
 
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 		// insert into table, insertBat will be deeply copied into txn's workspace.
-		err := insert.ctr.source.Write(proc.Ctx, insert.ctr.buf)
+		err = insert.ctr.source.Write(newCtx, insert.ctr.buf)
 		if err != nil {
 			return input, err
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 	}
 
 	if insert.InsertCtx.AddAffectedRows {
@@ -266,12 +277,18 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	return input, nil
 }
 
-func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch) error {
+func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
 	if writer.StashBatch(proc, bat) {
-		blockInfos, stats, err := writer.SortAndSync(proc)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
+		blockInfos, stats, err := writer.SortAndSync(newCtx, proc)
 		if err != nil {
 			return err
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
+
 		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
 		if err != nil {
 			return err
@@ -280,11 +297,16 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 	return nil
 }
 
-func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult) error {
-	blockInfos, stats, err := writer.FlushTailBatch(proc)
+func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult, analyzer process.Analyzer) error {
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
+	blockInfos, stats, err := writer.FlushTailBatch(newCtx, proc)
 	if err != nil {
 		return err
 	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	// if stats is not zero, then the blockInfos must not be nil
 	if !stats.IsZero() {

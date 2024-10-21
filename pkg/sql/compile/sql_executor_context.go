@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -145,25 +147,49 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 		}
 	}
 	var statsInfo *pb.StatsInfo
+	stats := statistic.StatsInfoFromContext(ctx)
 	// This is a partition table.
 	if partitionInfo != nil {
+		crs := new(perfcounter.CounterSet)
 		statsInfo = plan.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := c.getRelation(dbName, partitionTable, snapshot)
 			if err != nil {
 				return nil, err
 			}
-			parStats, err := parTable.Stats(parCtx, true)
+			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return nil, err
 			}
 			statsInfo.Merge(parStats)
 		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	} else {
-		statsInfo, err = table.Stats(ctx, true)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
+		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return nil, err
 		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	}
 	return statsInfo, nil
 }

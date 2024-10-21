@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -38,10 +39,12 @@ var _ ie.InternalExecutor = &logOutputExecutor{}
 type logOutputExecutor struct{}
 
 func (l logOutputExecutor) Exec(ctx context.Context, s string, s2 ie.SessionOverrideOptions) error {
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	logutil.Info(s)
 	return nil
 }
 func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	logutil.Info(s)
 	return nil
 }

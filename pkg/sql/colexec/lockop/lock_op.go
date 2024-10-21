@@ -33,9 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -246,13 +248,26 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		nil,
 		tableID,
 		proc,
@@ -262,6 +277,7 @@ func LockTable(
 	if err != nil {
 		return err
 	}
+
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
 		if !defChanged {
@@ -292,6 +308,19 @@ func LockRows(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
@@ -301,7 +330,7 @@ func LockRows(
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		rel,
 		tableID,
 		proc,
@@ -502,7 +531,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, analyzer, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -831,6 +860,7 @@ func getRowsFilter(
 func hasNewVersionInRange(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -851,9 +881,19 @@ func hasNewVersionInRange(
 			return false, err
 		}
 	}
+
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	defer func() {
+		if analyzer != nil {
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+		}
+	}()
+
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, vec)
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {

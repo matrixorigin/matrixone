@@ -36,7 +36,7 @@ func metaScanPrepare(proc *process.Process, tableFunction *TableFunction) (tvfSt
 	return &metaScanState{}, err
 }
 
-func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *metaScanState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
 	// Get uuid

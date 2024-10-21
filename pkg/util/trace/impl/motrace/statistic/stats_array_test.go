@@ -332,8 +332,8 @@ func BenchmarkStatsInfo(b *testing.B) {
 	s := StatsInfo{}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.ParseStartTime = time.Now()
-		s.ParseDuration = time.Since(s.ParseStartTime)
+		s.ParseStage.ParseStartTime = time.Now()
+		s.ParseStage.ParseDuration = time.Since(s.ParseStage.ParseStartTime)
 		s.PlanStart()
 		s.PlanEnd()
 		s.CompileStart()

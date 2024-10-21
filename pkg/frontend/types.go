@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -211,7 +212,7 @@ type ComputationWrapper interface {
 
 	GetColumns(ctx context.Context) ([]interface{}, error)
 
-	Compile(any any, fill func(*batch.Batch) error) (interface{}, error)
+	Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -615,7 +616,7 @@ func (execCtx *ExecCtx) Close() {
 //	FeSession
 //	ExecCtx
 //	batch.Batch
-type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
+type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
@@ -1150,7 +1151,7 @@ type Property interface {
 type Responser interface {
 	Property
 	RespPreMeta(*ExecCtx, any) error
-	RespResult(*ExecCtx, *batch.Batch) error
+	RespResult(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
 	MysqlRrWr() MysqlRrWr
 	Close()
@@ -1161,7 +1162,7 @@ type MediaReader interface {
 }
 
 type MediaWriter interface {
-	Write(*ExecCtx, *batch.Batch) error
+	Write(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	Close()
 }
 
