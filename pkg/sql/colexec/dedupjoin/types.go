@@ -118,6 +118,9 @@ func (dedupJoin *DedupJoin) Release() {
 
 func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
+	if !ctr.handledLast && dedupJoin.NumCPU > 1 && !dedupJoin.IsMerger {
+		dedupJoin.Channel <- nil
+	}
 	if dedupJoin.OpAnalyzer != nil {
 		dedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
