@@ -96,7 +96,7 @@ func openWordFileFromReader(reader io.ReaderAt, size int64) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("%s", doc), nil
+			return string(doc), nil
 		}
 		rc.Close()
 	}
@@ -142,7 +142,7 @@ func openWordFile(filename string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("%s", doc), nil
+			return string(doc), nil
 		}
 		rc.Close()
 	}
