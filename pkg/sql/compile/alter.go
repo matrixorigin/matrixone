@@ -19,13 +19,12 @@ import (
 
 	"go.uber.org/zap"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -71,6 +70,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 			retryErr = err
 		}
+
+		if qry.TableDef.Indexes != nil {
+			for _, indexdef := range qry.TableDef.Indexes {
+				if indexdef.TableExist {
+					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		if retryErr != nil {
 			return retryErr
 		}
