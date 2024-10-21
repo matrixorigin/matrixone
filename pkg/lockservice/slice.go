@@ -15,11 +15,11 @@
 package lockservice
 
 import (
-	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -44,7 +44,10 @@ func newCowSlice(
 	values [][]byte) *cowSlice {
 	cs := reuse.Alloc[cowSlice](nil)
 	cs.fsp = fsp
-	fs := fsp.acquire(len(values))
+	fs, err := fsp.acquire(len(values))
+	if err != nil {
+		// TODO
+	}
 	fs.append(values)
 	cs.fs.Store(fs)
 	return cs
@@ -62,7 +65,10 @@ func (cs *cowSlice) append(values [][]byte) {
 	// COW(copy-on-write), which needs to be copied once for each expansion, but for
 	// [][]byte lock information, only the []byte pointer needs to be copied and the
 	// overhead can be ignored.
-	new := cs.fsp.acquire(newLen)
+	new, err := cs.fsp.acquire(newLen)
+	if err != nil {
+		//TODO
+	}
 	new.join(old, values)
 	cs.replace(old, new)
 }
@@ -208,7 +214,7 @@ func newFixedSlicePool(max int) *fixedSlicePool {
 	return sp
 }
 
-func (sp *fixedSlicePool) acquire(n int) *fixedSlice {
+func (sp *fixedSlicePool) acquire(n int) (*fixedSlice, error) {
 	if n == 0 {
 		n = 4
 	}
@@ -216,25 +222,22 @@ func (sp *fixedSlicePool) acquire(n int) *fixedSlice {
 	n = roundUp(n)
 	i := int(math.Log2(float64(n)))
 	if i >= len(sp.slices) {
-		panic(fmt.Sprintf("too large fixed slice %d, max is %d",
-			n,
-			1<<(len(sp.slices)-1)))
+		return nil, moerr.NewInternalErrorNoCtxf("too large fixed slice %d, max is %d", n, 1<<(len(sp.slices)-1))
 	}
 	s := sp.slices[i].Get().(*fixedSlice)
 	s.ref()
-	return s
+	return s, nil
 }
 
-func (sp *fixedSlicePool) release(s *fixedSlice) {
+func (sp *fixedSlicePool) release(s *fixedSlice) error {
 	sp.releaseV.Add(1)
 	n := s.cap()
 	i := int(math.Log2(float64(n)))
 	if i >= len(sp.slices) {
-		panic(fmt.Sprintf("too large fixed slice %d, max is %d",
-			n,
-			2<<(len(sp.slices)-1)))
+		return moerr.NewInternalErrorNoCtxf("too large fixed slice %d, max is %d", n, 2<<(len(sp.slices)-1))
 	}
 	sp.slices[i].Put(s)
+	return nil
 }
 
 // roundUp takes a int greater than 0 and rounds it up to the next

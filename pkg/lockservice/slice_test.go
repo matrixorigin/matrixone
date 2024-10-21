@@ -37,51 +37,48 @@ func TestNewFixedSlicePool(t *testing.T) {
 func TestAcquire(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		assert.Equal(t, 1, fs.cap())
 		fs.close()
 
-		fs = fsp.acquire(3)
+		fs, err = fsp.acquire(3)
+		assert.NoError(t, err)
 		assert.Equal(t, 4, fs.cap())
 		fs.close()
 
-		fs = fsp.acquire(5)
+		fs, err = fsp.acquire(5)
+		assert.NoError(t, err)
 		assert.Equal(t, 8, fs.cap())
 		fs.close()
 
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-		fsp.acquire(1024)
+		fs, err = fsp.acquire(1024)
+		assert.Error(t, err)
+		assert.Nil(t, fs)
 	})
 }
 
 func TestRelease(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
-		fsp.release(fs)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
+		err = fsp.release(fs)
+		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), fsp.releaseV.Load())
-
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-		fs = fsp.acquire(1)
+		fs, err = fsp.acquire(1)
+		assert.NoError(t, err)
 		fs.values = make([][]byte, 1024)
-		fsp.release(fs)
+		err = fsp.release(fs)
+		assert.Error(t, err)
 	})
 }
 
 func TestFixedSliceAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(4)
+		fs, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs.close()
 
 		for i := byte(0); i < 4; i++ {
@@ -94,10 +91,12 @@ func TestFixedSliceAppend(t *testing.T) {
 func TestFixedSliceJoin(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs1 := fsp.acquire(4)
+		fs1, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs1.close()
 
-		fs2 := fsp.acquire(1)
+		fs2, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		defer fs2.close()
 		fs2.append([][]byte{{1}})
 
@@ -110,7 +109,8 @@ func TestFixedSliceJoin(t *testing.T) {
 func TestFixedSliceRefAndUnRef(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		assert.Equal(t, int32(1), fs.atomic.ref.Load())
 		fs.ref()
 		assert.Equal(t, int32(2), fs.atomic.ref.Load())
@@ -137,7 +137,8 @@ func TestFixedSliceRefAndUnRef(t *testing.T) {
 func TestFixedSliceIter(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(4)
+		fs, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs.close()
 
 		for i := byte(0); i < 4; i++ {
