@@ -58,8 +58,10 @@ const (
 )
 
 var (
-	DefaultLogServiceServiceAddress = fmt.Sprintf("%s:%d", DefaultServiceHost, DefaultLogServicePort)
-	DefaultGossipServiceAddress     = fmt.Sprintf("%s:%d", DefaultServiceHost, defaultGossipPort)
+	DefaultLogServiceServiceAddress        = fmt.Sprintf("%s:%d", DefaultServiceHost, DefaultLogServicePort)
+	DefaultGossipServiceAddress            = fmt.Sprintf("%s:%d", DefaultServiceHost, defaultGossipPort)
+	defaultLogDBMaxLogFileSize      uint64 = 1024 * 1024 * 64
+	defaultArchiverEnabled                 = false
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -112,6 +114,8 @@ type Config struct {
 	UseTeeLogDB bool `toml:"use-tee-logdb"`
 	// LogDBBufferSize is the size of the logdb buffer in bytes.
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
+	// LogDBMaxLogFileSize is the max size of the log db file.
+	LogDBMaxLogFileSize uint64 `toml:"logdb-max-log-file-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	// It is deprecated and will be removed.
 	GossipAddress string `toml:"gossip-address" user_setting:"advanced"`
@@ -252,6 +256,9 @@ type Config struct {
 		// ListenAddress as the communication address.
 		ServiceAddress string `toml:"service-address"`
 	} `toml:"ctl"`
+
+	// ArchiveEnabled indicates if the archive log function is enabled, default is false.
+	ArchiveLogEnabled bool `toml:"archive-log-enabled"`
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {
@@ -416,6 +423,7 @@ func DefaultConfig() Config {
 		ServiceHost:              DefaultServiceHost,
 		UseTeeLogDB:              false,
 		LogDBBufferSize:          defaultLogDBBufferSize,
+		LogDBMaxLogFileSize:      defaultLogDBMaxLogFileSize,
 		GossipAddress:            defaultGossipAddress,
 		GossipSeedAddresses:      []string{DefaultGossipServiceAddress},
 		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
@@ -508,6 +516,7 @@ func DefaultConfig() Config {
 			ListenAddress  string
 			ServiceAddress string
 		}{ListenAddress: "", ServiceAddress: ""}),
+		ArchiveLogEnabled: defaultArchiverEnabled,
 	}
 }
 
