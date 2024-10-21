@@ -20,20 +20,15 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"net/http/httptrace"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -421,98 +416,6 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
-}
-
-func TestS3FSMinioServer(t *testing.T) {
-
-	// find minio executable
-	exePath, err := exec.LookPath("minio")
-	if errors.Is(err, exec.ErrNotFound) {
-		// minio not found in machine
-		t.Skip("minio executable not found")
-	}
-
-	// start minio
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cmd := exec.CommandContext(ctx,
-		exePath,
-		"server",
-		t.TempDir(),
-		//"--certs-dir", filepath.Join("testdata", "minio-certs"),
-	)
-	cmd.Env = append(os.Environ(),
-		"MINIO_SITE_NAME=test",
-		"MINIO_SITE_REGION=test",
-	)
-	//cmd.Stderr = os.Stderr
-	//cmd.Stdout = os.Stdout
-	err = cmd.Start()
-	assert.Nil(t, err)
-
-	// set s3 credentials
-	t.Setenv("AWS_REGION", "test")
-	t.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
-
-	endpoint := "http://localhost:9000"
-
-	// create bucket
-	ctx, cancel = context.WithTimeout(ctx, time.Second*59)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
-	assert.Nil(t, err)
-	client := s3.NewFromConfig(cfg,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					_ = options
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
-			),
-		),
-	)
-	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: ptrTo("test"),
-	})
-	assert.Nil(t, err)
-
-	// run test
-	t.Run("file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		testFileService(t, 0, func(name string) FileService {
-			ctx := context.Background()
-			fs, err := NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					Name:      name,
-					Endpoint:  endpoint,
-					Bucket:    "test",
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					IsMinio:   true,
-				},
-				CacheConfig{
-					DiskPath: ptrTo(cacheDir),
-				},
-				nil,
-				true,
-				false,
-			)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
 }
 
 func BenchmarkS3FS(b *testing.B) {
@@ -1164,4 +1067,66 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 			data.Release()
 		}
 	})
+}
+
+func TestS3FSFromEnv(t *testing.T) {
+
+	// test disk backed S3
+	t.Setenv("TEST_S3FS_DISK", "name=disk,endpoint=disk,bucket="+t.TempDir())
+
+	// examples
+	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
+	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
+
+	// emulate env vars and get test specs
+	for _, pairs := range os.Environ() {
+		name, value, ok := strings.Cut(pairs, "=")
+		if !ok {
+			continue
+		}
+		// env vars begin with TEST_S3FS_
+		if !strings.HasPrefix(name, "TEST_S3FS_") {
+			continue
+		}
+
+		// parse args
+		reader := csv.NewReader(strings.NewReader(value))
+		argStrs, err := reader.Read()
+		if err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		var args ObjectStorageArguments
+		if err := args.SetFromString(argStrs); err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+
+		// test
+		t.Run(args.Name, func(t *testing.T) {
+			testFileService(t, 0, func(name string) FileService {
+				args.Name = name
+				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+				fs, err := NewS3FS(
+					context.Background(),
+					args,
+					DisabledCacheConfig,
+					nil,
+					true,
+					false,
+				)
+				if err != nil {
+					logutil.Error("S3FS errror",
+						zap.Any("args", args),
+						zap.Any("error", err),
+					)
+					t.Fatal(err)
+				}
+
+				return fs
+			})
+		})
+
+	}
 }

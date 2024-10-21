@@ -560,6 +560,44 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
+
+	dbTblInfo := &DbTableInfo{
+		SourceTblIdStr: "1_0",
+	}
+
+	watermarkUpdater := &WatermarkUpdater{
+		watermarkMap: &sync.Map{},
+	}
+	watermarkUpdater.UpdateMem("1_0", types.BuildTS(0, 1))
+
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			user:          "root",
+			password:      "123456",
+			ip:            "127.0.0.1",
+			port:          3306,
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar:               NewCdcActiveRoutine(),
+		dbTblInfo:        dbTblInfo,
+		watermarkUpdater: watermarkUpdater,
+		sqlBuf:           make([]byte, 1024),
+		preRowType:       DeleteRow,
+	}
+
+	err = sinker.Sink(context.Background(), &DecoderOutput{
+		noMoreData: true,
+		toTs:       types.BuildTS(1, 1),
+	})
+	assert.Error(t, err)
+}
+
 func Test_mysqlSinker_sinkSnapshot(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
