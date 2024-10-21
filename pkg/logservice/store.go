@@ -18,11 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
@@ -31,7 +32,6 @@ import (
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
