@@ -55,7 +55,7 @@ select count(*) from rs01;
 
 drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 insert into rs01 values (2, -1, null);
 insert into rs01 values (1, -321.321, null);
 select * from rs01;
@@ -65,12 +65,12 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 restore account sys from snapshot sp01;
-select count(*) from rs01 {snapshot = 'sp01'};
-select count(*) from rs01 {snapshot = 'sp01'};
-select count(*) from rs01 {snapshot = 'sp01'};
-select count(*) from rs01 {snapshot = 'sp01'};
-select count(*) from rs01 {snapshot = 'sp01'};
-select * from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
+select * from test01.rs01 {snapshot = 'sp01'};
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
@@ -120,16 +120,16 @@ use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
 select count(*) from cluster01;
-select count(*) from cluster01{snapshot = 'sp02'};
+select count(*) from mo_catalog.cluster01{snapshot = 'sp02'};
 
 use test02;
 insert into rs02 select * from rs02;
 select count(*) from rs02;
-select count(*) from rs02{snapshot = 'sp02'};
+select count(*) from test02.rs02{snapshot = 'sp02'};
 
 delete from rs03 where col1 = 1;
 select count(*) from rs03;
-select count(*) from rs03{snapshot = 'sp02'};
+select count(*) from test02.rs03{snapshot = 'sp02'};
 
 restore account sys from snapshot sp02;
 
@@ -209,10 +209,9 @@ select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database 
 -- @ignore:1
 show snapshots where snapshot_name = 'sp04';
 
-select * from aff01{snapshot = 'sp04'};
-select * from pri01{snapshot = 'sp04'};
+select * from test03.aff01{snapshot = 'sp04'};
+select * from test03.pri01{snapshot = 'sp04'};
 
-drop database test03;
 select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
@@ -445,17 +444,17 @@ create snapshot sp13 for cluster;
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 show create table ti1;
-show create table ti1{snapshot = 'sp13'};
+show create table db03.ti1{snapshot = 'sp13'};
 show create table tm1;
-show create table tm1{snapshot = 'sp13'};
+show create table db03.tm1{snapshot = 'sp13'};
 
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
 
-show create table ti1 {snapshot = 'sp14'};
-show create table tm1 {snapshot = 'sp13'};
-show create table ti1 {snapshot = 'sp14'};
-show create table tm1 {snapshot = 'sp13'};
+show create table db03.ti1 {snapshot = 'sp14'};
+show create table db03.tm1 {snapshot = 'sp13'};
+show create table db03.ti1 {snapshot = 'sp14'};
+show create table db03.tm1 {snapshot = 'sp13'};
 
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
@@ -464,10 +463,10 @@ truncate tm2;
 drop snapshot if exists sp15;
 create snapshot sp15 for cluster;
 
-show create table ti1 {snapshot = 'sp14'};
-show create table tm1 {snapshot = 'sp15'};
-show create table ti1 {snapshot = 'sp14'};
-show create table tm1 {snapshot = 'sp15'};
+show create table db03.ti1 {snapshot = 'sp14'};
+show create table db03.tm1 {snapshot = 'sp15'};
+show create table db03.ti1 {snapshot = 'sp14'};
+show create table db03.tm1 {snapshot = 'sp15'};
 
 select count(*) from ti1;
 select count(*) from tm1;

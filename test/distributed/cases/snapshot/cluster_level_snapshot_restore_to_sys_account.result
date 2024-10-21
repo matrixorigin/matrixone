@@ -45,7 +45,7 @@ count(*)
 6
 drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
 insert into rs01 values (2, -1, null);
@@ -65,7 +65,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
+274054    test01    def    create database test01    0    1    2024-10-21 11:44:13    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -74,22 +74,22 @@ col3
 __mo_fake_pk_col
 __mo_rowid
 restore account sys from snapshot sp01;
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
-select count(*) from rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'sp01'};
 count(*)
 6
-select * from rs01 {snapshot = 'sp01'};
+select * from test01.rs01 {snapshot = 'sp01'};
 col1    col2    col3
 1    null    database
 2    38291    database
@@ -102,7 +102,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
+274054    test01    def    create database test01    0    1    2024-10-21 11:44:13    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -156,17 +156,17 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303172    test02    def    create database test02    0    1    2024-07-08 17:35:46    0    
+274080    test02    def    create database test02    0    1    2024-10-21 11:44:14    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-07-08 17:06:49    0    
+1    mo_catalog    mo_catalog        0    0    2024-10-21 10:27:35    0    
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
 select count(*) from cluster01;
 count(*)
 4
-select count(*) from cluster01{snapshot = 'sp02'};
+select count(*) from mo_catalog.cluster01{snapshot = 'sp02'};
 count(*)
 2
 use test02;
@@ -174,14 +174,14 @@ insert into rs02 select * from rs02;
 select count(*) from rs02;
 count(*)
 14
-select count(*) from rs02{snapshot = 'sp02'};
+select count(*) from test02.rs02{snapshot = 'sp02'};
 count(*)
 7
 delete from rs03 where col1 = 1;
 select count(*) from rs03;
 count(*)
 2
-select count(*) from rs03{snapshot = 'sp02'};
+select count(*) from test02.rs03{snapshot = 'sp02'};
 count(*)
 5
 restore account sys from snapshot sp02;
@@ -272,7 +272,7 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303195    test03    def    create database test03    0    1    2024-07-08 17:35:47    0    
+274109    test03    def    create database test03    0    1    2024-10-21 11:44:15    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
 empno
@@ -290,8 +290,8 @@ loc
 __mo_rowid
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-07-08 09:35:47.77113    cluster            
-select * from aff01{snapshot = 'sp04'};
+sp04    2024-10-21 03:44:16.908735    cluster            
+select * from test03.aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
@@ -307,13 +307,12 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
-select * from pri01{snapshot = 'sp04'};
+select * from test03.pri01{snapshot = 'sp04'};
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK
 20    RESEARCH    DALLAS
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
-drop database test03;
 select * from test03.aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -526,8 +525,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-07-08 09:35:50.882008    cluster            
-sp07    2024-07-08 09:35:50.863196    cluster            
+sp08    2024-10-21 03:44:28.885329    cluster            
+sp07    2024-10-21 03:44:28.718493    cluster            
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -576,8 +575,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-07-08 09:35:51.701227    cluster            
-sp09    2024-07-08 09:35:51.665012    cluster            
+sp10    2024-10-21 03:44:30.557389    cluster            
+sp09    2024-10-21 03:44:30.44094    cluster            
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -682,27 +681,27 @@ alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 show create table ti1;
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table ti1{snapshot = 'sp13'};
+show create table db03.ti1{snapshot = 'sp13'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 show create table tm1;
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table tm1{snapshot = 'sp13'};
+show create table db03.tm1{snapshot = 'sp13'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
-show create table ti1 {snapshot = 'sp14'};
+show create table db03.ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table tm1 {snapshot = 'sp13'};
+show create table db03.tm1 {snapshot = 'sp13'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
-show create table ti1 {snapshot = 'sp14'};
+show create table db03.ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table tm1 {snapshot = 'sp13'};
+show create table db03.tm1 {snapshot = 'sp13'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 alter table ti1 drop foreign key fi1;
@@ -711,16 +710,16 @@ truncate ti2;
 truncate tm2;
 drop snapshot if exists sp15;
 create snapshot sp15 for cluster;
-show create table ti1 {snapshot = 'sp14'};
+show create table db03.ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table tm1 {snapshot = 'sp15'};
+show create table db03.tm1 {snapshot = 'sp15'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
-show create table ti1 {snapshot = 'sp14'};
+show create table db03.ti1 {snapshot = 'sp14'};
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-show create table tm1 {snapshot = 'sp15'};
+show create table db03.tm1 {snapshot = 'sp15'};
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 select count(*) from ti1;
