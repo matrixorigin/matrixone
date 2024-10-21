@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"bytes"
-	"hash/fnv"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -95,28 +94,4 @@ func IsEmptySegid(id *Segmentid) bool {
 
 func IsEmptyBlkid(id *Blockid) bool {
 	return bytes.Equal(id[:], emptyBlockId[:])
-}
-
-// some id hacks
-
-// used only in some special cases
-// REMOVEME: hf
-func HackObjid2Rowid(id *ObjectId) Rowid {
-	var rowid Rowid
-	copy(rowid[:], id[:])
-	return rowid
-}
-
-// used only in some special cases
-// REMOVEME: hf
-func HackBytes2Rowid(bs []byte) Rowid {
-	var rowid types.Rowid
-	if size := len(bs); size <= types.RowidSize {
-		copy(rowid[:size], bs[:size])
-	} else {
-		hasher := fnv.New128()
-		hasher.Write(bs)
-		hasher.Sum(rowid[:0])
-	}
-	return rowid
 }

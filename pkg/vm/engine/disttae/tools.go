@@ -232,6 +232,7 @@ func genTableKey(aid uint32, name string, databaseId uint64, databaseName string
 	}
 }
 
+// PXU TODO: optimize me
 // fillRandomRowidAndZeroTs modifies the input batch and returns the proto batch as a shallow copy.
 func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
