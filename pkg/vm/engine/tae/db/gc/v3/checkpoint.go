@@ -369,12 +369,14 @@ func (c *checkpointCleaner) Replay() (err error) {
 			)
 			return
 		}
-		pitrs, err := c.GetPITRsLocked()
+		var snapshots map[uint32]containers.Vector
+		var pitrs *logtail.PitrInfo
+		pitrs, err = c.GetPITRsLocked()
 		if err != nil {
 			logutil.Errorf("GetPITRs failed, err: %v", err)
 			return
 		}
-		snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
 		if err != nil {
 			logutil.Errorf("GetSnapshot failed, err: %v", err)
 			return
