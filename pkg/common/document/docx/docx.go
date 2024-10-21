@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// package goword parses docx files to get its containing text
 package docx
 
 import (
