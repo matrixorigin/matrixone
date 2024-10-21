@@ -384,7 +384,8 @@ func (h *Handle) HandlePreCommitWrite(
 // HandlePreCommitWrite impls TxnStorage:Commit
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
+	meta txn.TxnMeta,
+) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
 	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	var txn txnif.AsyncTxn
@@ -398,13 +399,18 @@ func (h *Handle) HandleCommit(
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 		common.DoIfInfoEnabled(func() {
-			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil {
 				var tnTxnInfo string
 				if txn != nil {
 					tnTxnInfo = txn.String()
 				}
+				msg := "HandleCommit-SLOW-LOG"
+				if err != nil {
+					msg = "HandleCommit-Error"
+				}
 				logutil.Warn(
-					"SLOW-LOG",
+					msg,
+					zap.Error(err),
 					zap.Duration("commit-latency", time.Since(start)),
 					zap.String("cn-txn", meta.DebugString()),
 					zap.String("tn-txn", tnTxnInfo),
