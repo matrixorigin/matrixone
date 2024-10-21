@@ -401,7 +401,8 @@ func (h *Handle) HandleCommit(
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 		common.DoIfInfoEnabled(func() {
-			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil {
+			_, _, injected := fault.TriggerFault(objectio.FJ_CommitSlowLog)
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || injected {
 				var tnTxnInfo string
 				if txn != nil {
 					tnTxnInfo = txn.String()

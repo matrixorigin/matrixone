@@ -615,6 +615,16 @@ func TestInProgressTransfer(t *testing.T) {
 	)
 	require.NoError(t, err1)
 	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
+	err1 = fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitSlowLog,
+		":::",
+		"echo",
+		0,
+		"trace slowlog",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
 
 	var did, tid uint64
 	var theRow *batch.Batch
