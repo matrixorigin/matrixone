@@ -7455,7 +7455,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	globalCkpInterval := time.Duration(0)
+	globalCkpIntervalTimeout := 10 * time.Second
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.Extra.BlockMaxRows = 10
@@ -7474,7 +7474,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7482,7 +7482,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7501,7 +7501,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
