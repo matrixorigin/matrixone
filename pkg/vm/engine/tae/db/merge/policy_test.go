@@ -223,7 +223,9 @@ func TestObjOverlap(t *testing.T) {
 	// empty policy
 	policy := newObjOverlapPolicy()
 	objs := policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -233,7 +235,9 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry1, defaultBasicConfig))
 	require.True(t, policy.onObject(entry2, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -243,8 +247,13 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry3, defaultBasicConfig))
 	require.True(t, policy.onObject(entry4, defaultBasicConfig))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 1, len(objs))
-	require.Equal(t, 2, len(objs[0].objs))
+	for i, obj := range objs {
+		if i == 0 {
+			require.Equal(t, 2, len(obj.objs))
+			continue
+		}
+		require.Equal(t, 0, len(obj.objs))
+	}
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
 	policy.resetForTable(nil)
@@ -254,9 +263,11 @@ func TestObjOverlap(t *testing.T) {
 	entry6 := newTestObjectEntry(t, overlapSizeThreshold, false)
 	require.False(t, policy.onObject(entry5, defaultBasicConfig))
 	require.False(t, policy.onObject(entry6, defaultBasicConfig))
-	require.Equal(t, 0, len(policy.objects))
+	require.Equal(t, 6, len(policy.leveledObjects))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 
@@ -277,7 +288,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 1, len(objs))
+	require.Equal(t, 6, len(objs))
 	require.Equal(t, 3, len(objs[0].objs))
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
@@ -291,7 +302,9 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry13, defaultBasicConfig))
 
 	objs = policy.revise(0, 0, defaultBasicConfig)
-	require.Equal(t, 0, len(objs))
+	for _, obj := range objs {
+		require.Equal(t, 0, len(obj.objs))
+	}
 
 	policy.resetForTable(nil)
 }

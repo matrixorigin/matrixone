@@ -20,26 +20,27 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
 
-type objOverlapPolicy struct {
-	objects     []*catalog.ObjectEntry
-	objectsSize int
+var levels = [6]int{
+	1, 2, 4, 16, 64, 256,
+}
 
-	segmentCounts      map[objectio.Segmentid]int
+type objOverlapPolicy struct {
+	leveledObjects [6][]*catalog.ObjectEntry
+
+	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
-		objects:            make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
-		segmentCounts:      make(map[objectio.Segmentid]int),
+		segments:           make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -53,39 +54,51 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
-	if m.objectsSize > 10*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-		return false
+	if m.segments[obj.ObjectName().SegmentId()] == nil {
+		m.segments[obj.ObjectName().SegmentId()] = make(map[*catalog.ObjectEntry]struct{})
 	}
-	m.objects = append(m.objects, obj)
-	m.objectsSize += int(obj.OriginSize())
-	m.segmentCounts[obj.ObjectName().SegmentId()]++
+	m.segments[obj.ObjectName().SegmentId()][obj] = struct{}{}
 	return true
 }
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	for segmentID, count := range m.segmentCounts {
-		if count > 3 {
-			m.objects = slices.DeleteFunc(m.objects, func(entry *catalog.ObjectEntry) bool {
-				return entry.ObjectName().SegmentId() == segmentID
-			})
+	for _, objects := range m.segments {
+		segLevel := 0
+		for i, level := range levels {
+			if len(objects) <= level {
+				segLevel = i
+				break
+			}
+		}
+		for obj := range objects {
+			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
 		}
 	}
-	if len(m.objects) < 2 {
-		return nil
+
+	reviseResults := make([]reviseResult, len(levels))
+	for i := range len(levels) {
+		if len(m.leveledObjects[i]) < 2 {
+			continue
+		}
+
+		if cpu > 80 {
+			continue
+		}
+
+		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+
+		objs, taskHostKind := m.reviseLeveledObjs(i, config)
+		objs = controlMem(objs, mem)
+
+		if len(objs) > 1 {
+			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+		}
 	}
-	if cpu > 80 {
-		return nil
-	}
-	objs, taskHostKind := m.reviseDataObjs(config)
-	objs = controlMem(objs, mem)
-	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
-	}
-	return nil
+	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
+func (m *objOverlapPolicy) reviseLeveledObjs(i int, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
+	slices.SortFunc(m.leveledObjects[i], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
 		if c := zmA.CompareMin(zmB); c != 0 {
@@ -94,7 +107,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 		return zmA.CompareMax(zmB)
 	})
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
-	for _, obj := range m.objects {
+	for _, obj := range m.leveledObjects[i] {
 		if len(set.entries) == 0 {
 			set.add(obj)
 			continue
@@ -144,10 +157,11 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
-	m.objects = m.objects[:0]
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
-	m.objectsSize = 0
-	clear(m.segmentCounts)
+	for i := range m.leveledObjects {
+		m.leveledObjects[i] = m.leveledObjects[i][:0]
+	}
+	clear(m.segments)
 }
 
 type entrySet struct {
