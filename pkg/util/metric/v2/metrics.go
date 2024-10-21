@@ -200,7 +200,7 @@ func initFrontendMetrics() {
 	registry.MustRegister(cdcRecordCounter)
 	registry.MustRegister(cdcErrorCounter)
 	registry.MustRegister(cdcProcessingRecordCountGauge)
-	registry.MustRegister(cdcAllocatedBatchBytesGauge)
+	registry.MustRegister(cdcMemoryGauge)
 	registry.MustRegister(cdcDurationHistogram)
 }
 

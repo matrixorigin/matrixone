@@ -254,13 +254,15 @@ func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
 			}),
 
 		c.withMultiGraph(
-			"Allocated Batch Bytes",
+			"Memory",
 			3,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_allocated_batch_bytes", `type="total"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="hold-changes"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="mpool-inuse"`) + `)`,
 			},
 			[]string{
-				"total",
+				"hold-changes",
+				"mpool-inuse",
 			}),
 	)
 }
