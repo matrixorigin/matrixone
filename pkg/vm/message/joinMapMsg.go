@@ -67,7 +67,7 @@ func (js *JoinSels) InsertSel(k, v int32) {
 		js.sels = append(js.sels, s)
 		var internalArray [selsDivideLength * selsPreAlloc]int32
 		for p := 0; p < selsDivideLength; p++ {
-			js.sels[i][p] = internalArray[p*selsPreAlloc : p*selsPreAlloc+selsPreAlloc]
+			js.sels[i][p] = internalArray[p*selsPreAlloc : p*selsPreAlloc : (p+1)*selsPreAlloc]
 		}
 	}
 	js.sels[i][j] = append(js.sels[i][j], v)
