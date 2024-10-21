@@ -40,8 +40,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.AllocateCacheData(len(data))
-			copy(cacheData.Bytes(), data)
+			cacheData = allocator.CopyToCacheData(data)
 			return cacheData, nil
 		}
 
