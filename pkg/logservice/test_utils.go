@@ -103,7 +103,7 @@ func getServiceTestConfig() Config {
 	c.FS = vfs.NewStrictMem()
 	c.LogServicePort = getTestServicePort()
 	c.DisableWorkers = true
-	c.UseTeeLogDB = true
+	c.UseTeeLogDB = false
 	c.RPC.MaxMessageSize = toml.ByteSize(getTestServerMaxMsgSize())
 
 	rt := runtime.ServiceRuntime("")

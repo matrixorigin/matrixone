@@ -106,6 +106,11 @@ func NewAwsSDKv2(
 			),
 		)
 	}
+
+	// http client
+	httpClient := newHTTPClient(args)
+	loadConfigOptions = append(loadConfigOptions, config.WithHTTPClient(httpClient))
+
 	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 	if err != nil {
 		return nil, moerr.AttachCause(ctx, err)
@@ -115,7 +120,7 @@ func NewAwsSDKv2(
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
 			opts.Retryer = newAWSRetryer()
-			opts.HTTPClient = newHTTPClient(args)
+			opts.HTTPClient = httpClient
 		},
 	}
 
@@ -130,32 +135,15 @@ func NewAwsSDKv2(
 
 	// endpoint for s3 client
 	if args.Endpoint != "" {
+		s3Options = append(s3Options, func(opts *s3.Options) {
+			opts.BaseEndpoint = aws.String(args.Endpoint)
+		})
 		if args.IsMinio {
 			// special handling for MinIO
 			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFunc(
-						func(
-							region string,
-							_ s3.EndpointResolverOptions,
-						) (
-							ep aws.Endpoint,
-							err error,
-						) {
-							ep.URL = args.Endpoint
-							ep.Source = aws.EndpointSourceCustom
-							ep.HostnameImmutable = true
-							ep.SigningRegion = region
-							return
-						},
-					),
-				),
-			)
-		} else {
-			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFromURL(args.Endpoint),
-				),
+				func(opts *s3.Options) {
+					opts.EndpointOptions.ResolvedRegion = args.Region
+				},
 			)
 		}
 	}
@@ -223,9 +211,9 @@ loop1:
 			&s3.ListObjectsInput{
 				Bucket:    ptrTo(a.bucket),
 				Delimiter: ptrTo("/"),
-				Prefix:    ptrTo(prefix),
+				Prefix:    zeroToNil(prefix),
 				Marker:    marker,
-				MaxKeys:   a.listMaxKeys,
+				MaxKeys:   zeroToNil(a.listMaxKeys),
 			},
 		)
 		if err != nil {
@@ -233,7 +221,7 @@ loop1:
 		}
 
 		for _, obj := range output.Contents {
-			more, err := fn(false, *obj.Key, obj.Size)
+			more, err := fn(false, *obj.Key, *obj.Size)
 			if err != nil {
 				return err
 			}
@@ -252,7 +240,7 @@ loop1:
 			}
 		}
 
-		if !output.IsTruncated {
+		if !*output.IsTruncated {
 			break
 		}
 		marker = output.NextMarker
@@ -294,7 +282,7 @@ func (a *AwsSDKv2) Stat(
 		return
 	}
 
-	size = output.ContentLength
+	size = *output.ContentLength
 
 	return
 }
@@ -341,7 +329,7 @@ func (a *AwsSDKv2) Write(
 			Bucket:        ptrTo(a.bucket),
 			Key:           ptrTo(key),
 			Body:          r,
-			ContentLength: size,
+			ContentLength: zeroToNil(size),
 			Expires:       expire,
 		},
 	)
@@ -460,7 +448,7 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		Delete: &types.Delete{
 			Objects: objs,
 			// In quiet mode the response includes only keys where the delete action encountered an error.
-			Quiet: true,
+			Quiet: ptrTo(true),
 		},
 	})
 	// delete api failed
@@ -531,6 +519,9 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)
