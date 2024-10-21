@@ -188,6 +188,11 @@ func NewCheckpointCleaner(
 }
 
 func (c *checkpointCleaner) Stop() {
+	c.mutation.Lock()
+	defer c.mutation.Unlock()
+	c.mutation.scanned = nil
+	c.mutation.metaFiles = nil
+	c.mutation.snapshotMeta = nil
 }
 
 func (c *checkpointCleaner) GetMPool() *mpool.MPool {
