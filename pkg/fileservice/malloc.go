@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	prometheusmodel "github.com/prometheus/client_model/go"
@@ -63,7 +65,7 @@ func init() {
 				panic(err)
 			}
 			value := metric.Gauge.GetValue()
-			_ = value
+			logutil.Infof("!!! memcache in use %.1f mb", value/1024/1024)
 		}
 	}()
 }
