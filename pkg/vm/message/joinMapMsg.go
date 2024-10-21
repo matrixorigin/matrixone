@@ -33,25 +33,25 @@ const selsPreAlloc = 4
 
 type JoinSels struct {
 	sels      [][][]int32
-	allUnique bool
+	AllUnique bool
 }
 
 func (js *JoinSels) InitSel(len int) {
 	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
-	js.allUnique = true
+	js.AllUnique = true
 }
 
 func (js *JoinSels) Free() {
 	js.sels = nil
-	js.allUnique = false
+	js.AllUnique = false
 }
 
 func (js *JoinSels) InsertSel(k, v int32) {
-	if js.allUnique {
+	if js.AllUnique {
 		if k == v {
 			return
 		} else {
-			js.allUnique = false
+			js.AllUnique = false
 			js.sels = js.sels[:0]
 			var i int32 = 0
 			for ; i < v; i++ {
