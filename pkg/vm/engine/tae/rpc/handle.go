@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -934,7 +935,8 @@ func (h *Handle) HandleWrite(
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+	_, _, injected := fault.TriggerFault(objectio.FJ_CommitDelete)
+	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) || injected {
 		schema := tb.Schema(false).(*catalog.Schema)
 		if schema.HasPK() {
 			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
