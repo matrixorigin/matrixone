@@ -16,10 +16,10 @@ create database test;
 use test;
 create table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2);
-drop snapshot if exists sp01;
-create snapshot sp01 for cluster;
+drop snapshot if exists clu_sp02;
+create snapshot clu_sp02 for cluster;
 insert into clu01 values(2,3);
-restore account sys from snapshot sp01;
+restore account sys from snapshot clu_sp02;
 select * from clu01;
 col1    col2
 1    2
@@ -28,7 +28,7 @@ count(*)
 1
 drop table clu01;
 drop database test;
-drop snapshot sp01;
+drop snapshot clu_sp02;
 drop database if exists test01;
 create database test01;
 use test01;
@@ -43,9 +43,9 @@ insert into rs01 values (2, -1, null);
 select count(*) from rs01;
 count(*)
 6
-drop snapshot if exists sp01;
-create snapshot sp01 for cluster;
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+drop snapshot if exists clu_sp03;
+create snapshot clu_sp03 for cluster;
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
 insert into rs01 values (2, -1, null);
@@ -60,36 +60,36 @@ col1    col2    col3
 2    -1    null
 2    -1    null
 1    -321    null
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp03'} where reldatabase = 'test01';
 count(*)
 1
-select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp03'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-274054    test01    def    create database test01    0    1    2024-10-21 11:44:13    0    
-select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+274330    test01    def    create database test01    0    1    2024-10-21 14:17:03    0    
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp03'} where att_database = 'test01';
 attname
 col1
 col2
 col3
 __mo_fake_pk_col
 __mo_rowid
-restore account sys from snapshot sp01;
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+restore account sys from snapshot clu_sp03;
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 count(*)
 6
-select * from test01.rs01 {snapshot = 'sp01'};
+select * from test01.rs01 {snapshot = 'clu_sp03'};
 col1    col2    col3
 1    null    database
 2    38291    database
@@ -97,20 +97,20 @@ col1    col2    col3
 4    10    null
 1    -321    null
 2    -1    null
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp03'} where reldatabase = 'test01';
 count(*)
 1
-select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp03'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-274054    test01    def    create database test01    0    1    2024-10-21 11:44:13    0    
-select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
+274330    test01    def    create database test01    0    1    2024-10-21 14:17:03    0    
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp03'} where att_database = 'test01';
 attname
 col1
 col2
 col3
 __mo_fake_pk_col
 __mo_rowid
-drop snapshot sp01;
+drop snapshot clu_sp03;
 drop database test01;
 use mo_catalog;
 drop table if exists cluster01;
@@ -149,24 +149,24 @@ insert into rs03 values (2, null, null, 2);
 insert into rs03 values (2, -12.1, 34738, null);
 insert into rs03 values (1, 90.2314, null, 4);
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
-drop snapshot if exists sp02;
-create snapshot sp02 for cluster;
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
+drop snapshot if exists clu_sp04;
+create snapshot clu_sp04 for cluster;
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp04'} where reldatabase = 'test02';
 count(*)
 2
-select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp04'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-274080    test02    def    create database test02    0    1    2024-10-21 11:44:14    0    
-select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
+274356    test02    def    create database test02    0    1    2024-10-21 14:17:04    0    
+select * from mo_catalog.mo_database{snapshot = 'clu_sp04'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-10-21 10:27:35    0    
+1    mo_catalog    mo_catalog        0    0    2024-10-21 12:41:11    0    
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
 select count(*) from cluster01;
 count(*)
 4
-select count(*) from mo_catalog.cluster01{snapshot = 'sp02'};
+select count(*) from mo_catalog.cluster01{snapshot = 'clu_sp04'};
 count(*)
 2
 use test02;
@@ -174,17 +174,17 @@ insert into rs02 select * from rs02;
 select count(*) from rs02;
 count(*)
 14
-select count(*) from test02.rs02{snapshot = 'sp02'};
+select count(*) from test02.rs02{snapshot = 'clu_sp04'};
 count(*)
 7
 delete from rs03 where col1 = 1;
 select count(*) from rs03;
 count(*)
 2
-select count(*) from test02.rs03{snapshot = 'sp02'};
+select count(*) from test02.rs03{snapshot = 'clu_sp04'};
 count(*)
 5
-restore account sys from snapshot sp02;
+restore account sys from snapshot clu_sp04;
 show databases;
 Database
 cluster_level_snapshot_restore_to_sys_account
@@ -210,7 +210,7 @@ drop table cluster01;
 use test02;
 drop table rs02;
 drop table rs03;
-drop snapshot sp02;
+drop snapshot clu_sp04;
 drop database test02;
 drop database if exists test03;
 create database test03;
@@ -265,15 +265,15 @@ pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部�
 show create table aff01;
 Table    Create Table
 aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
-drop snapshot if exists sp04;
-create snapshot sp04 for cluster;
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
+drop snapshot if exists clu_sp05;
+create snapshot clu_sp05 for cluster;
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp05'} where reldatabase = 'test03';
 count(*)
 2
-select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp05'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-274109    test03    def    create database test03    0    1    2024-10-21 11:44:15    0    
-select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
+274385    test03    def    create database test03    0    1    2024-10-21 14:17:06    0    
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp05'} where att_database = 'test03';
 attname
 empno
 ename
@@ -288,10 +288,10 @@ deptno
 dname
 loc
 __mo_rowid
-show snapshots where snapshot_name = 'sp04';
+show snapshots where snapshot_name = 'clu_sp05';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-10-21 03:44:16.908735    cluster            
-select * from test03.aff01{snapshot = 'sp04'};
+clu_sp05    2024-10-21 06:17:06.962406    cluster            
+select * from test03.aff01{snapshot = 'clu_sp05'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
@@ -307,13 +307,13 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
-select * from test03.pri01{snapshot = 'sp04'};
+select * from test03.pri01{snapshot = 'clu_sp05'};
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK
 20    RESEARCH    DALLAS
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
-select * from test03.aff01{snapshot = 'sp04'};
+select * from test03.aff01{snapshot = 'clu_sp05'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
@@ -329,16 +329,16 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
-select * from test03.pri01{snapshot = 'sp04'};
+select * from test03.pri01{snapshot = 'clu_sp05'};
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK
 20    RESEARCH    DALLAS
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
-select count(*) from test03.aff01{snapshot = 'sp04'};
+select count(*) from test03.aff01{snapshot = 'clu_sp05'};
 count(*)
 14
-restore account sys from snapshot sp04;
+restore account sys from snapshot clu_sp05;
 use test03;
 show create table aff01;
 Table    Create Table
@@ -350,7 +350,7 @@ select count(*) from aff01;
 count(*)
 14
 drop database test03;
-drop snapshot sp04;
+drop snapshot clu_sp05;
 drop database if exists test01;
 create database test01;
 use test01;
@@ -412,15 +412,15 @@ count(*)
 select count(*) from t3;
 count(*)
 3
-drop snapshot if exists snap01;
-create snapshot snap01 for cluster;
-select count(*) from test01.t1 {snapshot = 'snap01'};
+drop snapshot if exists clu_sp06;
+create snapshot clu_sp06 for cluster;
+select count(*) from test01.t1 {snapshot = 'clu_sp06'};
 count(*)
 3
-select count(*) from test02.t2 {snapshot = 'snap01'};
+select count(*) from test02.t2 {snapshot = 'clu_sp06'};
 count(*)
 3
-select count(*) from test03.t3 {snapshot = 'snap01'};
+select count(*) from test03.t3 {snapshot = 'clu_sp06'};
 count(*)
 3
 drop database test01;
@@ -441,7 +441,7 @@ invalid database test01
 select count(*) from test03.t3;
 count(*)
 3
-restore account sys from snapshot snap01;
+restore account sys from snapshot clu_sp06;
 show databases;
 Database
 cluster_level_snapshot_restore_to_sys_account
@@ -491,11 +491,11 @@ t2    CREATE TABLE `t2` (\n  `cool1` int NOT NULL,\n  `col2` decimal(38,0) DEFAU
 drop database test01;
 drop database test02;
 drop database test03;
-drop snapshot snap01;
-drop snapshot if exists sp05;
-create snapshot sp05 for cluster;
+drop snapshot clu_sp06;
+drop snapshot if exists clu_sp07;
+create snapshot clu_sp07 for cluster;
 create database db01;
-restore account sys FROM snapshot sp05;
+restore account sys FROM snapshot clu_sp07;
 show databases;
 Database
 cluster_level_snapshot_restore_to_sys_account
@@ -506,7 +506,7 @@ mo_task
 mysql
 system
 system_metrics
-drop snapshot sp05;
+drop snapshot clu_sp07;
 drop database if exists db01;
 create database db01;
 use db01;
@@ -525,8 +525,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-10-21 03:44:28.885329    cluster            
-sp07    2024-10-21 03:44:28.718493    cluster            
+sp08    2024-10-21 06:17:16.853046    cluster            
+sp07    2024-10-21 06:17:16.454956    cluster            
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -575,8 +575,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-10-21 03:44:30.557389    cluster            
-sp09    2024-10-21 03:44:30.44094    cluster            
+sp10    2024-10-21 06:17:21.480162    cluster            
+sp09    2024-10-21 06:17:21.342629    cluster            
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2

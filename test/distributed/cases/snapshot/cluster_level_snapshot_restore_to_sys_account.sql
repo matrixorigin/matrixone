@@ -23,17 +23,17 @@ use test;
 create table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2);
 
-drop snapshot if exists sp01;
-create snapshot sp01 for cluster;
+drop snapshot if exists clu_sp02;
+create snapshot clu_sp02 for cluster;
 insert into clu01 values(2,3);
 
-restore account sys from snapshot sp01;
+restore account sys from snapshot clu_sp02;
 
 select * from clu01;
 select count(*) from clu01;
 drop table clu01;
 drop database test;
-drop snapshot sp01;
+drop snapshot clu_sp02;
 
 
 
@@ -53,29 +53,29 @@ insert into rs01 values (1, -321.321, null);
 insert into rs01 values (2, -1, null);
 select count(*) from rs01;
 
-drop snapshot if exists sp01;
-create snapshot sp01 for cluster;
-select count(*) from test01.rs01 {snapshot = 'sp01'};
+drop snapshot if exists clu_sp03;
+create snapshot clu_sp03 for cluster;
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
 insert into rs01 values (2, -1, null);
 insert into rs01 values (1, -321.321, null);
 select * from rs01;
 
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp03'} where reldatabase = 'test01';
 -- @ignore:0,6,7
-select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
-select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-restore account sys from snapshot sp01;
-select count(*) from test01.rs01 {snapshot = 'sp01'};
-select count(*) from test01.rs01 {snapshot = 'sp01'};
-select count(*) from test01.rs01 {snapshot = 'sp01'};
-select count(*) from test01.rs01 {snapshot = 'sp01'};
-select count(*) from test01.rs01 {snapshot = 'sp01'};
-select * from test01.rs01 {snapshot = 'sp01'};
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp03'} where datname = 'test01';
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp03'} where att_database = 'test01';
+restore account sys from snapshot clu_sp03;
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
+select count(*) from test01.rs01 {snapshot = 'clu_sp03'};
+select * from test01.rs01 {snapshot = 'clu_sp03'};
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp03'} where reldatabase = 'test01';
 -- @ignore:0,6,7
-select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
-select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-drop snapshot sp01;
+select * from mo_catalog.mo_database{snapshot = 'clu_sp03'} where datname = 'test01';
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp03'} where att_database = 'test01';
+drop snapshot clu_sp03;
 drop database test01;
 
 
@@ -108,30 +108,30 @@ insert into rs03 values (2, null, null, 2);
 insert into rs03 values (2, -12.1, 34738, null);
 insert into rs03 values (1, 90.2314, null, 4);
 insert into rs03 values (1, 43425.4325, -7483.432, 2);
-drop snapshot if exists sp02;
-create snapshot sp02 for cluster;
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
+drop snapshot if exists clu_sp04;
+create snapshot clu_sp04 for cluster;
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp04'} where reldatabase = 'test02';
 -- @ignore:0,5,6,7
-select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp04'} where datname = 'test02';
 -- @ignore:0,5,6,7
-select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp04'} where datname = 'mo_catalog';
 
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
 select count(*) from cluster01;
-select count(*) from mo_catalog.cluster01{snapshot = 'sp02'};
+select count(*) from mo_catalog.cluster01{snapshot = 'clu_sp04'};
 
 use test02;
 insert into rs02 select * from rs02;
 select count(*) from rs02;
-select count(*) from test02.rs02{snapshot = 'sp02'};
+select count(*) from test02.rs02{snapshot = 'clu_sp04'};
 
 delete from rs03 where col1 = 1;
 select count(*) from rs03;
-select count(*) from test02.rs03{snapshot = 'sp02'};
+select count(*) from test02.rs03{snapshot = 'clu_sp04'};
 
-restore account sys from snapshot sp02;
+restore account sys from snapshot clu_sp04;
 
 show databases;
 select count(*) from rs02;
@@ -142,7 +142,7 @@ drop table cluster01;
 use test02;
 drop table rs02;
 drop table rs03;
-drop snapshot sp02;
+drop snapshot clu_sp04;
 drop database test02;
 
 
@@ -200,29 +200,29 @@ select count(*) from aff01;
 show create table pri01;
 show create table aff01;
 
-drop snapshot if exists sp04;
-create snapshot sp04 for cluster;
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
+drop snapshot if exists clu_sp05;
+create snapshot clu_sp05 for cluster;
+select count(*) from mo_catalog.mo_tables{snapshot = 'clu_sp05'} where reldatabase = 'test03';
 -- @ignore:0,6,7
-select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
-select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
+select * from mo_catalog.mo_database{snapshot = 'clu_sp05'} where datname = 'test03';
+select attname from mo_catalog.mo_columns{snapshot = 'clu_sp05'} where att_database = 'test03';
 -- @ignore:1
-show snapshots where snapshot_name = 'sp04';
+show snapshots where snapshot_name = 'clu_sp05';
 
-select * from test03.aff01{snapshot = 'sp04'};
-select * from test03.pri01{snapshot = 'sp04'};
+select * from test03.aff01{snapshot = 'clu_sp05'};
+select * from test03.pri01{snapshot = 'clu_sp05'};
 
-select * from test03.aff01{snapshot = 'sp04'};
-select * from test03.pri01{snapshot = 'sp04'};
-select count(*) from test03.aff01{snapshot = 'sp04'};
+select * from test03.aff01{snapshot = 'clu_sp05'};
+select * from test03.pri01{snapshot = 'clu_sp05'};
+select count(*) from test03.aff01{snapshot = 'clu_sp05'};
 
-restore account sys from snapshot sp04;
+restore account sys from snapshot clu_sp05;
 use test03;
 show create table aff01;
 show create table pri01;
 select count(*) from aff01;
 drop database test03;
-drop snapshot sp04;
+drop snapshot clu_sp05;
 
 
 
@@ -273,12 +273,12 @@ select count(*) from t1;
 select count(*) from t2;
 select count(*) from t3;
 
-drop snapshot if exists snap01;
-create snapshot snap01 for cluster;
+drop snapshot if exists clu_sp06;
+create snapshot clu_sp06 for cluster;
 
-select count(*) from test01.t1 {snapshot = 'snap01'};
-select count(*) from test02.t2 {snapshot = 'snap01'};
-select count(*) from test03.t3 {snapshot = 'snap01'};
+select count(*) from test01.t1 {snapshot = 'clu_sp06'};
+select count(*) from test02.t2 {snapshot = 'clu_sp06'};
+select count(*) from test03.t3 {snapshot = 'clu_sp06'};
 
 drop database test01;
 drop database test02;
@@ -287,7 +287,7 @@ show databases;
 select * from test01.t1;
 select count(*) from test03.t3;
 
-restore account sys from snapshot snap01;
+restore account sys from snapshot clu_sp06;
 
 show databases;
 select count(*) from test01.t1;
@@ -302,18 +302,18 @@ show create table test03.t2;
 drop database test01;
 drop database test02;
 drop database test03;
-drop snapshot snap01;
+drop snapshot clu_sp06;
 
 
 
 
 -- restore null
-drop snapshot if exists sp05;
-create snapshot sp05 for cluster;
+drop snapshot if exists clu_sp07;
+create snapshot clu_sp07 for cluster;
 create database db01;
-restore account sys FROM snapshot sp05;
+restore account sys FROM snapshot clu_sp07;
 show databases;
-drop snapshot sp05;
+drop snapshot clu_sp07;
 
 
 
