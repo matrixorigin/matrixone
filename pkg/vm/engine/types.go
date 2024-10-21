@@ -714,13 +714,13 @@ func ForRangeShardID(
 func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
-	onBlock func(blk objectio.BlockInfo) (bool, error)) error {
+	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
 
 	for i := 0; i < sliceLen; i++ {
-		if ok, err := onBlock(*slice.Get(i)); !ok || err != nil {
+		if ok, err := onBlock(slice.Get(i)); !ok || err != nil {
 			return err
 		}
 	}
