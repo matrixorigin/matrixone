@@ -236,7 +236,7 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 		opt(cache)
 	}
 
-	cache.data = btree.NewBTreeGOptions[UsageData](cache.lessFunc, btree.Options{NoLocks: true})
+	cache.data = btree.NewBTreeG[UsageData](cache.lessFunc)
 	cache.data.Clear()
 
 	return cache
@@ -1139,8 +1139,8 @@ func FillUsageBatOfCompacted(
 	logutil.Infof("fill usage bat of compacted ckp start")
 	usage.EnterProcessing()
 	defer func() {
-		logutil.Infof("fill usage bat of compacted ckp takes %v", time.Since(now))
 		usage.LeaveProcessing()
+		logutil.Infof("fill usage bat of compacted ckp takes %v", time.Since(now))
 	}()
 	objects := data.GetObjectBatchs()
 	tombstones := data.GetTombstoneObjectBatchs()
