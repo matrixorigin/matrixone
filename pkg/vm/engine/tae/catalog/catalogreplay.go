@@ -88,8 +88,10 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
+		logutil.Infof("replay database %v insert dnode %v", cmd.ID.DbID, un.String())
 		db.InsertLocked(un)
 	} else {
+		logutil.Infof("replay database %v skip dnode %v", cmd.ID.DbID, un.String())
 		return
 		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
