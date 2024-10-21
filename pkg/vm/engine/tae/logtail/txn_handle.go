@@ -211,9 +211,9 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	if bat == nil || bat.Length() == 0 {
 		return
 	}
-	// if tid == pkgcatalog.MO_DATABASE_ID || tid == pkgcatalog.MO_TABLES_ID || tid == pkgcatalog.MO_COLUMNS_ID {
+	// if tid == pkgcatalog.MO_DATABASE_ID {
 	// 	logutil.Infof(
-	// 		"yyyyyy txn logtail] from table %d-%s, is delete %v, batch %v @%s",
+	// 		"yyyyyy [txn logtail] from table %d-%s, is delete %v, batch %v @%s",
 	// 		tid, tableName, delete, bat.PPString(5), b.txn.GetPrepareTS().ToString(),
 	// 	)
 	// }
