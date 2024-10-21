@@ -58,7 +58,12 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
 	}
 
-	deletedObjects := state.CollectObjectsBetween(start, end, true)
+	newDataObjects, deletedObjects := state.CollectObjectsBetween(start, end)
+
+	if len(newDataObjects) == 0 || len(deletedObjects) == 0 {
+		return nil, nil
+	}
+
 	deletedObjectsIter := func() *types.Objectid {
 		if len(deletedObjects) == 0 {
 			return nil
@@ -84,12 +89,6 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
 		return nil, err
 	} else if len(tombstoneObjects) == 0 {
-		return nil, nil
-	}
-
-	newDataObjects := state.CollectObjectsBetween(start, end, false)
-
-	if len(newDataObjects) == 0 {
 		return nil, nil
 	}
 
