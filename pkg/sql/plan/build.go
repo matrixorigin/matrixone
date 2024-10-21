@@ -92,6 +92,41 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}, err
 }
 
+func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	return buildLoad(stmt, ctx, isPrepareStmt)
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
+	rootId, err := builder.bindLoad(stmt, bindCtx)
+	if err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			return buildLoad(stmt, ctx, isPrepareStmt)
+		}
+		return nil, err
+	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
+
 func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -314,7 +349,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Deallocate:
 		return buildDeallocate(stmt, ctx)
 	case *tree.Load:
-		return buildLoad(stmt, ctx, isPrepareStmt)
+		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.Do, *tree.Declare:
