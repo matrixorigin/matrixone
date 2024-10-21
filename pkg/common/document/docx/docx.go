@@ -18,23 +18,24 @@ package docx
 import (
 	"archive/zip"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func ParseText(filename string) (string, error) {
 
 	doc, err := openWordFile(filename)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Error opening file %s - %s", filename, err))
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error opening file %s - %s", filename, err))
 	}
 
 	docx, err := Parse(doc)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Error parsing %s - %s", filename, err))
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error parsing %s - %s", filename, err))
 	}
 
 	return docx.AsText(), nil
@@ -113,7 +114,7 @@ func ParseTextFromReader(reader io.ReaderAt, size int64) (string, error) {
 
 	docx, err := Parse(doc)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Error parsing %s", err))
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("Error parsing %s", err))
 	}
 
 	return docx.AsText(), nil
