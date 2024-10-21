@@ -3628,20 +3628,30 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			statsByte.WithTimeConsumed(float64(totalTime))
 		}
 
-		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.PlanStage.BuildPlanS3Request.Put
-		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.PlanStage.BuildPlanS3Request.Get + statsInfo.PlanStage.BuildPlanS3Request.Delete + statsInfo.PlanStage.BuildPlanS3Request.DeleteMul
+		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.CountPUT()
+		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.CountGET()
+		planS3List := statsInfo.PlanStage.BuildPlanS3Request.CountLIST()
+		planS3Delete := statsInfo.PlanStage.BuildPlanS3Request.CountDELETE()
 
-		compileS3Input := statsInfo.CompileStage.CompileS3Request.List + statsInfo.CompileStage.CompileS3Request.Put
-		compileS3Output := statsInfo.CompileStage.CompileS3Request.Head + statsInfo.CompileStage.CompileS3Request.Get + statsInfo.CompileStage.CompileS3Request.Delete + statsInfo.CompileStage.CompileS3Request.DeleteMul
+		compileS3Input := statsInfo.CompileStage.CompileS3Request.CountPUT()
+		compileS3Output := statsInfo.CompileStage.CompileS3Request.CountGET()
+		compileS3List := statsInfo.CompileStage.CompileS3Request.CountLIST()
+		compileS3Delete := statsInfo.CompileStage.CompileS3Request.CountDELETE()
 
-		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.Put
-		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Get + statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete + statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul
+		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountPUT()
+		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountGET()
+		preRunS3List := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountLIST()
+		preRunS3Delete := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountDELETE()
 
 		totalS3Input := statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input)
 		totalS3Output := statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output)
+		totalS3List := statsByte.GetS3IOListCount() + float64(planS3List+compileS3List+preRunS3List)
+		totalS3Delete := statsByte.GetS3IODeleteCount() + float64(planS3Delete+compileS3Delete+preRunS3Delete)
 
 		statsByte.WithS3IOInputCount(totalS3Input)
 		statsByte.WithS3IOOutputCount(totalS3Output)
+		statsByte.WithS3IOListCount(totalS3List)
+		statsByte.WithS3IODeleteCount(totalS3Delete)
 	}
 	return
 }

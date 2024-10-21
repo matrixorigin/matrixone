@@ -35,6 +35,8 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
 	ioIn := stats.GetS3IOInputCount() * cfg.IoInPrice
 	ioOut := stats.GetS3IOOutputCount() * cfg.IoOutPrice
+	ioList := stats.GetS3IOListCount() * cfg.IoListPrice
+	ioDelete := stats.GetS3IODeleteCount() * cfg.IoDeletePrice
 	connType := stats.GetConnType()
 	traffic := 0.0
 	switch statistic.ConnType(connType) {
@@ -50,10 +52,10 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 
 	if durationNS <= DecimalNSThreshold {
 		mem := stats.GetMemorySize() * float64(durationNS) * cfg.MemPrice
-		return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
+		return (cpu + mem + ioIn + ioOut + ioList + ioDelete + traffic) / cfg.CUUnit
 	} else {
 		memCU := CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
-		return (cpu+ioIn+ioOut+traffic)/cfg.CUUnit + memCU
+		return (cpu+ioIn+ioOut+ioList+ioDelete+traffic)/cfg.CUUnit + memCU
 
 	}
 }
