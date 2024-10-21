@@ -41,18 +41,7 @@ func ParseText(filename string) (string, error) {
 
 }
 
-// func Parse(doc string) (WordDocument, error) {
-
-// 	docx := WordDocument{}
-// 	err := xml.Unmarshal([]byte(doc), &docx)
-// 	if err != nil {
-// 		return docx, err
-// 	}
-// 	fmt.Printf("\n %-v \n", docx)
-// 	return docx, nil
-// }
-
-func Parse(doc string) (WordDocument, error) {
+func Parse(doc []byte) (WordDocument, error) {
 
 	docx := WordDocument{}
 	r := strings.NewReader(string(doc))
@@ -75,11 +64,11 @@ func Parse(doc string) (WordDocument, error) {
 	return docx, nil
 }
 
-func openWordFileFromReader(reader io.ReaderAt, size int64) (string, error) {
+func openWordFileFromReader(reader io.ReaderAt, size int64) ([]byte, error) {
 
 	r, err := zip.NewReader(reader, size)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Iterate through the files in the archive,
@@ -89,19 +78,19 @@ func openWordFileFromReader(reader io.ReaderAt, size int64) (string, error) {
 		//fmt.Printf("Contents of %s:\n", f.Name)
 		rc, err := f.Open()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if f.Name == "word/document.xml" {
 			doc, err := io.ReadAll(rc)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			return string(doc), nil
+			return doc, nil
 		}
 		rc.Close()
 	}
 
-	return "", nil
+	return nil, nil
 }
 
 func ParseTextFromReader(reader io.ReaderAt, size int64) (string, error) {
@@ -119,12 +108,12 @@ func ParseTextFromReader(reader io.ReaderAt, size int64) (string, error) {
 	return docx.AsText(), nil
 }
 
-func openWordFile(filename string) (string, error) {
+func openWordFile(filename string) ([]byte, error) {
 
 	// Open a zip archive for reading. word files are zip archives
 	r, err := zip.OpenReader(filename)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer r.Close()
 
@@ -135,17 +124,17 @@ func openWordFile(filename string) (string, error) {
 		//fmt.Printf("Contents of %s:\n", f.Name)
 		rc, err := f.Open()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if f.Name == "word/document.xml" {
 			doc, err := io.ReadAll(rc)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			return string(doc), nil
+			return doc, nil
 		}
 		rc.Close()
 	}
 
-	return "", nil
+	return nil, nil
 }

@@ -40,7 +40,7 @@ func TestOpenWordFileValidFile(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to open a word file.")
 	}
-	if !strings.Contains(doc, "This is a word file") {
+	if !strings.Contains(string(doc), "This is a word file") {
 		t.Errorf("Error reading document.xml %s ", doc)
 	}
 	fmt.Printf("%s", err)
