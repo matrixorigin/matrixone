@@ -33,7 +33,3 @@ func init() {
 func GetTestVectorPool() *containers.VectorPool {
 	return testVectorPool
 }
-
-func GetTestRunTime() *dbutils.Runtime {
-	return testRunTime
-}
