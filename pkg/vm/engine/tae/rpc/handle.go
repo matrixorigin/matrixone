@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -936,9 +937,9 @@ func (h *Handle) HandleWrite(
 	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
 		schema := tb.Schema(false).(*catalog.Schema)
 		if schema.HasPK() {
+			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
-			for i := 0; i < rowIDVec.Length(); i++ {
-				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			for i := 0; i < len(rowids); i++ {
 				if isCompositeKey {
 					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
 					tuple, _ := types.Unpack(pkbuf)
@@ -946,7 +947,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 						zap.Any("detail", tuple.SQLStrings(nil)),
 					)
 				} else {
@@ -954,7 +955,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 					)
 				}
 			}
