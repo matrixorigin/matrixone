@@ -740,6 +740,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				engine_util.GetThresholdForReader(blkCnt, newNum),
 			)
 			if err != nil {
 				return nil, err

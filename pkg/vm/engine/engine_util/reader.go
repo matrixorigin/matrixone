@@ -226,6 +226,7 @@ type reader struct {
 	memFilter MemPKFilter
 
 	readBlockCnt uint64
+	threashHold  uint64
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
@@ -315,6 +316,7 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
+	threashHold uint64,
 ) (*reader, error) {
 
 	baseFilter, err := ConstructBasePKFilter(
@@ -357,6 +359,7 @@ func NewReader(
 	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
+	r.threashHold = threashHold
 	return r, nil
 }
 
@@ -434,7 +437,8 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt > 128 {
+
+	if r.readBlockCnt > r.threashHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
@@ -481,4 +485,11 @@ func (r *reader) Read(
 	}
 
 	return false, nil
+}
+
+func GetThresholdForReader(blockNum, readerNum int) uint64 {
+	if readerNum <= 4 {
+		return uint64(1024 / readerNum)
+	}
+	return 128
 }

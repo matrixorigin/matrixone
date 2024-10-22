@@ -296,6 +296,7 @@ func HandleShardingReadBuildReader(
 		tbl.db.op.SnapshotTS(),
 		param.ReaderBuildParam.Expr,
 		ds,
+		engine_util.GetThresholdForReader(relData.DataCnt(), 1),
 	)
 	if err != nil {
 		return nil, err
