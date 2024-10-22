@@ -140,10 +140,10 @@ message StorageUsageResp_V3 {
     bool Succeed                    = 1;
     repeated int64 AccIds           = 2;
     repeated uint64 Sizes           = 3;
-    repeated uint64 SnapshotSizes    = 4;
-    uint64 Magic                     = 5;
+    uint64 Magic                     = 4;
 
-    repeated uint64 ObjCnts      = 6;
-    repeated uint64 BlkCnts      = 7;
-    repeated uint64 RowCnts      = 8;
+    repeated uint64 ObjCnts      = 5;
+    repeated uint64 BlkCnts      = 6;
+    repeated uint64 RowCnts      = 7;
+    repeated uint64 SnapshotSizes    = 8;
 }

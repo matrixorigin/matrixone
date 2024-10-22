@@ -321,15 +321,15 @@ func (s *StorageUsageResp_V2) UnmarshalBinary(data []byte) error {
 }
 
 type StorageUsageResp_V3 struct {
-	Succeed       bool
-	AccIds        []int64
-	Sizes         []uint64
-	SnapshotSizes []uint64
-	Magic         uint64
+	Succeed bool
+	AccIds  []int64
+	Sizes   []uint64
+	Magic   uint64
 
-	ObjCnts []uint64
-	BlkCnts []uint64
-	RowCnts []uint64
+	ObjCnts       []uint64
+	BlkCnts       []uint64
+	RowCnts       []uint64
+	SnapshotSizes []uint64
 }
 
 func (s *StorageUsageResp_V3) MarshalBinary() ([]byte, error) {
