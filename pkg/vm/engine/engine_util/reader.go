@@ -487,7 +487,7 @@ func (r *reader) Read(
 	return false, nil
 }
 
-func GetThresholdForReader(blockNum, readerNum int) uint64 {
+func GetThresholdForReader(readerNum int) uint64 {
 	if readerNum <= 8 {
 		return uint64(1024 / readerNum)
 	}
