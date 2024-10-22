@@ -18,13 +18,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"sync"
 )
 
 type spoolBuffer struct {
-	// listWithMemory and listEmptyMemory
-	// is the list of memory cache index which was ready for using.
-	listWithMemory  chan int8
-	listEmptyMemory chan int8
+	sync.Mutex
+	// cacheIndexReadyToUse is a stack to save how many cache can be used.
+	// and the last one with high level.
+	cacheIndexReadyToUse []int8
 
 	bytesCache []oneBatchMemoryCache
 }
@@ -32,11 +33,9 @@ type spoolBuffer struct {
 func initSpoolBuffer(size int8) *spoolBuffer {
 	b := new(spoolBuffer)
 	b.bytesCache = make([]oneBatchMemoryCache, size)
-	b.listWithMemory = make(chan int8, size)
-	b.listEmptyMemory = make(chan int8, size)
-
-	for i := int8(0); i < size; i++ {
-		b.listEmptyMemory <- i
+	b.cacheIndexReadyToUse = make([]int8, size)
+	for i := range b.cacheIndexReadyToUse {
+		b.cacheIndexReadyToUse[i] = int8(i)
 	}
 	return b
 }
@@ -78,18 +77,17 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 	bat.Aggs = nil
 
 	// put id into free list.
-	b.listWithMemory <- id
+	b.Lock()
+	b.cacheIndexReadyToUse = append(b.cacheIndexReadyToUse, id)
+	b.Unlock()
 }
 
 func (b *spoolBuffer) getCacheID() int8 {
-	select {
-	case id := <-b.listWithMemory:
-		return id
-	default:
-	}
-
-	id := <-b.listEmptyMemory
-	return id
+	b.Lock()
+	k := len(b.cacheIndexReadyToUse) - 1
+	b.cacheIndexReadyToUse = b.cacheIndexReadyToUse[:k]
+	b.Unlock()
+	return int8(k)
 }
 
 func (b *spoolBuffer) clean(mp *mpool.MPool) {
