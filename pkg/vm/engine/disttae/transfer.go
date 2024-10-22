@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"strings"
 	"time"
 
@@ -188,6 +189,13 @@ func transferTombstones(
 	for name := range createdObjects {
 		if obj, ok := state.GetObject(name); ok {
 			objectList = append(objectList, obj.ObjectStats)
+		}
+	}
+
+	if len(objectList) >= 10 {
+		proc := table.proc.Load()
+		for _, obj := range objectList {
+			blockio.Prefetch(proc.GetService(), proc.GetFileService(), obj.ObjectLocation())
 		}
 	}
 

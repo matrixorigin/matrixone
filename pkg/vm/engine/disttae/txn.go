@@ -1303,7 +1303,6 @@ func forceTransfer(ctx context.Context) bool {
 }
 
 func skipTransfer(ctx context.Context, txn *Transaction) bool {
-	return false
 	return time.Since(txn.start) < txn.engine.config.cnTransferTxnLifespanThreshold
 }
 
@@ -1353,6 +1352,11 @@ func (txn *Transaction) delTransaction() {
 	txn.cnBlkId_Pos = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
+
+	//txn.transfer.workerPool.Release()
+	txn.transfer.timestamps = nil
+	txn.transfer.lastTransferred = types.TS{}
+	txn.transfer.pendingTransfer = false
 }
 
 func (txn *Transaction) rollbackTableOpLocked() {
