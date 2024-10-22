@@ -132,10 +132,11 @@ const (
 )
 
 const (
-	WorkspaceThreshold   uint64 = 1 * mpool.MB
-	InsertEntryThreshold        = 5000
-	GCBatchOfFileCount   int    = 1000
-	GCPoolSize           int    = 5
+	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	InsertEntryThreshold                  = 5000
+	GCBatchOfFileCount             int    = 1000
+	GCPoolSize                     int    = 5
+	CNTransferTxnLifespanThreshold        = time.Second * 5
 )
 
 var (
@@ -156,13 +157,19 @@ type EngineOptions func(*Engine)
 
 func WithWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
-		e.workspaceThreshold = th
+		e.config.workspaceThreshold = th
 	}
 }
 
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
-		e.insertEntryMaxCount = th
+		e.config.insertEntryMaxCount = th
+	}
+}
+
+func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
+	return func(e *Engine) {
+		e.config.cnTransferTxnLifespanThreshold = th
 	}
 }
 
@@ -179,8 +186,12 @@ type Engine struct {
 	idGen    IDGenerator
 	tnID     string
 
-	workspaceThreshold  uint64
-	insertEntryMaxCount int
+	config struct {
+		workspaceThreshold  uint64
+		insertEntryMaxCount int
+
+		cnTransferTxnLifespanThreshold time.Duration
+	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache

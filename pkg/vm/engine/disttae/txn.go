@@ -18,14 +18,9 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"math"
-
-	// "strings"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -413,12 +410,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.workspaceSize < txn.engine.workspaceThreshold && txn.insertCount < txn.engine.insertEntryMaxCount &&
-			txn.approximateInMemDeleteCnt < txn.engine.insertEntryMaxCount {
+		if txn.workspaceSize < txn.engine.config.workspaceThreshold &&
+			txn.insertCount < txn.engine.config.insertEntryMaxCount &&
+			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.workspaceSize < txn.engine.workspaceThreshold {
+		if txn.workspaceSize < txn.engine.config.workspaceThreshold {
 			return nil
 		}
 	}
@@ -442,7 +440,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.engine.workspaceThreshold {
+		if size < txn.engine.config.workspaceThreshold {
 			return nil
 		}
 		size = 0
@@ -454,7 +452,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 
 	if dumpAll {
-		if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
+		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
 			if err := txn.dumpDeleteBatchLocked(ctx, offset); err != nil {
 				return err
 			}
@@ -629,7 +627,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int) e
 		}
 	}
 
-	if deleteCnt < txn.engine.insertEntryMaxCount {
+	if deleteCnt < txn.engine.config.insertEntryMaxCount {
 		return nil
 	}
 
@@ -1287,7 +1285,7 @@ func skipTransfer(
 		return false
 	}
 
-	if time.Since(txn.start) < transferTxnLastThreshold {
+	if time.Since(txn.start) < txn.engine.config.cnTransferTxnLifespanThreshold {
 		return true
 	}
 
