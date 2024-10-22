@@ -58,10 +58,10 @@ func NewFixedSizeSyncPoolAllocator(size uint64) (ret *fixedSizeSyncPoolAllocator
 
 var _ FixedSizeAllocator = new(fixedSizeSyncPoolAllocator)
 
-func (f *fixedSizeSyncPoolAllocator) Allocate(hint Hints) ([]byte, Deallocator, error) {
+func (f *fixedSizeSyncPoolAllocator) Allocate(hint Hints, clearSize uint64) ([]byte, Deallocator, error) {
 	slice := f.pool.Get().(*[]byte)
 	if hint&NoClear == 0 {
-		clear(*slice)
+		clear((*slice)[:clearSize])
 	}
 	return *slice, f.deallocatorPool.Get(fixedSizeSyncPoolDeallocatorArgs{
 		slice: slice,

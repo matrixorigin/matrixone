@@ -16,13 +16,14 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
@@ -41,7 +43,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"go.uber.org/zap"
 )
 
 type storeMeta struct {
@@ -64,7 +65,7 @@ func isSetLeaseHolderUpdate(cmd []byte) bool {
 	return parseCmdTag(cmd) == pb.LeaseHolderIDUpdate
 }
 
-func getNodeHostConfig(cfg Config) config.NodeHostConfig {
+func getNodeHostConfig(cfg Config, fs fileservice.FileService) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.LogServiceServiceAddr(),
 	}
@@ -75,11 +76,12 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	logdb.KVWriteBufferSize = cfg.LogDBBufferSize
 	logdbFactory := (config.LogDBFactory)(nil)
 	logdbFactory = tan.Factory
+	logdb.MaxLogFileSize = cfg.LogDBMaxLogFileSize
 	if cfg.UseTeeLogDB {
 		logutil.Warn("using tee based logdb backed by pebble and tan, for testing purposes only")
 		logdbFactory = tee.TanPebbleLogDBFactory
 	}
-	return config.NodeHostConfig{
+	c := config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostID:          cfg.UUID,
 		NodeHostDir:         cfg.DataDir,
@@ -105,6 +107,10 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			CanUseSelfAsSeed: cfg.GossipAllowSelfAsSeed,
 		},
 	}
+	if cfg.ArchiveLogEnabled {
+		c.Expert.ArchiveIO = newArchiveIO(cfg.FS, fs)
+	}
+	return c
 }
 
 func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
@@ -149,8 +155,10 @@ type store struct {
 func newLogStore(cfg Config,
 	taskServiceGetter func() taskservice.TaskService,
 	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
-	rt runtime.Runtime) (*store, error) {
-	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
+	rt runtime.Runtime,
+	fs fileservice.FileService,
+) (*store, error) {
+	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg, fs))
 	if err != nil {
 		return nil, err
 	}
@@ -192,9 +200,10 @@ func newLogStoreWithRetry(
 	taskServiceGetter func() taskservice.TaskService,
 	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
 	rt runtime.Runtime,
+	fs fileservice.FileService,
 ) (*store, error) {
 	for {
-		s, err := newLogStore(genCfg(), taskServiceGetter, onReplicaChanged, rt)
+		s, err := newLogStore(genCfg(), taskServiceGetter, onReplicaChanged, rt, fs)
 		if err != nil {
 			if strings.Contains(err.Error(), "address already in use") {
 				continue
@@ -938,6 +947,27 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		panic(moerr.NewInvalidState(ctx, "unexpected rs state"))
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
+	}
+}
+
+func (l *store) queryLogLsn(ctx context.Context, shardID uint64, ts time.Time) (Lsn, error) {
+	rs, err := l.nh.QueryLogLsn(shardID, ts)
+	if err != nil {
+		l.runtime.Logger().Error("QueryLogLsn failed", zap.Error(err))
+		return 0, err
+	}
+	select {
+	case v := <-rs.ResultC():
+		if v.Completed() {
+			_, logRange := v.RaftLogs()
+			return logRange.FirstIndex, nil
+		} else if v.RequestOutOfRange() {
+			l.runtime.Logger().Error("OutOfRange query found, could not find the Lsn")
+			return 0, dragonboat.ErrInvalidRange
+		}
+		panic(moerr.NewInvalidState(ctx, "unexpected rs state"))
+	case <-ctx.Done():
+		return 0, ctx.Err()
 	}
 }
 
