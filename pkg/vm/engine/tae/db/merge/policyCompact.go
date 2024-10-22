@@ -30,8 +30,9 @@ import (
 
 type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
-	objects  []*catalog.ObjectEntry
 	fs       fileservice.FileService
+
+	segObjects map[objectio.Segmentid][]*catalog.ObjectEntry
 
 	tombstones     []*catalog.ObjectEntry
 	tombstoneStats []objectio.ObjectStats
@@ -41,8 +42,9 @@ type objCompactPolicy struct {
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
 	return &objCompactPolicy{
-		objects: make([]*catalog.ObjectEntry, 0),
-		fs:      fs,
+		fs: fs,
+
+		segObjects: make(map[objectio.Segmentid][]*catalog.ObjectEntry),
 
 		tombstones:      make([]*catalog.ObjectEntry, 0),
 		tombstoneStats:  make([]objectio.ObjectStats, 0),
@@ -86,7 +88,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 				zap.Uint32("data rows", entry.Rows()),
 				zap.Uint32("tombstone size", tombstone.OriginSize()),
 			)
-			o.objects = append(o.objects, entry)
+			o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
 			return true
 		}
 	}
@@ -98,9 +100,9 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 		return nil
 	}
 	o.filterValidTombstones()
-	results := make([]reviseResult, 0, len(o.objects)+len(o.tombstones))
-	for _, obj := range o.objects {
-		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN})
+	results := make([]reviseResult, 0, len(o.segObjects)+len(o.tombstones))
+	for _, obj := range o.segObjects {
+		results = append(results, reviseResult{obj, TaskHostDN})
 	}
 	if len(o.tombstoneStats) > 0 {
 		results = append(results, reviseResult{o.tombstones, TaskHostDN})
@@ -110,9 +112,9 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 	o.tblEntry = entry
-	o.objects = o.objects[:0]
 	o.tombstones = o.tombstones[:0]
 	o.tombstoneStats = o.tombstoneStats[:0]
+	clear(o.segObjects)
 	clear(o.validTombstones)
 
 	tIter := entry.MakeTombstoneObjectIt()
