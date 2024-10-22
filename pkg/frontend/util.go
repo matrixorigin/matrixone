@@ -392,13 +392,13 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 				defines.EngineKey{},
 				ses.GetTxnHandler().GetStorage()))
 
-		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(ses.txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
 			return nil, err
 		}
 
 		value, err := getValueFromVector(ctx, vec, ses, planExpr)
-		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
+		free()
 		return value, err
 	}
 }
@@ -524,8 +524,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
-		stmt := ses.GetStmtInfo()
-		stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		if stmt := ses.GetStmtInfo(); stmt != nil {
+			stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		}
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
@@ -1404,44 +1405,6 @@ func (g *toposort) sort() (ans []string, err error) {
 		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
 	}
 	return
-}
-
-type footPrints struct {
-	prints [256][2]uint32
-}
-
-func (fprints *footPrints) reset() {
-	for i := 0; i < len(fprints.prints); i++ {
-		fprints.prints[i][0] = 0
-		fprints.prints[i][1] = 0
-	}
-}
-
-func (fprints *footPrints) String() string {
-	strBuf := strings.Builder{}
-	for i := 0; i < len(fprints.prints); i++ {
-		if fprints.prints[i][0] == 0 && fprints.prints[i][1] == 0 {
-			continue
-		}
-		strBuf.WriteString("[")
-		strBuf.WriteString(fmt.Sprintf("%d", i))
-		strBuf.WriteString(": ")
-		strBuf.WriteString(fmt.Sprintf("enter:%d exit:%d", fprints.prints[i][0], fprints.prints[i][1]))
-		strBuf.WriteString("] ")
-	}
-	return strBuf.String()
-}
-
-func (fprints *footPrints) addEnter(idx int) {
-	if idx >= 0 && idx < len(fprints.prints) {
-		fprints.prints[idx][0]++
-	}
-}
-
-func (fprints *footPrints) addExit(idx int) {
-	if idx >= 0 && idx < len(fprints.prints) {
-		fprints.prints[idx][1]++
-	}
 }
 
 func ToRequest(payload []byte) *Request {

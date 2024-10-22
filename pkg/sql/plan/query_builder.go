@@ -1624,7 +1624,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		ReCalcNodeStats(rootID, builder, true, false, true)
+		ReCalcNodeStats(rootID, builder, true, true, true)
 		builder.partitionPrune(rootID)
 
 		determineHashOnPK(rootID, builder)
@@ -4455,6 +4455,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
 	case "mo_cache":
 		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, childId)
+	case "fulltext_index_scan":
+		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, childId)
+	case "fulltext_index_tokenize":
+		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, childId)
 	case "stage_list":
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
 	default:

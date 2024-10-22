@@ -33,6 +33,7 @@ import (
 const (
 	// DefaultMaxAllowedPacket of mysql is 64 MB
 	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
+	SqlBufReserved                 = 128
 	DefaultRetryTimes              = -1
 	DefaultRetryDuration           = 30 * time.Minute
 
@@ -47,6 +48,7 @@ func NewSinker(
 	retryTimes int,
 	retryDuration time.Duration,
 	ar *ActiveRoutine,
+	initSnapshotSplitTxn bool,
 ) (Sinker, error) {
 	//TODO: remove console
 	if sinkUri.SinkTyp == ConsoleSink {
@@ -58,7 +60,7 @@ func NewSinker(
 		return nil, err
 	}
 
-	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar), nil
+	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, initSnapshotSplitTxn), nil
 }
 
 var _ Sinker = new(consoleSinker)
@@ -142,7 +144,12 @@ type mysqlSinker struct {
 	insertRow []any
 	deleteRow []any
 
+	// insert or delete of last record, used for combine inserts and deletes
 	preRowType RowType
+
+	// whether send begin statement
+	hasBegin             bool
+	initSnapshotSplitTxn bool
 }
 
 var NewMysqlSinker = func(
@@ -151,13 +158,15 @@ var NewMysqlSinker = func(
 	watermarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
+	initSnapshotSplitTxn bool,
 ) Sinker {
 	s := &mysqlSinker{
-		mysql:            mysql,
-		dbTblInfo:        dbTblInfo,
-		watermarkUpdater: watermarkUpdater,
-		maxAllowedPacket: DefaultMaxAllowedPacket,
-		ar:               ar,
+		mysql:                mysql,
+		dbTblInfo:            dbTblInfo,
+		watermarkUpdater:     watermarkUpdater,
+		maxAllowedPacket:     DefaultMaxAllowedPacket,
+		ar:                   ar,
+		initSnapshotSplitTxn: initSnapshotSplitTxn,
 	}
 	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&s.maxAllowedPacket)
 
@@ -209,6 +218,28 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	}
 
 	if data.noMoreData {
+		// output the left sql
+		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
+			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+				return
+			}
+		} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
+			s.sqlBuf = appendByte(s.sqlBuf, ')')
+			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+				return
+			}
+		}
+		// reset status
+		s.sqlBuf = s.sqlBuf[:0]
+		s.preRowType = NoOp
+
+		if s.hasBegin {
+			if err = s.mysql.Send(ctx, s.ar, "commit;"); err != nil {
+				return
+			}
+			s.hasBegin = false
+		}
+
 		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblIdStr, data.toTs)
 		return
 	}
@@ -235,7 +266,27 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 }
 
 func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err error) {
-	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+	if !s.initSnapshotSplitTxn && !s.hasBegin {
+		if err = s.mysql.Send(ctx, s.ar, "begin;"); err != nil {
+			return
+		}
+		s.hasBegin = true
+	}
+
+	defer func() {
+		if err != nil {
+			logutil.Errorf("----mysql sinker----, sinkSnapshot failed, err: %v", err)
+			if err = s.mysql.Send(ctx, s.ar, "rollback;"); err != nil {
+				return
+			}
+		}
+	}()
+
+	// if last row is not insert row, means this is the first snapshot batch
+	if s.preRowType != InsertRow {
+		s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+		s.preRowType = InsertRow
+	}
 
 	for i := 0; i < batchRowCount(bat); i++ {
 		// step1: get row from the batch
@@ -253,19 +304,28 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err e
 			return
 		}
 	}
-	if len(s.sqlBuf) != len(s.tsInsertPrefix) {
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	}
-
-	s.sqlBuf = s.sqlBuf[:0]
 	return
 }
 
 // insertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then insert
 func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch) (err error) {
+	if !s.hasBegin {
+		if err = s.mysql.Send(ctx, s.ar, "begin;"); err != nil {
+			return
+		}
+		s.hasBegin = true
+	}
+
+	defer func() {
+		if err != nil {
+			logutil.Errorf("----mysql sinker----, sinkTail failed, err: %v", err)
+			if err = s.mysql.Send(ctx, s.ar, "rollback;"); err != nil {
+				return
+			}
+		}
+	}()
+
 	insertIter := insertBatch.GetRowIterator().(*atomicBatchRowIter)
 	deleteIter := deleteBatch.GetRowIterator().(*atomicBatchRowIter)
 	defer func() {
@@ -411,7 +471,7 @@ func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err er
 	}
 
 	// when len(sql) == max_allowed_packet, mysql will return error, so add equal here
-	if len(s.sqlBuf)+commaLen+len(s.rowBuf)+parLen >= cap(s.sqlBuf) {
+	if len(s.sqlBuf)+commaLen+len(s.rowBuf)+parLen+SqlBufReserved > cap(s.sqlBuf) {
 		if rowType == DeleteRow {
 			s.sqlBuf = appendByte(s.sqlBuf, ')')
 		}

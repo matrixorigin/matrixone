@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,7 +52,7 @@ func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef)
 		sr.colTypes = make([]types.Type, len(cols))
 		for i, column := range cols {
 			column = strings.ToLower(column)
-			if column == catalog.Row_ID {
+			if objectio.IsPhysicalAddr(column) {
 				sr.colTypes[i] = objectio.RowidType
 			} else {
 				colIdx := tblDef.Name2ColIndex[column]
@@ -278,6 +277,16 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
+	//TODO::add for debug 19202, remove it later.
+	defer func() {
+		logutil.Infof("xxxx HandleShardingReadBuildReader, waited ts:%s, txn:%s, name:%s,id:%d",
+			ts.DebugString(),
+			tbl.db.op.Txn().DebugString(),
+			tbl.tableDef.Name,
+			tbl.tableId,
+		)
+	}()
+
 	rd, err := engine_util.NewReader(
 		ctx,
 		tbl.proc.Load().Mp(),
@@ -352,6 +361,14 @@ func HandleShardingReadNext(
 	}
 	bat := buildBatch()
 	defer func() {
+		//TODO::add for debug #19202, remove it later.
+		logutil.Infof("xxxx HandleShardingReadNext, stream:%s, txn:%s,name:%s,id:%d, bat:%s",
+			streamID.String(),
+			tbl.db.op.Txn().DebugString(),
+			tbl.tableDef.Name,
+			tbl.tableId,
+			common.MoBatchToString(bat, 10))
+
 		bat.Clean(mp)
 	}()
 
@@ -368,13 +385,6 @@ func HandleShardingReadNext(
 	if isEnd {
 		return buffer.EncodeBytes(types.EncodeBool(&isEnd)), nil
 	}
-
-	logutil.Infof("xxxx HandleShardingReadNext, stream:%s, txn:%s,name:%s,id:%d, bat:%s",
-		streamID.String(),
-		tbl.db.op.Txn().DebugString(),
-		tbl.tableDef.Name,
-		tbl.tableId,
-		common.MoBatchToString(bat, 10))
 
 	var w bytes.Buffer
 	if _, err := w.Write(types.EncodeBool(&isEnd)); err != nil {

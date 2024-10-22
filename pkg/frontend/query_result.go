@@ -340,12 +340,12 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
 					// calculate uuid
-					vec, err := colexec.EvalExpressionOnce(proc, n.TblFuncExprList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
-					vec.Free(proc.GetMPool())
+					uuid := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
+					free()
 
 					uuids = append(uuids, uuid.String())
 				}

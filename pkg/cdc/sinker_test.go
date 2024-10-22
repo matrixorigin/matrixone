@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/btree"
@@ -90,14 +91,14 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine, _ bool) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, true)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -319,7 +320,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine())
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), true)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -343,7 +344,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 
 	s := &mysqlSinker{
 		mysql:          sink,
-		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+2),
+		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+2+SqlBufReserved),
 		tsInsertPrefix: []byte(tsInsertPrefix),
 		tsDeletePrefix: []byte(tsDeletePrefix),
 		preRowType:     NoOp,
@@ -435,6 +436,8 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -469,7 +472,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		},
 	}
 
-	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine())
+	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine(), true)
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -557,58 +560,71 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func Test_mysqlSinker_sinkCkp(t *testing.T) {
-	type fields struct {
-		mysql            Sink
-		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
-		sqlBuf           []byte
-		rowBuf           []byte
-		insertPrefix     []byte
-		deletePrefix     []byte
-		tsInsertPrefix   []byte
-		tsDeletePrefix   []byte
-		insertTypes      []*types.Type
-		deleteTypes      []*types.Type
-		insertRow        []any
-		deleteRow        []any
-		preRowType       RowType
+func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
+
+	dbTblInfo := &DbTableInfo{
+		SourceTblIdStr: "1_0",
 	}
-	type args struct {
-		ctx context.Context
-		bat *batch.Batch
+
+	watermarkUpdater := &WatermarkUpdater{
+		watermarkMap: &sync.Map{},
 	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr assert.ErrorAssertionFunc
-	}{
-		// TODO: Add test cases.
+	watermarkUpdater.UpdateMem("1_0", types.BuildTS(0, 1))
+
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			user:          "root",
+			password:      "123456",
+			ip:            "127.0.0.1",
+			port:          3306,
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar:               NewCdcActiveRoutine(),
+		dbTblInfo:        dbTblInfo,
+		watermarkUpdater: watermarkUpdater,
+		sqlBuf:           make([]byte, 1024),
+		preRowType:       DeleteRow,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &mysqlSinker{
-				mysql:            tt.fields.mysql,
-				dbTblInfo:        tt.fields.dbTblInfo,
-				watermarkUpdater: tt.fields.watermarkUpdater,
-				maxAllowedPacket: tt.fields.maxAllowedPacket,
-				sqlBuf:           tt.fields.sqlBuf,
-				rowBuf:           tt.fields.rowBuf,
-				insertPrefix:     tt.fields.insertPrefix,
-				deletePrefix:     tt.fields.deletePrefix,
-				tsInsertPrefix:   tt.fields.tsInsertPrefix,
-				tsDeletePrefix:   tt.fields.tsDeletePrefix,
-				insertTypes:      tt.fields.insertTypes,
-				deleteTypes:      tt.fields.deleteTypes,
-				insertRow:        tt.fields.insertRow,
-				deleteRow:        tt.fields.deleteRow,
-				preRowType:       tt.fields.preRowType,
-			}
-			tt.wantErr(t, s.sinkSnapshot(tt.args.ctx, tt.args.bat), fmt.Sprintf("sinkSnapshot(%v, %v)", tt.args.ctx, tt.args.bat))
-		})
+
+	err = sinker.Sink(context.Background(), &DecoderOutput{
+		noMoreData: true,
+		toTs:       types.BuildTS(1, 1),
+	})
+	assert.Error(t, err)
+}
+
+func Test_mysqlSinker_sinkSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
+
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			user:          "root",
+			password:      "123456",
+			ip:            "127.0.0.1",
+			port:          3306,
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar:                   NewCdcActiveRoutine(),
+		sqlBuf:               make([]byte, 1024),
+		initSnapshotSplitTxn: false,
 	}
+
+	insertBat := batch.New([]string{"a", "ts"})
+	insertBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil)
+	insertBat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(0, 1)}, nil)
+	err = sinker.sinkSnapshot(context.Background(), insertBat)
+	assert.NoError(t, err)
 }
 
 func Test_mysqlSinker_sinkDelete(t *testing.T) {
@@ -737,56 +753,52 @@ func Test_mysqlsink(t *testing.T) {
 }
 
 func Test_mysqlSinker_sinkTail(t *testing.T) {
-	type fields struct {
-		mysql            Sink
-		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
-		sqlBuf           []byte
-		rowBuf           []byte
-		insertPrefix     []byte
-		deletePrefix     []byte
-		tsInsertPrefix   []byte
-		tsDeletePrefix   []byte
-		insertTypes      []*types.Type
-		deleteTypes      []*types.Type
-		insertRow        []any
-		deleteRow        []any
-		preRowType       RowType
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
+
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer {
+			return types.NewPacker()
+		},
+		func(packer *types.Packer) {
+			packer.Reset()
+		},
+		func(packer *types.Packer) {
+			packer.Close()
+		},
+	)
+	var packer *types.Packer
+	put := packerPool.Get(&packer)
+	defer put.Put()
+
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			user:          "root",
+			password:      "123456",
+			ip:            "127.0.0.1",
+			port:          3306,
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar:     NewCdcActiveRoutine(),
+		sqlBuf: make([]byte, 1024),
 	}
-	type args struct {
-		ctx         context.Context
-		insertBatch *AtomicBatch
-		deleteBatch *AtomicBatch
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr assert.ErrorAssertionFunc
-	}{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &mysqlSinker{
-				mysql:            tt.fields.mysql,
-				dbTblInfo:        tt.fields.dbTblInfo,
-				watermarkUpdater: tt.fields.watermarkUpdater,
-				maxAllowedPacket: tt.fields.maxAllowedPacket,
-				sqlBuf:           tt.fields.sqlBuf,
-				rowBuf:           tt.fields.rowBuf,
-				insertPrefix:     tt.fields.insertPrefix,
-				deletePrefix:     tt.fields.deletePrefix,
-				tsInsertPrefix:   tt.fields.tsInsertPrefix,
-				tsDeletePrefix:   tt.fields.tsDeletePrefix,
-				insertTypes:      tt.fields.insertTypes,
-				deleteTypes:      tt.fields.deleteTypes,
-				insertRow:        tt.fields.insertRow,
-				deleteRow:        tt.fields.deleteRow,
-				preRowType:       tt.fields.preRowType,
-			}
-			tt.wantErr(t, s.sinkTail(tt.args.ctx, tt.args.insertBatch, tt.args.deleteBatch), fmt.Sprintf("sinkTail(%v, %v, %v)", tt.args.ctx, tt.args.insertBatch, tt.args.deleteBatch))
-		})
-	}
+
+	insertAtomicBat := NewAtomicBatch(testutil.TestUtilMp)
+	insertBat := batch.New([]string{"a", "ts"})
+	insertBat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil)
+	insertBat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(0, 1)}, nil)
+	insertBat.SetRowCount(3)
+	insertAtomicBat.Append(packer, insertBat, 1, 0)
+
+	deleteAtomicBat := NewAtomicBatch(testutil.TestUtilMp)
+	err = sinker.sinkTail(context.Background(), insertAtomicBat, deleteAtomicBat)
+	assert.NoError(t, err)
 }
 
 func Test_consoleSinker_Close(t *testing.T) {

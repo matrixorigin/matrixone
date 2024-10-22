@@ -83,25 +83,33 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+	case args.IsMinio ||
+		// 天翼云
+		strings.Contains(args.Endpoint, "ctyunapi.cn") ||
+		// 腾讯云
+		strings.Contains(args.Endpoint, "myqcloud.com"):
+		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		// 阿里云
 		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case strings.EqualFold(args.Endpoint, "disk"):
+		// disk based
 		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	default:
+		// AWS SDK
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
@@ -144,6 +152,17 @@ func (s *S3FS) AllocateCacheData(size int) fscache.Data {
 		)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
+}
+
+func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(
+			len(data),
+			// evict at least 1/100 capacity to reduce number of evictions
+			int(s.memCache.cache.Capacity()/100),
+		)
+	}
+	return DefaultCacheDataAllocator().CopyToCacheData(data)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -288,13 +307,16 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
-
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
 
 	startLock := time.Now()
+	defer func() {
+		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
+	}()
+
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
@@ -304,7 +326,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		// not wait in prefetch, return
 		return nil
 	}
-	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -317,7 +338,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -435,6 +455,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Record S3 IO and netwokIO(un memory IO) time Consumption
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -443,7 +470,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	LogEvent(ctx, str_s3fs_read, vector)
 	defer func() {
 		LogEvent(ctx, str_read_return)
-		LogSlowEvent(ctx, time.Second*5)
+		LogSlowEvent(ctx, time.Millisecond*500)
 	}()
 
 	tp := reuse.Alloc[tracePoint](nil)
@@ -506,13 +533,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
 
 read_disk_cache:
 	if s.diskCache != nil {
