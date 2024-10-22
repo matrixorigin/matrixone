@@ -315,6 +315,8 @@ type Transaction struct {
 		lastTransferred types.TS
 		timestamps      []timestamp.Timestamp
 		pendingTransfer bool
+
+		//workerPool *ants.Pool
 	}
 
 	//the start time of first statement in a txn.
@@ -414,6 +416,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
 	}
+
+	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
