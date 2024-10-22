@@ -15,14 +15,9 @@
 package fileservice
 
 import (
-	"sync"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	prometheusmodel "github.com/prometheus/client_model/go"
+	"sync"
 )
 
 const (
@@ -55,20 +50,6 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator = decorateAllocator(allocator)
 	return allocator
 })
-
-func init() {
-	go func() {
-		guage := metric.MallocGauge.WithLabelValues("memory-cache-inuse")
-		var metric prometheusmodel.Metric
-		for range time.NewTicker(time.Second * 5).C {
-			if err := guage.Write(&metric); err != nil {
-				panic(err)
-			}
-			value := metric.Gauge.GetValue()
-			logutil.Infof("!!! memcache in use %.1f mb", value/1024/1024)
-		}
-	}()
-}
 
 var ioAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator := malloc.GetDefault(nil)
