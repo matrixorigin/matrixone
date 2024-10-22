@@ -195,7 +195,6 @@ func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) er
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	return nil
 }
 

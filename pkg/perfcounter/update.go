@@ -22,10 +22,8 @@ func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*Coun
 	var counterSets CounterSets
 
 	// Check if InternalExecutorKey is present in the context.
-	if ctx.Value(InternalExecutorKey{}) != nil {
-		// No action is taken when InternalExecutorKey is present.
-		// Not processing for the time being
-	} else {
+	// No action is taken when InternalExecutorKey is present.
+	if ctx.Value(InternalExecutorKey{}) == nil {
 		// If the InternalExecutorKey does not exist, it means that you are using a generic executor.
 		if counter1, ok := ctx.Value(ExecPipelineMarkKey{}).(*CounterSet); ok && counter1 != nil {
 			// No code here; At this stage, independent functions are used to statistically analyze S3 requests

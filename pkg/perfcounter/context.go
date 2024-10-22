@@ -105,14 +105,6 @@ func AttachGenericExecutorKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, GenericExecutorKey{}, struct{}{})
 }
 
-// ParserMarkKey is an empty struct used as a key for attaching a parser mark to a context.
-type ParserMarkKey struct{}
-
-// AttachParserMarkKey attaches a parser mark (an empty struct) to the given context.
-func AttachParserMarkKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ParserMarkKey{}, struct{}{})
-}
-
 // BuildPlanMarkKey is an empty struct used as a key for attaching a build plan counter to a context.
 type BuildPlanMarkKey struct{}
 
