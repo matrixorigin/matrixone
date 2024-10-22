@@ -20,7 +20,7 @@ const (
 
 // receiver will be a unlimited queue for int8.
 type receiver struct {
-	// todo: I ensure that this elements will never be full, so there is no need set a lock here.
+	// I ensure that the elements will never be full, so it is no need set a lock here.
 	lastPop    int8
 	head, tail int
 	andBase    int

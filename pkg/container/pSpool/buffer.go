@@ -70,7 +70,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
 
-	// todo: a hack here, because we won't reuse the aggs.
+	// we won't reuse the aggregation's memories now.
 	for i := range bat.Aggs {
 		bat.Aggs[i].Free()
 	}

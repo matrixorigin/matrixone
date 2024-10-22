@@ -32,22 +32,30 @@ type PipelineSpool struct {
 	shardRefs  []atomic.Int32
 	doRefCheck []bool
 
+	// rs record all receivers' input data queue.
+	// it supports push-index and pop-index methods.
 	rs []receiver
 
+	// cache manage all the reuse memories.
 	cache *cachedBatch
 	// free element index on shardPool.
 	freeShardPool chan int8
 
-	// each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
-	// and the data producer should wait all consumers done before its close or reset.
+	// once each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
+	//
+	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
 type pipelineSpoolMessage struct {
-	content *batch.Batch
+	// data or error information.
+	dataContent *batch.Batch
+	errContent  error
+
+	// which cache pool does dataContent's memory allocated from.
+	// and we should put this memory back after the use of dataContent.
 	cacheID int8
-	err     error
 }
 
 // SendBatch do copy for data, and send it to any or all data receiver.
@@ -65,9 +73,9 @@ func (ps *PipelineSpool) SendBatch(
 	}
 
 	msg := pipelineSpoolMessage{
-		content: dst.pointer,
-		cacheID: dst.usingCacheID,
-		err:     info,
+		dataContent: dst.pointer,
+		cacheID:     dst.usingCacheID,
+		errContent:  info,
 	}
 
 	if receiverID == SendToAllLocal {
@@ -88,7 +96,7 @@ func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(
 				freeBatchSignal{
-					pointer:      ps.shardPool[last].content,
+					pointer:      ps.shardPool[last].dataContent,
 					usingCacheID: ps.shardPool[last].cacheID,
 				},
 			)
@@ -103,10 +111,10 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	ps.ReleaseCurrent(idx)
 
 	next := ps.rs[idx].popNextIndex()
-	if ps.shardPool[next].content == nil {
+	if ps.shardPool[next].dataContent == nil {
 		ps.csDoneSignal <- struct{}{}
 	}
-	return ps.shardPool[next].content, ps.shardPool[next].err
+	return ps.shardPool[next].dataContent, ps.shardPool[next].errContent
 }
 
 // Close the sender and receivers, and do memory clean.
