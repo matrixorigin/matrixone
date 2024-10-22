@@ -176,6 +176,9 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 		if err != nil {
 			return vm.CancelResult, err
 		}
+		if ctr.s3Writer.outputBat.RowCount() == 0 {
+			return vm.CancelResult, err
+		}
 		result := vm.NewCallResult()
 		result.Batch = ctr.s3Writer.outputBat
 		return result, nil

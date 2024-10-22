@@ -15,6 +15,7 @@
 package multi_update
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
 
@@ -90,6 +91,7 @@ type s3Writer struct {
 	flushThreshold uint64
 
 	checkSizeCols []int
+	buf           bytes.Buffer
 }
 
 func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
@@ -532,8 +534,7 @@ func (writer *s3Writer) fillInsertBlockInfo(
 }
 
 func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process) (err error) {
-	onlyDelete := writer.action == actionDelete
-	if !onlyDelete && writer.batchSize > TagS3SizeForMOLogger {
+	if (writer.action == actionDelete && writer.batchSize > 0) || writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc)
 		if err != nil {
@@ -628,7 +629,7 @@ func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process) (err er
 	}()
 
 	for i, bat := range bats {
-		err = writer.addBatchToOutput(mp, actionUpdate, 0, 0, 0, "", bat)
+		err = writer.addBatchToOutput(mp, actionUpdate, 0, 0, uint64(bat.RowCount()), "", bat)
 		if err != nil {
 			return
 		}
@@ -688,6 +689,7 @@ func (writer *s3Writer) reset(proc *process.Process) (err error) {
 		writer.outputBat.CleanOnlyData()
 	}
 	writer.batchSize = 0
+	writer.buf.Reset()
 	return
 }
 
@@ -743,6 +745,7 @@ func (writer *s3Writer) free(proc *process.Process) (err error) {
 		writer.outputBat.Clean(proc.Mp())
 		writer.outputBat = nil
 	}
+	writer.buf.Reset()
 
 	return
 }
@@ -783,7 +786,7 @@ func (writer *s3Writer) addBatchToOutput(
 	}
 
 	var val []byte
-	val, err = bat.MarshalBinary()
+	val, err = bat.MarshalBinaryWithBuffer(&writer.buf)
 	if err != nil {
 		return
 	}
