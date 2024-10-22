@@ -1469,7 +1469,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 				tbl.GetID(),
 				rowIDStr,
 				err)
-			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			if tbl.store.rt.Options.DedupType.SkipTargetOldCommitted() && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
 					tbl.store.txn.GetID(),
 					tbl.store.txn.GetStartTS().ToString(),

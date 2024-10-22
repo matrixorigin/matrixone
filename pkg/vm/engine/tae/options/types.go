@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
@@ -82,7 +83,7 @@ type Options struct {
 	// MaxMessageSize is the size of max message which is sent to log-service.
 	MaxMessageSize   uint64
 	TransferTableTTL time.Duration
-	IncrementalDedup bool
+	DedupType        txnif.DedupPolicy
 	IsStandalone     bool
 	LogStoreT        LogstoreType
 

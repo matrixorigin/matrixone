@@ -165,11 +165,11 @@ type Config struct {
 		// Mode. [Optimistic|Pessimistic], default Pessimistic.
 		Mode string `toml:"mode"`
 
-		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
-		// If incremental dedup feature is disable,
-		// If empty, it will set 'false' when CN.Txn.Mode is optimistic,  set 'true' when CN.Txn.Mode is pessimistic
-		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
-		IncrementalDedup string `toml:"incremental-dedup"`
+		// [incremental|skip-workspace|skip-all|check-all].
+		// If empty, it will set 'skip-workspace' when CN.Txn.Mode is optimistic,  set 'incremental' when CN.Txn.Mode is pessimistic
+		// "incremental" dedup only uncommitted in-memory data and tombstones.
+		// "skip-workspace" do not dedup all uncommitted data and tombstones.
+		DedupType string `toml:"dedup-type"`
 
 		// Storage txn storage config
 		Storage struct {
@@ -298,16 +298,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Txn.IncrementalDedup == "" {
+	if c.Txn.DedupType == "" {
 		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-			c.Txn.IncrementalDedup = "true"
+			c.Txn.DedupType = "incremental"
 		} else {
-			c.Txn.IncrementalDedup = "false"
+			c.Txn.DedupType = "skip-workspace"
 		}
 	} else {
-		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
-		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {
-			return moerr.NewBadDBNoCtx("not support txn incremental-dedup: " + c.Txn.IncrementalDedup)
+		c.Txn.DedupType = strings.ToLower(c.Txn.DedupType)
+		if c.Txn.DedupType != "incremental" && c.Txn.DedupType != "skip-workspace" && c.Txn.DedupType != "skip-all" && c.Txn.DedupType != "check-all" {
+			return moerr.NewBadDBNoCtx("not support txn dedup-type: " + c.Txn.DedupType)
 		}
 	}
 
@@ -406,14 +406,14 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.Mode = defaultTxnMode.String()
 	}
 
-	if c.Txn.IncrementalDedup == "" {
+	if c.Txn.DedupType == "" {
 		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-			c.Txn.IncrementalDedup = "true"
+			c.Txn.DedupType = "incremental"
 		} else {
-			c.Txn.IncrementalDedup = "false"
+			c.Txn.DedupType = "skip-workspace"
 		}
 	} else {
-		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
+		c.Txn.DedupType = strings.ToLower(c.Txn.DedupType)
 	}
 
 	c.RPC.Adjust()
