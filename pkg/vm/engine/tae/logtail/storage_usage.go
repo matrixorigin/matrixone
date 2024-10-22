@@ -1187,7 +1187,8 @@ func FillUsageBatOfCompacted(
 			}
 			accountId := uint64(meta.GetAccountId(tableID[i]))
 			if len(tableSnapshots[tableID[i]]) == 0 &&
-				tablePitrs[tableID[i]].IsEmpty() {
+				(tablePitrs[tableID[i]] == nil ||
+					tablePitrs[tableID[i]].IsEmpty()) {
 				continue
 			}
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
