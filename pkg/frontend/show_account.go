@@ -176,9 +176,9 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		// try the previous RPC method
-		payload_V0 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
-		responseUnmarshaler_V0 := func(payload []byte) (interface{}, error) {
-			usage := &cmd_util.StorageUsageResp_V0{}
+		payload_V2 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
+		responseUnmarshaler_V2 := func(payload []byte) (interface{}, error) {
+			usage := &cmd_util.StorageUsageResp_V2{}
 			if err := usage.Unmarshal(payload); err != nil {
 				return nil, err
 			}
@@ -187,7 +187,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 
 		tried = true
 		CmdMethod_StorageUsage := api.OpCode(14)
-		handler = ctl.GetTNHandlerFunc(CmdMethod_StorageUsage, whichTN, payload_V0, responseUnmarshaler_V0)
+		handler = ctl.GetTNHandlerFunc(CmdMethod_StorageUsage, whichTN, payload_V2, responseUnmarshaler_V2)
 		result, err = handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 
 		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
@@ -248,6 +248,22 @@ func handleStorageUsageResponse_V0(
 	return result, nil
 }
 
+func handleStorageUsageResponse_V2(
+	ctx context.Context,
+	usage *cmd_util.StorageUsageResp_V2,
+) (map[int64][]uint64, error) {
+	result := make(map[int64][]uint64, 0)
+
+	for x := range usage.AccIds {
+		if result[usage.AccIds[x]] == nil {
+			result[usage.AccIds[x]] = make([]uint64, 2)
+		}
+		result[usage.AccIds[x]][0] += usage.Sizes[x]
+	}
+
+	return result, nil
+}
+
 func handleStorageUsageResponse(
 	ctx context.Context,
 	usage *cmd_util.StorageUsageResp_V3,
@@ -289,6 +305,37 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64][]uint64, succee
 	}
 
 	return result, true
+}
+
+func updateStorageUsageCache_V2(usages *cmd_util.StorageUsageResp_V2) {
+
+	if len(usages.AccIds) == 0 {
+		return
+	}
+
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
+
+	// step 1: delete stale accounts
+	cnUsageCache.ClearForUpdate()
+
+	// step 2: update
+	for x := range usages.AccIds {
+		usage := logtail.UsageData{
+			AccId: uint64(usages.AccIds[x]),
+			Size:  usages.Sizes[x],
+			ObjectAbstract: logtail.ObjectAbstract{
+				TotalObjCnt: int(usages.ObjCnts[x]),
+				TotalBlkCnt: int(usages.BlkCnts[x]),
+				TotalRowCnt: int(usages.RowCnts[x]),
+			},
+		}
+		//if old, exist := cnUsageCache.Get(usage); exist {
+		//	usage.Size += old.Size
+		//}
+
+		cnUsageCache.SetOrReplace(usage)
+	}
 }
 
 func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
@@ -342,17 +389,13 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 	}
 
 	if tried {
-		usage, ok := response.(*cmd_util.StorageUsageResp_V0)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V2)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
-
-		fs, err := fileservice.Get[fileservice.FileService](getPu(ses.GetService()).FileService, defines.SharedFileServiceName)
-		if err != nil {
-			return nil, err
-		}
+		updateStorageUsageCache_V2(usage)
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
+		return handleStorageUsageResponse_V2(ctx, usage)
 
 	} else {
 		usage, ok := response.(*cmd_util.StorageUsageResp_V3)
