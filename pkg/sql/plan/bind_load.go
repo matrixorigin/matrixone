@@ -25,6 +25,7 @@ import (
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
 	onDupAction := plan.Node_ERROR
+	builder.qry.LoadTag = true
 	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx)
 	if err != nil {
 		return -1, err
