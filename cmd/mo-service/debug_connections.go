@@ -17,10 +17,10 @@
 package main
 
 import (
-	"cmp"
 	"context"
+	"fmt"
+	"net"
 	"runtime"
-	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -34,7 +34,7 @@ func init() {
 }
 
 const (
-	tooManyThreshold = 4096
+	connsThreshold = 1024
 )
 
 var (
@@ -100,40 +100,42 @@ func logConnTrack(ctx context.Context, events chan conntrack.Event, errorChan ch
 				zap.Any("connections", len(activeConns)),
 			)
 
-			if len(activeConns) > tooManyThreshold {
-				logConnectionStats(activeConns)
-			}
+			logConnectionStats(activeConns)
 
 		}
 	}
 }
 
 func logConnectionStats(actives map[uint32]*conntrack.Flow) {
-	srcPorts := make(map[uint16]int)
-	destPorts := make(map[uint16]int)
+	srcHostPorts := make(map[string]int)
+	destHostPorts := make(map[string]int)
 	for _, flow := range actives {
-		srcPorts[flow.TupleOrig.Proto.SourcePort]++
-		destPorts[flow.TupleOrig.Proto.DestinationPort]++
+		src, dest := flowGetHostPorts(flow)
+		srcHostPorts[src]++
+		destHostPorts[dest]++
 	}
-	logPortStats(srcPorts, "source port")
-	logPortStats(destPorts, "dest port")
+	logHostPortStats(srcHostPorts, "source")
+	logHostPortStats(destHostPorts, "destination")
 }
 
-func logPortStats(stats map[uint16]int, what string) {
-	ports := make([]uint16, 0, len(stats))
-	for port := range stats {
-		ports = append(ports, port)
-	}
-	slices.SortFunc(ports, func(a, b uint16) int {
-		return -cmp.Compare(stats[a], stats[b])
-	})
-	for _, port := range ports {
-		if stats[port] < tooManyThreshold/10 {
-			break
+func flowGetHostPorts(flow *conntrack.Flow) (string, string) {
+	return net.JoinHostPort(
+			flow.TupleOrig.IP.SourceAddress.String(),
+			fmt.Sprintf("%d", flow.TupleOrig.Proto.SourcePort),
+		), net.JoinHostPort(
+			flow.TupleOrig.IP.DestinationAddress.String(),
+			fmt.Sprintf("%d", flow.TupleOrig.Proto.DestinationPort),
+		)
+}
+
+func logHostPortStats(stats map[string]int, what string) {
+	for hostPort, conns := range stats {
+		if conns < connsThreshold {
+			continue
 		}
-		logutil.Info("conntrack: port stats",
-			zap.Any(what, port),
-			zap.Any("connections", stats[port]),
+		logutil.Info("conntrack: "+what,
+			zap.Any("host port", hostPort),
+			zap.Any("connections", conns),
 		)
 	}
 }
