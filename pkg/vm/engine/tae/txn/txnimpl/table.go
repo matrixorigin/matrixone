@@ -971,6 +971,10 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 		}
 	}
 
+	if dedupType.SkipTargetAllCommitted() {
+		return
+	}
+
 	if baseTable.tableSpace.node == nil {
 		return
 	}
