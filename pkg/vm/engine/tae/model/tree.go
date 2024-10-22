@@ -506,7 +506,7 @@ func (stree *ObjectTree) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(stree.ID[:]); err != nil {
 		return
 	}
-	n += int64(types.UuidSize)
+	n += int64(types.ObjectidSize)
 	return
 }
 
@@ -515,7 +515,7 @@ func ReadObjectTreesV1(r io.Reader) (strees []*ObjectTree, n int64, err error) {
 	if _, err = r.Read(segmentID[:]); err != nil {
 		return
 	}
-	n += int64(types.UuidSize)
+	n += int64(types.ObjectidSize)
 	var cnt uint32
 	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
@@ -546,7 +546,7 @@ func (stree *ObjectTree) ReadFromV2(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(stree.ID[:]); err != nil {
 		return
 	}
-	n += int64(types.UuidSize)
+	n += int64(types.ObjectidSize)
 	var cnt uint32
 	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
@@ -569,6 +569,6 @@ func (stree *ObjectTree) ReadFromV3(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(stree.ID[:]); err != nil {
 		return
 	}
-	n += int64(types.UuidSize)
+	n += int64(types.ObjectidSize)
 	return
 }
