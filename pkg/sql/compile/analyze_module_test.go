@@ -338,12 +338,12 @@ func Test_processPhyScope(t *testing.T) {
 			phyPlan.LocalScope = append(phyPlan.LocalScope, tt.args.scope)
 			explainPhyPlan := models.ExplainPhyPlan(phyPlan, models.NormalOption)
 			t.Logf("%s", explainPhyPlan)
-			processPhyScope(&tt.args.scope, tt.args.nodes)
+			processPhyScope(&tt.args.scope, tt.args.nodes, new(statistic.StatsInfo))
 		})
 	}
 }
 
-func Test_explainGlobalResources(t *testing.T) {
+func Test_explainResourceOverview(t *testing.T) {
 	operatorStats := &process.OperatorStats{
 		OperatorName:     "ExampleOperator",
 		CallNum:          10,
@@ -564,6 +564,26 @@ func Test_explainGlobalResources(t *testing.T) {
 	phyScope2.PreScopes = []models.PhyScope{phyScope3, phyScope4}
 	phyScope1.PreScopes = []models.PhyScope{phyScope2}
 
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseDuration = 72872
+	statsInfo.PlanStage.PlanDuration = 7544049
+	statsInfo.PlanStage.BuildPlanStatsDuration = 142500
+
+	statsInfo.CompileStage.CompileDuration = 59396
+	statsInfo.CompileStage.CompileTableScanDuration = 260717
+	statsInfo.CompileStage.CompileS3Request = statistic.S3Request{
+		List:      0,
+		Get:       2,
+		Put:       1,
+		Head:      1,
+		Delete:    0,
+		DeleteMul: 0,
+	}
+
+	statsInfo.PrepareRunStage.CompilePreRunOnceDuration = 49396
+	statsInfo.PrepareRunStage.ScopePrepareDuration = 12000
+	statsInfo.PrepareRunStage.BuildReaderDuration = 11000
+
 	type args struct {
 		queryResult *util.RunResult
 		statsInfo   *statistic.StatsInfo
@@ -581,14 +601,7 @@ func Test_explainGlobalResources(t *testing.T) {
 				queryResult: &util.RunResult{
 					AffectRows: 1,
 				},
-				statsInfo: &statistic.StatsInfo{
-					ParseDuration:               72872,
-					PlanDuration:                7544049,
-					CompileDuration:             59396,
-					BuildReaderDuration:         260717,
-					BuildPlanStatsDuration:      142500736,
-					BuildPlanResolveVarDuration: 605813,
-				},
+				statsInfo: statsInfo,
 				anal: &AnalyzeModule{
 					phyPlan: &models.PhyPlan{},
 				},
@@ -604,7 +617,7 @@ func Test_explainGlobalResources(t *testing.T) {
 			phyPlan := models.NewPhyPlan()
 			phyPlan.LocalScope = append(phyPlan.LocalScope, phyScope1)
 			tt.args.anal.phyPlan = phyPlan
-			explainGlobalResources(tt.args.queryResult, tt.args.statsInfo, tt.args.anal, tt.args.option, tt.args.buffer)
+			explainResourceOverview(tt.args.queryResult, tt.args.statsInfo, tt.args.anal, tt.args.option, tt.args.buffer)
 			t.Logf("%s", tt.args.buffer.String())
 		})
 	}
