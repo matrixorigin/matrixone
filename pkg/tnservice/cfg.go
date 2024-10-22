@@ -190,7 +190,6 @@ type Config struct {
 	LockService lockservice.Config `toml:"lockservice"`
 
 	ShardService shardservice.Config `toml:"shardservice"`
-
 	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
 	// For the tn does not boost an independent queryservice in standalone mode.
 	// cn,tn shares the same queryservice in standalone mode.

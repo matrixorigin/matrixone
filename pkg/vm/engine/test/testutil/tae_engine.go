@@ -136,6 +136,10 @@ func NewTestTAEEngine(
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
 	blockio.Start("")
+	if opts == nil {
+		opts = &options.Options{}
+	}
+	opts.DedupType = txnif.DedupPolicy_SkipWorkspace
 	handle := InitTxnHandle(ctx, moduleName, t, opts)
 	logtailServer, err := NewMockLogtailServer(
 		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)

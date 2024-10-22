@@ -1493,7 +1493,10 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
-	err = tbl.dedup(tbl.store.ctx, deleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), true)
+	err = tbl.dedup(
+		tbl.store.ctx,
+		deleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr),
+		true)
 	if err != nil {
 		return
 	}
@@ -1509,10 +1512,13 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		anode.isMergeCompact = true
 		if tbl.store.txn.GetTxnState(false) != txnif.TxnStateActive {
 			startOffset := anode.data.Length() - deleteBatch.Length()
-			tbl.tombstoneTable.tableSpace.prepareApplyANode(anode, uint32(startOffset))
+			tbl.tombstoneTable.tableSpace.prepareApplyANode(
+				anode,
+				uint32(startOffset))
 		}
 	}
-	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
+	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](
+		rowIDVec.GetDownstreamVector())
 	for _, rowID := range rowIDs {
 		obj, err := tbl.store.warChecker.CacheGet(
 			tbl.entry.GetDB().ID,
