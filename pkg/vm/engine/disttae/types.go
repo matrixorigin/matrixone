@@ -310,7 +310,13 @@ type Transaction struct {
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
-	timestamps []timestamp.Timestamp
+
+	transfer struct {
+		lastTransferred types.TS
+		timestamps      []timestamp.Timestamp
+		pendingTransfer bool
+	}
+
 	//the start time of first statement in a txn.
 	start time.Time
 
@@ -473,7 +479,7 @@ func (txn *Transaction) PPString() string {
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
-		stringifySlice(txn.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
+		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
 func (txn *Transaction) StartStatement() {
@@ -522,19 +528,21 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.statementID++
 
-	if !txn.op.Txn().IsRCIsolation() {
-		return nil
-	}
+	if txn.op.Txn().IsRCIsolation() {
+		// each statement's start snapshot
+		// will be used by transfer than between statements
+		txn.transfer.timestamps = append(txn.transfer.timestamps, txn.op.SnapshotTS())
 
-	// each statement's start snapshot
-	// will be used by transfer than between statements
-	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+		if txn.transfer.lastTransferred.IsEmpty() {
+			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[0])
+		}
 
-	if updated, err := txn.handleRCSnapshot(ctx, commit); err != nil {
-		return err
-	} else if updated {
-		// TODO force transfer, skip transfer
-		return txn.transferTombstonesByStatement(ctx)
+		updated, err := txn.handleRCSnapshot(ctx, commit)
+		if err != nil {
+			return err
+		}
+
+		return txn.transferTombstonesByStatement(ctx, updated)
 	}
 
 	return nil
@@ -730,7 +738,11 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
-		txn.timestamps = txn.timestamps[:txn.statementID]
+
+		txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
+		if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
+			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
+		}
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
