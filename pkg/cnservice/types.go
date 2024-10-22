@@ -128,6 +128,8 @@ type Config struct {
 	Engine struct {
 		Type     EngineType           `toml:"type"`
 		Logstore options.LogstoreType `toml:"logstore"`
+
+		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
 	}
 
 	// parameters for cn-server related buffer.

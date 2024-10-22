@@ -41,12 +41,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type UT_ForceTransCheck struct{}
-
-const (
-	transferTxnLastThreshold = time.Second * 5
-)
-
 func transferInmemTombstones(
 	ctx context.Context,
 	txn *Transaction,
