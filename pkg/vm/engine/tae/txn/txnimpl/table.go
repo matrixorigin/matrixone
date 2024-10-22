@@ -1442,6 +1442,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
+	rowIDStr := rowIDVec.PPString(1)
 	defer func() {
 		if err == nil {
 			return
@@ -1454,9 +1455,8 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		// 		end)
 		// }
 		// This err also captured by txn's write conflict check.
-		rowIDStr := rowIDVec.PPString(1)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(int(pk.Length())))
+			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(pk.Length()))
 		}
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[ts=%s]: table-%d delete rows(%v) %v",
@@ -1475,7 +1475,6 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 				pk.PPString(pk.Length()),
 			)
 		}
-
 	}()
 	deleteBatch := tbl.createTombstoneBatch(rowIDVec, pk)
 	defer func() {

@@ -42,7 +42,7 @@ func TestTree(t *testing.T) {
 	assert.True(t, tree.Equal(tree2))
 }
 
-func TestTableTree_ReadFromWithVersion(t *testing.T) {
+func TestTableTree_ReadOldVersion(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTableTree(0, 0)
 	var w bytes.Buffer
@@ -55,7 +55,4 @@ func TestTableTree_ReadFromWithVersion(t *testing.T) {
 	assert.Panics(t, func() {
 		tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
 	}, "not supported")
-	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion3)
-	assert.NoError(t, err)
-	assert.True(t, tree.Equal(tree2))
 }

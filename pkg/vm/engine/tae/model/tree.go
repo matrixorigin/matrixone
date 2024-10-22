@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,14 +29,6 @@ const (
 	MemoTreeVersion2
 	MemoTreeVersion3
 )
-
-type keyT struct {
-	Num, Seq uint16
-}
-
-func encodeKey(k *keyT) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(k)), 4)
-}
 
 type TreeVisitor interface {
 	VisitTable(dbID, id uint64) error
