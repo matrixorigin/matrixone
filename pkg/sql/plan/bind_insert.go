@@ -244,28 +244,28 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
-			colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
+			// // colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
 
-			argsLen := len(idxDef.Parts)
+			// argsLen := len(idxDef.Parts)
 
-			if argsLen == 1 {
-				colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
-			} else {
-				args := make([]*plan.Expr, argsLen)
+			// if argsLen == 1 {
+			// 	// colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			// } else {
+			// 	args := make([]*plan.Expr, argsLen)
 
-				for k := 0; k < argsLen; k++ {
-					colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
-					args[k] = DeepCopyExpr(selectNode.ProjectList[colPos])
-				}
+			// 	for k := 0; k < argsLen; k++ {
+			// 		colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
+			// 		args[k] = DeepCopyExpr(selectNode.ProjectList[colPos])
+			// 	}
 
-				fnName := "serial"
-				if !idxDef.Unique {
-					fnName = "serial_full"
-				}
-				idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
-				colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = int32(len(selectNode.ProjectList))
-				selectNode.ProjectList = append(selectNode.ProjectList, idxExpr)
-			}
+			// 	fnName := "serial"
+			// 	if !idxDef.Unique {
+			// 		fnName = "serial_full"
+			// 	}
+			// 	idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+			// 	colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = int32(len(selectNode.ProjectList))
+			// 	selectNode.ProjectList = append(selectNode.ProjectList, idxExpr)
+			// }
 
 			if !idxDef.Unique {
 				continue
@@ -652,17 +652,47 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 
 	skipUniqueIdx := make([]bool, len(tableDef.Indexes))
+	pkName := tableDef.Pkey.PkeyColName
+	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist || !idxDef.Unique {
+		if !idxDef.TableExist {
 			continue
 		}
 
-		skipUniqueIdx[i] = true
-		for _, part := range idxDef.Parts {
-			if !columnIsNull[part] {
-				skipUniqueIdx[i] = false
-				break
+		if idxDef.Unique {
+			skipUniqueIdx[i] = true
+			for _, part := range idxDef.Parts {
+				if !columnIsNull[part] {
+					skipUniqueIdx[i] = false
+					break
+				}
 			}
+		}
+
+		// if skipUniqueIdx[i] {
+		// 	continue
+		// }
+
+		_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+		colName2Idx[idxTableDef.Name+"."+catalog.IndexTablePrimaryColName] = pkPos
+		argsLen := len(idxDef.Parts)
+		if argsLen == 1 {
+			colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+		} else {
+			args := make([]*plan.Expr, argsLen)
+
+			for k := 0; k < argsLen; k++ {
+				colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
+				args[k] = DeepCopyExpr(projList1[colPos])
+			}
+
+			fnName := "serial"
+			if !idxDef.Unique {
+				fnName = "serial_full"
+			}
+			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+			colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+			projList2 = append(projList2, idxExpr)
 		}
 	}
 
