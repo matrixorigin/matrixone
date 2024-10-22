@@ -592,6 +592,7 @@ func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, de
 	if old, found := cache.Get(usage); found {
 		size = old.Size
 		special = old.special
+		usage.SnapshotSize = old.SnapshotSize
 
 		usage.ObjectAbstract = old.ObjectAbstract
 	}
