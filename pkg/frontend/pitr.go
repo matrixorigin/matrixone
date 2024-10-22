@@ -1996,7 +1996,7 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 				if pitrRecord.level != tree.PITRLEVELCLUSTER.String() {
 					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, the pitr level is not cluster", string(stmt.SrcAccountName), pitrRecord.pitrName)
 				}
-				if stmt.SrcAccountName == sysAccountName && stmt.AccountName != sysAccountName {
+				if (stmt.SrcAccountName == sysAccountName && stmt.AccountName != sysAccountName) || (stmt.SrcAccountName != sysAccountName && stmt.AccountName == sysAccountName) {
 					return moerr.NewInternalErrorNoCtxf("can not restore account %s by pitr %s, source account is sys account", string(stmt.AccountName), pitrRecord.pitrName)
 				}
 			}
