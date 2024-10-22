@@ -520,15 +520,24 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
 
-	if txn.op.Txn().IsRCIsolation() {
-		// each statement's start snapshot
-		// will be used by transfer than between statements
-		txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
-	}
-
 	txn.statementID++
 
-	return txn.handleRCSnapshot(ctx, commit)
+	if !txn.op.Txn().IsRCIsolation() {
+		return nil
+	}
+
+	// each statement's start snapshot
+	// will be used by transfer than between statements
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+
+	if updated, err := txn.handleRCSnapshot(ctx, commit); err != nil {
+		return err
+	} else if updated {
+		// TODO force transfer, skip transfer
+		return txn.transferTombstonesByStatement(ctx)
+	}
+
+	return nil
 }
 
 // writeOffset returns the offset of the first write in the workspace
@@ -768,7 +777,7 @@ func (txn *Transaction) GetSQLCount() uint64 {
 // only 2 cases need to reset snapshot
 // 1. cn sync latest commit ts from mo_ctl
 // 2. not first sql
-func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
+func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
 	needResetSnapshot := false
 	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
@@ -776,18 +785,20 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		needResetSnapshot = true
 	}
 
-	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 0 || needResetSnapshot) {
+	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
 		if err := txn.op.UpdateSnapshot(
 			ctx, timestamp.Timestamp{}); err != nil {
-			return err
+			return false, err
 		}
+
 		txn.resetSnapshot()
+
+		return true, nil
 	}
 
-	return nil
+	return false, nil
 }
 
 // Entry represents a delete/insert

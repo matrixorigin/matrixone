@@ -159,8 +159,6 @@ func (e *Engine) fillDefaults() {
 		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
-
-	fmt.Println(e.config.cnTransferTxnLifespanThreshold.Seconds())
 }
 
 func (e *Engine) GetService() string {

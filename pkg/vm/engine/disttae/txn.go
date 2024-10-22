@@ -1235,6 +1235,18 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 // TODO support transfer between statements.
 func (txn *Transaction) transferTombstonesByStatement(ctx context.Context) error {
 	return nil
+	//var start, end types.TS
+	//
+	//if txn.statementID == 1 {
+	//	start = types.TimestampToTS(txn.timestamps[0])
+	//} else {
+	//	//statementID > 1
+	//	start = types.TimestampToTS(txn.timestamps[txn.statementID-2])
+	//}
+	//
+	//end = types.TimestampToTS(txn.op.SnapshotTS())
+	//
+	//return txn.transferTombstones(ctx, start, end)
 }
 
 func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
