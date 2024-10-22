@@ -1304,6 +1304,7 @@ func forceTransfer(ctx context.Context) bool {
 }
 
 func skipTransfer(ctx context.Context, txn *Transaction) bool {
+	return false
 	return time.Since(txn.start) < txn.engine.config.cnTransferTxnLifespanThreshold
 }
 

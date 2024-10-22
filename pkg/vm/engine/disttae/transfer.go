@@ -87,12 +87,13 @@ func transferTombstoneObjects(
 	start, end types.TS,
 ) (err error) {
 
+	var logs []zap.Field
 	var flow *TransferFlow
 	return txn.forEachTableHasDeletesLocked(
 		true,
 		func(tbl *txnTable) error {
 			now := time.Now()
-			if flow, err = ConstructCNTombstoneObjectsTransferFlow(
+			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end,
 				tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
 				return err
@@ -117,7 +118,7 @@ func transferTombstoneObjects(
 			obj := make([]string, 0, len(statsList))
 			for i := range statsList {
 				fileName := statsList[i].ObjectLocation().String()
-				obj = append(obj, statsList[i].String())
+				obj = append(obj, statsList[i].ObjectName().ObjectId().ShortStringEx())
 				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
 				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 				if err = vector.AppendBytes(
@@ -137,7 +138,7 @@ func transferTombstoneObjects(
 				}
 			}
 
-			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ",
+			logs = append(logs,
 				zap.String("txn-id", txn.op.Txn().DebugString()),
 				zap.String("table",
 					fmt.Sprintf("%s(%d)-%s(%d)",
@@ -145,6 +146,8 @@ func transferTombstoneObjects(
 				zap.Duration("time-spent", time.Since(now)),
 				zap.Int("transferred-row-cnt", flow.transferred),
 				zap.String("new-files", strings.Join(obj, "; ")))
+
+			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
 
 			return nil
 		})
