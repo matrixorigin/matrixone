@@ -1195,7 +1195,7 @@ func FillUsageBatOfCompacted(
 			stats := (objectio.ObjectStats)(buf)
 			key := [3]uint64{accountId, dbid[i], tableID[i]}
 			snapSize := usageData[key].SnapshotSize
-			snapSize += uint64(stats.ObjectLocation().Extent().Length())
+			snapSize += uint64(stats.Size())
 			usageData[key] = UsageData{
 				AccId:        accountId,
 				DbId:         dbid[i],
