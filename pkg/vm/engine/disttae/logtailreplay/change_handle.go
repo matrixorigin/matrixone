@@ -372,7 +372,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
 				logutil.Info("ChangesHandle-CheckGCTS",
-					zap.String("err", err2.Error()),
+					zap.String("err2", fmt.Sprintf("%v", err2)),
 					zap.String("origin err", err.Error()))
 				if err2 != nil {
 					err = err2
