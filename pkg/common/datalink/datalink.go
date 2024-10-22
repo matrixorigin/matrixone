@@ -15,7 +15,6 @@
 package datalink
 
 import (
-	"context"
 	"io"
 	"net/url"
 	"path/filepath"
@@ -52,8 +51,7 @@ func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
 }
 
 func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
-	fs := proc.GetFileService()
-	r, err := d.NewReadCloser(fs, proc.Ctx)
+	r, err := d.NewReadCloser(proc)
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +140,9 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	return moUrl, offsetSize, nil
 }
 
-func (d Datalink) NewReadCloser(fs fileservice.FileService, ctx context.Context) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(ctx, fs, d.MoPath)
+func (d Datalink) NewReadCloser(proc *process.Process) (io.ReadCloser, error) {
+	fs := proc.GetFileService()
+	fs, readPath, err := fileservice.GetForETL(proc.Ctx, fs, d.MoPath)
 	if fs == nil || err != nil {
 		return nil, err
 	}
@@ -158,7 +157,7 @@ func (d Datalink) NewReadCloser(fs fileservice.FileService, ctx context.Context)
 			},
 		},
 	}
-	err = fs.Read(ctx, &vec)
+	err = fs.Read(proc.Ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
