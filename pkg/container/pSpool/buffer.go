@@ -85,9 +85,10 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 func (b *spoolBuffer) getCacheID() int8 {
 	b.Lock()
 	k := len(b.cacheIndexReadyToUse) - 1
+	index := b.cacheIndexReadyToUse[k]
 	b.cacheIndexReadyToUse = b.cacheIndexReadyToUse[:k]
 	b.Unlock()
-	return int8(k)
+	return index
 }
 
 func (b *spoolBuffer) clean(mp *mpool.MPool) {
