@@ -24,9 +24,12 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -270,7 +273,7 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			return
+			logutil.Error("close conn error", zap.Error(err))
 		}
 		c.ses = nil
 		rm := getRtMgr(c.service)
