@@ -168,15 +168,14 @@ func checkTombstoneMeta(tombstoneMeta objectio.ObjectDataMeta, objectId *objecti
 		columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
 		// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 		// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-		if !columnZonemap.RowidPrefixEq(prefixPattern) {
-			if columnZonemap.RowidPrefixGT(prefixPattern) {
-				// all zone maps are sorted by the rowid
-				// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
-				break
-			}
-			continue
+		if columnZonemap.RowidPrefixEq(prefixPattern) {
+			return true
 		}
-		return true
+		if columnZonemap.RowidPrefixGT(prefixPattern) {
+			// all zone maps are sorted by the rowid
+			// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			break
+		}
 	}
 	return false
 }
