@@ -907,13 +907,6 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 		return nil, false
 	}
 
-	second := int64(time.Now().Second())
-	if s.ApproxObjectNumber != 0 && second-s.TimeSecond < s.ApproxObjectNumber {
-		// do not call ApproxObjectsNum within a short time limit
-		return s, false
-	}
-	s.TimeSecond = second
-
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -931,6 +924,18 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 			}
 		}
 	}
+
+	second := time.Now().Unix()
+	var diff int64 = 3
+	if partitionInfo != nil {
+		diff = 30
+	}
+	if s.ApproxObjectNumber > 0 && second-s.TimeSecond < diff {
+		// do not call ApproxObjectsNum within a short time limit
+		return s, false
+	}
+	s.TimeSecond = second
+
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
