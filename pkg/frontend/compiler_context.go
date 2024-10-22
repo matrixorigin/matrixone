@@ -248,7 +248,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snap
 	return databaseId, nil
 }
 
-func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+func (tcc *TxnCompilerContext) GetConfig(varName string, dbName string, tblName string) (string, error) {
 	switch varName {
 	case "unique_check_on_autoincr":
 		// check if the database is a system database
@@ -257,7 +257,7 @@ func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (
 			if _, ok := ses.(*backSession); ok {
 				return "None", nil
 			}
-			ret, err := ses.GetConfig(tcc.GetContext(), dbName, varName)
+			ret, err := ses.GetConfig(tcc.GetContext(), varName, dbName, tblName)
 			if err != nil {
 				return "", err
 			}
@@ -907,13 +907,6 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 		return nil, false
 	}
 
-	second := int64(time.Now().Second())
-	if s.ApproxObjectNumber != 0 && second-s.TimeSecond < s.ApproxObjectNumber {
-		// do not call ApproxObjectsNum within a short time limit
-		return s, false
-	}
-	s.TimeSecond = second
-
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
@@ -931,6 +924,18 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 			}
 		}
 	}
+
+	second := time.Now().Unix()
+	var diff int64 = 3
+	if partitionInfo != nil {
+		diff = 30
+	}
+	if s.ApproxObjectNumber > 0 && second-s.TimeSecond < diff {
+		// do not call ApproxObjectsNum within a short time limit
+		return s, false
+	}
+	s.TimeSecond = second
+
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {

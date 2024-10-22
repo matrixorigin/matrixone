@@ -130,10 +130,6 @@ type Session struct {
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
 
-	// db/tbl level config store in mo_mysql_compatibility_mode, need to read and write through SQL
-	// this map is maintained at the session level to cache configuration results.
-	configs map[string]interface{}
-
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
@@ -147,8 +143,7 @@ type Session struct {
 
 	cache *privilegeCache
 
-	mu   sync.Mutex
-	rwmu sync.RWMutex
+	mu sync.Mutex
 
 	lastInsertID uint64
 
@@ -553,7 +548,6 @@ func NewSession(
 		statsCache:   plan2.NewStatsCache(),
 	}
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
-	ses.configs = make(map[string]interface{})
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -1026,50 +1020,32 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 	return val, nil
 }
 
-// SetUserDefinedVar sets the config to the value in session
-func (ses *Session) SetConfig(dbName, varName string, valValue any) error {
-	ses.rwmu.Lock()
-	defer ses.rwmu.Unlock()
-
-	// TODO : validate the config name and value
-	ses.configs[dbName+"-"+varName] = valValue
-	return nil
-}
-
 // GetUserDefinedVar gets value of the config
-func (ses *Session) GetConfig(ctx context.Context, dbName, varName string) (any, error) {
-	ses.rwmu.RLock()
-	defer ses.rwmu.RUnlock()
-	if val, ok := ses.configs[dbName+"-"+varName]; ok {
-		return val, nil
-	}
-	if varName == "unique_check_on_autoincr" {
-		ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
-		if err != nil {
-			return nil, err
-		}
-		ses.configs[dbName+"-"+varName] = ret
-		return ret, nil
-	}
+func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
+	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
+	// 	return val, nil
+	// }
+	// if varName == "unique_check_on_autoincr" {
+	// 	ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	ses.configs[dbName+"-"+varName] = ret
+	// 	return ret, nil
+	// }
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
 func (ses *Session) SetCreateVersion(version string) {
-	ses.rwmu.Lock()
-	defer ses.rwmu.Unlock()
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	ses.createVersion = version
 }
 
 func (ses *Session) GetCreateVersion() string {
-	ses.rwmu.RLock()
-	defer ses.rwmu.RUnlock()
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	return ses.createVersion
-}
-
-func (ses *Session) DeleteConfig(ctx context.Context, dbName, varName string) {
-	ses.rwmu.Lock()
-	defer ses.rwmu.Unlock()
-	delete(ses.configs, dbName+"-"+varName)
 }
 
 func (ses *Session) GetTxnInfo() string {
@@ -1719,10 +1695,8 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 }
 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
-	ses.ResetFPrints()
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
-	defer ses.ResetFPrints()
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx

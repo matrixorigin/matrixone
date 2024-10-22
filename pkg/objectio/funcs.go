@@ -218,8 +218,7 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.DefaultCacheDataAllocator().AllocateCacheData(buf.Len())
-				copy(cacheData.Bytes(), buf.Bytes())
+				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}
 		}

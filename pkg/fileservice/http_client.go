@@ -52,7 +52,6 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 
 	// transport
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           dialer.DialContext,
 		MaxIdleConns:          maxIdleConns,
 		IdleConnTimeout:       idleConnTimeout,
@@ -60,7 +59,8 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		MaxConnsPerHost:       maxConnsPerHost,
 		TLSHandshakeTimeout:   connectTimeout,
 		ResponseHeaderTimeout: readWriteTimeout,
-		ForceAttemptHTTP2:     true,
+		//Proxy:                 http.ProxyFromEnvironment,
+		//ForceAttemptHTTP2:     true,
 	}
 
 	// custom certs
