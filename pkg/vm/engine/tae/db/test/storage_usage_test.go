@@ -99,7 +99,7 @@ func Test_StorageUsageCache(t *testing.T) {
 
 			size, _, exist := cache.GatherAccountSize(accId)
 			require.True(t, exist)
-			require.Equal(t, gathered[accId], size)
+			require.Equal(t, gathered[accId][0], size)
 		}
 
 		require.Equal(t, uint64(0), totalSize)

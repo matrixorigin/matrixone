@@ -144,11 +144,10 @@ func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result 
 
 			for z := 0; z < tblCnt; z++ {
 				result = append(result, UsageData{
-					AccId:        accId,
-					DbId:         dbId,
-					TblId:        allocator.Add(1),
-					Size:         uint64(rand.Int63() % 0x3fff),
-					SnapshotSize: uint64(rand.Int63() % 0x3fff),
+					AccId: accId,
+					DbId:  dbId,
+					TblId: allocator.Add(1),
+					Size:  uint64(rand.Int63() % 0x3fff),
 				})
 			}
 		}
@@ -1171,6 +1170,7 @@ func FillUsageBatOfCompacted(
 		accountSnapshots,
 		pitrs,
 	)
+	objectsName := make(map[string]struct{})
 	scan := func(bat *containers.Batch) {
 		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
 			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
@@ -1193,6 +1193,10 @@ func FillUsageBatOfCompacted(
 			}
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
+			// skip the same object
+			if _, ok := objectsName[stats.ObjectName().String()]; ok {
+				continue
+			}
 			key := [3]uint64{accountId, dbid[i], tableID[i]}
 			snapSize := usageData[key].SnapshotSize
 			snapSize += uint64(stats.Size())
@@ -1202,6 +1206,8 @@ func FillUsageBatOfCompacted(
 				TblId:        tableID[i],
 				SnapshotSize: snapSize,
 			}
+
+			objectsName[stats.ObjectName().String()] = struct{}{}
 		}
 	}
 	scan(objects)
