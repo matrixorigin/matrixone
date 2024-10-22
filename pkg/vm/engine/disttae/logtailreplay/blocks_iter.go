@@ -17,14 +17,11 @@ package logtailreplay
 import (
 	"bytes"
 	"fmt"
-	"strings"
-
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -197,22 +194,6 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	return false
 }
 
-func (p *PartitionState) LogAllDataObjects() string {
-	var log []string
-	iter := p.dataObjectsNameIndex.Copy().Iter()
-	defer iter.Release()
-
-	for iter.Next() {
-		entry := iter.Item()
-		log = append(log, fmt.Sprintf("%s|%s|%s",
-			entry.ObjectName().ObjectId().ShortStringEx(),
-			entry.CreateTime.ToString(),
-			entry.DeleteTime.ToString()))
-	}
-
-	return strings.Join(log, "; ")
-}
-
 func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
 ) (insertList, deletedList []objectio.ObjectStats) {
@@ -270,62 +251,6 @@ func (p *PartitionState) CollectObjectsBetween(
 
 	return
 }
-
-//func (p *PartitionState) CollectObjectsBetween(
-//	start, end types.TS,
-//	collectDeleted bool,
-//) (stats []objectio.ObjectStats) {
-//
-//	iter := p.dataObjectTSIndex.Copy().Iter()
-//	defer iter.Release()
-//
-//	if !iter.Seek(ObjectIndexByTSEntry{
-//		Time: start,
-//	}) {
-//		return
-//	}
-//
-//	nameIdx := p.dataObjectsNameIndex.Copy()
-//
-//	for ok := true; ok; ok = iter.Next() {
-//		entry := iter.Item()
-//
-//		var ss objectio.ObjectStats
-//		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
-//
-//		val, exist := nameIdx.Get(ObjectEntry{
-//			ObjectInfo{
-//				ObjectStats: ss,
-//			},
-//		})
-//
-//		if !exist {
-//			continue
-//		}
-//
-//		if !collectDeleted {
-//			// if deleted before end
-//			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
-//				continue
-//			}
-//		} else {
-//			// only collect deletes
-//			// if not delete or delete after end
-//			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
-//				continue
-//			}
-//		}
-//
-//		// if created not in [start, end]
-//		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
-//			continue
-//		}
-//
-//		stats = append(stats, val.ObjectStats)
-//	}
-//
-//	return
-//}
 
 func (p *PartitionState) CheckIfObjectDeletedBeforeTS(
 	ts types.TS,
