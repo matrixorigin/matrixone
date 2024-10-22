@@ -869,7 +869,7 @@ func NewOBCUConfig() *OBCUConfig {
 		MemPrice:      CUMemPriceDefault,
 		IoInPrice:     CUIOInPriceDefault,
 		IoOutPrice:    CUIOOutPriceDefault,
-		IoListPrice:   0,  // default as OBCUConfig.IoInPrice
+		IoListPrice:   -1, // default as OBCUConfig.IoInPrice
 		IoDeletePrice: -1, // default as OBCUConfig.IoInPrice
 		TrafficPrice0: CUTrafficPrice0Default,
 		TrafficPrice1: CUTrafficPrice1Default,
@@ -898,7 +898,7 @@ func (c *OBCUConfig) SetDefaultValues() {
 	if c.IoListPrice <= 0 {
 		c.IoListPrice = c.IoInPrice
 	}
-	// default as c.IoInPrice
+	// default as c.IoInPrice, allow value: 0
 	if c.IoDeletePrice < 0 {
 		c.IoDeletePrice = c.IoInPrice
 	}
