@@ -41,25 +41,25 @@ type cowSlice struct {
 
 func newCowSlice(
 	fsp *fixedSlicePool,
-	values [][]byte) *cowSlice {
+	values [][]byte) (*cowSlice, error) {
 	cs := reuse.Alloc[cowSlice](nil)
 	cs.fsp = fsp
 	fs, err := fsp.acquire(len(values))
 	if err != nil {
-		// TODO
+		return cs, err
 	}
 	fs.append(values)
 	cs.fs.Store(fs)
-	return cs
+	return cs, nil
 }
 
-func (cs *cowSlice) append(values [][]byte) {
+func (cs *cowSlice) append(values [][]byte) error {
 	old := cs.mustGet()
 	capacity := old.cap()
 	newLen := len(values) + old.len()
 	if capacity >= newLen {
 		old.append(values)
-		return
+		return nil
 	}
 
 	// COW(copy-on-write), which needs to be copied once for each expansion, but for
@@ -67,10 +67,11 @@ func (cs *cowSlice) append(values [][]byte) {
 	// overhead can be ignored.
 	new, err := cs.fsp.acquire(newLen)
 	if err != nil {
-		//TODO
+		return err
 	}
 	new.join(old, values)
 	cs.replace(old, new)
+	return nil
 }
 
 func (cs *cowSlice) replace(old, new *fixedSlice) {
@@ -222,7 +223,7 @@ func (sp *fixedSlicePool) acquire(n int) (*fixedSlice, error) {
 	n = roundUp(n)
 	i := int(math.Log2(float64(n)))
 	if i >= len(sp.slices) {
-		return nil, moerr.NewInternalErrorNoCtxf("too large fixed slice %d, max is %d", n, 1<<(len(sp.slices)-1))
+		return nil, moerr.NewLockNeedUpgradeNoCtx()
 	}
 	s := sp.slices[i].Get().(*fixedSlice)
 	s.ref()
@@ -234,7 +235,7 @@ func (sp *fixedSlicePool) release(s *fixedSlice) error {
 	n := s.cap()
 	i := int(math.Log2(float64(n)))
 	if i >= len(sp.slices) {
-		return moerr.NewInternalErrorNoCtxf("too large fixed slice %d, max is %d", n, 2<<(len(sp.slices)-1))
+		return moerr.NewLockNeedUpgradeNoCtx()
 	}
 	sp.slices[i].Put(s)
 	return nil

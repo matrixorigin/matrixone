@@ -75,7 +75,9 @@ func init() {
 		},
 		func(cs *cowSlice) {
 			cs.v.Store(0)
-			cs.mustGet().unref()
+			if fs := cs.fs.Load(); fs != nil {
+				fs.(*fixedSlice).unref()
+			}
 		},
 		reuse.DefaultOptions[cowSlice]().
 			WithEnableChecker())

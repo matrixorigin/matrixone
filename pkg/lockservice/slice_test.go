@@ -17,6 +17,7 @@ package lockservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/stretchr/testify/assert"
 )
@@ -54,6 +55,7 @@ func TestAcquire(t *testing.T) {
 
 		fs, err = fsp.acquire(1024)
 		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 		assert.Nil(t, fs)
 	})
 }
@@ -71,6 +73,7 @@ func TestRelease(t *testing.T) {
 		fs.values = make([][]byte, 1024)
 		err = fsp.release(fs)
 		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 	})
 }
 
@@ -164,13 +167,15 @@ func TestFixedSliceIter(t *testing.T) {
 func TestCowSliceAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}, {2}, {3}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}, {2}, {3}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		assert.Equal(t, 4, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
-		cs.append([][]byte{{4}})
+		err = cs.append([][]byte{{4}})
+		assert.NoError(t, err)
 		assert.Equal(t, 4, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
@@ -182,13 +187,15 @@ func TestCowSliceAppend(t *testing.T) {
 func TestCowSliceAppendWithCow(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		assert.Equal(t, 1, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(2), fsp.acquireV.Load())
 
@@ -200,12 +207,14 @@ func TestCowSliceAppendWithCow(t *testing.T) {
 func TestCowSliceRead(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 
 		s := cs.slice()
 		assert.Equal(t, [][]byte{{1}}, s.values[:s.len()])
 
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, uint64(0), fsp.releaseV.Load())
 
 		assert.Equal(t, [][]byte{{1}}, s.values[:s.len()])
@@ -220,7 +229,8 @@ func TestCowSliceRead(t *testing.T) {
 func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		var s *fixedSlice
@@ -231,7 +241,8 @@ func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 			}
 			n++
 		}
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, n)
 		assert.Equal(t, uint64(1), fsp.releaseV.Load())
 	})
@@ -240,7 +251,8 @@ func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		old := cs.fs.Load().(*fixedSlice)
@@ -252,7 +264,8 @@ func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 			}
 			n++
 		}
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, n)
 		assert.Equal(t, uint64(0), fsp.releaseV.Load())
 
@@ -264,13 +277,15 @@ func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 func TestCowSliceSliceReadConcurrentWithAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		n := 0
 		cs.hack.slice = func() {
 			if n == 0 {
-				cs.append([][]byte{{2}})
+				err = cs.append([][]byte{{2}})
+				assert.NoError(t, err)
 			}
 			n++
 		}

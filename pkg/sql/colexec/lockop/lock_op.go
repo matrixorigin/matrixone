@@ -461,6 +461,18 @@ func doLock(
 		if !canRetryLock(table, txnOp, err) {
 			break
 		}
+		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			opts.lockTable = true
+			_, rows, _ = fetchFunc(
+				vec,
+				opts.parker,
+				pkType,
+				opts.maxCountPerLock,
+				opts.lockTable,
+				opts.filter,
+				opts.filterCols,
+			)
+		}
 	}
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
@@ -603,7 +615,8 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
