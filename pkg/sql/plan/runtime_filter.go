@@ -155,8 +155,8 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				if ctx == nil {
 					return
 				}
-				if scanID, ok := builder.tag2NodeID[col.Col.RelPos]; ok {
-					tableDef := builder.qry.Nodes[scanID].TableDef
+				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
 					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 						if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 							return

@@ -169,8 +169,7 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
-	tag2Table  map[int32]*TableDef
-	tag2NodeID map[int32]int32
+	tag2Table map[int32]*TableDef
 
 	nextTag    int32
 	nextMsgTag int32
