@@ -513,7 +513,31 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	return datalink.ReadFromFileOffsetSize(Filepath, fs, 0, -1)
+	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
+}
+
+func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
+	if fs == nil || err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	ctx := context.TODO()
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            offset, //0 - default
+				Size:              size,   //-1 - default
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+	err = fs.Read(ctx, &vec)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // Too confused.
@@ -575,7 +599,7 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		err = func() error {
-			r, err := datalink.ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
 			if err != nil {
 				return err
 			}
