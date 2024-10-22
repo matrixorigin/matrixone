@@ -33,6 +33,7 @@ import (
 const (
 	// DefaultMaxAllowedPacket of mysql is 64 MB
 	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
+	SqlBufReserved                 = 128
 	DefaultRetryTimes              = -1
 	DefaultRetryDuration           = 30 * time.Minute
 
@@ -470,7 +471,7 @@ func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err er
 	}
 
 	// when len(sql) == max_allowed_packet, mysql will return error, so add equal here
-	if len(s.sqlBuf)+commaLen+len(s.rowBuf)+parLen >= cap(s.sqlBuf) {
+	if len(s.sqlBuf)+commaLen+len(s.rowBuf)+parLen+SqlBufReserved > cap(s.sqlBuf) {
 		if rowType == DeleteRow {
 			s.sqlBuf = appendByte(s.sqlBuf, ')')
 		}
