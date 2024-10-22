@@ -225,8 +225,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	readBlockCnt uint64
-	threshHold   uint64
+	readBlockCnt uint64 // count of blocks this reader has read
+	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
