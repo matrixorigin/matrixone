@@ -62,6 +62,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nextTag:            0,
 		mysqlCompatible:    mysqlCompatible,
 		tag2Table:          make(map[int32]*TableDef),
+		tag2NodeID:         make(map[int32]int32),
 		isPrepareStatement: isPrepareStatement,
 		deleteNode:         make(map[uint64]int32),
 		skipStats:          skipStats,
@@ -3706,6 +3707,9 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	ReCalcNodeStats(nodeID, builder, false, true, true)
+	for _, tag := range node.BindingTags {
+		builder.tag2NodeID[tag] = nodeID
+	}
 	return nodeID
 }
 
