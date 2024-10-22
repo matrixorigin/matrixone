@@ -165,8 +165,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					if builder.getColOverlap(col.Col) > overlapThreshold {
 						return
 					}
-				} else {
-					return
 				}
 			default:
 				return
