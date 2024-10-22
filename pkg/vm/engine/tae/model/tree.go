@@ -400,31 +400,15 @@ func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	if cnt != 0 {
 		for i := 0; i < int(cnt); i++ {
 			id := objectio.NewObjectid()
-			if ver < MemoTreeVersion2 {
-				objs, tmpn, err := ReadObjectTreesV1(r)
-				if err != nil {
-					return n, err
-				}
-				for _, obj := range objs {
-					ttree.Objs[*obj.ID] = obj
-				}
-				n += tmpn
-
-			} else if ver < MemoTreeVersion3 {
-				obj := NewObjectTree(id)
-				if tmpn, err = obj.ReadFromV2(r); err != nil {
-					return
-				}
-				ttree.Objs[*obj.ID] = obj
-				n += tmpn
-			} else {
+			if ver == MemoTreeVersion3 {
 				obj := NewObjectTree(id)
 				if tmpn, err = obj.ReadFromV3(r); err != nil {
 					return
 				}
 				ttree.Objs[*obj.ID] = obj
 				n += tmpn
-
+			} else {
+				panic("not supported")
 			}
 		}
 	}
@@ -507,61 +491,6 @@ func (stree *ObjectTree) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(types.ObjectidSize)
-	return
-}
-
-func ReadObjectTreesV1(r io.Reader) (strees []*ObjectTree, n int64, err error) {
-	segmentID := new(types.Segmentid)
-	if _, err = r.Read(segmentID[:]); err != nil {
-		return
-	}
-	n += int64(types.ObjectidSize)
-	var cnt uint32
-	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
-		return
-	}
-	n += 4
-	if cnt == 0 {
-		return
-	}
-	numSeqMap := make(map[uint16][]uint16)
-	var id keyT
-	for i := 0; i < int(cnt); i++ {
-		if _, err = r.Read(encodeKey(&id)); err != nil {
-			return
-		}
-		seqs, ok := numSeqMap[id.Num]
-		if !ok {
-			seqs = make([]uint16, 0)
-		}
-		seqs = append(seqs, id.Seq)
-		numSeqMap[id.Num] = seqs
-	}
-	n += 4 * int64(cnt)
-
-	return
-}
-
-func (stree *ObjectTree) ReadFromV2(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(stree.ID[:]); err != nil {
-		return
-	}
-	n += int64(types.ObjectidSize)
-	var cnt uint32
-	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
-		return
-	}
-	n += 4
-	if cnt == 0 {
-		return
-	}
-	var id uint16
-	for i := 0; i < int(cnt); i++ {
-		if _, err = r.Read(types.EncodeUint16(&id)); err != nil {
-			return
-		}
-	}
-	n += 4 * int64(cnt)
 	return
 }
 
