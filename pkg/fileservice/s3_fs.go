@@ -154,6 +154,17 @@ func (s *S3FS) AllocateCacheData(size int) fscache.Data {
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
+func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(
+			len(data),
+			// evict at least 1/100 capacity to reduce number of evictions
+			int(s.memCache.cache.Capacity()/100),
+		)
+	}
+	return DefaultCacheDataAllocator().CopyToCacheData(data)
+}
+
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
@@ -459,7 +470,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	LogEvent(ctx, str_s3fs_read, vector)
 	defer func() {
 		LogEvent(ctx, str_read_return)
-		LogSlowEvent(ctx, time.Second*5)
+		LogSlowEvent(ctx, time.Millisecond*500)
 	}()
 
 	tp := reuse.Alloc[tracePoint](nil)
