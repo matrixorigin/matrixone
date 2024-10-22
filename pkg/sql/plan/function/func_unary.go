@@ -33,6 +33,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
@@ -512,31 +513,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
-}
-
-func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
-	if fs == nil || err != nil {
-		return nil, err
-	}
-	var r io.ReadCloser
-	ctx := context.TODO()
-	vec := fileservice.IOVector{
-		FilePath: readPath,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            offset, //0 - default
-				Size:              size,   //-1 - default
-				ReadCloserForRead: &r,
-			},
-		},
-	}
-	err = fs.Read(ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
+	return datalink.ReadFromFileOffsetSize(Filepath, fs, 0, -1)
 }
 
 // Too confused.
@@ -592,13 +569,13 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		filePath := util.UnsafeBytesToString(_filePath)
 		fs := proc.GetFileService()
 
-		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
+		moUrl, offsetSize, err := datalink.ParseDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
 
 		err = func() error {
-			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+			r, err := datalink.ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
 			if err != nil {
 				return err
 			}
@@ -647,7 +624,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		moUrl, _, err := ParseDatalink(filePath, proc)
+		moUrl, _, err := datalink.ParseDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
@@ -662,7 +639,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		content := util.UnsafeBytesToString(_content)
 
 		err = func() error {
-			writer, err := NewFileServiceWriter(moUrl, proc)
+			writer, err := fileservice.NewFileServiceWriter(moUrl, proc.Ctx)
 			if err != nil {
 				return err
 			}

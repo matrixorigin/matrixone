@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -802,7 +803,7 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 				}
 				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_datalink {
-				_, _, err1 := function.ParseDatalink(sval, proc)
+				_, _, err1 := datalink.ParseDatalink(sval, proc)
 				if err1 != nil {
 					return nil, err1
 				}

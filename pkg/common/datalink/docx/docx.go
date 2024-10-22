@@ -139,7 +139,7 @@ func openWordFile(filename string) ([]byte, error) {
 	return nil, nil
 }
 
-func GetContent(data []byte) ([]byte, error) {
+func GetPlainText(data []byte) ([]byte, error) {
 	doc, err := ParseTextFromReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err

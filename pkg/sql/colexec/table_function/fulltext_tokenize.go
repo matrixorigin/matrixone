@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/document"
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -134,7 +134,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
 				// datalink
-				b, err := document.GetContentFromURL(data, proc)
+				b, err := datalink.GetPlainText(data, proc)
 				if err != nil {
 					return err
 				}

@@ -20,7 +20,7 @@ import (
 	gopdf "github.com/dslipak/pdf"
 )
 
-func GetContent(data []byte) ([]byte, error) {
+func GetPlainText(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	pdfr, err := gopdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
