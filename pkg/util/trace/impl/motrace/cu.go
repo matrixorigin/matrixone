@@ -149,6 +149,20 @@ func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
 	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
 }
 
+func CalculateCUIOList(ioCnt float64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cfg = GetCUConfig()
+	}
+	return ioCnt * cfg.IoListPrice / cfg.CUUnit
+}
+
+func CalculateCUIODelete(ioCnt float64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cfg = GetCUConfig()
+	}
+	return ioCnt * cfg.IoDeletePrice / cfg.CUUnit
+}
+
 func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cfg = GetCUConfig()

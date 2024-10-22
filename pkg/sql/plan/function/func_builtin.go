@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2387,9 +2388,11 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "mem":
 			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg) +
+				motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
+				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
 		case "network":
 			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
 		case "total":
