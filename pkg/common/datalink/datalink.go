@@ -87,11 +87,7 @@ func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
 
 func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
 
-	writer, err := fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
-	if err != nil {
-		return nil, err
-	}
-	return writer, nil
+	return fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
 }
 
 // ParseDatalink extracts data from a Datalink string
