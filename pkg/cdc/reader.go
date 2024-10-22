@@ -140,6 +140,12 @@ func (reader *tableReader) readTable(
 	defer func() {
 		FinishTxnOp(ctx, err, txnOp, reader.cnEngine)
 	}()
+
+	EnterRunSql(txnOp)
+	defer func() {
+		ExitRunSql(txnOp)
+	}()
+
 	err = GetTxn(ctx, reader.cnEngine, txnOp)
 	if err != nil {
 		return err
