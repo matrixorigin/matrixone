@@ -1026,6 +1026,7 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			// need to close them to avoid goroutine leak
 			close(cdc.activeRoutine.Pause)
 			close(cdc.activeRoutine.Cancel)
+			mpool.DeleteMPool(cdc.mp)
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1354,6 +1355,7 @@ func (cdc *CdcTask) Pause() (err error) {
 	}()
 
 	close(cdc.activeRoutine.Pause)
+	mpool.DeleteMPool(cdc.mp)
 	return
 }
 
@@ -1369,6 +1371,7 @@ func (cdc *CdcTask) Cancel() (err error) {
 	}()
 
 	close(cdc.activeRoutine.Cancel)
+	mpool.DeleteMPool(cdc.mp)
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
