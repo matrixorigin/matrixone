@@ -341,6 +341,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !s.canRemote(c, true) {
 		return s.MergeRun(c)
 	}
+	if !checkPipelineStandaloneExecutableAtRemote(s) {
+		return s.MergeRun(c)
+	}
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",

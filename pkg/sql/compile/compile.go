@@ -817,7 +817,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL())
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -2261,8 +2261,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
-	isEq := plan2.IsEquiJoin2(node.OnList)
-	if !isEq {
+	if !plan2.IsEquiJoin2(node.OnList) {
 		panic("shuffle join only support equal join for now!")
 	}
 
@@ -2704,18 +2703,18 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
 		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
 			// get limit
-			vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Limit)
 			if err != nil {
 				panic(err)
 			}
-			defer vec1.Free(c.proc.Mp())
+			defer free1()
 
 			// get offset
-			vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
+			vec2, free2, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Offset)
 			if err != nil {
 				panic(err)
 			}
-			defer vec2.Free(c.proc.Mp())
+			defer free2()
 
 			limit, offset := vector.MustFixedColWithTypeCheck[uint64](vec1)[0], vector.MustFixedColWithTypeCheck[uint64](vec2)[0]
 			topN := limit + offset
@@ -3756,28 +3755,20 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 		return 1
 	}
 	ret := blocks/16 + 1
-	if ret < cpunum {
-		if cpunum > 4 && ret < 4 {
-			return 4
-		}
+	if c.isPrepare {
+		ret = blocks/64 + 1
+	}
+	if ret <= cpunum {
 		return ret
 	}
 	return cpunum
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
-		return true
+	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
+		return true //avoid bugs
 	}
-
-	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
-		return true
-	}
-
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
 func collectTombstones(
@@ -3944,9 +3935,9 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(&blk)
+						relData.AppendBlockInfo(blk)
 						return true, nil
 					})
 			}
@@ -3966,9 +3957,9 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
-						relData.AppendBlockInfo(&blk)
+						relData.AppendBlockInfo(blk)
 						return true, nil
 					})
 			}
@@ -4102,13 +4093,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
-			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
-					newRelData.AppendBlockInfo(&blk)
+					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
 				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
@@ -4147,8 +4138,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	engineType := rel.GetEngineType()
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
+	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
@@ -4201,7 +4192,7 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 	return partialResults, partialResultTypes, columnMap
 }
 
-func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
+func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
 	if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 		partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 		return nil
@@ -4572,16 +4563,16 @@ func removeEmtpyNodes(
 	rel engine.Relation,
 	relData engine.RelData,
 	nodes engine.Nodes) (engine.Nodes, error) {
-	minWorkLoad := math.MaxInt32
-	maxWorkLoad := 0
+	minCnt := math.MaxInt32
+	maxCnt := 0
 	// remove empty node from nodes
-	var newNodes engine.Nodes
+	var newnodes engine.Nodes
 	for i := range nodes {
-		if nodes[i].Data.DataCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() > maxCnt {
+			maxCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
-		if nodes[i].Data.DataCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() < minCnt {
+			minCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4591,23 +4582,23 @@ func removeEmtpyNodes(
 				}
 				nodes[i].Data.AttachTombstones(tombstone)
 			}
-			newNodes = append(newNodes, nodes[i])
+			newnodes = append(newnodes, nodes[i])
 		}
 	}
-	if minWorkLoad*2 < maxWorkLoad {
+	if minCnt*2 < maxCnt {
 		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
 			n.TableDef.Name,
 			relData.DataCnt(),
-			len(newNodes),
-			maxWorkLoad,
-			minWorkLoad)
+			len(newnodes),
+			maxCnt,
+			minCnt)
 		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
 		}
 		c.proc.Warn(c.proc.Ctx, logstring)
 	}
-	return newNodes, nil
+	return newnodes, nil
 }
 
 func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
@@ -4615,25 +4606,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
-	// only memory table block
-	if relData.DataCnt() == 1 {
-		return nodes, nil
-	}
-	// only one cn
-	if len(c.cnList) == 1 {
-		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk objectio.BlockInfo) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(&blk)
-				return true, nil
-			})
-
-		return nodes, nil
-	}
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
@@ -4641,7 +4618,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
 				Data: relData.BuildEmptyRelData(),
 			})
 		}
@@ -4668,52 +4645,15 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	}
 
 	return removeEmtpyNodes(c, n, rel, relData, nodes)
-
-	//minWorkLoad := math.MaxInt32
-	//maxWorkLoad := 0
-	//// remove empty node from nodes
-	//var newNodes engine.Nodes
-	//for i := range nodes {
-	//	if nodes[i].Data.DataCnt() > maxWorkLoad {
-	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() < minWorkLoad {
-	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() > 0 {
-	//		if nodes[i].Addr != c.addr {
-	//			tombstone, err := collectTombstones(c, n, rel)
-	//			if err != nil {
-	//				return nil, err
-	//			}
-	//			nodes[i].Data.AttachTombstones(tombstone)
-	//		}
-	//		newNodes = append(newNodes, nodes[i])
-	//	}
-	//}
-	//if minWorkLoad*2 < maxWorkLoad {
-	//	logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
-	//		n.TableDef.Name,
-	//		relData.DataCnt(),
-	//		len(newNodes),
-	//		maxWorkLoad,
-	//		minWorkLoad)
-	//	logstring = logstring + " cnlist: "
-	//	for i := range c.cnList {
-	//		logstring = logstring + c.cnList[i].Addr + " "
-	//	}
-	//	c.proc.Warnf(c.proc.Ctx, logstring)
-	//}
-	//return newNodes, nil
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
 			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-			nodes[index].Data.AppendBlockInfo(&blk)
+			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 }
@@ -4735,8 +4675,8 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 		1,
 		cnt,
 		relData,
-		func(blk objectio.BlockInfo) (bool, error) {
-			nodes[1].Data.AppendBlockInfo(&blk)
+		func(blk *objectio.BlockInfo) (bool, error) {
+			nodes[1].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 
@@ -4753,7 +4693,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var index uint64
 
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 			if err != nil {
@@ -4769,7 +4709,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 			if !zm.IsInited() {
 				// a block with all null will send to first CN
-				nodes[0].Data.AppendBlockInfo(&blk)
+				nodes[0].Data.AppendBlockInfo(blk)
 				return false, nil
 			}
 			if !init {
@@ -4788,19 +4728,19 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			} else {
 				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 			}
-			nodes[index].Data.AppendBlockInfo(&blk)
+			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
 
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, relData engine.RelData) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	nodes[0].Data = relData
 	return nodes
