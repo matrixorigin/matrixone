@@ -926,6 +926,7 @@ func RegisterCdcExecutor(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
+	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
 		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
@@ -951,6 +952,7 @@ func RegisterCdcExecutor(
 			fileService,
 			cnTxnClient,
 			cnEngine,
+			cnEngMp,
 		)
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
 		if err = attachToTask(ctx, T.GetID(), cdc); err != nil {
@@ -995,6 +997,7 @@ func NewCdcTask(
 	fileService fileservice.FileService,
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
+	cdcMp *mpool.MPool,
 ) *CdcTask {
 	return &CdcTask{
 		logger:      logger,
@@ -1004,6 +1007,7 @@ func NewCdcTask(
 		fileService: fileService,
 		cnTxnClient: cnTxnClient,
 		cnEngine:    cnEngine,
+		mp:          cdcMp,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -1026,7 +1030,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 			// need to close them to avoid goroutine leak
 			close(cdc.activeRoutine.Pause)
 			close(cdc.activeRoutine.Cancel)
-			mpool.DeleteMPool(cdc.mp)
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1066,13 +1069,9 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		dbTableInfos = append(dbTableInfos, info)
 	}
 
-	// new mpool
-	if cdc.mp, err = mpool.NewMPool("cdc-"+cdc.cdcTask.TaskName, 0, mpool.NoFixed); err != nil {
-		return
-	}
-
-	if err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos); err != nil {
-		return
+	err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos)
+	if err != nil {
+		return err
 	}
 
 	if firstTime {
@@ -1355,7 +1354,6 @@ func (cdc *CdcTask) Pause() (err error) {
 	}()
 
 	close(cdc.activeRoutine.Pause)
-	mpool.DeleteMPool(cdc.mp)
 	return
 }
 
@@ -1371,7 +1369,6 @@ func (cdc *CdcTask) Cancel() (err error) {
 	}()
 
 	close(cdc.activeRoutine.Cancel)
-	mpool.DeleteMPool(cdc.mp)
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
