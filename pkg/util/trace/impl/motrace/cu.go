@@ -181,8 +181,8 @@ func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) f
 	return traffic / cfg.CUUnit
 }
 
-var cuCfg = config.NewOBCUConfig()
-var cuCfgV1 = config.NewOBCUConfig()
+var cuCfg *config.OBCUConfig
+var cuCfgV1 *config.OBCUConfig
 
 func GetCUConfig() *config.OBCUConfig {
 	return cuCfg
@@ -194,4 +194,11 @@ func GetCUConfigV1() *config.OBCUConfig {
 
 func SetCuConfig(cu, cuv1 *config.OBCUConfig) {
 	cuCfg, cuCfgV1 = cu, cuv1
+}
+
+func init() {
+	cuCfg = config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	cuCfgV1 = config.NewOBCUConfig()
+	cuCfgV1.SetDefaultValues()
 }

@@ -2393,9 +2393,14 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "ioout":
 			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
 				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iolist":
+			cu = motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iodelete":
+			cu = motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "network":
 			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
 		case "total":
+			// total = cpu + mem + ioin + ioout + network
 			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
 		default:
 			rs.Append(float64(0), true)
