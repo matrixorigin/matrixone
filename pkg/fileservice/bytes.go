@@ -69,8 +69,8 @@ type bytesAllocator struct {
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
-func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
-	slice, dec, err := b.allocator.Allocate(uint64(size), malloc.NoHints)
+func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache.Data {
+	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
 	if err != nil {
 		panic(err)
 	}
@@ -81,4 +81,14 @@ func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
 		deallocator: dec,
 		refs:        &refs,
 	}
+}
+
+func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
+	return b.allocateCacheData(size, malloc.NoHints)
+}
+
+func (b *bytesAllocator) CopyToCacheData(data []byte) fscache.Data {
+	ret := b.allocateCacheData(len(data), malloc.NoClear)
+	copy(ret.Bytes(), data)
+	return ret
 }

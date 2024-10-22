@@ -344,7 +344,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 
 	s := &mysqlSinker{
 		mysql:          sink,
-		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+2),
+		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+2+SqlBufReserved),
 		tsInsertPrefix: []byte(tsInsertPrefix),
 		tsDeletePrefix: []byte(tsDeletePrefix),
 		preRowType:     NoOp,
