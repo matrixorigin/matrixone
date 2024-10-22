@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -258,6 +259,9 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
+
+	logutil.Infof("xxxx Truncate table name:%s,tid:%v partition state from %p to %p, minTs:%s",
+		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString())
 
 	return nil
 }

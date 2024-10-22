@@ -267,6 +267,11 @@ func (e *Engine) getOrCreateSnapPart(
 	//check whether the latest partition is available for reuse.
 	if _, err := tbl.tryToSubscribe(ctx); err == nil {
 		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+			logutil.Infof("xxxx getOrCreateSnapPart, table:%s, tid:%v, txn:%s, ps:%p",
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString(),
+				p.Snapshot())
 			return p.Snapshot(), nil
 		}
 	}
@@ -362,6 +367,11 @@ func (e *Engine) getOrCreateSnapPart(
 		if ps == nil {
 			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 		}
+		logutil.Infof("xxxx getOrCreateSnapPart, table:%s, tid:%v, txn:%s, ps:%p",
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			ps)
 		return ps, nil
 	}
 	if ts.LT(&start) {

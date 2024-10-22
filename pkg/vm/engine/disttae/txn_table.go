@@ -1819,19 +1819,24 @@ func (tbl *txnTable) getPartitionState(
 				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 			}
 			tbl._partState.Store(ps)
+			logutil.Infof("xxxx getPartitionState, table:%s, tid:%v, txn:%s, ps:%v",
+				tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), ps)
 		}
 		return tbl._partState.Load(), nil
 	}
 
 	// for snapshot txnOp
-	ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
-		ctx,
-		tbl,
-		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
-	if err != nil {
-		return nil, err
+	if tbl._partState.Load() == nil {
+		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
+			ctx,
+			tbl,
+			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+		if err != nil {
+			return nil, err
+		}
+		tbl._partState.Store(ps)
 	}
-	return ps, nil
+	return tbl._partState.Load(), nil
 }
 
 func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
