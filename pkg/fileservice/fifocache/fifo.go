@@ -15,6 +15,7 @@
 package fifocache
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -34,16 +35,20 @@ type Cache[K comparable, V any] struct {
 	postEvict func(key K, value V)
 
 	shards [256]struct {
-		sync.RWMutex
+		sync.Mutex
 		values map[K]*_CacheItem[K, V]
 		_      cpu.CacheLinePad
 	}
+
+	itemQueue chan *_CacheItem[K, V]
 
 	queueLock sync.RWMutex
 	used1     int64
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
+
+	overEvict atomic.Int64
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -89,6 +94,7 @@ func New[K comparable, V any](
 		capacity1: func() int64 {
 			return capacity() / 10
 		},
+		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
 		queue1:       *NewQueue[*_CacheItem[K, V]](),
 		queue2:       *NewQueue[*_CacheItem[K, V]](),
 		keyShardFunc: keyShardFunc,
@@ -127,29 +133,56 @@ func (c *Cache[K, V]) set(key K, value V, size int64) *_CacheItem[K, V] {
 
 func (c *Cache[K, V]) Set(key K, value V, size int64) {
 	if item := c.set(key, value, size); item != nil {
-		c.queueLock.Lock()
+		c.enqueue(item)
+		c.evict(nil, 0)
+	}
+}
+
+func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
+	if !c.queueLock.TryLock() {
+		// try put itemQueue
+		select {
+		case c.itemQueue <- item:
+			// let the queueLock holder do the job
+			return
+		default:
+			// block until get lock
+			c.queueLock.Lock()
+			defer c.queueLock.Unlock()
+		}
+	} else {
 		defer c.queueLock.Unlock()
-		c.queue1.enqueue(item)
-		c.used1 += size
-		if c.used1+c.used2 > c.capacity() {
-			c.evict(nil, 0)
+	}
+
+	// enqueue
+	c.queue1.enqueue(item)
+	c.used1 += item.size
+
+	// help enqueue
+	for {
+		select {
+		case item := <-c.itemQueue:
+			c.queue1.enqueue(item)
+			c.used1 += item.size
+		default:
+			return
 		}
 	}
 }
 
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 	shard := &c.shards[c.keyShardFunc(key)]
-	shard.RLock()
+	shard.Lock()
 	var item *_CacheItem[K, V]
 	item, ok = shard.values[key]
 	if !ok {
-		shard.RUnlock()
+		shard.Unlock()
 		return
 	}
 	if c.postGet != nil {
 		c.postGet(item.key, item.value)
 	}
-	shard.RUnlock()
+	shard.Unlock()
 	item.inc()
 	return item.value, true
 }
@@ -169,18 +202,34 @@ func (c *Cache[K, V]) Delete(key K) {
 	// queues will be update in evict
 }
 
-// must call evict with queueLock held
 func (c *Cache[K, V]) evict(done chan int64, overEvict int64) {
+	if done == nil {
+		// can be async
+		if c.queueLock.TryLock() {
+			defer c.queueLock.Unlock()
+		} else {
+			if overEvict > 0 {
+				// let the holder do more evict
+				c.overEvict.Add(overEvict)
+			}
+			return
+		}
+	} else {
+		c.queueLock.Lock()
+		defer c.queueLock.Unlock()
+	}
+
 	var target int64
 	for {
-		target = c.capacity() - overEvict
+		globalOverEvict := c.overEvict.Swap(0)
+		target = c.capacity() - overEvict - globalOverEvict
 		if target < 0 {
 			target = 0
 		}
 		if c.used1+c.used2 <= target {
 			break
 		}
-		target1 := c.capacity1() - overEvict
+		target1 := c.capacity1() - overEvict - globalOverEvict
 		if target1 < 0 {
 			target1 = 0
 		}
@@ -252,7 +301,5 @@ func (c *Cache[K, V]) Evict(done chan int64) {
 	if done != nil && cap(done) < 1 {
 		panic("should be buffered chan")
 	}
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
 	c.evict(done, 0)
 }

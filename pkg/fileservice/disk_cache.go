@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -28,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,6 +69,8 @@ func NewDiskCache(
 		cacheDataAllocator = DefaultCacheDataAllocator()
 	}
 
+	seed := maphash.MakeSeed()
+
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
@@ -86,7 +88,7 @@ func NewDiskCache(
 			},
 
 			func(key string) uint8 {
-				return uint8(xxhash.Sum64String(key))
+				return uint8(maphash.String(seed, key))
 			},
 
 			nil,
