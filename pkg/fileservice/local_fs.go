@@ -122,6 +122,17 @@ func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
+func (l *LocalFS) CopyToCacheData(data []byte) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(
+			len(data),
+			// evict at least 1/100 capacity to reduce number of evictions
+			int(l.memCache.cache.Capacity()/100),
+		)
+	}
+	return DefaultCacheDataAllocator().CopyToCacheData(data)
+}
+
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
