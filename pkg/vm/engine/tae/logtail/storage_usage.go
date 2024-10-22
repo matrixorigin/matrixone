@@ -1155,11 +1155,12 @@ func FillUsageBatOfCompacted(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo) {
 	now := time.Now()
-	logutil.Infof("fill usage bat of compacted ckp start")
+	var memoryUsed float64
 	usage.EnterProcessing()
 	defer func() {
+		v2.TaskStorageUsageCacheMemUsedGauge.Set(memoryUsed)
+		v2.TaskCompactedCollectUsageDurationHistogram.Observe(time.Since(now).Seconds())
 		usage.LeaveProcessing()
-		logutil.Infof("fill usage bat of compacted ckp takes %v", time.Since(now))
 	}()
 	objects := data.GetObjectBatchs()
 	tombstones := data.GetTombstoneObjectBatchs()
@@ -1205,14 +1206,12 @@ func FillUsageBatOfCompacted(
 	update := make(map[[3]uint64]UsageData)
 	for iter.Next() {
 		val := iter.Item()
-		logutil.Infof("fill usage bat of compacted ckp: %v", val.String())
 		key := [3]uint64{val.AccId, val.DbId, val.TblId}
 		ud, ok := usageData[key]
 		if val.SnapshotSize == 0 && !ok {
 			continue
 		}
 		val.SnapshotSize = ud.SnapshotSize
-		logutil.Infof("fill usage2 bat of compacted ckp: %v", val.String())
 		update[key] = val
 	}
 	iter.Release()
@@ -1220,6 +1219,7 @@ func FillUsageBatOfCompacted(
 	for _, v := range update {
 		usage.cache.SetOrReplace(v)
 	}
+	memoryUsed = usage.MemoryUsed()
 }
 
 // GetStorageUsageHistory is for debug to show these storage usage changes.

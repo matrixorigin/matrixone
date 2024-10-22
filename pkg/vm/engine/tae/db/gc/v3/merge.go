@@ -144,13 +144,6 @@ func MergeCheckpoint(
 		ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ckpData.GetObjectBatchs().Vecs[0].Length(); i++ {
 		tid := tableInsertTid[i]
-		{
-			// TODO: remove debug log
-			var objectStats objectio.ObjectStats
-			buf := ckpData.GetObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			logutil.Infof("merge object %v tid is %d", objectStats.ObjectName().String(), tid)
-		}
 		if tableInsertOff[tid] == nil {
 			tableInsertOff[tid] = &tableOffset{
 				offset: i,
@@ -161,13 +154,6 @@ func MergeCheckpoint(
 	}
 	for i := 0; i < ckpData.GetTombstoneObjectBatchs().Vecs[0].Length(); i++ {
 		tid := tableTombstoneTid[i]
-		{
-			// TODO: remove debug log
-			var objectStats objectio.ObjectStats
-			buf := ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			logutil.Infof("merge tombstone %v tid is %d", objectStats.ObjectName().String(), tid)
-		}
 		if tableTombstoneOff[tid] == nil {
 			tableTombstoneOff[tid] = &tableOffset{
 				offset: i,

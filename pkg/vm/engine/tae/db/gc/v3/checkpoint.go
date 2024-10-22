@@ -356,6 +356,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	c.updateScanWaterMark(ckp)
 	compacted := c.checkpointCli.GetCompacted()
 	if compacted != nil {
+		start := time.Now()
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
 
@@ -373,12 +374,20 @@ func (c *checkpointCleaner) Replay() (err error) {
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked()
 		if err != nil {
-			logutil.Errorf("GetPITRs failed, err: %v", err)
+			logutil.Error("GC-REPLAY-GET-PITRS_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.Duration("duration", time.Since(start)),
+			)
 			return
 		}
 		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
 		if err != nil {
-			logutil.Errorf("GetSnapshot failed, err: %v", err)
+			logutil.Error("GC-REPLAY-GET-SNAPSHOT_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.Duration("duration", time.Since(start)),
+			)
 			return
 		}
 		accountSnapshots := TransformToTSList(snapshots)
@@ -388,6 +397,11 @@ func (c *checkpointCleaner) Replay() (err error) {
 			c.mutation.snapshotMeta,
 			accountSnapshots,
 			pitrs)
+		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int("size", len(accountSnapshots)),
+			zap.Duration("duration", time.Since(start)),
+		)
 	}
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,

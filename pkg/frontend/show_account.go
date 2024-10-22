@@ -330,9 +330,6 @@ func updateStorageUsageCache_V2(usages *cmd_util.StorageUsageResp_V2) {
 				TotalRowCnt: int(usages.RowCnts[x]),
 			},
 		}
-		//if old, exist := cnUsageCache.Get(usage); exist {
-		//	usage.Size += old.Size
-		//}
 
 		cnUsageCache.SetOrReplace(usage)
 	}
