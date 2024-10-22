@@ -740,7 +740,11 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		txn.offsets = txn.offsets[:txn.statementID]
 
 		txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
-		if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
+
+		if txn.statementID == 0 {
+			txn.transfer.pendingTransfer = false
+			txn.transfer.lastTransferred = types.TS{}
+		} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
 			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
 		}
 	}
