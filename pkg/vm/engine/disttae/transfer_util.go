@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"go.uber.org/zap"
 )
 
 type UT_ForceTransCheck struct{}
@@ -47,22 +48,28 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	txn *Transaction,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (*TransferFlow, error) {
+) (*TransferFlow, []zap.Field, error) {
 
 	//ctx := table.proc.Load().Ctx
 	state, err := table.getPartitionState(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
 		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
 	}
 
+	var logs []zap.Field
+
 	newDataObjects, deletedObjects := state.CollectObjectsBetween(start, end)
 
+	logs = append(logs,
+		zap.Int("newDataObjects", len(newDataObjects)),
+		zap.Int("deletedObjects", len(deletedObjects)))
+
 	if len(newDataObjects) == 0 || len(deletedObjects) == 0 {
-		return nil, nil
+		return nil, logs, nil
 	}
 
 	deletedObjectsIter := func() *types.Objectid {
@@ -86,12 +93,16 @@ func ConstructCNTombstoneObjectsTransferFlow(
 			}
 		})
 
+	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
+
 	if tombstoneObjects, err = blockio.CoarseFilterTombstoneObject(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
-		return nil, err
+		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
-		return nil, nil
+		return nil, logs, nil
 	}
+
+	logs = append(logs, zap.Int("coarse-tombstoneObjects", len(tombstoneObjects)))
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
@@ -112,7 +123,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		isObjectDeletedFn,
 		newDataObjects,
 		mp,
-		fs), nil
+		fs), logs, nil
 }
 
 func ConstructTransferFlow(
