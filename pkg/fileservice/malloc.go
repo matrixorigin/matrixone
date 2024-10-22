@@ -15,9 +15,10 @@
 package fileservice
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"sync"
 )
 
 const (
