@@ -591,41 +591,24 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
-		fs := proc.GetFileService()
 
-		moUrl, offsetSize, err := datalink.ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
 			return err
 		}
 
-		err = func() error {
-			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
-			if err != nil {
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-
-			defer r.Close()
-
-			fileBytes, err := io.ReadAll(r)
-			if err != nil {
-				return err
-			}
-
-			if len(fileBytes) == 0 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				return nil
-			}
-
-			if err = rs.AppendBytes(fileBytes, false); err != nil {
-				return err
-			}
-
 			return nil
-		}()
+		}
 
-		if err != nil {
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
 	}
@@ -648,7 +631,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		moUrl, _, err := datalink.ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
@@ -663,7 +646,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		content := util.UnsafeBytesToString(_content)
 
 		err = func() error {
-			writer, err := fileservice.NewFileServiceWriter(moUrl, proc.Ctx)
+			writer, err := dl.NewWriter(proc)
 			if err != nil {
 				return err
 			}

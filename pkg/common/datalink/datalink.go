@@ -30,15 +30,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func GetPlainText(aurl string, proc *process.Process) ([]byte, error) {
+type Datalink struct {
+	Url    *url.URL
+	Offset int64
+	Size   int64
+	MoPath string
+}
 
-	fs := proc.GetFileService()
-	moUrl, offsetSize, err := ParseDatalink(aurl, proc)
+func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
+
+	u, err := url.Parse(aurl)
 	if err != nil {
-		return nil, err
+		return Datalink{}, err
 	}
 
-	r, err := readFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]), proc.Ctx)
+	moUrl, offsetSize, err := ParseDatalink(aurl, proc)
+	if err != nil {
+		return Datalink{}, err
+	}
+	return Datalink{Url: u, Offset: int64(offsetSize[0]), Size: int64(offsetSize[1]), MoPath: moUrl}, nil
+}
+
+func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
+	fs := proc.GetFileService()
+	r, err := d.NewReadCloser(fs, proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -49,13 +64,17 @@ func GetPlainText(aurl string, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return fileBytes, nil
+}
 
-	u, err := url.Parse(aurl)
+func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
+
+	fileBytes, err := d.GetBytes(proc)
 	if err != nil {
 		return nil, err
 	}
 
-	ext := strings.ToLower(filepath.Ext(u.Path))
+	ext := strings.ToLower(filepath.Ext(d.Url.Path))
 	switch ext {
 	case ".pdf":
 		return pdf.GetPlainText(fileBytes)
@@ -64,6 +83,15 @@ func GetPlainText(aurl string, proc *process.Process) ([]byte, error) {
 	default:
 		return fileBytes, nil
 	}
+}
+
+func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWriter, error) {
+
+	writer, err := fileservice.NewFileServiceWriter(d.MoPath, proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	return writer, nil
 }
 
 // ParseDatalink extracts data from a Datalink string
@@ -118,8 +146,8 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	return moUrl, offsetSize, nil
 }
 
-func readFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64, ctx context.Context) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(ctx, fs, Filepath)
+func (d Datalink) NewReadCloser(fs fileservice.FileService, ctx context.Context) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(ctx, fs, d.MoPath)
 	if fs == nil || err != nil {
 		return nil, err
 	}
@@ -128,8 +156,8 @@ func readFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            offset, //0 - default
-				Size:              size,   //-1 - default
+				Offset:            d.Offset, //0 - default
+				Size:              d.Size,   //-1 - default
 				ReadCloserForRead: &r,
 			},
 		},

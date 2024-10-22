@@ -134,10 +134,15 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
 				// datalink
-				b, err := datalink.GetPlainText(data, proc)
+				dl, err := datalink.NewDatalink(data, proc)
 				if err != nil {
 					return err
 				}
+				b, err := dl.GetPlainText(proc)
+				if err != nil {
+					return err
+				}
+
 				c += string(b)
 			} else {
 				c += data
