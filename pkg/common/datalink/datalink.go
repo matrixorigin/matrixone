@@ -38,7 +38,7 @@ func GetPlainText(aurl string, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 
-	r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+	r, err := readFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]), proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -118,13 +118,12 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	return moUrl, offsetSize, nil
 }
 
-func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
+func readFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64, ctx context.Context) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(ctx, fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
 	}
 	var r io.ReadCloser
-	ctx := context.TODO()
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
