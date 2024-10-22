@@ -1232,55 +1232,65 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	return reqs, nil
 }
 
-// TODO support transfer between statements.
-func (txn *Transaction) transferTombstonesByStatement(ctx context.Context) error {
+func (txn *Transaction) transferTombstonesByStatement(
+	ctx context.Context,
+	snapshotUpdated bool) error {
+
+	if (snapshotUpdated && !skipTransfer(ctx, txn)) || forceTransfer(ctx) {
+
+		start := txn.transfer.lastTransferred
+		end := types.TimestampToTS(txn.op.SnapshotTS())
+
+		txn.transfer.pendingTransfer = false
+		txn.transfer.lastTransferred = end
+
+		return txn.transferTombstones(ctx, start, end)
+
+	} else if snapshotUpdated {
+		// pending transfer until next statement or commit
+		txn.transfer.pendingTransfer = true
+	}
+
 	return nil
-	//var start, end types.TS
-	//
-	//if txn.statementID == 1 {
-	//	start = types.TimestampToTS(txn.timestamps[0])
-	//} else {
-	//	//statementID > 1
-	//	start = types.TimestampToTS(txn.timestamps[txn.statementID-2])
-	//}
-	//
-	//end = types.TimestampToTS(txn.op.SnapshotTS())
-	//
-	//return txn.transferTombstones(ctx, start, end)
 }
 
 func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
-	// TODO Is the transfer only happened in RC Isolation?
 	if !txn.op.Txn().IsRCIsolation() {
 		return nil
 	}
 
-	return txn.transferTombstones(
-		ctx,
-		types.TimestampToTS(txn.timestamps[0]),
-		types.TimestampToTS(txn.op.SnapshotTS()))
+	if txn.transfer.pendingTransfer ||
+		forceTransfer(ctx) ||
+		!skipTransfer(ctx, txn) {
+
+		// reset snapshot to get the latest partition state
+		if err := txn.resetSnapshot(); err != nil {
+			return err
+		}
+
+		if err := txn.op.UpdateSnapshot(
+			ctx, timestamp.Timestamp{}); err != nil {
+			return err
+		}
+
+		err := txn.transferTombstones(
+			ctx,
+			txn.transfer.lastTransferred,
+			types.TimestampToTS(txn.op.SnapshotTS()))
+
+		txn.transfer.pendingTransfer = false
+		txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
+
+		return err
+	}
+
+	return nil
 }
 
 func (txn *Transaction) transferTombstones(
 	ctx context.Context,
 	start, end types.TS,
 ) (err error) {
-
-	if skipTransfer(ctx, txn) {
-		return nil
-	}
-
-	// reset snapshot to get the latest partition state
-	if err = txn.resetSnapshot(); err != nil {
-		return err
-	}
-
-	if err = txn.op.UpdateSnapshot(
-		ctx, timestamp.Timestamp{}); err != nil {
-		return err
-	}
-
-	end = types.TimestampToTS(txn.op.SnapshotTS())
 
 	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
 		return err
@@ -1289,19 +1299,12 @@ func (txn *Transaction) transferTombstones(
 	return transferTombstoneObjects(ctx, txn, start, end)
 }
 
-func skipTransfer(
-	ctx context.Context,
-	txn *Transaction) bool {
+func forceTransfer(ctx context.Context) bool {
+	return ctx.Value(UT_ForceTransCheck{}) != nil
+}
 
-	if ctx.Value(UT_ForceTransCheck{}) != nil {
-		return false
-	}
-
-	if time.Since(txn.start) < txn.engine.config.cnTransferTxnLifespanThreshold {
-		return true
-	}
-
-	return false
+func skipTransfer(ctx context.Context, txn *Transaction) bool {
+	return time.Since(txn.start) < txn.engine.config.cnTransferTxnLifespanThreshold
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
