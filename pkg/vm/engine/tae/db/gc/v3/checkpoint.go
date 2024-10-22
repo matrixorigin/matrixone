@@ -375,6 +375,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 			)
 			return
 		}
+		defer ckpData.Close()
 		var snapshots map[uint32]containers.Vector
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked()
@@ -448,6 +449,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 				isConsumedGCkp = true
 			}
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
+			ckpData.Close()
 		}
 		if !isConsumedGCkp {
 			// The global checkpoint that Specified checkpoint depends on may have been GC,
@@ -477,6 +479,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 				return
 			}
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
+			ckpData.Close()
 		}
 
 		logutil.Info(
