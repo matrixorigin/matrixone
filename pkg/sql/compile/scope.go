@@ -137,7 +137,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
-	//s.ScopeAnalyzer.Reset()
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
@@ -251,7 +250,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
-	//s.ScopeAnalyzer.Reset()
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
@@ -365,7 +363,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
-	//s.ScopeAnalyzer.Reset()
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 

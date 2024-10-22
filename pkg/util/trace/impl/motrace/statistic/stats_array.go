@@ -322,7 +322,6 @@ type StatsInfo struct {
 		OutputDuration int64 `json:"OutputDuration"` // unit: ns
 	}
 
-	// 用于记录额外操作的统计信息, 记录不包含在以上这些阶段中
 	// Used to record statistics of additional operations, which are not included in the above stages
 	OtherStage struct {
 		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`

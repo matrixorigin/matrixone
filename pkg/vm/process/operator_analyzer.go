@@ -52,8 +52,6 @@ type Analyzer interface {
 	ScanBytes(*batch.Batch)
 }
 
-//AddS3Request()
-
 // Operator Resource operatorAnalyzer
 type operatorAnalyzer struct {
 	nodeIdx              int
@@ -312,31 +310,6 @@ func (ps *OperatorStats) String() string {
 		}
 	}
 
-	//return fmt.Sprintf(" CallNum:%d "+
-	//	"TimeCost:%dns "+
-	//	"WaitTime:%dns "+
-	//	"InRows:%d "+
-	//	"OutRows:%d "+
-	//	"InSize:%dbytes "+
-	//	"InBlock:%d "+
-	//	"OutSize:%dbytes "+
-	//	"MemSize:%dbytes "+
-	//	"ScanBytes:%dbytes "+
-	//	"NetworkIO:%dbytes"+
-	//	"%s",
-	//	ps.CallNum,
-	//	ps.TimeConsumed,
-	//	ps.WaitTimeConsumed,
-	//	ps.InputRows,
-	//	ps.OutputRows,
-	//	ps.InputSize,
-	//	ps.InputBlocks,
-	//	ps.OutputSize,
-	//	ps.MemorySize,
-	//	ps.ScanBytes,
-	//	ps.NetworkIO,
-	//	metricsStr)
-
 	return fmt.Sprintf(" CallNum:%d "+
 		"TimeCost:%dns "+
 		"WaitTime:%dns "+
@@ -375,47 +348,4 @@ func (ps *OperatorStats) String() string {
 		ps.S3Delete,
 		ps.S3DeleteMul,
 		metricsStr)
-
-}
-
-// ReducedString used to `mo_explan_phy` internal function when show operator stats
-func (ps *OperatorStats) ReducedString() string {
-	var metricsStr string
-	if len(ps.OperatorMetrics) > 0 {
-		metricsStr = " "
-		for k, v := range ps.OperatorMetrics {
-			metricName := "Unknown"
-			switch k {
-			case OpScanTime:
-				metricName = "ScanTime"
-			case OpInsertTime:
-				metricName = "InsertTime"
-			case OpIncrementTime:
-				metricName = "IncrementTime"
-			}
-			metricsStr += fmt.Sprintf("%s: %dns\n", metricName, v)
-		}
-	}
-
-	return fmt.Sprintf(" CallNum:%d "+
-		"TimeCost:%dns "+
-		"WaitTime:%dns "+
-		"InRows:%d "+
-		"OutRows:%d "+
-		"InSize:%dbytes "+
-		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
-		"Network:%dbytes"+
-		"%s",
-		ps.CallNum,
-		ps.TimeConsumed,
-		ps.WaitTimeConsumed,
-		ps.InputRows,
-		ps.OutputRows,
-		ps.InputSize,
-		ps.OutputSize,
-		ps.MemorySize,
-		ps.NetworkIO,
-		metricsStr,
-	)
 }

@@ -882,16 +882,6 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	}
 }
 
-// S3Request 结构用于记录每种 S3 操作的次数
-type S3Request struct {
-	List        int64 `json:"List"`
-	Head        int64 `json:"Head"`
-	Put         int64 `json:"Put"`
-	Get         int64 `json:"Get"`
-	Delete      int64 `json:"Delete"`
-	DeleteMulti int64 `json:"DeleteMul"`
-}
-
 func (ses *Session) GetErrInfo() *errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

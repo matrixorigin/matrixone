@@ -823,18 +823,6 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Value: analyzeInfo.ScanBytes,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
-			//--------------------验证后，此处代码需要删除------------
-			{
-				Name:  S3IOInputCount,
-				Value: analyzeInfo.S3IOInputCount,
-				Unit:  Statistic_Unit_count, //"count",
-			},
-			{
-				Name:  S3IOOutputCount,
-				Value: analyzeInfo.S3IOOutputCount,
-				Unit:  Statistic_Unit_count, //"count",
-			},
-			//----------------------------------------------------
 			{
 				Name:  S3List,
 				Value: analyzeInfo.S3List,

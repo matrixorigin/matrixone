@@ -303,12 +303,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 					gDiskIO.Value += ioValue.Value
 				case ScanBytes:
 					gS3IOByte.Value += ioValue.Value
-				// -----------------验证后，此处代码需要删除------------
-				case S3IOInputCount:
-					gS3IOInputCount.Value += ioValue.Value
-				case S3IOOutputCount:
-					gS3IOOutputCount.Value += ioValue.Value
-				// --------------------------------------------------
 				case S3List:
 					gS3ListCount.Value += ioValue.Value
 				case S3Head:
