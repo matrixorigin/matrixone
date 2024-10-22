@@ -671,16 +671,16 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	group := func(rd engine.RelData) (local engine.RelData, remote engine.RelData) {
 		local = rd.BuildEmptyRelData()
 		remote = rd.BuildEmptyRelData()
-		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi objectio.BlockInfo) (bool, error) {
+		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi *objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
-				local.AppendBlockInfo(&bi)
-				remote.AppendBlockInfo(&bi)
+				local.AppendBlockInfo(bi)
+				remote.AppendBlockInfo(bi)
 				return true, nil
 			}
 			if _, ok := uncommittedObjNames[*objectio.ShortName(&bi.BlockID)]; ok {
-				local.AppendBlockInfo(&bi)
+				local.AppendBlockInfo(bi)
 			} else {
-				remote.AppendBlockInfo(&bi)
+				remote.AppendBlockInfo(bi)
 			}
 			return true, nil
 		})

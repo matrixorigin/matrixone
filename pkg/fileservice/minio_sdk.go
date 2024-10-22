@@ -134,6 +134,13 @@ func NewMinioSDK(
 		options.Region = args.Region
 	}
 
+	// bucket lookup style
+	if strings.Contains(args.Endpoint, "myqcloud") ||
+		strings.Contains(args.Endpoint, "aliyuncs") {
+		// 腾讯云，阿里云默认使用virtual host style
+		options.BucketLookup = minio.BucketLookupDNS
+	}
+
 	// transport
 	options.Transport = newHTTPClient(args).Transport
 

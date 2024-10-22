@@ -153,6 +153,7 @@ func (i IOEntry) String() string {
 
 type CacheDataAllocator interface {
 	AllocateCacheData(size int) fscache.Data
+	CopyToCacheData([]byte) fscache.Data
 }
 
 // DirEntry is a file or dir

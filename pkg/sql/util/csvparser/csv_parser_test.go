@@ -349,6 +349,32 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	}, row)
 	assertPosEqual(t, parser, 19)
 
+	//  example 8, read head columns
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), true)
+	require.NoError(t, err)
+
+	row, err = parser.Read(nil)
+	require.Nil(t, err)
+	require.Equal(t, 0, len(parser.columns))
+	require.Equal(t, []Field{
+		newStringField("zzz", false),
+		newStringField("yyy", false),
+		newStringField("xxx", false),
+	}, row)
+
+	cfg.HeaderSchemaMatch = true
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), true)
+	require.NoError(t, err)
+
+	row, err = parser.Read(nil)
+	require.Nil(t, err)
+	require.Equal(t, []string{"aaa", "bbb", "ccc"}, parser.columns)
+	require.Equal(t, []Field{
+		newStringField("zzz", false),
+		newStringField("yyy", false),
+		newStringField("xxx", false),
+	}, row)
+
 }
 
 func TestMySQL(t *testing.T) {
