@@ -298,7 +298,9 @@ func (c *StorageUsageCache) ClearForUpdate() {
 func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64][]uint64) {
 	usages = make(map[uint64][]uint64)
 	c.data.Scan(func(item UsageData) bool {
-		usages[item.AccId] = make([]uint64, 2)
+		if len(usages[item.AccId]) == 0 {
+			usages[item.AccId] = make([]uint64, 2)
+		}
 		usages[item.AccId][0] += item.Size
 		usages[item.AccId][1] += item.SnapshotSize
 		return true
@@ -1184,7 +1186,8 @@ func FillUsageBatOfCompacted(
 				}
 			}
 			accountId := uint64(meta.GetAccountId(tableID[i]))
-			if len(tableSnapshots[tableID[i]]) == 0 && tablePitrs[tableID[i]].IsEmpty() {
+			if len(tableSnapshots[tableID[i]]) == 0 &&
+				tablePitrs[tableID[i]].IsEmpty() {
 				continue
 			}
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)

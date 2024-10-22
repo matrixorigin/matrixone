@@ -138,7 +138,7 @@ func Test_StorageUsageCache(t *testing.T) {
 
 		require.False(t, cache.IsExpired())
 
-		_, exist := cache.GatherAccountSize(usages[0].AccId)
+		_, _, exist := cache.GatherAccountSize(usages[0].AccId)
 		require.False(t, exist)
 	}
 
@@ -394,7 +394,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 				require.Equal(t, accCnt, len(abstract))
 				for id, aa := range abstract {
 					require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
-					require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
+					require.Equal(t, int(memUsages[id][0]), aa.TotalObjSize)
 				}
 
 				accCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())

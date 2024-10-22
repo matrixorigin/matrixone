@@ -297,7 +297,9 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64][]uint64, succee
 				// one missed, update all
 				return nil, false
 			}
-			result[accIds[x][y]] = make([]uint64, 2)
+			if len(result[accIds[x][y]]) == 0 {
+				result[accIds[x][y]] = make([]uint64, 2)
+			}
 			result[accIds[x][y]][0] = size
 			result[accIds[x][y]][1] = snapshotSize
 
