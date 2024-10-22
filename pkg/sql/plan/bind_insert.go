@@ -126,37 +126,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 	// lock unique key table
-	compUniqueIdxLockPos := int32(len(selectNode.ProjectList))
 	for j, idxDef := range mainTableDef.Indexes {
-		if !idxDef.TableExist || skipUniqueIdx[j] {
-			continue
-		}
-		if !idxDef.Unique {
-			if len(idxDef.Parts) > 0 {
-				compUniqueIdxLockPos++
-			}
+		if !idxDef.TableExist || skipUniqueIdx[j] || !idxDef.Unique {
 			continue
 		}
 		_, idxTableDef := builder.compCtx.Resolve(dmlCtx.objRefs[0].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+		var pkIdxInBat int32
+
 		if len(idxDef.Parts) == 1 {
-			pos := colName2Idx[mainTableDef.Name+"."+idxDef.Parts[0]]
-			lockTarget := &plan.LockTarget{
-				TableId:            idxTableDef.TblId,
-				PrimaryColIdxInBat: pos,
-				PrimaryColRelPos:   selectNodeTag,
-				PrimaryColTyp:      selectNode.ProjectList[int(pos)].Typ,
-			}
-			lockTargets = append(lockTargets, lockTarget)
+			pkIdxInBat = colName2Idx[mainTableDef.Name+"."+idxDef.Parts[0]]
 		} else {
-			lockTarget := &plan.LockTarget{
-				TableId:            idxTableDef.TblId,
-				PrimaryColIdxInBat: compUniqueIdxLockPos,
-				PrimaryColRelPos:   selectNodeTag,
-				PrimaryColTyp:      makeHiddenColTyp(),
-			}
-			lockTargets = append(lockTargets, lockTarget)
-			compUniqueIdxLockPos++
+			pkIdxInBat = colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName]
 		}
+		lockTarget := &plan.LockTarget{
+			TableId:            idxTableDef.TblId,
+			PrimaryColIdxInBat: pkIdxInBat,
+			PrimaryColRelPos:   selectNodeTag,
+			PrimaryColTyp:      selectNode.ProjectList[int(pkIdxInBat)].Typ,
+		}
+		lockTargets = append(lockTargets, lockTarget)
 	}
 	if len(lockTargets) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -170,169 +158,149 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	for i, tableDef := range dmlCtx.tableDefs {
-		pkName := tableDef.Pkey.PkeyColName
-		pkPos := tableDef.Name2ColIndex[pkName]
-		if pkName != catalog.FakePrimaryKeyColName {
-			scanTag := builder.genNewTag()
-			builder.addNameByColRef(scanTag, tableDef)
+	if !builder.qry.LoadTag {
+		for i, tableDef := range dmlCtx.tableDefs {
+			pkName := tableDef.Pkey.PkeyColName
+			pkPos := tableDef.Name2ColIndex[pkName]
+			if pkName != catalog.FakePrimaryKeyColName {
+				scanTag := builder.genNewTag()
+				builder.addNameByColRef(scanTag, tableDef)
 
-			scanNodeID := builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				TableDef:     DeepCopyTableDef(tableDef, true),
-				ObjRef:       dmlCtx.objRefs[i],
-				BindingTags:  []int32{scanTag},
-				ScanSnapshot: bindCtx.snapshot,
-			}, bindCtx)
+				scanNodeID := builder.appendNode(&plan.Node{
+					NodeType:     plan.Node_TABLE_SCAN,
+					TableDef:     DeepCopyTableDef(tableDef, true),
+					ObjRef:       dmlCtx.objRefs[i],
+					BindingTags:  []int32{scanTag},
+					ScanSnapshot: bindCtx.snapshot,
+				}, bindCtx)
 
-			pkTyp := tableDef.Cols[pkPos].Typ
-			leftExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: pkPos,
+				pkTyp := tableDef.Cols[pkPos].Typ
+				leftExpr := &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: scanTag,
+							ColPos: pkPos,
+						},
 					},
-				},
-			}
+				}
 
-			rightExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNode.BindingTags[0],
-						ColPos: colName2Idx[tableDef.Name+"."+pkName],
+				rightExpr := &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNode.BindingTags[0],
+							ColPos: colName2Idx[tableDef.Name+"."+pkName],
+						},
 					},
-				},
+				}
+
+				joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+					leftExpr,
+					rightExpr,
+				})
+
+				var dedupColName string
+				dedupColTypes := make([]plan.Type, len(tableDef.Pkey.Names))
+
+				if len(tableDef.Pkey.Names) == 1 {
+					dedupColName = tableDef.Pkey.Names[0]
+				} else {
+					dedupColName = "(" + strings.Join(tableDef.Pkey.Names, ",") + ")"
+				}
+
+				for j, part := range tableDef.Pkey.Names {
+					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
+				}
+
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType:          plan.Node_JOIN,
+					Children:          []int32{scanNodeID, lastNodeID},
+					JoinType:          plan.Node_DEDUP,
+					OnList:            []*plan.Expr{joinCond},
+					OnDuplicateAction: onDupAction,
+					DedupColName:      dedupColName,
+					DedupColTypes:     dedupColTypes,
+				}, bindCtx)
 			}
 
-			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-				leftExpr,
-				rightExpr,
-			})
+			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
+			idxTableDefs[i] = make([]*plan.TableDef, len(tableDef.Indexes))
 
-			var dedupColName string
-			dedupColTypes := make([]plan.Type, len(tableDef.Pkey.Names))
+			for j, idxDef := range tableDef.Indexes {
+				if !idxDef.TableExist || skipUniqueIdx[j] {
+					continue
+				}
 
-			if len(tableDef.Pkey.Names) == 1 {
-				dedupColName = tableDef.Pkey.Names[0]
-			} else {
-				dedupColName = "(" + strings.Join(tableDef.Pkey.Names, ",") + ")"
-			}
+				idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
 
-			for j, part := range tableDef.Pkey.Names {
-				dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
-			}
+				if !idxDef.Unique {
+					continue
+				}
 
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:          plan.Node_JOIN,
-				Children:          []int32{scanNodeID, lastNodeID},
-				JoinType:          plan.Node_DEDUP,
-				OnList:            []*plan.Expr{joinCond},
-				OnDuplicateAction: onDupAction,
-				DedupColName:      dedupColName,
-				DedupColTypes:     dedupColTypes,
-			}, bindCtx)
-		}
+				idxTag := builder.genNewTag()
+				builder.addNameByColRef(idxTag, idxTableDefs[i][j])
 
-		idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
-		idxTableDefs[i] = make([]*plan.TableDef, len(tableDef.Indexes))
+				idxScanNode := &plan.Node{
+					NodeType:     plan.Node_TABLE_SCAN,
+					TableDef:     idxTableDefs[i][j],
+					ObjRef:       idxObjRefs[i][j],
+					BindingTags:  []int32{idxTag},
+					ScanSnapshot: bindCtx.snapshot,
+				}
+				idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
-		for j, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist || skipUniqueIdx[j] {
-				continue
-			}
+				idxPkPos := idxTableDefs[i][j].Name2ColIndex[catalog.IndexTableIndexColName]
+				pkTyp := idxTableDefs[i][j].Cols[idxPkPos].Typ
 
-			idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
-			// // colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTablePrimaryColName] = pkPos
-
-			// argsLen := len(idxDef.Parts)
-
-			// if argsLen == 1 {
-			// 	// colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
-			// } else {
-			// 	args := make([]*plan.Expr, argsLen)
-
-			// 	for k := 0; k < argsLen; k++ {
-			// 		colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
-			// 		args[k] = DeepCopyExpr(selectNode.ProjectList[colPos])
-			// 	}
-
-			// 	fnName := "serial"
-			// 	if !idxDef.Unique {
-			// 		fnName = "serial_full"
-			// 	}
-			// 	idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
-			// 	colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName] = int32(len(selectNode.ProjectList))
-			// 	selectNode.ProjectList = append(selectNode.ProjectList, idxExpr)
-			// }
-
-			if !idxDef.Unique {
-				continue
-			}
-
-			idxTag := builder.genNewTag()
-			builder.addNameByColRef(idxTag, idxTableDefs[i][j])
-
-			idxScanNode := &plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				TableDef:     idxTableDefs[i][j],
-				ObjRef:       idxObjRefs[i][j],
-				BindingTags:  []int32{idxTag},
-				ScanSnapshot: bindCtx.snapshot,
-			}
-			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
-
-			idxPkPos := idxTableDefs[i][j].Name2ColIndex[catalog.IndexTableIndexColName]
-			pkTyp := idxTableDefs[i][j].Cols[idxPkPos].Typ
-
-			leftExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxTag,
-						ColPos: idxPkPos,
+				leftExpr := &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTag,
+							ColPos: idxPkPos,
+						},
 					},
-				},
-			}
+				}
 
-			rightExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNode.BindingTags[0],
-						ColPos: colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName],
+				rightExpr := &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNode.BindingTags[0],
+							ColPos: colName2Idx[idxTableDefs[i][j].Name+"."+catalog.IndexTableIndexColName],
+						},
 					},
-				},
+				}
+
+				joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+					leftExpr,
+					rightExpr,
+				})
+
+				var dedupColName string
+				dedupColTypes := make([]plan.Type, len(idxDef.Parts))
+
+				if len(idxDef.Parts) == 1 {
+					dedupColName = idxDef.Parts[0]
+				} else {
+					dedupColName = "(" + strings.Join(idxDef.Parts, ",") + ")"
+				}
+
+				for j, part := range idxDef.Parts {
+					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
+				}
+
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType:          plan.Node_JOIN,
+					Children:          []int32{idxTableNodeID, lastNodeID},
+					JoinType:          plan.Node_DEDUP,
+					OnList:            []*plan.Expr{joinCond},
+					OnDuplicateAction: onDupAction,
+					DedupColName:      dedupColName,
+					DedupColTypes:     dedupColTypes,
+				}, bindCtx)
 			}
-
-			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-				leftExpr,
-				rightExpr,
-			})
-
-			var dedupColName string
-			dedupColTypes := make([]plan.Type, len(idxDef.Parts))
-
-			if len(idxDef.Parts) == 1 {
-				dedupColName = idxDef.Parts[0]
-			} else {
-				dedupColName = "(" + strings.Join(idxDef.Parts, ",") + ")"
-			}
-
-			for j, part := range idxDef.Parts {
-				dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
-			}
-
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType:          plan.Node_JOIN,
-				Children:          []int32{idxTableNodeID, lastNodeID},
-				JoinType:          plan.Node_DEDUP,
-				OnList:            []*plan.Expr{joinCond},
-				OnDuplicateAction: onDupAction,
-				DedupColName:      dedupColName,
-				DedupColTypes:     dedupColTypes,
-			}, bindCtx)
 		}
 	}
 
@@ -669,21 +637,17 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			}
 		}
 
-		// if skipUniqueIdx[i] {
-		// 	continue
-		// }
-
-		_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
-		colName2Idx[idxTableDef.Name+"."+catalog.IndexTablePrimaryColName] = pkPos
+		idxTableName := idxDef.IndexTableName
+		colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
 		argsLen := len(idxDef.Parts)
 		if argsLen == 1 {
-			colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
 		} else {
 			args := make([]*plan.Expr, argsLen)
 
 			for k := 0; k < argsLen; k++ {
 				colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
-				args[k] = DeepCopyExpr(projList1[colPos])
+				args[k] = DeepCopyExpr(projList2[colPos])
 			}
 
 			fnName := "serial"
@@ -691,7 +655,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				fnName = "serial_full"
 			}
 			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
-			colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
 			projList2 = append(projList2, idxExpr)
 		}
 	}
