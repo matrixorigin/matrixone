@@ -47,6 +47,7 @@ import (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.filter = objectio.BlockReadFilter{}
+	mixin.filterState.memFilter = MemPKFilter{}
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -211,10 +212,11 @@ type withFilterMixin struct {
 
 	filterState struct {
 		//point select for primary key
-		expr     *plan.Expr
-		filter   objectio.BlockReadFilter
-		seqnums  []uint16 // seqnums of the columns in the filter
-		colTypes []types.Type
+		expr      *plan.Expr
+		filter    objectio.BlockReadFilter
+		memFilter MemPKFilter
+		seqnums   []uint16 // seqnums of the columns in the filter
+		colTypes  []types.Type
 	}
 }
 
@@ -222,8 +224,6 @@ type reader struct {
 	withFilterMixin
 
 	source engine.DataSource
-
-	memFilter MemPKFilter
 
 	readBlockCnt uint64
 
@@ -351,12 +351,12 @@ func NewReader(
 			tableDef: tableDef,
 			name:     tableDef.Name,
 		},
-		memFilter: memFilter,
-		source:    source,
+		source: source,
 	}
 	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
+	r.filterState.memFilter = memFilter
 	return r, nil
 }
 
@@ -408,7 +408,7 @@ func (r *reader) Read(
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
-		r.memFilter,
+		r.filterState.memFilter,
 		mp,
 		outBatch)
 
@@ -474,10 +474,6 @@ func (r *reader) Read(
 
 	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
 		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
-	}
-
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block reader", outBatch))
 	}
 
 	return false, nil
