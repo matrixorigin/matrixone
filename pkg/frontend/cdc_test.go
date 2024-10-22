@@ -1316,8 +1316,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 				tt.args.cnUUID,
 				tt.args.fileService,
 				tt.args.cnTxnClient,
-				tt.args.cnEngine,
-				tt.args.cnEngMp)
+				tt.args.cnEngine)
 			ctx2, cancel := context.WithTimeout(ctx, time.Second*3)
 			defer cancel()
 			err = fun(ctx2, tt.args.dTask)
