@@ -22,13 +22,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
@@ -200,52 +198,6 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	}
 
 	return result.Data.([]any)[0], tried, nil
-}
-
-func handleStorageUsageResponse_V0(
-	ctx context.Context,
-	sid string,
-	fs fileservice.FileService,
-	usage *cmd_util.StorageUsageResp_V0,
-	logger SessionLogger,
-) (map[int64][]uint64, error) {
-	result := make(map[int64][]uint64, 0)
-	for idx := range usage.CkpEntries {
-		version := usage.CkpEntries[idx].Version
-		location := usage.CkpEntries[idx].Location
-
-		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, sid, location, version, logtail.StorageUsageInsIDX, fs)
-		if err != nil {
-			return nil, err
-		}
-
-		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
-		accIDVec := vector.MustFixedColWithTypeCheck[uint64](
-			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
-		)
-		sizeVec := vector.MustFixedColWithTypeCheck[uint64](
-			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
-		)
-
-		size := uint64(0)
-		length := len(accIDVec)
-		for i := 0; i < length; i++ {
-			if result[int64(accIDVec[i])] == nil {
-				result[int64(accIDVec[i])] = make([]uint64, 2)
-			}
-			result[int64(accIDVec[i])][0] += sizeVec[i]
-			size += sizeVec[i]
-		}
-
-		ckpData.Close()
-	}
-
-	// [account_id, db_id, table_id, obj_id, table_total_size]
-	for _, info := range usage.BlockEntries {
-		result[int64(info.Info[0])][0] += info.Info[3]
-	}
-
-	return result, nil
 }
 
 func handleStorageUsageResponse_V2(
