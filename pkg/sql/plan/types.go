@@ -92,7 +92,7 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef
-	// get needed info for stats by table
+	// get needed info for stats by table, NOTE: Stats May indirectly access the file service
 	Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string

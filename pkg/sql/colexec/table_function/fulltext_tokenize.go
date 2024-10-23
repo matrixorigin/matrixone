@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/monlp/tokenizer"
+
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/monlp/tokenizer"
 )
 
 type FullTextEntry struct {
@@ -86,7 +87,7 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
