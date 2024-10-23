@@ -76,6 +76,17 @@ func NewBatchWithCapacity(cap int) *Batch {
 	}
 }
 
+func NewBatchWithVectors(vecs []Vector, attrs []string) *Batch {
+	if len(vecs) != len(attrs) {
+		panic("length not match")
+	}
+	bat := NewBatch()
+	for i, vec := range vecs {
+		bat.AddVector(attrs[i], vec)
+	}
+	return bat
+}
+
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.Nameidx[attr]; exist {
 		panic(moerr.NewInternalErrorNoCtxf("duplicate vector %s", attr))
