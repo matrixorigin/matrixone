@@ -136,7 +136,7 @@ const (
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
-	CNTransferTxnLifespanThreshold        = time.Second * 500000
+	CNTransferTxnLifespanThreshold        = time.Second * 5
 )
 
 var (
