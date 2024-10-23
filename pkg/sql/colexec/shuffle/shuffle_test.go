@@ -193,7 +193,7 @@ func init() {
 				ShuffleColIdx:      0,
 				ShuffleType:        int32(plan.ShuffleType_Range),
 				BucketNum:          3,
-				ShuffleRangeUint64: []uint64{100, 10000, 100000},
+				ShuffleRangeUint64: []uint64{100, 10000},
 			},
 		},
 		{
