@@ -170,7 +170,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 							return
 						}
 					}
-					if col.Col.Name != catalog.CPrimaryKeyColName && builder.getColOverlap(col.Col) > overlapThreshold {
+					if builder.getColOverlap(col.Col) > overlapThreshold {
 						return
 					}
 				}

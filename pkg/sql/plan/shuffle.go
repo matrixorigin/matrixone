@@ -312,6 +312,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 			n.Stats.HashmapStats.ShuffleColIdx = 0
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 		}
+		return
 
 	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
 	default:
