@@ -1238,6 +1238,14 @@ func (txn *Transaction) transferTombstonesByStatement(
 
 	if (snapshotUpdated && !skipTransfer(ctx, txn)) || forceTransfer(ctx) {
 
+		// if this transfer is triggered by UT solely,
+		// should advance the snapshot manually here.
+		if !snapshotUpdated {
+			if err := txn.advanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
+				return err
+			}
+		}
+
 		start := txn.transfer.lastTransferred
 		end := types.TimestampToTS(txn.op.SnapshotTS())
 
@@ -1263,13 +1271,7 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 		forceTransfer(ctx) ||
 		!skipTransfer(ctx, txn) {
 
-		// reset snapshot to get the latest partition state
-		if err := txn.resetSnapshot(); err != nil {
-			return err
-		}
-
-		if err := txn.op.UpdateSnapshot(
-			ctx, timestamp.Timestamp{}); err != nil {
+		if err := txn.advanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
 			return err
 		}
 

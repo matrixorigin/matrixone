@@ -797,6 +797,18 @@ func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }
 
+func (txn *Transaction) advanceSnapshot(
+	ctx context.Context,
+	minTS timestamp.Timestamp) error {
+
+	if err := txn.op.UpdateSnapshot(ctx, minTS); err != nil {
+		return err
+	}
+
+	// reset to get the latest partitionstate
+	return txn.resetSnapshot()
+}
+
 // For RC isolation, update the snapshot TS of transaction for each statement.
 // only 2 cases need to reset snapshot
 // 1. cn sync latest commit ts from mo_ctl
@@ -812,14 +824,8 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool
 	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
-		if err := txn.op.UpdateSnapshot(
-			ctx, timestamp.Timestamp{}); err != nil {
-			return false, err
-		}
 
-		txn.resetSnapshot()
-
-		return true, nil
+		return true, txn.advanceSnapshot(ctx, timestamp.Timestamp{})
 	}
 
 	return false, nil
