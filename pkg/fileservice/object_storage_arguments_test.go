@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -138,4 +139,31 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 	}
 
 	return ret
+}
+
+func TestQCloudRegion(t *testing.T) {
+	args := ObjectStorageArguments{
+		Endpoint: "http://cos.foobar.myqcloud.com",
+	}
+	args.validate()
+	assert.Equal(t, "foobar", args.Region)
+}
+
+func TestAWSRegion(t *testing.T) {
+	args := ObjectStorageArguments{
+		Bucket: "aws", // hope it will not change its region
+	}
+	args.validate()
+	assert.Equal(t, "us-east-1", args.Region)
+}
+
+func TestQCloudKeyIDSecretFromAwsEnv(t *testing.T) {
+	args := ObjectStorageArguments{
+		Endpoint: "http://cos.foobar.myqcloud.com",
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "foo")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "bar")
+	args.validate()
+	assert.Equal(t, "foo", args.KeyID)
+	assert.Equal(t, "bar", args.KeySecret)
 }

@@ -323,7 +323,7 @@ func testFileService(
 			content := make([]byte, _BlockContentSize*4)
 			_, err := rand.Read(content)
 			assert.Nil(t, err)
-			parts := randomSplit(content, len(content)/16)
+			parts := randomCut(content, 16)
 
 			// write
 			writeVector := IOVector{
@@ -361,7 +361,7 @@ func testFileService(
 			readVector.Release()
 
 			// read, random entry
-			parts = randomSplit(content, len(content)/16)
+			parts = randomCut(content, 16)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
 			for _, part := range parts {
@@ -374,12 +374,12 @@ func testFileService(
 			err = fs.Read(ctx, readVector)
 			assert.Nil(t, err)
 			for i, entry := range readVector.Entries {
-				assert.Equal(t, parts[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
+				assert.Equal(t, parts[i], entry.Data, "path: %s, entry: %+v", filePath, entry)
 			}
 			readVector.Release()
 
 			// read, random entry with ReadCloserForRead
-			parts = randomSplit(content, len(content)/16)
+			parts = randomCut(content, 16)
 			readVector.Entries = readVector.Entries[:0]
 			offset = int64(0)
 			readers := make([]io.ReadCloser, len(parts))
@@ -1014,19 +1014,25 @@ func testFileService(
 
 }
 
-func randomSplit(data []byte, maxLen int) (ret [][]byte) {
-	for {
-		if len(data) == 0 {
-			return
+func randomCut(data []byte, parts int) [][]byte {
+	positions := mrand.Perm(len(data))[:parts-1]
+	sort.Ints(positions)
+	slices := make([][]byte, 0, parts)
+	slices = append(slices, data[:positions[0]])
+	for i, pos := range positions {
+		if i == len(positions)-1 {
+			break
 		}
-		if len(data) < maxLen {
-			ret = append(ret, data)
-			return
-		}
-		cut := 1 + mrand.Intn(maxLen)
-		ret = append(ret, data[:cut])
-		data = data[cut:]
+		slices = append(slices, data[pos:positions[i+1]])
 	}
+	slices = append(slices, data[positions[len(positions)-1]:])
+	ret := slices[:0]
+	for _, slice := range slices {
+		if len(slice) > 0 {
+			ret = append(ret, slice)
+		}
+	}
+	return ret
 }
 
 func fixedSplit(data []byte, l int) (ret [][]byte) {
