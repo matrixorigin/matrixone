@@ -367,3 +367,17 @@ alter table test01 rename column col1 to newCol;
 show create table test01;
 drop database test;
 set global lower_case_table_names = 1;
+
+
+
+
+drop database if exists test;
+create database test;
+use test;
+begin;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+delete from s3t where a < 1000;
+commit;
+drop database test;
