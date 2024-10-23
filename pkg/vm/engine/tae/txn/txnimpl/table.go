@@ -1311,10 +1311,12 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 		if err = node.PrepareCommit(); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
-				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				buf.WriteString(
+					fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
 				obj, ok := node.(*catalog.ObjectEntry)
 				if ok {
-					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					buf.WriteString(
+						fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
 				}
 				for idx2, node2 := range tbl.txnEntries.entries {
 					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
@@ -1357,10 +1359,12 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
-				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				buf.WriteString(
+					fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
 				obj, ok := node.(*catalog.ObjectEntry)
 				if ok {
-					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					buf.WriteString(
+						fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
 				}
 				for idx2, node2 := range tbl.txnEntries.entries {
 					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
@@ -1436,7 +1440,10 @@ func (tbl *txnTable) RangeDelete(
 	}
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
 	for i := start; i <= end; i++ {
-		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), i)
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(),
+			id.BlockID.Sequence(),
+			i)
 		rowIDVec.Append(rowID, false)
 	}
 	return tbl.DeleteByPhyAddrKeys(rowIDVec, pk, dt)
@@ -1491,7 +1498,10 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		}
 	}()
 	if tbl.tombstoneTable == nil {
-		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
+		tbl.tombstoneTable = newBaseTable(
+			tbl.entry.GetLastestSchema(true),
+			true,
+			tbl)
 	}
 	err = tbl.dedup(
 		tbl.store.ctx,
@@ -1548,9 +1558,15 @@ func (tbl *txnTable) contains(
 			}
 			rid := keys.Get(j).(types.Rowid)
 			for i := 0; i < workspaceDeleteBatch.Length(); i++ {
-				rowID := workspaceDeleteBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
+				rowID := workspaceDeleteBatch.GetVectorByName(
+					objectio.TombstoneAttr_Rowid_Attr).Get(i).(types.Rowid)
 				if rid == rowID {
-					containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
+					containers.UpdateValue(
+						keys.GetDownstreamVector(),
+						uint32(j),
+						nil,
+						true,
+						mp)
 				}
 			}
 		}
@@ -1571,7 +1587,13 @@ func (tbl *txnTable) contains(
 		}
 		idx := indexwrapper.NewImmutIndex(stats.SortKeyZoneMap(), bf, stats.ObjectLocation())
 		for i := uint16(0); i < uint16(blkCount); i++ {
-			sel, err := idx.BatchDedup(ctx, keys, keysZM, tbl.store.rt, true, uint32(i))
+			sel, err := idx.BatchDedup(
+				ctx,
+				keys,
+				keysZM,
+				tbl.store.rt,
+				true,
+				uint32(i))
 			if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 				continue
 			}
@@ -1583,7 +1605,11 @@ func (tbl *txnTable) contains(
 				blkRow = totalRow
 			}
 			totalRow -= blkRow
-			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
+			metaloc := objectio.BuildLocation(
+				stats.ObjectName(),
+				stats.Extent(),
+				blkRow,
+				i)
 
 			vectors, closeFunc, err := blockio.LoadColumns2(
 				tbl.store.ctx,
@@ -1598,7 +1624,8 @@ func (tbl *txnTable) contains(
 			if err != nil {
 				return err
 			}
-			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
+			data := vector.MustFixedColWithTypeCheck[types.Rowid](
+				vectors[0].GetDownstreamVector())
 			containers.ForeachVector(keys,
 				func(id types.Rowid, isNull bool, row int) error {
 					if keys.IsNull(row) {
