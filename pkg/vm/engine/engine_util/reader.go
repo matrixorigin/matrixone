@@ -225,7 +225,8 @@ type reader struct {
 
 	memFilter MemPKFilter
 
-	readBlockCnt uint64
+	readBlockCnt uint64 // count of blocks this reader has read
+	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
@@ -315,6 +316,7 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
+	threshHold uint64,
 ) (*reader, error) {
 
 	baseFilter, err := ConstructBasePKFilter(
@@ -357,6 +359,7 @@ func NewReader(
 	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
+	r.threshHold = threshHold
 	return r, nil
 }
 
@@ -434,7 +437,8 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.readBlockCnt > 100 {
+
+	if r.readBlockCnt > r.threshHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
@@ -481,4 +485,11 @@ func (r *reader) Read(
 	}
 
 	return false, nil
+}
+
+func GetThresholdForReader(readerNum int) uint64 {
+	if readerNum <= 8 {
+		return uint64(1024 / readerNum)
+	}
+	return 128
 }
