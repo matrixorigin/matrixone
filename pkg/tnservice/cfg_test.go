@@ -40,3 +40,25 @@ func TestDefaulValue(t *testing.T) {
 	c := Config{}
 	c.SetDefaultValue()
 }
+
+func TestDedupOption(t *testing.T) {
+	c := Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Optimistic"
+	assert.NoError(t, c.Validate())
+	assert.Equal(t, c.Txn.DedupType, "skip-workspace")
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Pessimistic"
+	assert.NoError(t, c.Validate())
+	assert.Equal(t, c.Txn.DedupType, "incremental")
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.DedupType = "Invalid Type"
+	assert.Error(t, c.Validate())
+}

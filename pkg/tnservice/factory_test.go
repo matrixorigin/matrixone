@@ -53,3 +53,45 @@ func TestCreateTxnStorage(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, v)
 }
+
+func TestDedupOption2(t *testing.T) {
+	ctx := context.TODO()
+	s := &store{rt: runtime.DefaultRuntime(), cfg: &Config{}, stopper: stopper.NewStopper("")}
+	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+		return mem.NewMemLog(), nil
+	}
+
+	s.cfg.Txn.Storage.Backend = StorageMEMKV
+	s.cfg.Txn.DedupType = "skip-workspace"
+	v, err := s.createTxnStorage(ctx, metadata.TNShard{})
+	assert.NoError(t, err)
+	assert.NotNil(t, v)
+}
+
+func TestDedupOption3(t *testing.T) {
+	ctx := context.TODO()
+	s := &store{rt: runtime.DefaultRuntime(), cfg: &Config{}, stopper: stopper.NewStopper("")}
+	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+		return mem.NewMemLog(), nil
+	}
+
+	s.cfg.Txn.Storage.Backend = StorageMEMKV
+	s.cfg.Txn.DedupType = "skip-all"
+	v, err := s.createTxnStorage(ctx, metadata.TNShard{})
+	assert.NoError(t, err)
+	assert.NotNil(t, v)
+}
+
+func TestDedupOption4(t *testing.T) {
+	ctx := context.TODO()
+	s := &store{rt: runtime.DefaultRuntime(), cfg: &Config{}, stopper: stopper.NewStopper("")}
+	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+		return mem.NewMemLog(), nil
+	}
+
+	s.cfg.Txn.Storage.Backend = StorageMEMKV
+	s.cfg.Txn.DedupType = "skip-all"
+	v, err := s.createTxnStorage(ctx, metadata.TNShard{})
+	assert.NoError(t, err)
+	assert.NotNil(t, v)
+}
