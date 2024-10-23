@@ -99,6 +99,13 @@ func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
 
+func (relData *BlockListRelData) BuildEmptyRelDataWithPreAlloc(i int) engine.RelData {
+	l := make([]byte, 0, objectio.BlockInfoSize*i)
+	return &BlockListRelData{
+		blklist: l,
+	}
+}
+
 func (relData *BlockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
 	return *relData.blklist.Get(i)
 }

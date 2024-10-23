@@ -688,6 +688,7 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
+	BuildEmptyRelDataWithPreAlloc(i int) RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
@@ -1033,6 +1034,10 @@ func (rd *EmptyRelationData) AppendShardID(id uint64) {
 }
 
 func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) BuildEmptyRelDataWithPreAlloc(i int) RelData {
 	panic("not supported")
 }
 

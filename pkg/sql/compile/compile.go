@@ -4609,7 +4609,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData()
+	nodes[0].Data = relData.BuildEmptyRelDataWithPreAlloc(relData.DataCnt() / len(c.cnList))
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
@@ -4619,7 +4619,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
-				Data: relData.BuildEmptyRelData(),
+				Data: relData.BuildEmptyRelDataWithPreAlloc(relData.DataCnt() / len(c.cnList)),
 			})
 		}
 	}
