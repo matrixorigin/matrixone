@@ -61,4 +61,16 @@ func TestDedupOption(t *testing.T) {
 	}
 	c.Txn.DedupType = "Invalid Type"
 	assert.Error(t, c.Validate())
+	
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.DedupType = "Invalid Type"
+	c.SetDefaultValue()
+	
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Optimistic"
+	c.SetDefaultValue()
 }
