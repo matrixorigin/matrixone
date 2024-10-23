@@ -127,7 +127,8 @@ func cloneSomeVecFromCompactBatchs(
 	src *batch.CompactBatchs,
 	partitionIdxInBatch int,
 	getPartitionIdx int,
-	cols []int) ([]*batch.Batch, error) {
+	cols []int,
+	attrs []string) ([]*batch.Batch, error) {
 
 	var err error
 	var newBat *batch.Batch
@@ -149,6 +150,7 @@ func cloneSomeVecFromCompactBatchs(
 		expect := int32(getPartitionIdx)
 		for i := 0; i < src.Length(); i++ {
 			newBat = batch.NewWithSize(len(cols))
+			newBat.Attrs = attrs
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
@@ -182,6 +184,7 @@ func cloneSomeVecFromCompactBatchs(
 	} else {
 		for i := 0; i < src.Length(); i++ {
 			newBat = batch.NewWithSize(len(cols))
+			newBat.Attrs = attrs
 			oldBat := src.Get(i)
 			for newColIdx, oldColIdx := range cols {
 				newBat.Vecs[newColIdx], err = oldBat.Vecs[oldColIdx].Dup(proc.GetMPool())
@@ -204,7 +207,8 @@ func fetchMainTableBatchs(
 	src *batch.CompactBatchs,
 	partitionIdxInBatch int,
 	getPartitionIdx int,
-	cols []int) ([]*batch.Batch, error) {
+	cols []int,
+	attrs []string) ([]*batch.Batch, error) {
 	var err error
 	var newBat *batch.Batch
 	mp := proc.GetMPool()
@@ -239,6 +243,7 @@ func fetchMainTableBatchs(
 		expect := int32(getPartitionIdx)
 		for i, oldBat := range srcBats {
 			newBat = batch.NewWithSize(len(cols))
+			newBat.Attrs = attrs
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
 
@@ -271,10 +276,23 @@ func fetchMainTableBatchs(
 	} else {
 		for i, oldBat := range srcBats {
 			newBat = batch.NewWithSize(len(cols))
+			newBat.Attrs = attrs
 			for j, idx := range cols {
 				oldVec := oldBat.Vecs[idx]
 				srcBats[i].ReplaceVector(oldVec, nil, 0)
-				newBat.Vecs[j] = oldVec
+
+				//expand constant vector
+				if oldVec.IsConst() {
+					newVec := vector.NewVec(*oldVec.GetType())
+					err = vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
+					if err != nil {
+						return nil, err
+					}
+					oldVec.Free(mp)
+					newBat.Vecs[j] = newVec
+				} else {
+					newBat.Vecs[j] = oldVec
+				}
 			}
 			newBat.SetRowCount(newBat.Vecs[0].Length())
 			retBats[i] = newBat

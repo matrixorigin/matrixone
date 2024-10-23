@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -108,6 +109,16 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.ctr.action = actionInsert
 	} else {
 		update.ctr.action = actionDelete
+	}
+
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if len(updateCtx.InsertAttrs) == 0 {
+			for _, col := range updateCtx.TableDef.Cols {
+				if col.Name != catalog.Row_ID {
+					updateCtx.InsertAttrs = append(updateCtx.InsertAttrs, col.Name)
+				}
+			}
+		}
 	}
 
 	return nil
@@ -225,37 +236,61 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	batData, batArea := vector.MustVarlenaRawData(input.Batch.Vecs[5])
 
 	ctx := proc.Ctx
-	bat := batch.NewOffHeapEmpty()
+	batBufs := make(map[actionType]*batch.Batch)
 	defer func() {
-		bat.Clean(proc.Mp())
+		for _, bat := range batBufs {
+			bat.Clean(proc.Mp())
+		}
 	}()
 
 	for i, action := range actions {
 		updateCtx := update.MultiUpdateCtx[updateCtxIdx[i]]
 		isPartition := len(updateCtx.PartitionTableIDs) > 0
-		bat.CleanOnlyData()
-		if err := bat.UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
-			return input, err
-		}
 
 		switch actionType(action) {
 		case actionDelete:
+			if batBufs[actionDelete] == nil {
+				batBufs[actionDelete] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionDelete].CleanOnlyData()
+			}
+			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
 			update.addDeleteAffectRows(updateCtx.TableType, rowCounts[i])
 			name := nameData[i].UnsafeGetString(nameArea)
 			if isPartition {
-				err = updateCtx.PartitionSources[partitionIdx[i]].Delete(ctx, bat, name)
+				err = updateCtx.PartitionSources[partitionIdx[i]].Delete(ctx, batBufs[actionDelete], name)
 			} else {
-				err = updateCtx.Source.Delete(ctx, bat, name)
+				err = updateCtx.Source.Delete(ctx, batBufs[actionDelete], name)
 			}
 		case actionInsert:
+			if batBufs[actionInsert] == nil {
+				batBufs[actionInsert] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionInsert].CleanOnlyData()
+			}
+			if err := batBufs[actionInsert].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
+
 			update.addInsertAffectRows(updateCtx.TableType, rowCounts[i])
 			if isPartition {
-				err = updateCtx.PartitionSources[partitionIdx[i]].Write(ctx, bat)
+				err = updateCtx.PartitionSources[partitionIdx[i]].Write(ctx, batBufs[actionInsert])
 			} else {
-				err = updateCtx.Source.Write(ctx, bat)
+				err = updateCtx.Source.Write(ctx, batBufs[actionInsert])
 			}
 		case actionUpdate:
-			err = update.updateOneBatch(proc, bat)
+			if batBufs[actionUpdate] == nil {
+				batBufs[actionUpdate] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionUpdate].CleanOnlyData()
+			}
+			if err := batBufs[actionUpdate].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
+
+			err = update.updateOneBatch(proc, batBufs[actionUpdate])
 		default:
 			panic("unexpected multi_update.actionType")
 		}
