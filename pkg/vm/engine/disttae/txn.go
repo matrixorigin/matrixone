@@ -1246,13 +1246,7 @@ func (txn *Transaction) transferTombstonesByStatement(
 			}
 		}
 
-		start := txn.transfer.lastTransferred
-		end := types.TimestampToTS(txn.op.SnapshotTS())
-
-		txn.transfer.pendingTransfer = false
-		txn.transfer.lastTransferred = end
-
-		return txn.transferTombstones(ctx, start, end)
+		return txn.transferTombstones(ctx)
 
 	} else if snapshotUpdated {
 		// pending transfer until next statement or commit
@@ -1275,15 +1269,7 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 			return err
 		}
 
-		err := txn.transferTombstones(
-			ctx,
-			txn.transfer.lastTransferred,
-			types.TimestampToTS(txn.op.SnapshotTS()))
-
-		txn.transfer.pendingTransfer = false
-		txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
-
-		return err
+		return txn.transferTombstones(ctx)
 	}
 
 	return nil
@@ -1291,8 +1277,15 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 
 func (txn *Transaction) transferTombstones(
 	ctx context.Context,
-	start, end types.TS,
 ) (err error) {
+
+	start := txn.transfer.lastTransferred
+	end := types.TimestampToTS(txn.op.SnapshotTS())
+
+	defer func() {
+		txn.transfer.pendingTransfer = false
+		txn.transfer.lastTransferred = end
+	}()
 
 	if err = transferInmemTombstones(ctx, txn, start, end); err != nil {
 		return err
