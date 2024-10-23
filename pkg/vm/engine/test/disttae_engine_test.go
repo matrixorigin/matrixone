@@ -783,7 +783,7 @@ func TestCacheGC(t *testing.T) {
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
 	require.Equal(t, 4, r.TStaleItem)
-	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
+	require.Equal(t, 2 /*test2 & test 4*/, r.TStaleCpk)
 
 }
 
