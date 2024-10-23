@@ -743,13 +743,16 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
 
-		txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
+		// transfer stuff
+		if txn.op.Txn().IsRCIsolation() {
+			txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
 
-		if txn.statementID == 0 {
-			txn.transfer.pendingTransfer = false
-			txn.transfer.lastTransferred = types.TS{}
-		} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
-			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
+			if txn.statementID == 0 {
+				txn.transfer.pendingTransfer = false
+				txn.transfer.lastTransferred = types.TS{}
+			} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
+				txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
+			}
 		}
 	}
 	// rollback current statement's writes info
