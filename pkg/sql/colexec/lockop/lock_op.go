@@ -639,8 +639,8 @@ func LockWithMayUpgrade(
 
 	// if return ErrLockNeedUpgrade, manually upgrade the lock and retry
 	logutil.Infof("Trying to upgrade lock level due to too many row level locks for txn %s", txnID)
-	opts.lockTable = true
-	_, rows, _ = fetchFunc(
+	opts = opts.WithLockTable(true, false)
+	_, nrows, ng := fetchFunc(
 		vec,
 		opts.parker,
 		pkType,
@@ -649,7 +649,8 @@ func LockWithMayUpgrade(
 		opts.filter,
 		opts.filterCols,
 	)
-	return lockService.Lock(ctx, tableID, rows, txnID, options)
+	options.Granularity = ng
+	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
 func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
