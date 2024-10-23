@@ -327,6 +327,12 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
+	case types.T_decimal128:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row := range groupByCol {
