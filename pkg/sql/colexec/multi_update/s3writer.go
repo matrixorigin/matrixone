@@ -43,6 +43,10 @@ const (
 	PkIdx    = 1
 )
 
+var (
+	DeleteBatchAttrs = []string{catalog.Row_ID, "pk"}
+)
+
 type deleteBlockData struct {
 	bitmap *nulls.Nulls
 	typ    int8
@@ -272,9 +276,9 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 			if parititionCount == 0 {
 				// normal table
 				if onlyDelete && updateCtx.TableType == UpdateMainTable {
-					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
+					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols, DeleteBatchAttrs)
 				} else {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols)
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols, DeleteBatchAttrs)
 				}
 				if err != nil {
 					return
@@ -295,9 +299,9 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
 					if onlyDelete && updateCtx.TableType == UpdateMainTable && getPartitionIdx == lastIdx {
-						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
+						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs)
 					} else {
-						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols)
+						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs)
 					}
 					if err != nil {
 						return
@@ -321,9 +325,9 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 			if parititionCount == 0 {
 				// normal table
 				if updateCtx.TableType == UpdateMainTable {
-					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
+					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols, updateCtx.InsertAttrs)
 				} else {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols)
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.InsertCols, updateCtx.InsertAttrs)
 				}
 				if err != nil {
 					return
@@ -337,9 +341,9 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				lastIdx := parititionCount - 1
 				for getPartitionIdx := range parititionCount {
 					if updateCtx.TableType == UpdateMainTable && getPartitionIdx == lastIdx {
-						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, getPartitionIdx, updateCtx.InsertCols)
+						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, getPartitionIdx, updateCtx.InsertCols, updateCtx.InsertAttrs)
 					} else {
-						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, getPartitionIdx, updateCtx.InsertCols)
+						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, getPartitionIdx, updateCtx.InsertCols, updateCtx.InsertAttrs)
 					}
 					if err != nil {
 						return
