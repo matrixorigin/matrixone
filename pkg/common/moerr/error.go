@@ -341,7 +341,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
 	ErrLogServiceNotReady:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
-	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
+	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "Unknown database %s"},
 	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
 	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
 	ErrEmptyVector:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},

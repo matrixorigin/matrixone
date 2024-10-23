@@ -591,7 +591,7 @@ drop database db100;
 create database sub_db7 from sys publication pubname7;
 internal error: there is no publication pubname7
 use sub_db7;
-invalid database sub_db7
+Unknown database sub_db7
 show tables;
 not connect to a database
 create database test_db;

@@ -151,7 +151,7 @@ create table test_13(col1 int primary key,col2 varchar(25));
 rollback;
 drop database s_db_1;
 use s_db_1;
-invalid database s_db_1
+Unknown database s_db_1
 select * from test_13;
 not connect to a database
 create database s_db_1;

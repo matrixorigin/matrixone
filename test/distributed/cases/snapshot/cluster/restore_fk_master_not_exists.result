@@ -184,21 +184,21 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 sys_sp    2024-08-21 09:09:41.024335    account    sys        
 drop database Company;
 select * from Company.Departments;
-invalid database company
+Unknown database company
 select * from Company.Employees;
-invalid database company
+Unknown database company
 select * from Company.Positions;
-invalid database company
+Unknown database company
 select * from Company.EmployeePositions;
-invalid database company
+Unknown database company
 select * from Company.Salaries;
-invalid database company
+Unknown database company
 select * from Company.Benefits;
-invalid database company
+Unknown database company
 select * from Company.TimeOff;
-invalid database company
+Unknown database company
 select * from Company.PerformanceReviews;
-invalid database company
+Unknown database company
 restore account sys database Company table Departments from snapshot sys_sp;
 restore account sys database Company table Employees from snapshot sys_sp;
 restore account sys database Company table Positions from snapshot sys_sp;
