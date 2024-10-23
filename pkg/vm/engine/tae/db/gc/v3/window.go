@@ -189,6 +189,7 @@ func (w *GCWindow) ScanCheckpoints(
 		if err != nil {
 			return false, err
 		}
+		defer data.Close()
 		if processCkpData != nil {
 			if err = processCkpData(checkpointEntries[0], data); err != nil {
 				return false, err
