@@ -409,14 +409,12 @@ func (c *checkpointCleaner) Replay() (err error) {
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
-		waterMark := compacted.GetEnd()
 		logtail.FillUsageBatOfCompacted(
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 			ckpData,
 			c.mutation.snapshotMeta,
 			accountSnapshots,
-			pitrs,
-			&waterMark)
+			pitrs)
 		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
@@ -890,8 +888,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		newCheckpointData,
 		c.mutation.snapshotMeta,
 		accountSnapshots,
-		pitrs,
-		&checkpointMaxEnd)
+		pitrs)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}

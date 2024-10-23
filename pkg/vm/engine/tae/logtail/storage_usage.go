@@ -1018,11 +1018,19 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		}
 
 		if _, ok := delDbs[uniqueTbl[1]]; ok {
-			continue
+			if usage.SnapshotSize == 0 {
+				continue
+			}
+			usage.Size = 0
+			usage.ObjectAbstract = ObjectAbstract{}
 		}
 
 		if _, ok := delTbls[uniqueTbl[2]]; ok {
-			continue
+			if usage.SnapshotSize == 0 {
+				continue
+			}
+			usage.Size = 0
+			usage.ObjectAbstract = ObjectAbstract{}
 		}
 
 		memo.Replace(UsageData{
@@ -1030,6 +1038,7 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 			TblId:          uniqueTbl[2],
 			DbId:           uniqueTbl[1],
 			AccId:          uniqueTbl[0],
+			SnapshotSize:   usage.SnapshotSize,
 			ObjectAbstract: usage.ObjectAbstract,
 		})
 
@@ -1155,7 +1164,6 @@ func FillUsageBatOfCompacted(
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,
-	waterMark *types.TS,
 ) {
 	now := time.Now()
 	var memoryUsed float64
@@ -1182,25 +1190,26 @@ func FillUsageBatOfCompacted(
 			bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		for i := 0; i < bat.Length(); i++ {
 			if insDeleteTSVec[i].IsEmpty() {
-				dropTs := meta.GetTableDropAt(tableID[i])
-				if dropTs.IsEmpty() {
+				dropTs, ok := meta.GetTableDropAt(tableID[i])
+				if !ok || dropTs.IsEmpty() {
 					continue
 				}
 			}
-			accountId := uint64(meta.GetAccountId(tableID[i]))
+			id, ok := meta.GetAccountId(tableID[i])
+			if !ok {
+				continue
+			}
+			accountId := uint64(id)
 			if len(tableSnapshots[tableID[i]]) == 0 &&
 				(tablePitrs[tableID[i]] == nil ||
 					tablePitrs[tableID[i]].IsEmpty()) {
 				continue
 			}
 
-			if insDeleteTSVec[i].GT(waterMark) {
-				continue
-			}
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
 			// skip the same object
-			if _, ok := objectsName[stats.ObjectName().String()]; ok {
+			if _, ok = objectsName[stats.ObjectName().String()]; ok {
 				continue
 			}
 			key := [3]uint64{accountId, dbid[i], tableID[i]}
@@ -1229,10 +1238,16 @@ func FillUsageBatOfCompacted(
 		}
 		val.SnapshotSize = ud.SnapshotSize
 		update[key] = val
+		delete(usageData, key)
 	}
 	iter.Release()
 
 	for _, v := range update {
+		usage.cache.SetOrReplace(v)
+	}
+
+	// table has been dropped
+	for _, v := range usageData {
 		usage.cache.SetOrReplace(v)
 	}
 	memoryUsed = usage.MemoryUsed()

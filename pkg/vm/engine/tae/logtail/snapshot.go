@@ -1457,22 +1457,22 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	return nil
 }
 
-func (sm *SnapshotMeta) GetTableDropAt(tid uint64) types.TS {
+func (sm *SnapshotMeta) GetTableDropAt(tid uint64) (types.TS, bool) {
 	sm.RLock()
 	defer sm.RUnlock()
 	if sm.tableIDIndex[tid] == nil {
-		return types.TS{}
+		return types.TS{}, false
 	}
-	return sm.tableIDIndex[tid].deleteAt
+	return sm.tableIDIndex[tid].deleteAt, true
 }
 
-func (sm *SnapshotMeta) GetAccountId(tid uint64) uint32 {
+func (sm *SnapshotMeta) GetAccountId(tid uint64) (uint32, bool) {
 	sm.RLock()
 	defer sm.RUnlock()
 	if sm.tableIDIndex[tid] == nil {
-		return 0
+		return 0, false
 	}
-	return sm.tableIDIndex[tid].accountID
+	return sm.tableIDIndex[tid].accountID, true
 }
 
 // for test
