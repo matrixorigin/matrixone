@@ -413,4 +413,16 @@ set @a=10000;
 execute s using @a;
 set @a=23456;
 execute s using @a;
+
+drop table if exists prepare_test_t1;
+create table prepare_test_t1(col1 int, col2 int);
+prepare s_pre from insert into prepare_test_t1 values(1, ?);
+set @var = 2;
+execute s_pre using @var;
+select * from prepare_test_t1;
+alter table prepare_test_t1 add col3 int;
+execute s_pre using @var;
+deallocate prepare s_pre;
+drop table prepare_test_t1;
+
 drop database if exists db1;
