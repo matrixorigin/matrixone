@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -449,31 +450,19 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
-	var err error
-	var result lock.Result
-	for {
-		result, err = lockService.Lock(
-			ctx,
-			tableID,
-			rows,
-			txn.ID,
-			options)
-		if !canRetryLock(table, txnOp, err) {
-			break
-		}
-		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
-			opts.lockTable = true
-			_, rows, _ = fetchFunc(
-				vec,
-				opts.parker,
-				pkType,
-				opts.maxCountPerLock,
-				opts.lockTable,
-				opts.filter,
-				opts.filterCols,
-			)
-		}
-	}
+	result, err := lockWithRetry(
+		ctx,
+		lockService,
+		table,
+		rows,
+		txn.ID,
+		options,
+		txnOp,
+		fetchFunc,
+		vec,
+		opts,
+		pkType,
+	)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -600,6 +589,69 @@ func doLock(
 
 const defaultWaitTimeOnRetryLock = time.Second
 
+func lockWithRetry(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	txnOp client.TxnOperator,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	var result lock.Result
+	var err error
+
+	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
+	if !canRetryLock(tableID, txnOp, err) {
+		return result, err
+	}
+
+	for {
+		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
+		if !canRetryLock(tableID, txnOp, err) {
+			break
+		}
+	}
+
+	return result, err
+}
+
+func LockWithMayUpgrade(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+
+	// if return ErrLockNeedUpgrade, manually upgrade the lock and retry
+	logutil.Infof("Trying to upgrade lock level due to too many row level locks for txn %s", txnID)
+	opts.lockTable = true
+	_, rows, _ = fetchFunc(
+		vec,
+		opts.parker,
+		pkType,
+		opts.maxCountPerLock,
+		opts.lockTable,
+		opts.filter,
+		opts.filterCols,
+	)
+	return lockService.Lock(ctx, tableID, rows, txnID, options)
+}
+
 func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
@@ -615,8 +667,7 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
