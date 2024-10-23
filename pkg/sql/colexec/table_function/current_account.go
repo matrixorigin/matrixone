@@ -34,7 +34,7 @@ func currentAccountPrepare(_ *process.Process, _ *TableFunction) (tvfState, erro
 	return &currentAccountState{}, nil
 }
 
-func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	// we do not call startPreamble here,
 	// there are very specific way of constructing the batch, below.
 	var err error
