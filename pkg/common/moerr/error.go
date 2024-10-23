@@ -355,7 +355,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrShortWrite:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
 	ErrInvalidWrite:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
 	ErrShortBuffer:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
-	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "not connect to a database"},
+	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
 	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},

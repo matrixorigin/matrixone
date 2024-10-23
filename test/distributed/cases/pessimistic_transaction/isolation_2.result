@@ -115,7 +115,7 @@ drop database dis_db_01;
 delete from dis_table_04 where a=4;
 no such table dis_db_01.dis_table_04
 select * from dis_table_04;
-not connect to a database
+No database selected
 rollback ;
 select * from dis_db_01.dis_table_04;
 Unknown database dis_db_01
@@ -453,7 +453,7 @@ drop database iso_db_02;
 commit;
 Unknown database iso_db_02
 create table iso_table_0001(a int);
-not connect to a database
+No database selected
 commit;
 
 use iso_db_02;

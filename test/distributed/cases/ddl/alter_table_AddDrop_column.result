@@ -355,12 +355,12 @@ transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int 
 use isolation;
 Unknown database isolation
 show create table transaction03;
-not connect to a database
+No database selected
 commit;
 alter table transaction03 drop column d;
 no such table .transaction03
 show create table transaction03;
-not connect to a database
+No database selected
 show create table transaction03;
 Table    Create Table
 transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
@@ -533,7 +533,7 @@ c    d
 use isolation;
 Unknown database isolation
 select * from transaction04;
-not connect to a database
+No database selected
 commit;
 select * from transaction04;
 c    d

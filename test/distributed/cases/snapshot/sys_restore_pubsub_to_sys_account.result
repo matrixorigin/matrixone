@@ -710,7 +710,7 @@ system_metrics
 use sub09;
 Unknown database sub09
 select * from t1;
-not connect to a database
+No database selected
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 drop database sub09;

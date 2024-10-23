@@ -575,11 +575,11 @@ internal error: table projectbonuses not exists at snapshot mater_sp
 drop database if exists Company;
 restore account sys database Payroll table DepartmentBudgets from snapshot mater_sp;
 select * from Salaries;
-not connect to a database
+No database selected
 select * from ProjectBonuses;
-not connect to a database
+No database selected
 select * from DepartmentBudgets;
-not connect to a database
+No database selected
 drop snapshot if exists mater_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
