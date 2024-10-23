@@ -839,3 +839,20 @@ func Test_mysqlSinker_Close(t *testing.T) {
 
 	sinker.Close()
 }
+
+func Test_mysqlSinker_SinkSql(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 0))
+
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar: NewCdcActiveRoutine(),
+	}
+	err = sinker.SinkSql(context.Background(), "sql")
+	assert.NoError(t, err)
+}
