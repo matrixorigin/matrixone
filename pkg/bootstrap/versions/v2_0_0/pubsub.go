@@ -98,6 +98,7 @@ func getAllPubInfos(txn executor.TxnExecutor, accNameInfoMap map[string]*pubsub.
 		if err != nil {
 			return nil, err
 		}
+		getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("account %s's pub count: %d", accountInfo.Name, len(pubInfos)))
 
 		for _, pubInfo := range pubInfos {
 			allPubInfos[accountInfo.Name+"#"+pubInfo.PubName] = pubInfo
@@ -164,20 +165,24 @@ func UpgradePubSub(txn executor.TxnExecutor) (err error) {
 	if err != nil {
 		return
 	}
+	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("accNameInfoMap.size() = %d", len(accNameInfoMap)))
 
 	// allPubInfos: pubAccountName#pubName -> pubInfo
 	allPubInfos, err := getAllPubInfos(txn, accNameInfoMap)
 	if err != nil {
 		return
 	}
+	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("allPubInfos.size() = %d", len(allPubInfos)))
 
 	// pubSubscribedInfos: pubAccountName#pubName -> subscribedInfos
 	pubSubscribedInfos, err := getPubSubscribedInfos(txn)
 	if err != nil {
 		return
 	}
+	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("pubSubscribedInfos.size() = %d", len(pubSubscribedInfos)))
 
 	getSubAccountIds := func(pubInfo *pubsub.PubInfo, pubAccountName string) (subAccountIds []int32) {
+		getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("getSubAccountIds of %s.%s", pubAccountName, pubInfo.PubName))
 		if pubInfo.SubAccountsStr == pubsub.AccountAll {
 			for _, accInfo := range accNameInfoMap {
 				if accInfo.Name == pubAccountName {
@@ -188,7 +193,9 @@ func UpgradePubSub(txn executor.TxnExecutor) (err error) {
 			}
 		} else {
 			for _, accName := range pubInfo.GetSubAccountNames() {
-				subAccountIds = append(subAccountIds, accNameInfoMap[accName].Id)
+				if _, ok := accNameInfoMap[accName]; ok {
+					subAccountIds = append(subAccountIds, accNameInfoMap[accName].Id)
+				}
 			}
 		}
 		return
