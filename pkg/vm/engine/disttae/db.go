@@ -267,13 +267,19 @@ func (e *Engine) getOrCreateSnapPart(
 	//check whether the latest partition is available for reuse.
 	if _, err := tbl.tryToSubscribe(ctx); err == nil {
 		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-			logutil.Infof("xxxx getOrCreateSnapPart, table:%s, tid:%v, txn:%s, ps:%p",
+			logutil.Infof("xxxx getOrCreateSnapPart, reuse latest ps:%p, table:%s, tid:%v, txn:%s",
+				p.Snapshot(),
 				tbl.tableName,
 				tbl.tableId,
-				tbl.db.op.Txn().DebugString(),
-				p.Snapshot())
+				tbl.db.op.Txn().DebugString())
 			return p.Snapshot(), nil
 		}
+		logutil.Infof("xxxx getOrCreateSnapPart, "+
+			"latest partition state can't serve snapshot read at ts :%s, table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
 	}
 
 	//subscribe failed : 1. network timeout,
@@ -360,19 +366,43 @@ func (e *Engine) getOrCreateSnapPart(
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
 	if snap.IsEmpty() || ts.GT(&end) {
-		ps, err := tbl.tryToSubscribe(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ps == nil {
-			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
-		}
-		logutil.Infof("xxxx getOrCreateSnapPart, table:%s, tid:%v, txn:%s, ps:%p",
+		logutil.Infof("xxxx start to resue latest ps for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
+			ts.ToString(),
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),
-			ps)
-		return ps, nil
+			snap.IsEmpty(),
+			end.ToString(),
+		)
+		_, err := tbl.tryToSubscribe(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+			logutil.Infof("xxxx getOrCreateSnapPart resue latest ps:%p, "+
+				"table:%s, tid:%v, txn:%s,snapIsEmpty:%v, end:%s",
+				p.Snapshot(),
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString(),
+				snap.IsEmpty(),
+				end.ToString())
+			return p.Snapshot(), nil
+		}
+		logutil.Infof("xxxx getOrCreateSnapPart, "+
+			"latest partition state can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+		return nil, moerr.NewInternalErrorNoCtxf("Latest partition state can't serve for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+
 	}
 	if ts.LT(&start) {
 		return nil, moerr.NewInternalErrorNoCtxf(
