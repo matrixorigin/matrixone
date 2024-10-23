@@ -838,10 +838,16 @@ type OBCUConfig struct {
 	// cu unit
 	CUUnit float64 `toml:"cu_unit"`
 	// price
-	CpuPrice      float64 `toml:"cpu_price"`
-	MemPrice      float64 `toml:"mem_price"`
-	IoInPrice     float64 `toml:"io_in_price"`
-	IoOutPrice    float64 `toml:"io_out_price"`
+	CpuPrice   float64 `toml:"cpu_price"`
+	MemPrice   float64 `toml:"mem_price"`
+	IoInPrice  float64 `toml:"io_in_price"`
+	IoOutPrice float64 `toml:"io_out_price"`
+	// IoListPrice default value: IoInPrice
+	// NOT allow 0 value.
+	IoListPrice float64 `toml:"io_list_price"`
+	// IoDeletePrice default value: IoInPrice, cc SetDefaultValues
+	// The only one ALLOW 0 value.
+	IoDeletePrice float64 `toml:"io_delete_price"`
 	TrafficPrice0 float64 `toml:"traffic_price_0"`
 	TrafficPrice1 float64 `toml:"traffic_price_1"`
 	TrafficPrice2 float64 `toml:"traffic_price_2"`
@@ -863,6 +869,8 @@ func NewOBCUConfig() *OBCUConfig {
 		MemPrice:      CUMemPriceDefault,
 		IoInPrice:     CUIOInPriceDefault,
 		IoOutPrice:    CUIOOutPriceDefault,
+		IoListPrice:   -1, // default as OBCUConfig.IoInPrice
+		IoDeletePrice: -1, // default as OBCUConfig.IoInPrice
 		TrafficPrice0: CUTrafficPrice0Default,
 		TrafficPrice1: CUTrafficPrice1Default,
 		TrafficPrice2: CUTrafficPrice2Default,
@@ -885,6 +893,14 @@ func (c *OBCUConfig) SetDefaultValues() {
 	}
 	if c.IoOutPrice <= 0 {
 		c.IoOutPrice = CUIOOutPriceDefault
+	}
+	// default as c.IoInPrice
+	if c.IoListPrice <= 0 {
+		c.IoListPrice = c.IoInPrice
+	}
+	// default as c.IoInPrice, allow value: 0
+	if c.IoDeletePrice < 0 {
+		c.IoDeletePrice = c.IoInPrice
 	}
 	if c.TrafficPrice0 <= 0 {
 		c.TrafficPrice0 = CUTrafficPrice0Default
