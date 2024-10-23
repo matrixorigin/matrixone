@@ -1442,7 +1442,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
-	rowIDStr := rowIDVec.PPString(1)
+	var rowIDStr string
 	defer func() {
 		if err == nil {
 			return
@@ -1455,29 +1455,32 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		// 		end)
 		// }
 		// This err also captured by txn's write conflict check.
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(int(pk.Length())))
-			}
-
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(pk.Length()))
+		}
+		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[ts=%s]: table-%d delete rows(%v) %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				tbl.GetID(),
 				rowIDStr,
 				err)
-			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
-					tbl.store.txn.GetID(),
-					tbl.store.txn.GetStartTS().ToString(),
-					tbl.GetID(),
-					rowIDStr,
-					pk.PPString(pk.Length()),
-				)
-			}
+		})
+
+		if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
+				tbl.store.txn.GetID(),
+				tbl.store.txn.GetStartTS().ToString(),
+				tbl.GetID(),
+				rowIDStr,
+				pk.PPString(pk.Length()),
+			)
 		}
 	}()
 	deleteBatch := tbl.createTombstoneBatch(rowIDVec, pk)
 	defer func() {
+		if err != nil {
+			rowIDStr = rowIDVec.PPString(1)
+		}
 		for _, attr := range deleteBatch.Attrs {
 			if attr == objectio.TombstoneAttr_PK_Attr {
 				// not close pk
