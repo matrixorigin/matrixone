@@ -1288,6 +1288,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		},
 	}
 
+	mp, err := mpool.NewMPool("cdc", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
 	tests := []struct {
 		name string
 		args args
@@ -1301,6 +1305,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 				ieFactory:    tIEFactory1,
 				attachToTask: attacher,
 				cnEngine:     eng,
+				cnEngMp:      mp,
 				cnTxnClient:  txnClient,
 			},
 		},
