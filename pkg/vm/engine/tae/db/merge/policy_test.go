@@ -17,18 +17,25 @@ package merge
 import (
 	"context"
 	"math"
+	"math/rand/v2"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -358,4 +365,59 @@ func TestSegLevel(t *testing.T) {
 	require.Equal(t, 4, segLevel(255))
 	require.Equal(t, 5, segLevel(256))
 	require.Equal(t, 5, segLevel(257))
+}
+
+func TestCheckTombstone(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	fs := testutil.NewSharedFS()
+
+	rowCnt := 100
+	ssCnt := 2
+
+	rowids := make([]types.Rowid, rowCnt)
+	metas := make([]objectio.ObjectDataMeta, ssCnt)
+	for i := 0; i < ssCnt; i++ {
+		writer := blockio.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+		assert.NotNil(t, writer)
+
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+		for j := 0; j < rowCnt; j++ {
+			row := types.RandomRowid()
+			rowids[j] = row
+			pk := rand.Int()
+
+			err := vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp)
+			require.NoError(t, err)
+
+			err = vector.AppendFixed[int32](bat.Vecs[1], int32(pk), false, mp)
+			require.NoError(t, err)
+		}
+
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+
+		_, _, err = writer.Sync(context.Background())
+		require.NoError(t, err)
+
+		ss := writer.GetObjectStats()
+		require.Equal(t, rowCnt, int(ss.Rows()))
+		meta, err := loadTombstoneMeta(context.TODO(), &ss, fs)
+		require.NoError(t, err)
+		metas[i] = meta
+	}
+	for _, rowID := range rowids {
+		id := rowID.BorrowObjectID()
+		for i := range metas {
+			ok := checkTombstoneMeta(metas[i], id)
+			if i == 0 {
+				require.False(t, ok)
+			} else {
+				require.True(t, ok)
+			}
+		}
+	}
 }
