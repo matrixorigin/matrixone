@@ -23,7 +23,7 @@ import (
 )
 
 // Only Paragraph and Table contains text in docx file.  All text are enclosed with paragraph tag w:p for both paragraph and table element.
-// 2 docx files included in the test.
+// 2 docx files included in the test and the sample xml files are in testfiles/sample.xml.
 // test.docx only contains paragraphs.
 // content of test.docx:
 //
