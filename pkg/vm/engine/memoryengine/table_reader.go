@@ -278,10 +278,6 @@ func (rd *MemRelationData) String() string {
 	return "RelData[M]"
 }
 
-func (rd *MemRelationData) BuildEmptyRelDataWithPreAlloc(i int) engine.RelData {
-	panic("not supported")
-}
-
 func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	panic("not supported")
 }
@@ -352,7 +348,7 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
+func (rd *MemRelationData) BuildEmptyRelData(i int) engine.RelData {
 	return &MemRelationData{}
 }
 

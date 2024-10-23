@@ -4074,7 +4074,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		var columnMap map[int]int
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
-			newRelData := relData.BuildEmptyRelData()
+			newRelData := relData.BuildEmptyRelData(1)
 			blk := relData.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 
@@ -4492,7 +4492,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
+						Data: relData.BuildEmptyRelData(1),
 					})
 				}
 
@@ -4508,7 +4508,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
+					Data: relData.BuildEmptyRelData(1),
 				}
 
 				engine.ForRangeShardID(i, relData.DataCnt(), relData,
@@ -4525,7 +4525,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
+						Data: relData.BuildEmptyRelData(1),
 					})
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
@@ -4541,7 +4541,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
+					Data: relData.BuildEmptyRelData(1),
 				}
 
 				engine.ForRangeShardID(i, i+step, relData,
@@ -4609,7 +4609,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelDataWithPreAlloc(relData.DataCnt() / len(c.cnList))
+	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
@@ -4619,7 +4619,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
-				Data: relData.BuildEmptyRelDataWithPreAlloc(relData.DataCnt() / len(c.cnList)),
+				Data: relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList)),
 			})
 		}
 	}

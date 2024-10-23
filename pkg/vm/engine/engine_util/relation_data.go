@@ -99,7 +99,7 @@ func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
 
-func (relData *BlockListRelData) BuildEmptyRelDataWithPreAlloc(i int) engine.RelData {
+func (relData *BlockListRelData) BuildEmptyRelData(i int) engine.RelData {
 	l := make([]byte, 0, objectio.BlockInfoSize*i)
 	return &BlockListRelData{
 		blklist: l,
@@ -230,12 +230,6 @@ func (relData *BlockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 	}
 
 	return ret
-}
-
-func (relData *BlockListRelData) BuildEmptyRelData() engine.RelData {
-	return &BlockListRelData{
-		blklist: objectio.BlockInfoSlice{},
-	}
 }
 
 func (relData *BlockListRelData) DataCnt() int {

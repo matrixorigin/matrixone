@@ -676,7 +676,7 @@ type RelData interface {
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	BuildEmptyRelData() RelData
+	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
 	// specified interface
@@ -688,7 +688,6 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
-	BuildEmptyRelDataWithPreAlloc(i int) RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
@@ -1037,10 +1036,6 @@ func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	panic("not supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelDataWithPreAlloc(i int) RelData {
-	panic("not supported")
-}
-
 func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
@@ -1097,7 +1092,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
 	return &EmptyRelationData{}
 }
 
