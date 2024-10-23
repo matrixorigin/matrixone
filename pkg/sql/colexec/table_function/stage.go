@@ -45,7 +45,7 @@ func stageListPrepare(proc *process.Process, tableFunction *TableFunction) (tvfS
 }
 
 // call
-func (s *stagelistState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *stagelistState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
 	var (
