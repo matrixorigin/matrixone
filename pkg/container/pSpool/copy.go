@@ -84,7 +84,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 	} else {
 		signal.usingCacheID = cb.buffer.getCacheID()
-		dst = signal.pointer
+		dst = &batch.Batch{}
 		dst.Recursive = src.Recursive
 		dst.ShuffleIDX = src.ShuffleIDX
 
