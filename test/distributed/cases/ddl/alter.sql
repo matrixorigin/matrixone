@@ -371,6 +371,19 @@ set global lower_case_table_names = 1;
 
 
 
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+alter table s3t modify column b bigint;
+show create table s3t;
+drop database test01;
+
+
+
+
 drop database if exists test;
 create database test;
 use test;

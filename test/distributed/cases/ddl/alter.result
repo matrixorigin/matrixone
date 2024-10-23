@@ -472,6 +472,17 @@ Table    Create Table
 test01    CREATE TABLE `test01` (\n  `newCol` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` varchar(50) DEFAULT NULL\n)
 drop database test;
 set global lower_case_table_names = 1;
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+alter table s3t modify column b bigint;
+show create table s3t;
+Table    Create Table
+s3t    CREATE TABLE `s3t` (\n  `a` int NOT NULL,\n  `b` bigint NOT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`)\n)
+drop database test01;
 drop database if exists test;
 create database test;
 use test;
