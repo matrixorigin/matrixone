@@ -88,8 +88,7 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 			return
 		}
 	}
-	cacheData = allocator.AllocateCacheData(len(data))
-	copy(cacheData.Bytes(), data)
+	cacheData = allocator.CopyToCacheData(data)
 	return
 }
 
