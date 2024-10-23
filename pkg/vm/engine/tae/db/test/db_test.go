@@ -10147,7 +10147,3 @@ func TestTransferInMerge2(t *testing.T) {
 	tae.CheckRowsByScan(9, true)
 	t.Log(tae.Catalog.SimplePPString(3))
 }
-
-func TestDedupOption(t *testing.T){
-	c:
-}
