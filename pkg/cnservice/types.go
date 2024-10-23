@@ -628,6 +628,7 @@ type service struct {
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	distributeTaeMp        *mpool.MPool
+	cdcMp                  *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService

@@ -155,7 +155,6 @@ func (reader *tableReader) readTable(
 		txnOp,
 		packer,
 		ar)
-
 	return
 }
 
@@ -164,6 +163,8 @@ func (reader *tableReader) readTableWithTxn(
 	txnOp client.TxnOperator,
 	packer *types.Packer,
 	ar *ActiveRoutine) (err error) {
+	v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
+
 	var rel engine.Relation
 	var changes engine.ChangesHandle
 	//step1 : get relation
@@ -215,7 +216,7 @@ func (reader *tableReader) readTableWithTxn(
 		count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
 		allocated := float64(insertData.Allocated() + deleteData.Allocated())
 		v2.CdcTotalProcessingRecordCountGauge.Add(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
+		v2.CdcHoldChangesBytesGauge.Add(allocated)
 		v2.CdcReadRecordCounter.Add(count)
 	}
 
@@ -223,7 +224,7 @@ func (reader *tableReader) readTableWithTxn(
 		count := float64(batchRowCount(insertData))
 		allocated := float64(insertData.Allocated())
 		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcHoldChangesBytesGauge.Sub(allocated)
 		v2.CdcSinkRecordCounter.Add(count)
 	}
 
@@ -231,7 +232,7 @@ func (reader *tableReader) readTableWithTxn(
 		count := float64(bat.RowCount())
 		allocated := float64(bat.Allocated())
 		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Sub(allocated)
+		v2.CdcHoldChangesBytesGauge.Sub(allocated)
 		v2.CdcSinkRecordCounter.Add(count)
 	}
 
