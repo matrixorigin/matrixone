@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -261,15 +262,16 @@ func saveQueryResult(ctx context.Context, ses *Session,
 }
 
 // saveQueryResult2 saves the data from the engine.
-func saveQueryResult2(execCtx *ExecCtx, bat *batch.Batch) error {
+func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	ses := execCtx.ses.(*Session)
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
+		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
-			if err := saveMeta(execCtx.reqCtx, ses); err != nil {
+			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
 		} else {
-			if err := saveBatch(execCtx.reqCtx, ses, bat); err != nil {
+			if err := saveBatch(newCtx, ses, bat); err != nil {
 				return err
 			}
 		}
@@ -776,8 +778,8 @@ var defResultSaver BinaryWriter = &QueryResult{}
 type QueryResult struct {
 }
 
-func (result *QueryResult) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	return saveQueryResult2(execCtx, bat)
+func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	return saveQueryResult2(execCtx, crs, bat)
 }
 
 func (result *QueryResult) Close() {
