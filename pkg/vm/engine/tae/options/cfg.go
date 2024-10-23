@@ -65,8 +65,8 @@ type GCCfg struct {
 	GCMergeCount      int           `toml:"gc-merge-count"`
 	GCestimateRows    int           `toml:"gc-estimate-rows"`
 	GCProbility       float64       `toml:"gc-probility"`
-	GCDeleteTimeout   time.Duration `toml:gc-delete-timeout`
-	GCDeleteBatchSize int           `toml:gc-delete-batch-size`
+	GCDeleteTimeout   time.Duration `toml:"gc-delete-timeout""`
+	GCDeleteBatchSize int           `toml:"gc-delete-batch-size""`
 }
 
 type CatalogCfg struct {
