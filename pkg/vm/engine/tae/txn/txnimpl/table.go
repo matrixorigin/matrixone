@@ -1311,12 +1311,10 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 		if err = node.PrepareCommit(); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
-				buf.WriteString(
-					fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
 				obj, ok := node.(*catalog.ObjectEntry)
 				if ok {
-					buf.WriteString(
-						fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
 				}
 				for idx2, node2 := range tbl.txnEntries.entries {
 					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
@@ -1359,12 +1357,10 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
-				buf.WriteString(
-					fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
+				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
 				obj, ok := node.(*catalog.ObjectEntry)
 				if ok {
-					buf.WriteString(
-						fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
+					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
 				}
 				for idx2, node2 := range tbl.txnEntries.entries {
 					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
