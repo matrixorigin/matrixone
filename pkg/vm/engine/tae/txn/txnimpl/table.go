@@ -1442,7 +1442,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
-	rowIDStr := rowIDVec.PPString(1)
+	var rowIDStr string
 	defer func() {
 		if err == nil {
 			return
@@ -1478,6 +1478,9 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	}()
 	deleteBatch := tbl.createTombstoneBatch(rowIDVec, pk)
 	defer func() {
+		if err != nil {
+			rowIDStr = rowIDVec.PPString(1)
+		}
 		for _, attr := range deleteBatch.Attrs {
 			if attr == objectio.TombstoneAttr_PK_Attr {
 				// not close pk
