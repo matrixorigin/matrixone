@@ -1475,7 +1475,7 @@ func andSelectivity(s1, s2 float64) float64 {
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
-	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
+	if s1 > 0.015 || s2 > 0.015 || s1*s2 > 0.01 {
 		return s1 * s2
 	}
 	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))
