@@ -1154,7 +1154,9 @@ func FillUsageBatOfCompacted(
 	data *CheckpointData,
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
-	pitrs *PitrInfo) {
+	pitrs *PitrInfo,
+	waterMark *types.TS,
+) {
 	now := time.Now()
 	var memoryUsed float64
 	usage.EnterProcessing()
@@ -1189,6 +1191,10 @@ func FillUsageBatOfCompacted(
 			if len(tableSnapshots[tableID[i]]) == 0 &&
 				(tablePitrs[tableID[i]] == nil ||
 					tablePitrs[tableID[i]].IsEmpty()) {
+				continue
+			}
+
+			if insDeleteTSVec[i].GT(waterMark) {
 				continue
 			}
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
