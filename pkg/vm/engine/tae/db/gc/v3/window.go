@@ -506,7 +506,7 @@ func (w *GCWindow) replayData(
 	bs []objectio.BlockObject,
 	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
 	idxes := []uint16{0}
-	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), w.mp)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -529,7 +529,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.Obje
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, w.mp)
 	if err != nil {
 		return err
 	}
