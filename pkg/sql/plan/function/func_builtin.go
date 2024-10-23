@@ -113,7 +113,7 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	showColumns = 4
+	defExprInShowColumns = 4 //default expr in the show columns.
 )
 
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -124,7 +124,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	if null {
 		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 4], but got NULL")
 	}
-	if tp > showColumns {
+	if tp > defExprInShowColumns {
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 4], but got %d", tp))
 	}
 
@@ -181,7 +181,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
-	case showColumns:
+	case defExprInShowColumns:
 		formatStr := func(str string) string {
 			tmp := strings.Replace(str, "`", "``", -1)
 			strLen := len(tmp)
