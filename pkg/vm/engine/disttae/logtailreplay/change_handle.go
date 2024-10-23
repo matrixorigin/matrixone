@@ -234,11 +234,15 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
-				logutil.Info("ChangesHandle-CheckGCTS",
-					zap.String("err", err2.Error()),
-					zap.String("origin err", err.Error()))
 				if err2 != nil {
+					logutil.Info("ChangesHandle-CheckGCTS",
+						zap.String("err", err2.Error()),
+						zap.String("origin err", err.Error()))
 					err = err2
+				} else {
+					logutil.Info("ChangesHandle-CheckGCTS",
+						zap.String("err", "nil"),
+						zap.String("origin err", err.Error()))
 				}
 			}
 			h.base.changesHandle.readDuration += time.Since(t0)
@@ -371,11 +375,15 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
-				logutil.Info("ChangesHandle-CheckGCTS",
-					zap.String("err", err2.Error()),
-					zap.String("origin err", err.Error()))
 				if err2 != nil {
+					logutil.Info("ChangesHandle-CheckGCTS",
+						zap.String("err", err2.Error()),
+						zap.String("origin err", err.Error()))
 					err = err2
+				} else {
+					logutil.Info("ChangesHandle-CheckGCTS",
+						zap.String("err", "nil"),
+						zap.String("origin err", err.Error()))
 				}
 			}
 			h.p.changesHandle.readDuration += time.Since(t0)
@@ -1129,5 +1137,6 @@ func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (er
 	if ts.LT(&maxGCTS) {
 		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
 	}
+	logutil.Infof("ChangesHandle-CheckGCTS, gc TS %v, start ts %v", ts.ToString(), ts.ToString())
 	return nil
 }
