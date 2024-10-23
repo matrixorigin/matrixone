@@ -491,6 +491,7 @@ insert into tbl values(7, "[120,50,70]");
 insert into tbl values(8, "[130,40,90]");
 create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+not supported: Multiple IVFFLAT indexes are not allowed to use the same column
 insert into tbl values(9, "[130,40,90]");
 drop table if exists tbl;
 SET @PROBE_LIMIT=1;

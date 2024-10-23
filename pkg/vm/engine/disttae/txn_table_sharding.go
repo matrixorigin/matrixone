@@ -106,8 +106,6 @@ func MockTableDelegate(
 		isMock: true,
 	}
 	tbl.shard.service = service
-
-	tbl.shard.service = service
 	tbl.shard.is = false
 	tbl.isLocal = tbl.isLocalFunc
 
@@ -740,6 +738,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				engine_util.GetThresholdForReader(newNum),
 			)
 			if err != nil {
 				return nil, err
@@ -1121,7 +1120,9 @@ func (tbl *txnTableDelegate) forwardRead(
 	err = tbl.shard.service.Read(
 		ctx,
 		request,
-		shardservice.ReadOptions{}.Shard(shardID),
+		shardservice.ReadOptions{}.
+			ReadAt(tbl.origin.getTxn().op.SnapshotTS()).
+			Shard(shardID),
 	)
 	if err != nil {
 		return err

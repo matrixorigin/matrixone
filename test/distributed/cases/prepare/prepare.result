@@ -553,4 +553,17 @@ set @a=23456;
 execute s using @a;
 a    b    c    a    b
 46712    21712    46712    46712    23456
+drop table if exists prepare_test_t1;
+create table prepare_test_t1(col1 int, col2 int);
+prepare s_pre from insert into prepare_test_t1 values(1, ?);
+set @var = 2;
+execute s_pre using @var;
+select * from prepare_test_t1;
+col1    col2
+1    2
+alter table prepare_test_t1 add col3 int;
+execute s_pre using @var;
+internal error: table 'prepare_test_t1' has been changed, please reset prepare statement 's_pre'
+deallocate prepare s_pre;
+drop table prepare_test_t1;
 drop database if exists db1;
