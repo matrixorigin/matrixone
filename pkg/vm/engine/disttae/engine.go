@@ -678,6 +678,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
+			engine_util.GetThresholdForReader(newNum),
 		)
 		if err != nil {
 			return nil, err
