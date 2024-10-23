@@ -129,7 +129,7 @@ func transferTombstoneObjects(
 
 				bat.SetRowCount(bat.Vecs[0].Length())
 
-				if err = txn.WriteFile(
+				if err = txn.WriteFileLocked(
 					DELETE,
 					tbl.accountId, tbl.db.databaseId, tbl.tableId,
 					tbl.db.databaseName, tbl.tableName, fileName,
