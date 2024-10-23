@@ -1257,6 +1257,9 @@ func (txn *Transaction) transferTombstonesByStatement(
 }
 
 func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
+	txn.Lock()
+	defer txn.Unlock()
+
 	if !txn.op.Txn().IsRCIsolation() {
 		return nil
 	}
@@ -1278,7 +1281,6 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 func (txn *Transaction) transferTombstones(
 	ctx context.Context,
 ) (err error) {
-
 	start := txn.transfer.lastTransferred
 	end := types.TimestampToTS(txn.op.SnapshotTS())
 
