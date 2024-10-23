@@ -3934,7 +3934,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData.GetBlockInfoSlice(),
+				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
@@ -3956,7 +3956,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData.GetBlockInfoSlice(),
+				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
@@ -4093,7 +4093,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
-			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData.GetBlockInfoSlice(), func(blk *objectio.BlockInfo) (bool, error) {
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
 				); err2 != nil {
@@ -4648,7 +4648,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
-	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData.GetBlockInfoSlice(),
+	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
@@ -4674,7 +4674,7 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 	engine.ForRangeBlockInfo(
 		1,
 		cnt,
-		relData.GetBlockInfoSlice(),
+		relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			nodes[1].Data.AppendBlockInfo(blk)
 			return true, nil
@@ -4692,7 +4692,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var init bool
 	var index uint64
 
-	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData.GetBlockInfoSlice(),
+	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)

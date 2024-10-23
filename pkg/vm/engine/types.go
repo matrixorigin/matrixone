@@ -714,8 +714,9 @@ func ForRangeShardID(
 // ForRangeBlockInfo [begin, end)
 func ForRangeBlockInfo(
 	begin, end int,
-	slice objectio.BlockInfoSlice,
+	relData RelData,
 	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
+	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
 
