@@ -67,9 +67,14 @@ func (ps *PipelineSpool) SendBatch(
 		panic("do not support SendToAnyLocal for pipeline spool now.")
 	}
 
-	dst, queryDone, err := ps.cache.GetCopiedBatch(ctx, data)
-	if err != nil || queryDone {
-		return queryDone, err
+	done, messageIdx := ps.getFreeIdFromSharedPool(ctx)
+	if done {
+		return true, nil
+	}
+
+	dst, err := ps.cache.GetCopiedBatch(data)
+	if err != nil {
+		return false, err
 	}
 
 	msg := pipelineSpoolMessage{
@@ -79,15 +84,11 @@ func (ps *PipelineSpool) SendBatch(
 	}
 
 	if receiverID == SendToAllLocal {
-		queryDone = ps.sendToAll(ctx, msg)
+		ps.sendToAll(messageIdx, msg)
 	} else {
-		queryDone = ps.sendToIdx(ctx, receiverID, msg)
+		ps.sendToIdx(messageIdx, receiverID, msg)
 	}
-
-	if queryDone {
-		ps.cache.CacheBatch(dst)
-	}
-	return queryDone, nil
+	return false, nil
 }
 
 // ReleaseCurrent force to release the last received one.
@@ -127,39 +128,37 @@ func (ps *PipelineSpool) Close() {
 		<-ps.csDoneSignal
 	}
 
-	ps.cache.Free()
+	ps.cache.free()
 }
 
-func (ps *PipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *PipelineSpool) getFreeIdFromSharedPool(
+	ctx context.Context) (queryDone bool, id int8) {
 	select {
 	case <-ctx.Done():
-		return true
-	case index := <-ps.freeShardPool:
-		ps.shardPool[index] = msg
-		if ps.shardRefs == nil {
-			ps.doRefCheck[index] = false
-		} else {
-			ps.shardRefs[index].Store(int32(len(ps.rs)))
-			ps.doRefCheck[index] = true
-		}
-
-		for i := 0; i < len(ps.rs); i++ {
-			ps.rs[i].pushNextIndex(index)
-		}
+		return true, -1
+	case id = <-ps.freeShardPool:
+		return false, id
 	}
-	return false
 }
 
-func (ps *PipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
-	select {
-	case <-ctx.Done():
-		return true
-	case index := <-ps.freeShardPool:
-		ps.shardPool[index] = msg
-		// if send to only one, there is no need to do ref check.
-		ps.doRefCheck[index] = false
-
-		ps.rs[idx].pushNextIndex(index)
+func (ps *PipelineSpool) sendToAll(sharedPoolIndex int8, msg pipelineSpoolMessage) {
+	ps.shardPool[sharedPoolIndex] = msg
+	if ps.shardRefs == nil {
+		ps.doRefCheck[sharedPoolIndex] = false
+	} else {
+		ps.shardRefs[sharedPoolIndex].Store(int32(len(ps.rs)))
+		ps.doRefCheck[sharedPoolIndex] = true
 	}
-	return false
+
+	for i := 0; i < len(ps.rs); i++ {
+		ps.rs[i].pushNextIndex(sharedPoolIndex)
+	}
+}
+
+func (ps *PipelineSpool) sendToIdx(sharedPoolIndex int8, idx int, msg pipelineSpoolMessage) {
+	ps.shardPool[sharedPoolIndex] = msg
+	// if send to only one, there is no need to do ref check.
+	ps.doRefCheck[sharedPoolIndex] = false
+
+	ps.rs[idx].pushNextIndex(sharedPoolIndex)
 }

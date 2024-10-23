@@ -15,12 +15,10 @@
 package pSpool
 
 import (
-	"context"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 )
 
 // cachedBatch is just like the cachedVectorPool in the original code,
@@ -29,17 +27,11 @@ import (
 // 1. GetCopiedBatch: generate a copied batch.
 // 2. CacheBatch: put the byte slices of batch's vectors into the cache.
 // 3. Reset: reset the cachedBatch for reuse.
-// 4. Free: free the cached byte slices.
+// 4. free: free the cached byte slices.
 type cachedBatch struct {
 	mp *mpool.MPool
 
-	// the channel to cache the batch pointers.
-	// the capacity of the channel is the max number of batch pointers that can be copied.
-	//
-	// only support copy batch once freeBatchPointer is not empty.
-	freeBatchPointer chan freeBatchSignal
-
-	// buffer is all the memory using by this structure.
+	// buffer save all the memory using by this structure.
 	buffer *spoolBuffer
 }
 
@@ -63,16 +55,8 @@ func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 	}
 
 	cb := &cachedBatch{
-		mp:               mp,
-		freeBatchPointer: make(chan freeBatchSignal, capacity),
-		buffer:           initSpoolBuffer(int8(capacity)),
-	}
-
-	for i := 0; i < capacity; i++ {
-		cb.freeBatchPointer <- freeBatchSignal{
-			pointer:      batch.NewWithSize(0),
-			usingCacheID: notUsingAnyCache,
-		}
+		mp:     mp,
+		buffer: initSpoolBuffer(int8(capacity)),
 	}
 
 	return cb
@@ -85,13 +69,12 @@ func (cb *cachedBatch) CacheBatch(signal freeBatchSignal) {
 	cb.buffer.putCacheID(cb.mp, signal.usingCacheID, signal.pointer)
 
 	signal.usingCacheID = notUsingAnyCache
-	cb.freeBatchPointer <- signal
 }
 
 // GetCopiedBatch get a batch from the batchPointer channel
 // and copy the data and area of the src batch to the dst batch.
 func (cb *cachedBatch) GetCopiedBatch(
-	senderCtx context.Context, src *batch.Batch) (signal freeBatchSignal, senderDone bool, err error) {
+	src *batch.Batch) (signal freeBatchSignal, err error) {
 
 	var dst *batch.Batch
 
@@ -100,16 +83,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 		dst = src
 
 	} else {
-		select {
-		case signal = <-cb.freeBatchPointer:
-			signal.usingCacheID = cb.buffer.getCacheID()
-			dst = signal.pointer
-			dst.Recursive = src.Recursive
-			dst.ShuffleIDX = src.ShuffleIDX
-
-		case <-senderCtx.Done():
-			return signal, true, nil
-		}
+		signal.usingCacheID = cb.buffer.getCacheID()
+		dst = signal.pointer
+		dst.Recursive = src.Recursive
+		dst.ShuffleIDX = src.ShuffleIDX
 
 		if cap(dst.Vecs) >= len(src.Vecs) {
 			dst.Vecs = dst.Vecs[:len(src.Vecs)]
@@ -143,7 +120,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			if vec.IsConst() {
 				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
 					dst.Clean(cb.mp)
-					return signal, false, err
+					return signal, err
 				}
 
 			} else {
@@ -154,7 +131,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 					dst.Vecs[i],
 					vec); err != nil {
 					dst.Clean(cb.mp)
-					return signal, false, err
+					return signal, err
 				}
 
 				dst.Vecs[i].SetSorted(vec.GetSorted())
@@ -177,7 +154,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 	}
 
 	signal.pointer = dst
-	return signal, false, nil
+	return signal, nil
 }
 
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
@@ -265,11 +242,6 @@ func (mc *oneBatchMemoryCache) removeItemAndArrange(idx int) []byte {
 	return dst
 }
 
-func (cb *cachedBatch) Free() {
-	m := cap(cb.freeBatchPointer)
-	for i := 0; i < m; i++ {
-		b := <-cb.freeBatchPointer
-		b.pointer.Clean(cb.mp)
-	}
+func (cb *cachedBatch) free() {
 	cb.buffer.clean(cb.mp)
 }
