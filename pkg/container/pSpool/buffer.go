@@ -87,7 +87,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 
 	// put id into free list.
 	b.Lock()
-	b.readyToUse = b.readyToUse[:len(b.readyToUse)]
+	b.readyToUse = b.readyToUse[:len(b.readyToUse)+1]
 	b.readyToUse[len(b.readyToUse)-1].whichCacheToUse = id
 	b.readyToUse[len(b.readyToUse)-1].whichPointerToUse = bat
 	b.Unlock()
