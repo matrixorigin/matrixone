@@ -220,10 +220,15 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				rightExpr,
 			})
 
+			joinType := plan.Node_INNER
+			if idxDef.Unique {
+				joinType = plan.Node_LEFT
+			}
+
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeID, idxTableNodeID},
-				JoinType: plan.Node_LEFT,
+				JoinType: joinType,
 				OnList:   []*plan.Expr{joinCond},
 			}, bindCtx)
 		}

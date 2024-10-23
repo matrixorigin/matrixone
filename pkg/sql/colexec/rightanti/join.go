@@ -132,7 +132,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 			result.Batch = ctr.buf[ctr.lastpos]
 			ctr.lastpos++
-			result.Status = vm.ExecHasMore
+			result.Status = vm.ExecNext
 			analyzer.Output(result.Batch)
 			return result, nil
 
