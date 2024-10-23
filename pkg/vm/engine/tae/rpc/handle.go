@@ -164,10 +164,24 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 
 // TODO: vast items within h.mu.txnCtxs would incur performance penality.
 func (h *Handle) GCCache(now time.Time) error {
-	logutil.Infof("GC rpc handle txn cache")
+
+	var (
+		cnt, deleteCnt int
+	)
+
 	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
-		return v.deadline.Before(now)
+		cnt++
+		ok := v.deadline.Before(now)
+		if ok {
+			deleteCnt++
+		}
+		return ok
 	})
+	logutil.Info(
+		"GC-RPC-Cache",
+		zap.Int("total", cnt),
+		zap.Int("deleted", deleteCnt),
+	)
 	return nil
 }
 
