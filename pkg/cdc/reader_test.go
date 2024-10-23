@@ -76,7 +76,7 @@ func TestNewTableReader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.NotNilf(t, NewTableReader(tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc), "NewTableReader(%v, %v, %v, %v, %v, %v, %v, %v, %v)", tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc)
+			assert.NotNilf(t, NewTableReader(tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc, true), "NewTableReader(%v, %v, %v, %v, %v, %v, %v, %v, %v)", tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc)
 		})
 	}
 }
