@@ -83,15 +83,17 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	tombstoneObjects := make([]objectio.ObjectStats, 0)
-	txn.ForEachTableWrites(
-		table.db.databaseId, table.tableId,
-		len(txn.writes),
-		func(entry Entry) {
-			if entry.fileName != "" && entry.typ == DELETE {
-				stats := objectio.ObjectStats(entry.bat.Vecs[0].GetBytesAt(0))
-				tombstoneObjects = append(tombstoneObjects, stats)
-			}
-		})
+
+	for _, e := range txn.writes {
+		if e.tableId != table.tableId || e.databaseId != table.db.databaseId {
+			continue
+		}
+
+		if e.fileName != "" && e.typ == DELETE {
+			stats := objectio.ObjectStats(e.bat.Vecs[0].GetBytesAt(0))
+			tombstoneObjects = append(tombstoneObjects, stats)
+		}
+	}
 
 	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
