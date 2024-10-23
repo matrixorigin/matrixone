@@ -14,6 +14,21 @@
 
 package docx
 
+// docx parser is to get parse the docx file and get all text content
+// docx file is zip file that contains xml files. word/document.xml file inside zip is location of content located.
+// Parse word/document.xml and traverse all paragraph tags <p> to get all text content. Each paragraph tag may have multiple rows <r>
+// and each row <r> has a text <t>.
+//
+// sample xml with paragraph tag
+//         <w:p w14:paraId="01895B7A" w14:textId="77777777" w:rsidR="00F553D1" w:rsidRDefault="00F553D1">
+//            <w:r>
+//                <w:t>This is a paragraph of text 1.</w:t>
+//            </w:r>
+//            <w:r>
+//                <w:t>This is a paragraph of text 2.</w:t>
+//            </w:r>
+//        </w:p>
+
 type WordDocument struct {
 	Paragraphs []Paragraph
 }

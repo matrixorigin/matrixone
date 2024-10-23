@@ -22,6 +22,30 @@ import (
 	"testing"
 )
 
+// Only Paragraph and Table contains text in docx file.  All text are enclosed with paragraph tag w:p for both paragraph and table element.
+// 2 docx files included in the test.
+// test.docx only contains paragraphs.
+// content of test.docx:
+//
+// This is a word file
+//
+// This is the heading of the file.
+//
+// This is a paragraph of text.
+//
+// This is another paragraph with text. some of it is italicized, and some of it is red. More is bold! What a lovely doc.
+//
+// content of test2.docx contains table:
+//
+// This is the heading of the file.
+//
+// This is a paragraph of text before the table.
+//
+// cell 1	cell 2	cell 3
+// cell 4	cell 5	cell 6
+//
+// This is text after the table.
+
 func TestOpenWordFileInvalidFile(t *testing.T) {
 
 	_, err := openWordFile("testfiles/text.txt")
@@ -58,9 +82,22 @@ func TestParseText(t *testing.T) {
 		t.Errorf("parsing test.docx should work \n %s", err)
 	}
 
+	// contains text at the begining of the document
 	if !strings.Contains(doctext, "This is a word file") {
 		t.Errorf("parsed text does not contain expected text \n %s", doctext)
 	}
+
+	// contains text in the heading
+	if !strings.Contains(doctext, "This is the heading of the file.") {
+		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+	}
+
+	// contains text that mix with different style such as bold, italicized and different color
+	if !strings.Contains(doctext, "This is another paragraph with text. some of it is italicized, and some of it is red. More is bold! What a lovely doc.") {
+		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+	}
+
+	// contains text at the end of the document
 	if !strings.Contains(doctext, "What a lovely doc.") {
 		t.Errorf("parsed text does not contain expected text \n %s", doctext)
 	}
@@ -70,11 +107,22 @@ func TestParseText(t *testing.T) {
 		t.Errorf("parsing test.docx should work \n %s", err)
 	}
 
+	// contain text right before the table
 	if !strings.Contains(doctext2, "before the table") {
-		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+		t.Errorf("parsed text does not contain expected text \n %s", doctext2)
 	}
+
+	// contain text right after the table
 	if !strings.Contains(doctext2, "This is text after the table.") {
-		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+		t.Errorf("parsed text does not contain expected text \n %s", doctext2)
+	}
+
+	// contains table values
+	for i := 1; i <= 6; i++ {
+		tv := fmt.Sprintf("cell %d", i)
+		if !strings.Contains(doctext2, tv) {
+			t.Errorf("parsed text does not contain table value \n %s", doctext2)
+		}
 	}
 
 	//fmt.Printf(doc)
@@ -101,9 +149,22 @@ func TestParseTextFromReader(t *testing.T) {
 		t.Errorf("parsing test.docx should work \n %s", err)
 	}
 
+	// contains text at first paragraph
 	if !strings.Contains(doctext, "This is a word file") {
 		t.Errorf("parsed text does not contain expected text \n %s", doctext)
 	}
+
+	// contains text in the heading
+	if !strings.Contains(doctext, "This is the heading of the file.") {
+		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+	}
+
+	// contains text that mix with different style such as bold, italicized and different color
+	if !strings.Contains(doctext, "This is another paragraph with text. some of it is italicized, and some of it is red. More is bold! What a lovely doc.") {
+		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+	}
+
+	// contains text at the end of the document
 	if !strings.Contains(doctext, "What a lovely doc.") {
 		t.Errorf("parsed text does not contain expected text \n %s", doctext)
 	}
@@ -117,12 +178,21 @@ func TestParseTextFromReader(t *testing.T) {
 		t.Errorf("parsing test.docx should work \n %s", err)
 	}
 
+	// contains text right before the table
 	if !strings.Contains(doctext2, "before the table") {
-		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+		t.Errorf("parsed text does not contain expected text \n %s", doctext2)
 	}
+	// contains text right after the table
 	if !strings.Contains(doctext2, "This is text after the table.") {
-		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+		t.Errorf("parsed text does not contain expected text \n %s", doctext2)
 	}
 
+	// contains table values
+	for i := 1; i <= 6; i++ {
+		tv := fmt.Sprintf("cell %d", i)
+		if !strings.Contains(doctext2, tv) {
+			t.Errorf("parsed text does not contain table value \n %s", doctext2)
+		}
+	}
 	//fmt.Printf(doc)
 }
