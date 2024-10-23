@@ -43,7 +43,7 @@ func NewGetParamRule() *GetParamRule {
 }
 
 func (rule *GetParamRule) MatchNode(node *Node) bool {
-	if node.NodeType == plan.Node_TABLE_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
 			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
 			Db:         node.ObjRef.Db,
