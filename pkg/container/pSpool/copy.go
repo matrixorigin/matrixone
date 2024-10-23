@@ -26,8 +26,7 @@ import (
 // it will support
 // 1. GetCopiedBatch: generate a copied batch.
 // 2. CacheBatch: put the byte slices of batch's vectors into the cache.
-// 3. Reset: reset the cachedBatch for reuse.
-// 4. free: free the cached byte slices.
+// 3. free: free the cached byte slices.
 type cachedBatch struct {
 	mp *mpool.MPool
 
@@ -38,11 +37,6 @@ type cachedBatch struct {
 const (
 	notUsingAnyCache int8 = -1
 )
-
-type freeBatchSignal struct {
-	pointer      *batch.Batch
-	usingCacheID int8
-}
 
 type oneBatchMemoryCache struct {
 	// bytes to copy vector's data and area to.
@@ -62,99 +56,92 @@ func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
 	return cb
 }
 
-func (cb *cachedBatch) CacheBatch(signal freeBatchSignal) {
-	if signal.usingCacheID == notUsingAnyCache {
+func (cb *cachedBatch) CacheBatch(whichCacheDoesThisDataUse int8, data *batch.Batch) {
+	if whichCacheDoesThisDataUse == notUsingAnyCache {
 		return
 	}
-	cb.buffer.putCacheID(cb.mp, signal.usingCacheID, signal.pointer)
-
-	signal.usingCacheID = notUsingAnyCache
+	cb.buffer.putCacheID(cb.mp, whichCacheDoesThisDataUse, data)
 }
 
-// GetCopiedBatch get a batch from the batchPointer channel
-// and copy the data and area of the src batch to the dst batch.
+// GetCopiedBatch copy the src from a ready memory cache.
+//
+// if this is a special batch which will never be released, just return it and do not using any cache.
 func (cb *cachedBatch) GetCopiedBatch(
-	src *batch.Batch) (signal freeBatchSignal, err error) {
-
-	var dst *batch.Batch
+	src *batch.Batch) (dst *batch.Batch, cacheID int8, err error) {
 
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
-		signal.usingCacheID = notUsingAnyCache
-		dst = src
-
-	} else {
-		signal.usingCacheID = cb.buffer.getCacheID()
-		dst = &batch.Batch{}
-		dst.Recursive = src.Recursive
-		dst.ShuffleIDX = src.ShuffleIDX
-
-		if cap(dst.Vecs) >= len(src.Vecs) {
-			dst.Vecs = dst.Vecs[:len(src.Vecs)]
-			for i := range dst.Vecs {
-				dst.Vecs[i] = nil
-			}
-		} else {
-			dst.Vecs = make([]*vector.Vector, len(src.Vecs))
-		}
-
-		if cap(dst.Attrs) >= len(src.Attrs) {
-			dst.Attrs = dst.Attrs[:len(src.Attrs)]
-		} else {
-			dst.Attrs = make([]string, len(src.Attrs))
-		}
-		// copy attrs.
-		for i := range dst.Attrs {
-			dst.Attrs[i] = src.Attrs[i]
-		}
-
-		// copy vectors.
-		for i := range dst.Vecs {
-			vec := src.Vecs[i]
-			if vec == nil || dst.Vecs[i] != nil {
-				continue
-			}
-
-			typ := *vec.GetType()
-			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-
-			if vec.IsConst() {
-				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-					dst.Clean(cb.mp)
-					return signal, err
-				}
-
-			} else {
-				cb.buffer.bytesCache[signal.usingCacheID].setSuitableDataAreaToVector(
-					len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
-				dst.Vecs[i].Reset(typ)
-				if err = vector.GetUnionAllFunction(typ, cb.mp)(
-					dst.Vecs[i],
-					vec); err != nil {
-					dst.Clean(cb.mp)
-					return signal, err
-				}
-
-				dst.Vecs[i].SetSorted(vec.GetSorted())
-			}
-			dst.Vecs[i].SetIsBin(vec.GetIsBin())
-
-			// range src and found the same vector.
-			for j := i + 1; j < len(src.Vecs); j++ {
-				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
-					dst.Vecs[j] = dst.Vecs[i]
-				}
-			}
-		}
-
-		dst.Aggs = src.Aggs
-		src.Aggs = nil
-
-		// set row count.
-		dst.SetRowCount(src.RowCount())
+		return src, notUsingAnyCache, nil
 	}
 
-	signal.pointer = dst
-	return signal, nil
+	cacheID, dst = cb.buffer.getCacheID()
+	dst.Recursive = src.Recursive
+	dst.ShuffleIDX = src.ShuffleIDX
+
+	if cap(dst.Vecs) >= len(src.Vecs) {
+		dst.Vecs = dst.Vecs[:len(src.Vecs)]
+		for i := range dst.Vecs {
+			dst.Vecs[i] = nil
+		}
+	} else {
+		dst.Vecs = make([]*vector.Vector, len(src.Vecs))
+	}
+
+	if cap(dst.Attrs) >= len(src.Attrs) {
+		dst.Attrs = dst.Attrs[:len(src.Attrs)]
+	} else {
+		dst.Attrs = make([]string, len(src.Attrs))
+	}
+	// copy attrs.
+	for i := range dst.Attrs {
+		dst.Attrs[i] = src.Attrs[i]
+	}
+
+	// copy vectors.
+	for i := range dst.Vecs {
+		vec := src.Vecs[i]
+		if vec == nil || dst.Vecs[i] != nil {
+			continue
+		}
+
+		typ := *vec.GetType()
+		dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+
+		if vec.IsConst() {
+			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
+				dst.Clean(cb.mp)
+				return nil, notUsingAnyCache, err
+			}
+
+		} else {
+			cb.buffer.bytesCache[cacheID].setSuitableDataAreaToVector(
+				len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
+			dst.Vecs[i].Reset(typ)
+			if err = vector.GetUnionAllFunction(typ, cb.mp)(
+				dst.Vecs[i],
+				vec); err != nil {
+				dst.Clean(cb.mp)
+				return nil, notUsingAnyCache, err
+			}
+
+			dst.Vecs[i].SetSorted(vec.GetSorted())
+		}
+		dst.Vecs[i].SetIsBin(vec.GetIsBin())
+
+		// range src and found the same vector.
+		for j := i + 1; j < len(src.Vecs); j++ {
+			if dst.Vecs[j] == nil && src.Vecs[j] == vec {
+				dst.Vecs[j] = dst.Vecs[i]
+			}
+		}
+	}
+
+	dst.Aggs = src.Aggs
+	src.Aggs = nil
+
+	// set row count.
+	dst.SetRowCount(src.RowCount())
+
+	return dst, cacheID, nil
 }
 
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.

@@ -72,21 +72,16 @@ func (ps *PipelineSpool) SendBatch(
 		return true, nil
 	}
 
-	dst, err := ps.cache.GetCopiedBatch(data)
+	dst, cacheID, err := ps.cache.GetCopiedBatch(data)
 	if err != nil {
 		return false, err
 	}
-
-	msg := pipelineSpoolMessage{
-		dataContent: dst.pointer,
-		cacheID:     dst.usingCacheID,
-		errContent:  info,
-	}
+	ps.updateSpoolMessage(messageIdx, dst, info, cacheID)
 
 	if receiverID == SendToAllLocal {
-		ps.sendToAll(messageIdx, msg)
+		ps.sendToAll(messageIdx)
 	} else {
-		ps.sendToIdx(messageIdx, receiverID, msg)
+		ps.sendToIdx(messageIdx, receiverID)
 	}
 	return false, nil
 }
@@ -96,14 +91,10 @@ func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(
-				freeBatchSignal{
-					pointer:      ps.shardPool[last].dataContent,
-					usingCacheID: ps.shardPool[last].cacheID,
-				},
-			)
+				ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
 			ps.freeShardPool <- last
 		}
-		ps.rs[idx].lastPop = noneLastPop
+		ps.rs[idx].flagLastPopRelease()
 	}
 }
 
@@ -141,8 +132,13 @@ func (ps *PipelineSpool) getFreeIdFromSharedPool(
 	}
 }
 
-func (ps *PipelineSpool) sendToAll(sharedPoolIndex int8, msg pipelineSpoolMessage) {
-	ps.shardPool[sharedPoolIndex] = msg
+func (ps *PipelineSpool) updateSpoolMessage(idx int8, data *batch.Batch, err error, cacheID int8) {
+	ps.shardPool[idx].dataContent = data
+	ps.shardPool[idx].errContent = err
+	ps.shardPool[idx].cacheID = cacheID
+}
+
+func (ps *PipelineSpool) sendToAll(sharedPoolIndex int8) {
 	if ps.shardRefs == nil {
 		ps.doRefCheck[sharedPoolIndex] = false
 	} else {
@@ -155,8 +151,7 @@ func (ps *PipelineSpool) sendToAll(sharedPoolIndex int8, msg pipelineSpoolMessag
 	}
 }
 
-func (ps *PipelineSpool) sendToIdx(sharedPoolIndex int8, idx int, msg pipelineSpoolMessage) {
-	ps.shardPool[sharedPoolIndex] = msg
+func (ps *PipelineSpool) sendToIdx(sharedPoolIndex int8, idx int) {
 	// if send to only one, there is no need to do ref check.
 	ps.doRefCheck[sharedPoolIndex] = false
 

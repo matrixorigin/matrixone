@@ -23,20 +23,29 @@ import (
 
 type spoolBuffer struct {
 	sync.Mutex
-	// cacheIndexReadyToUse is a stack to save how many cache can be used.
-	// and the last one with high level.
-	cacheIndexReadyToUse []int8
+
+	// readyToUse is a stack to record the which memory block is ready to use.
+	// the last one should be used first.
+	readyToUse []readyToUseItem
 
 	bytesCache []oneBatchMemoryCache
+}
+
+type readyToUseItem struct {
+	whichCacheToUse   int8
+	whichPointerToUse *batch.Batch
 }
 
 func initSpoolBuffer(size int8) *spoolBuffer {
 	b := new(spoolBuffer)
 	b.bytesCache = make([]oneBatchMemoryCache, size)
-	b.cacheIndexReadyToUse = make([]int8, size)
-	for i := range b.cacheIndexReadyToUse {
-		b.cacheIndexReadyToUse[i] = int8(i)
+	b.readyToUse = make([]readyToUseItem, size)
+
+	for i := range b.readyToUse {
+		b.readyToUse[i].whichCacheToUse = int8(i)
+		b.readyToUse[i].whichPointerToUse = batch.NewOffHeapEmpty()
 	}
+
 	return b
 }
 
@@ -78,17 +87,19 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 
 	// put id into free list.
 	b.Lock()
-	b.cacheIndexReadyToUse = append(b.cacheIndexReadyToUse, id)
+	b.readyToUse = b.readyToUse[:len(b.readyToUse)]
+	b.readyToUse[len(b.readyToUse)-1].whichCacheToUse = id
+	b.readyToUse[len(b.readyToUse)-1].whichPointerToUse = bat
 	b.Unlock()
 }
 
-func (b *spoolBuffer) getCacheID() int8 {
+func (b *spoolBuffer) getCacheID() (int8, *batch.Batch) {
 	b.Lock()
-	k := len(b.cacheIndexReadyToUse) - 1
-	index := b.cacheIndexReadyToUse[k]
-	b.cacheIndexReadyToUse = b.cacheIndexReadyToUse[:k]
+	k := len(b.readyToUse) - 1
+	index, bat := b.readyToUse[k].whichCacheToUse, b.readyToUse[k].whichPointerToUse
+	b.readyToUse = b.readyToUse[:k]
 	b.Unlock()
-	return index
+	return index, bat
 }
 
 func (b *spoolBuffer) clean(mp *mpool.MPool) {
