@@ -380,6 +380,6 @@ func (s *service) registerExecutorsLocked() {
 			s.fileService,
 			s._txnClient,
 			s.storeEngine,
-			s.distributeTaeMp,
+			s.cdcMp,
 		))
 }

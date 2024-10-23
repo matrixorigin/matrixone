@@ -228,6 +228,7 @@ func NewDefaultTableReader(
 		snapshotTS,
 		expr,
 		source,
+		engine_util.GetThresholdForReader(1),
 	)
 }
 
