@@ -136,7 +136,7 @@ const (
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
-	CNTransferTxnLifespanThreshold        = time.Second * 5
+	CNTransferTxnLifespanThreshold        = time.Second * 500000
 )
 
 var (
@@ -538,6 +538,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		txn.transfer.timestamps = append(txn.transfer.timestamps, txn.op.SnapshotTS())
 
 		if txn.transfer.lastTransferred.IsEmpty() {
+			txn.start = time.Now()
 			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[0])
 		}
 
