@@ -3768,6 +3768,10 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
 		return true //avoid bugs
 	}
+	partialResult, _, _ := checkAggOptimize(n)
+	if partialResult != nil {
+		return true
+	}
 	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
