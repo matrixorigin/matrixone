@@ -1182,12 +1182,16 @@ func FillUsageBatOfCompacted(
 			bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		for i := 0; i < bat.Length(); i++ {
 			if insDeleteTSVec[i].IsEmpty() {
-				dropTs := meta.GetTableDropAt(tableID[i])
-				if dropTs.IsEmpty() {
+				dropTs, ok := meta.GetTableDropAt(tableID[i])
+				if !ok || dropTs.IsEmpty() {
 					continue
 				}
 			}
-			accountId := uint64(meta.GetAccountId(tableID[i]))
+			id, ok := meta.GetAccountId(tableID[i])
+			if !ok {
+				continue
+			}
+			accountId := uint64(id)
 			if len(tableSnapshots[tableID[i]]) == 0 &&
 				(tablePitrs[tableID[i]] == nil ||
 					tablePitrs[tableID[i]].IsEmpty()) {
