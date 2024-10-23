@@ -117,23 +117,22 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendResult:
 			if dedupJoin.ctr.buf == nil {
 				dedupJoin.ctr.lastPos = 0
-				setNil, err := ctr.sendResult(dedupJoin, proc, analyzer)
+				err := ctr.sendResult(dedupJoin, proc, analyzer)
 				if err != nil {
 					return result, err
 				}
-				if setNil {
-					ctr.state = End
-				}
-			} else {
-				if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
-					ctr.state = End
-					continue
-				}
-				result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
-				dedupJoin.ctr.lastPos++
-				result.Status = vm.ExecNext
-				return result, nil
 			}
+
+			if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
+				ctr.state = End
+				continue
+			}
+
+			result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
+			dedupJoin.ctr.lastPos++
+			result.Status = vm.ExecHasMore
+			analyzer.Output(result.Batch)
+			return result, nil
 
 		default:
 			result.Batch = nil
@@ -163,24 +162,24 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	return
 }
 
-func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) (bool, error) {
+func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
-		return true, nil
+		return nil
 	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
-			return true, nil
+			return nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {
-					return true, nil
+					return nil
 				}
 			}
 			close(ap.Channel)
@@ -190,10 +189,7 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer 
 	if ctr.matched.Count() == 0 {
 		ap.ctr.buf = ctr.batches
 		ctr.batches = nil
-		for k := range ap.ctr.buf {
-			analyzer.Output(ap.ctr.buf[k])
-		}
-		return false, nil
+		return nil
 	}
 
 	count := ctr.batchRowCount - int64(ctr.matched.Count())
@@ -222,14 +218,13 @@ func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer 
 			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 			for j, pos := range ap.Result {
 				if err := ap.ctr.buf[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
-					return false, err
+					return err
 				}
 			}
 		}
 		ap.ctr.buf[k].SetRowCount(len(newsels))
-		analyzer.Output(ap.ctr.buf[k])
 	}
-	return false, nil
+	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) error {

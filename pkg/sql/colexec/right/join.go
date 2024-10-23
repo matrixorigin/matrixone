@@ -126,15 +126,17 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case SendLast:
-			setNil, err := ctr.sendLast(rightJoin, proc, analyzer, &result)
+			err := ctr.sendLast(rightJoin, proc, analyzer, &result)
 			if err != nil {
 				return result, err
 			}
 
 			ctr.state = End
-			if setNil {
+			if result.Batch == nil {
 				continue
 			}
+
+			result.Status = vm.ExecNext
 			analyzer.Output(result.Batch)
 			return result, nil
 
@@ -166,24 +168,27 @@ func (rightJoin *RightJoin) build(analyzer process.Analyzer, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
+func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
-		return true, nil
+		result.Batch = nil
+		return nil
 	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
-			return true, nil
+			result.Batch = nil
+			return nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {
-					return true, nil
+					result.Batch = nil
+					return nil
 				}
 			}
 			close(ap.Channel)
@@ -201,19 +206,19 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer pr
 
 	ap.resetRBat()
 	if err := ctr.rbat.PreExtend(proc.Mp(), len(sels)); err != nil {
-		return false, err
+		return err
 	}
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			if err := vector.AppendMultiFixed(ctr.rbat.Vecs[i], 0, true, int(count), proc.Mp()); err != nil {
-				return false, err
+				return err
 			}
 		} else {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 				if err := ctr.rbat.Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
-					return false, err
+					return err
 				}
 			}
 		}
@@ -221,7 +226,7 @@ func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer pr
 	}
 	ctr.rbat.AddRowCount(len(sels))
 	result.Batch = ctr.rbat
-	return false, nil
+	return nil
 }
 
 func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
