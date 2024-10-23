@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -112,6 +113,7 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
+	defExprInShowColumns = 4 //default expr in the show columns.
 )
 
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -120,10 +122,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 3], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 4], but got NULL")
 	}
-	if tp > 3 {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 3], but got %d", tp))
+	if tp > defExprInShowColumns {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 4], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -178,6 +180,37 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
+		}
+	case defExprInShowColumns:
+		formatStr := func(str string) string {
+			tmp := strings.Replace(str, "`", "``", -1)
+			strLen := len(tmp)
+			if strLen < 2 {
+				return tmp
+			}
+			if tmp == "''" {
+				return ""
+			}
+			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
+				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
+			}
+			return strings.Replace(tmp, "'", "''", -1)
+		}
+		f = func(s []byte) ([]byte, error) {
+			def := new(plan.Default)
+			err := types.Decode(s, def)
+			if err != nil {
+				return nil, err
+			}
+			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
+				return nil, nil
+			}
+
+			fStr := formatStr(def.OriginString)
+			if len(fStr) == 0 {
+				return []byte{}, nil
+			}
+			return functionUtil.QuickStrToBytes(fStr), nil
 		}
 	}
 
@@ -2387,12 +2420,19 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "mem":
 			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg) +
+				motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
+				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iolist":
+			cu = motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iodelete":
+			cu = motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "network":
 			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
 		case "total":
+			// total = cpu + mem + ioin + ioout + network
 			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
 		default:
 			rs.Append(float64(0), true)
