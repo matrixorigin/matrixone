@@ -35,6 +35,8 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
 	ioIn := stats.GetS3IOInputCount() * cfg.IoInPrice
 	ioOut := stats.GetS3IOOutputCount() * cfg.IoOutPrice
+	ioList := stats.GetS3IOListCount() * cfg.IoListPrice
+	ioDelete := stats.GetS3IODeleteCount() * cfg.IoDeletePrice
 	connType := stats.GetConnType()
 	traffic := 0.0
 	switch statistic.ConnType(connType) {
@@ -50,10 +52,10 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 
 	if durationNS <= DecimalNSThreshold {
 		mem := stats.GetMemorySize() * float64(durationNS) * cfg.MemPrice
-		return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
+		return (cpu + mem + ioIn + ioOut + ioList + ioDelete + traffic) / cfg.CUUnit
 	} else {
 		memCU := CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
-		return (cpu+ioIn+ioOut+traffic)/cfg.CUUnit + memCU
+		return (cpu+ioIn+ioOut+ioList+ioDelete+traffic)/cfg.CUUnit + memCU
 
 	}
 }
@@ -147,6 +149,20 @@ func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
 	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
 }
 
+func CalculateCUIOList(ioCnt float64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cfg = GetCUConfig()
+	}
+	return ioCnt * cfg.IoListPrice / cfg.CUUnit
+}
+
+func CalculateCUIODelete(ioCnt float64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cfg = GetCUConfig()
+	}
+	return ioCnt * cfg.IoDeletePrice / cfg.CUUnit
+}
+
 func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cfg = GetCUConfig()
@@ -165,8 +181,8 @@ func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) f
 	return traffic / cfg.CUUnit
 }
 
-var cuCfg = config.NewOBCUConfig()
-var cuCfgV1 = config.NewOBCUConfig()
+var cuCfg *config.OBCUConfig
+var cuCfgV1 *config.OBCUConfig
 
 func GetCUConfig() *config.OBCUConfig {
 	return cuCfg
@@ -178,4 +194,11 @@ func GetCUConfigV1() *config.OBCUConfig {
 
 func SetCuConfig(cu, cuv1 *config.OBCUConfig) {
 	cuCfg, cuCfgV1 = cu, cuv1
+}
+
+func init() {
+	cuCfg = config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	cuCfgV1 = config.NewOBCUConfig()
+	cuCfgV1.SetDefaultValues()
 }

@@ -20,13 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -113,13 +113,19 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				tableScan.Reader.SetFilterZM(msg.TopValueZM)
 			}
 		}
+
 		// read data from storage engine
 		tableScan.ctr.buf.CleanOnlyData()
-		isEnd, err := tableScan.Reader.Read(proc.Ctx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
+
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		isEnd, err := tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
 		if err != nil {
 			e = err
 			return vm.CancelResult, err
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		if isEnd {
 			e = err
