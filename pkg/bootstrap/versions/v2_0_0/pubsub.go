@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func getAccounts(txn executor.TxnExecutor) (nameInfoMap map[string]*pubsub.AccountInfo, err error) {
+var getAccounts = func(txn executor.TxnExecutor) (nameInfoMap map[string]*pubsub.AccountInfo, err error) {
 	sql := "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(0))
@@ -61,7 +61,7 @@ func getAccounts(txn executor.TxnExecutor) (nameInfoMap map[string]*pubsub.Accou
 	return
 }
 
-func getPubInfos(txn executor.TxnExecutor, accountId uint32) (pubInfos []*pubsub.PubInfo, err error) {
+var getPubInfos = func(txn executor.TxnExecutor, accountId uint32) (pubInfos []*pubsub.PubInfo, err error) {
 	sql := "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, comment from mo_catalog.mo_pubs"
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
@@ -91,14 +91,13 @@ func getPubInfos(txn executor.TxnExecutor, accountId uint32) (pubInfos []*pubsub
 	return
 }
 
-func getAllPubInfos(txn executor.TxnExecutor, accNameInfoMap map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
+var getAllPubInfos = func(txn executor.TxnExecutor, accNameInfoMap map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
 	allPubInfos := make(map[string]*pubsub.PubInfo)
 	for _, accountInfo := range accNameInfoMap {
 		pubInfos, err := getPubInfos(txn, uint32(accountInfo.Id))
 		if err != nil {
 			return nil, err
 		}
-		getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("account %s's pub count: %d", accountInfo.Name, len(pubInfos)))
 
 		for _, pubInfo := range pubInfos {
 			allPubInfos[accountInfo.Name+"#"+pubInfo.PubName] = pubInfo
@@ -123,7 +122,7 @@ func getSubInfoFromSql(sql string) (subName, pubAccountName, pubName string, err
 	return
 }
 
-func getPubSubscribedInfos(txn executor.TxnExecutor) (subscribedInfos map[string][]*pubsub.SubInfo, err error) {
+var getPubSubscribedInfos = func(txn executor.TxnExecutor) (subscribedInfos map[string][]*pubsub.SubInfo, err error) {
 	sql := "select dat_createsql, created_time, account_id from mo_catalog.mo_database where dat_type = 'subscription'"
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(0))
@@ -165,24 +164,20 @@ func UpgradePubSub(txn executor.TxnExecutor) (err error) {
 	if err != nil {
 		return
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("accNameInfoMap.size() = %d", len(accNameInfoMap)))
 
 	// allPubInfos: pubAccountName#pubName -> pubInfo
 	allPubInfos, err := getAllPubInfos(txn, accNameInfoMap)
 	if err != nil {
 		return
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("allPubInfos.size() = %d", len(allPubInfos)))
 
 	// pubSubscribedInfos: pubAccountName#pubName -> subscribedInfos
 	pubSubscribedInfos, err := getPubSubscribedInfos(txn)
 	if err != nil {
 		return
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("pubSubscribedInfos.size() = %d", len(pubSubscribedInfos)))
 
 	getSubAccountIds := func(pubInfo *pubsub.PubInfo, pubAccountName string) (subAccountIds []int32) {
-		getLogger(txn.Txn().TxnOptions().CN).Info(fmt.Sprintf("getSubAccountIds of %s.%s", pubAccountName, pubInfo.PubName))
 		if pubInfo.SubAccountsStr == pubsub.AccountAll {
 			for _, accInfo := range accNameInfoMap {
 				if accInfo.Name == pubAccountName {
