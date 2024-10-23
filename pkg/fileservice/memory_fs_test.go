@@ -57,15 +57,18 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
+	cache := NewMemCache(
+		fscache.ConstCapacity(128*1024*1024),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close()
+
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
-		fs.caches = append(fs.caches, NewMemCache(
-			fscache.ConstCapacity(128*1024*1024),
-			nil,
-			nil,
-			"",
-		))
+		fs.caches = append(fs.caches, cache)
 		return fs
 	})
 
@@ -79,13 +82,16 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
+	cache := NewMemCache(
+		fscache.ConstCapacity(2*1024*1024), nil, nil,
+		"",
+	)
+	defer cache.Close()
+
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
-		fs.caches = append(fs.caches, NewMemCache(
-			fscache.ConstCapacity(2*1024*1024), nil, nil,
-			"",
-		))
+		fs.caches = append(fs.caches, cache)
 		return fs
 	})
 

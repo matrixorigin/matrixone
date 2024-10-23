@@ -164,6 +164,8 @@ var (
 	defaultLoggerLabelVal = "logging_cn"
 	defaultLoggerMap      = map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}
 
+	defaultMaxLogMessageSize = 16 << 10
+
 	// largestEntryLimit is the max size for reading file to csv buf
 	LargestEntryLimit = 10 * 1024 * 1024
 
@@ -561,6 +563,9 @@ type ObservabilityParameters struct {
 	// estimate tcp network packet cost
 	TCPPacket bool `toml:"tcp-packet"`
 
+	// MaxLogMessageSize truncate the reset. default: 16 KiB
+	MaxLogMessageSize toml.ByteSize `toml:"max-log-message-size"`
+
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
@@ -626,6 +631,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{}, /*default: role=logging_cn*/
 		TCPPacket:                          true,
+		MaxLogMessageSize:                  toml.ByteSize(defaultMaxLogMessageSize),
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
