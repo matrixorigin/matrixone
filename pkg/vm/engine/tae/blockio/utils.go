@@ -217,16 +217,14 @@ func CheckTombstoneFile(
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.RowidPrefixEq(prefixPattern) {
-				if columnZonemap.RowidPrefixGT(prefixPattern) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			if columnZonemap.RowidPrefixEq(prefixPattern) {
+				var goOn bool
+				if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
 					break
 				}
-				continue
-			}
-			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			} else if columnZonemap.RowidPrefixGT(prefixPattern) {
+				// all zone maps are sorted by the rowid
+				// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
 				break
 			}
 		}

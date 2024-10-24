@@ -15,6 +15,7 @@
 package types
 
 import (
+	"encoding/hex"
 	"github.com/google/uuid"
 )
 
@@ -57,6 +58,12 @@ func CompareUuid(left Uuid, right Uuid) int {
 
 func (d Uuid) String() string {
 	return uuid.UUID(d).String()
+}
+
+func (d Uuid) ShortString() string {
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], d[10:])
+	return string(shortuuid[:])
 }
 
 func (d Uuid) ClockSequence() int {
