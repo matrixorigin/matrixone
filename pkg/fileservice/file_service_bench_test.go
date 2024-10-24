@@ -53,26 +53,22 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 
 		b.RunParallel(func(pb *testing.PB) {
 
-			readVector := &IOVector{
-				FilePath: "foo",
-			}
-			offset := int64(0)
-			for _, part := range parts2 {
-				readVector.Entries = append(readVector.Entries, IOEntry{
-					Offset:      offset,
-					Size:        int64(len(part)),
-					ToCacheData: CacheOriginalData,
-				})
-				offset += int64(len(part))
-			}
-
 			for pb.Next() {
-				for i := range readVector.Entries {
-					readVector.Entries[i].done = false
-					readVector.Entries[i].Data = nil
+				readVector := &IOVector{
+					FilePath: "foo",
+				}
+				offset := int64(0)
+				for _, part := range parts2 {
+					readVector.Entries = append(readVector.Entries, IOEntry{
+						Offset:      offset,
+						Size:        int64(len(part)),
+						ToCacheData: CacheOriginalData,
+					})
+					offset += int64(len(part))
 				}
 				err := fs.Read(ctx, readVector)
 				assert.Nil(b, err)
+				readVector.Release()
 			}
 
 		})
