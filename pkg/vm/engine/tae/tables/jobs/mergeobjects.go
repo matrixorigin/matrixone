@@ -190,7 +190,9 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
-func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (task *mergeObjectsTask) LoadNextBatch(
+	ctx context.Context, objIdx uint32,
+) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
 	}
@@ -212,9 +214,21 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 
 	obj := task.mergedObjsHandle[objIdx]
 	if task.isTombstone {
-		err = obj.Scan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.Scan(
+			ctx,
+			&data,
+			uint16(task.nMergedBlk[objIdx]),
+			task.idxs,
+			common.MergeAllocator,
+		)
 	} else {
-		err = obj.HybridScan(ctx, &data, uint16(task.nMergedBlk[objIdx]), task.idxs, common.MergeAllocator)
+		err = obj.HybridScan(
+			ctx,
+			&data,
+			uint16(task.nMergedBlk[objIdx]),
+			task.idxs,
+			common.MergeAllocator,
+		)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -360,7 +374,15 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
-	if task.createdBObjs, err = HandleMergeEntryInTxn(ctx, task.txn, task.Name(), task.commitEntry, task.transferMaps, task.rt, task.isTombstone); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(
+		ctx,
+		task.txn,
+		task.Name(),
+		task.commitEntry,
+		task.transferMaps,
+		task.rt,
+		task.isTombstone,
+	); err != nil {
 		return err
 	}
 
@@ -448,11 +470,15 @@ func HandleMergeEntryInTxn(
 	}
 
 	if isTombstone {
-		if err = txn.LogTxnEntry(entry.DbId, entry.TblId, txnEntry, nil, ids); err != nil {
+		if err = txn.LogTxnEntry(
+			entry.DbId, entry.TblId, txnEntry, nil, ids,
+		); err != nil {
 			return nil, err
 		}
 	} else {
-		if err = txn.LogTxnEntry(entry.DbId, entry.TblId, txnEntry, ids, nil); err != nil {
+		if err = txn.LogTxnEntry(
+			entry.DbId, entry.TblId, txnEntry, ids, nil,
+		); err != nil {
 			return nil, err
 		}
 	}
