@@ -4768,6 +4768,12 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.SessionInfo.TimeZone).
 		WithLowerCaseTableNames(&lower)
+
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
+		}
+	}
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
