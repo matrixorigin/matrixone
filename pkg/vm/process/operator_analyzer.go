@@ -306,7 +306,7 @@ func (ps *OperatorStats) String() string {
 			case OpIncrementTime:
 				metricName = "IncrementTime"
 			}
-			metricsStr += fmt.Sprintf("%s: %dns", metricName, v)
+			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
 		}
 	}
 
