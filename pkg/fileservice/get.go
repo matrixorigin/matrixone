@@ -24,30 +24,32 @@ import (
 )
 
 func Get[T any](fs FileService, name string) (res T, err error) {
-	lowerName := strings.ToLower(name)
-	if fs, ok := fs.(*FileServices); ok {
-		f, ok := fs.mappings[lowerName]
-		if !ok {
-			err = moerr.NewNoServiceNoCtx(name)
-			return
+
+	// wrap
+	if wrapFS, ok := fs.(WrapFileService); ok {
+		for _, fs := range wrapFS.Unwrap() {
+			if res, err = Get[T](fs, name); err == nil {
+				return
+			}
 		}
-		res, ok = f.(T)
-		if !ok {
-			err = moerr.NewNoServiceNoCtx(name)
-			return
-		}
+		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
+
+	// type
 	var ok bool
 	res, ok = fs.(T)
 	if !ok {
 		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
-	if !strings.EqualFold(fs.Name(), lowerName) {
+
+	// name
+	if !strings.EqualFold(fs.Name(), strings.ToLower(name)) {
 		err = moerr.NewNoServiceNoCtx(name)
 		return
 	}
+
 	return
 }
 
