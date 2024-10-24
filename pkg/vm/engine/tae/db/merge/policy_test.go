@@ -116,7 +116,7 @@ func TestPolicyBasic(t *testing.T) {
 	p := newBasicPolicy()
 
 	// only schedule objects whose size < cfg.objectMinOSize
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg := testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
@@ -127,7 +127,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
-	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
@@ -138,7 +138,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// basic policy do not schedule tombstones
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -146,7 +146,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.Equal(t, 0, len(result))
 
 	// memory limit
-	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
@@ -160,14 +160,14 @@ func TestPolicyTombstone(t *testing.T) {
 	p := newTombstonePolicy()
 
 	// tombstone policy do not schedule data objects
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg := testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
 	result := p.revise(0, math.MaxInt64, cfg)
 	require.Equal(t, 0, len(result))
 
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -177,7 +177,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -188,7 +188,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, TaskHostDN, result[0].kind)
 
 	// tombstone do not consider size limit
-	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
+	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 3)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
@@ -232,7 +232,7 @@ func TestObjOverlap(t *testing.T) {
 		require.Equal(t, 0, len(obj.objs))
 	}
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 
 	// no overlap
 	entry1 := newSortedTestObjectEntry(t, 1, 2, overlapSizeThreshold)
@@ -244,7 +244,7 @@ func TestObjOverlap(t *testing.T) {
 		require.Equal(t, 0, len(obj.objs))
 	}
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 
 	// overlap
 	entry3 := newSortedTestObjectEntry(t, 1, 4, overlapSizeThreshold)
@@ -261,7 +261,7 @@ func TestObjOverlap(t *testing.T) {
 	}
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 
 	// entry is not sorted
 	entry5 := newTestObjectEntry(t, overlapSizeThreshold, false)
@@ -274,7 +274,7 @@ func TestObjOverlap(t *testing.T) {
 		require.Equal(t, 0, len(obj.objs))
 	}
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 
 	// two overlap set:
 	// {entry7, entry8}
@@ -297,7 +297,7 @@ func TestObjOverlap(t *testing.T) {
 	require.Equal(t, 3, len(objs[0].objs))
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 
 	// no enough memory
 	entry12 := newSortedTestObjectEntry(t, 1, 4, overlapSizeThreshold)
@@ -311,7 +311,7 @@ func TestObjOverlap(t *testing.T) {
 		require.Equal(t, 0, len(obj.objs))
 	}
 
-	policy.resetForTable(nil)
+	policy.resetForTable(nil, nil)
 }
 
 func TestPolicyCompact(t *testing.T) {
@@ -332,7 +332,7 @@ func TestPolicyCompact(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
 
-	p.resetForTable(tbl)
+	p.resetForTable(tbl, nil)
 
 	objs := p.revise(0, math.MaxInt64, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))

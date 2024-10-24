@@ -147,7 +147,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(i int) ([]*catalog.ObjectEntry, Tas
 	return objs, TaskHostDN
 }
 
-func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
+func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 	for i := range m.leveledObjects {
 		m.leveledObjects[i] = m.leveledObjects[i][:0]

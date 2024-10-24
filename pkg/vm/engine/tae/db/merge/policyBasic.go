@@ -17,6 +17,7 @@ package merge
 import (
 	"cmp"
 	"context"
+	"go.uber.org/zap"
 	"slices"
 	"time"
 
@@ -70,10 +71,10 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 }
 
 func (g *policyGroup) resetForTable(entry *catalog.TableEntry) {
-	for _, p := range g.policies {
-		p.resetForTable(entry)
-	}
 	g.config = g.configProvider.getConfig(entry)
+	for _, p := range g.policies {
+		p.resetForTable(entry, g.config)
+	}
 }
 
 func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) (err error) {
@@ -88,7 +89,12 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
 		} else {
 			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
-			txn.Commit(ctx)
+			err = txn.Commit(ctx)
+			logutil.Infof("merge policy commit time: %s", txn.GetCommitTS().ToTimestamp().DebugString())
+			if err != nil {
+				logutil.Error("commit error", zap.Error(err))
+				return
+			}
 			g.configProvider.invalidCache(tbl)
 		}
 	}()
@@ -315,7 +321,7 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	return objs
 }
 
-func (o *basic) resetForTable(entry *catalog.TableEntry) {
+func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.schema = entry.GetLastestSchemaLocked(false)
 	o.lastMergeTime = entry.Stats.GetLastMergeTime()
 	o.objects = o.objects[:0]

@@ -19,10 +19,7 @@ import (
 	"sort"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -71,19 +68,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		}
 		tombstone := o.tombstones[i]
 		o.validTombstones[tombstone] = struct{}{}
-
-		if (entryOutdated(tombstone, config.TombstoneLifetime) && tombstone.OriginSize() > 10*common.Const1MBytes) ||
-			tombstone.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
-			logutil.Info("[MERGE-POLICY]",
-				zap.String("policy", "compact"),
-				zap.String("table", o.tblEntry.GetFullName()),
-				zap.String("data object", entry.ID().ShortStringEx()),
-				zap.Uint32("data rows", entry.Rows()),
-				zap.Uint32("tombstone size", tombstone.OriginSize()),
-			)
-			o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
-			return true
-		}
+		o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
 	}
 	return false
 }
@@ -103,7 +88,7 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	return results
 }
 
-func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
+func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
 	o.tombstones = o.tombstones[:0]
 	o.tombstoneMetas = o.tombstoneMetas[:0]
@@ -118,15 +103,19 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 			continue
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		meta, err := loadTombstoneMeta(ctx, tEntry.GetObjectStats(), o.fs)
-		cancel()
-		if err != nil {
-			continue
-		}
+		if (entryOutdated(tEntry, config.TombstoneLifetime) && tEntry.OriginSize() > 10*common.Const1MBytes) ||
+			tEntry.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 
-		o.tombstoneMetas = append(o.tombstoneMetas, meta)
-		o.tombstones = append(o.tombstones, tEntry)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			meta, err := loadTombstoneMeta(ctx, tEntry.GetObjectStats(), o.fs)
+			cancel()
+			if err != nil {
+				continue
+			}
+
+			o.tombstoneMetas = append(o.tombstoneMetas, meta)
+			o.tombstones = append(o.tombstones, tEntry)
+		}
 	}
 }
 
