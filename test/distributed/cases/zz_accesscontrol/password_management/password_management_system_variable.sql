@@ -53,6 +53,11 @@ select @@global.validate_password.mixed_case_count ;
 select @@global.validate_password.number_count;
 select @@global.validate_password.special_char_count;
 
+SET GLOBAL validate_password.policy = "LOW";
+select @@global.validate_password.policy;
+SET GLOBAL validate_password.policy = "MEDIUM";
+select @@global.validate_password.policy;
+
 SET GLOBAL validate_password = default;
 SET GLOBAL validate_password.check_user_name = default;
 SET GLOBAL validate_password.changed_characters_percentage = default;
