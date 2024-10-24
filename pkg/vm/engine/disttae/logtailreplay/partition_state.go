@@ -73,10 +73,6 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
-
-	// blocks deleted before minTS is hard deleted.
-	// partition state can't serve txn with snapshotTS less than minTS
-	minTS types.TS
 }
 
 func (p *PartitionState) HandleLogtailEntry(
