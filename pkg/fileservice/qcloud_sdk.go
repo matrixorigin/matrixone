@@ -62,20 +62,19 @@ func NewQCloudSDK(
 		return nil, err
 	}
 
-	// transport
-	transport := &cos.AuthorizationTransport{
+	// http client
+	httpClient := newHTTPClient(args)
+	httpClient.Transport = &cos.AuthorizationTransport{
 		SecretID:     args.KeyID,
 		SecretKey:    args.KeySecret,
 		SessionToken: args.SessionToken,
-		Transport:    newHTTPClient(args).Transport,
+		Transport:    httpClient.Transport,
 	}
 
 	// client
 	client := cos.NewClient(
 		&cos.BaseURL{BucketURL: baseURL},
-		&http.Client{
-			Transport: transport,
-		},
+		httpClient,
 	)
 
 	logutil.Info("new object storage",
@@ -85,7 +84,9 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
+		reqCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		_, err := client.Bucket.Head(reqCtx, &cos.BucketHeadOptions{})
 		if err != nil {
 			return nil, err
 		}

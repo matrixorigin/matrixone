@@ -169,7 +169,9 @@ func NewAwsSDKv2(
 
 	if !args.NoBucketValidation {
 		// head bucket to validate
-		_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		reqCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		_, err = client.HeadBucket(reqCtx, &s3.HeadBucketInput{
 			Bucket: ptrTo(args.Bucket),
 		})
 		if err != nil {

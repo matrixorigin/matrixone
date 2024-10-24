@@ -58,6 +58,14 @@ func testObjectStorage[T ObjectStorage](
 			assert.Nil(t, err)
 			assert.Equal(t, 1, n)
 
+			// list empty
+			prefix2 := time.Now().Format("2006-01-02-15-04-05.000000")
+			err = storage.List(ctx, prefix2+"/", func(isPrefix bool, key string, size int64) (bool, error) {
+				t.Fatal()
+				return true, nil
+			})
+			assert.Nil(t, err)
+
 			// stat
 			size, err := storage.Stat(ctx, name)
 			assert.Nil(t, err)
@@ -175,6 +183,13 @@ func TestObjectStorages(t *testing.T) {
 				// qiniu
 				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
 					storage, err := NewMinioSDK(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
+				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(context.Background(), args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}

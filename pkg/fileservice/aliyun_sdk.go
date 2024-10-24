@@ -100,7 +100,9 @@ func NewAliyunSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := client.GetBucketInfo(args.Bucket)
+		reqCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		_, err := client.GetBucketInfo(args.Bucket, oss.WithContext(reqCtx))
 		if err != nil {
 			return nil, err
 		}

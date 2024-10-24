@@ -167,7 +167,9 @@ func NewMinioSDK(
 
 	if !args.NoBucketValidation {
 		// validate
-		ok, err := client.BucketExists(ctx, args.Bucket)
+		reqCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		ok, err := client.BucketExists(reqCtx, args.Bucket)
 		if err != nil {
 			return nil, err
 		}

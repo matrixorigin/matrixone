@@ -83,10 +83,8 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case args.IsMinio ||
-		// 天翼云
-		strings.Contains(args.Endpoint, "ctyunapi.cn"):
-		// MinIO SDK
+	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+		// 天翼云，只能用signaturev2验证，其他sdk已不支持
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
