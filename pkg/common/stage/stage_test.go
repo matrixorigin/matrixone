@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mocks
+package stage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-var testVectorPool *containers.VectorPool
+func TestS3ServiceProvider(t *testing.T) {
+	protocol, err := getS3ServiceFromProvider("cos")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "s3")
 
-func init() {
-	testVectorPool = containers.NewVectorPool("for-test", 20)
-}
+	protocol, err = getS3ServiceFromProvider("amazon")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "s3")
 
-func GetTestVectorPool() *containers.VectorPool {
-	return testVectorPool
+	protocol, err = getS3ServiceFromProvider("minio")
+	require.Nil(t, err)
+	assert.Equal(t, protocol, "minio")
+
 }
