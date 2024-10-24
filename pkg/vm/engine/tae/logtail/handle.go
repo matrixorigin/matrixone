@@ -296,7 +296,8 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	return nil
 }
 func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
-	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(objectio.HackObjid2Rowid(entry.ID()), false)
+	var rowid types.Rowid
+	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
 	if push {
 		batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
 	} else {
