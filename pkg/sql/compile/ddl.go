@@ -90,10 +90,20 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	// whether foreign_key_checks = 0 or 1
-	err := s.removeFkeysRelationships(c, dbName)
+	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
+	}
+	relations, err := database.Relations(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range relations {
+		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
+		err = c.runSql(dropSql)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.TxnOperator)

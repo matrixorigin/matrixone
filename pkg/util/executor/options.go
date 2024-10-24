@@ -28,6 +28,12 @@ func (opts Options) WithDisableIncrStatement() Options {
 	return opts
 }
 
+// WithDisableIncrStatement disable incr statement
+func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
+	opts.ignoreForeignKey = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -157,6 +163,10 @@ func (opts StatementOption) AccountID() uint32 {
 
 func (opts StatementOption) HasAccountID() bool {
 	return opts.accountId > 0
+}
+
+func (opts StatementOption) IgnoreForeignKey() bool {
+	return opts.ignoreForeignKey
 }
 
 func (opts Options) WithDisableTrace() Options {

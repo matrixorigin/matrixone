@@ -66,8 +66,9 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy lock.WaitPolicy
-	accountId  uint32
+	waitPolicy       lock.WaitPolicy
+	accountId        uint32
+	ignoreForeignKey bool
 }
 
 // Result exec sql result
