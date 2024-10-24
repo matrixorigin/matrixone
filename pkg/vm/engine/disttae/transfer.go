@@ -395,18 +395,14 @@ func doTransferRowids(
 		if isEnd {
 			break
 		}
-		if err = vector.GetUnionAllFunction(
-			*readPKColumn.GetType(), mp,
-		)(
-			readPKColumn, bat.GetVector(0),
+
+		if err = readPKColumn.UnionBatch(
+			bat.GetVector(0), 0, bat.RowCount(), nil, mp,
 		); err != nil {
 			return
 		}
-
-		if err = vector.GetUnionAllFunction(
-			*targetRowids.GetType(), mp,
-		)(
-			targetRowids, bat.GetVector(1),
+		if err = targetRowids.UnionBatch(
+			bat.GetVector(1), 0, bat.RowCount(), nil, mp,
 		); err != nil {
 			return
 		}

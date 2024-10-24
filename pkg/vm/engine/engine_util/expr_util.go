@@ -427,8 +427,9 @@ func recurEvalExprList(
 			for i := 0; i < vec.Length(); i++ {
 				sels[i] = int32(i)
 			}
-			union := vector.GetUnionAllFunction(*outputVec.GetType(), proc.Mp())
-			if err := union(outputVec, vec); err != nil {
+			if err := outputVec.UnionBatch(
+				vec, 0, vec.Length(), nil, proc.Mp(),
+			); err != nil {
 				return false, outputVec
 			}
 		case *plan.Expr_List:
