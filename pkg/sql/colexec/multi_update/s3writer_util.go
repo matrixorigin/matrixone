@@ -65,14 +65,12 @@ func generateBlockWriter(writer *s3Writer,
 	}
 
 	if isDelete {
-		if writer.pkIdxs[idx] > -1 {
-			blockWriter.SetPrimaryKeyWithType(
-				uint16(writer.pkIdxs[idx]),
-				index.HBF,
-				index.ObjectPrefixFn,
-				index.BlockPrefixFn,
-			)
-		}
+		blockWriter.SetPrimaryKeyWithType(
+			0,
+			index.HBF,
+			index.ObjectPrefixFn,
+			index.BlockPrefixFn,
+		)
 	} else {
 		if writer.pkIdxs[idx] > -1 {
 			blockWriter.SetPrimaryKey(uint16(writer.pkIdxs[idx]))

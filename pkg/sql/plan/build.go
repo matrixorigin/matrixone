@@ -93,7 +93,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 }
 
 func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStmt bool, skipStats bool) (*Plan, error) {
-	return buildLoad(stmt, ctx, isPrepareStmt)
+	// return buildLoad(stmt, ctx, isPrepareStmt)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())

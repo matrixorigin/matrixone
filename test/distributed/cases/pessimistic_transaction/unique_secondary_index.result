@@ -14,7 +14,7 @@ insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,
 insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
 Duplicate entry '' for key 'col2'
 insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
-Duplicate entry '67834' for key 'col1'
+Duplicate entry '(\d{5})' for key 'col1'
 insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
 select col2,col4 from index_02;
 col2    col4

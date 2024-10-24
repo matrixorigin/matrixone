@@ -108,9 +108,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 	}
 
-	if len(insertColToExpr) == 0 {
+	if len(tbColToDataCol) == 0 {
 		idx := 0
-		tbColToDataCol := make(map[string]int32, 0)
 		for _, col := range tableDef.Cols {
 			if !col.Hidden {
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))

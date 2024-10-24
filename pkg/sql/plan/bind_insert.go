@@ -104,7 +104,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	//lock main table
-	var lockTargets []*plan.LockTarget
+	lockTargets := make([]*plan.LockTarget, 0, len(dmlCtx.tableDefs[0].Indexes)+1)
 	mainTableDef := dmlCtx.tableDefs[0]
 	for _, col := range mainTableDef.Cols {
 		if col.Name == mainTableDef.Pkey.PkeyColName && mainTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
