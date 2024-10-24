@@ -106,8 +106,6 @@ func MockTableDelegate(
 		isMock: true,
 	}
 	tbl.shard.service = service
-
-	tbl.shard.service = service
 	tbl.shard.is = false
 	tbl.isLocal = tbl.isLocalFunc
 
@@ -669,8 +667,8 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		return nil, err
 	}
 	group := func(rd engine.RelData) (local engine.RelData, remote engine.RelData) {
-		local = rd.BuildEmptyRelData()
-		remote = rd.BuildEmptyRelData()
+		local = rd.BuildEmptyRelData(0)
+		remote = rd.BuildEmptyRelData(0)
 		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi *objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
 				local.AppendBlockInfo(bi)
@@ -740,6 +738,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				engine_util.GetThresholdForReader(newNum),
 			)
 			if err != nil {
 				return nil, err
@@ -1121,7 +1120,9 @@ func (tbl *txnTableDelegate) forwardRead(
 	err = tbl.shard.service.Read(
 		ctx,
 		request,
-		shardservice.ReadOptions{}.Shard(shardID),
+		shardservice.ReadOptions{}.
+			ReadAt(tbl.origin.getTxn().op.SnapshotTS()).
+			Shard(shardID),
 	)
 	if err != nil {
 		return err

@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -28,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/stretchr/testify/require"
 )
 
 func TestTombstoneData1(t *testing.T) {
@@ -65,7 +66,7 @@ func TestTombstoneData1(t *testing.T) {
 
 		writer.StashBatch(proc, bat)
 
-		_, ss, err := writer.SortAndSync(proc)
+		_, ss, err := writer.SortAndSync(ctx, proc)
 		require.NoError(t, err)
 		require.False(t, ss.IsZero())
 
