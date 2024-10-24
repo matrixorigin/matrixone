@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"iter"
 	"time"
 
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -65,9 +66,11 @@ func (o *objectStorageMetrics) Exists(ctx context.Context, key string) (bool, er
 	return o.upstream.Exists(ctx, key)
 }
 
-func (o *objectStorageMetrics) List(ctx context.Context, prefix string, fn func(isPrefix bool, key string, size int64) (bool, error)) (err error) {
-	o.numList.Inc()
-	return o.upstream.List(ctx, prefix, fn)
+func (o *objectStorageMetrics) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		o.numList.Inc()
+		o.upstream.List(ctx, prefix)(yield)
+	}
 }
 
 func (o *objectStorageMetrics) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

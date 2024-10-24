@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -117,60 +118,60 @@ var _ ObjectStorage = new(AwsSDKv1)
 func (a *AwsSDKv1) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		select {
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return
+		default:
+		}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+		var cont *string
+
+	loop1:
+		for {
+			output, err := a.listObjects(
+				ctx,
+				&s3.ListObjectsV2Input{
+					Bucket:            ptrTo(a.bucket),
+					Delimiter:         ptrTo("/"),
+					Prefix:            ptrTo(prefix),
+					ContinuationToken: cont,
+					MaxKeys:           ptrTo(a.listMaxKeys),
+				},
+			)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+
+			for _, obj := range output.Contents {
+				if !yield(&DirEntry{
+					Name: *obj.Key,
+					Size: *obj.Size,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			for _, prefix := range output.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  *prefix.Prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !*output.IsTruncated {
+				break
+			}
+			cont = output.ContinuationToken
+		}
+
 	}
 
-	var cont *string
-
-loop1:
-	for {
-		output, err := a.listObjects(
-			ctx,
-			&s3.ListObjectsV2Input{
-				Bucket:            ptrTo(a.bucket),
-				Delimiter:         ptrTo("/"),
-				Prefix:            ptrTo(prefix),
-				ContinuationToken: cont,
-				MaxKeys:           ptrTo(a.listMaxKeys),
-			},
-		)
-		if err != nil {
-			return err
-		}
-
-		for _, obj := range output.Contents {
-			more, err := fn(false, *obj.Key, *obj.Size)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		for _, prefix := range output.CommonPrefixes {
-			more, err := fn(true, *prefix.Prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !*output.IsTruncated {
-			break
-		}
-		cont = output.ContinuationToken
-	}
-
-	return nil
 }
 
 func (a *AwsSDKv1) Stat(

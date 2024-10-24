@@ -48,14 +48,13 @@ func testObjectStorage[T ObjectStorage](
 
 			// list
 			n := 0
-			err = storage.List(ctx, prefix+"/", func(isPrefix bool, key string, size int64) (bool, error) {
+			for entry, err := range storage.List(ctx, prefix+"/") {
+				assert.Nil(t, err)
 				n++
-				assert.Equal(t, false, isPrefix)
-				assert.Equal(t, name, key)
-				assert.Equal(t, int64(3), size)
-				return true, nil
-			})
-			assert.Nil(t, err)
+				assert.Equal(t, false, entry.IsDir)
+				assert.Equal(t, name, entry.Name)
+				assert.Equal(t, int64(3), entry.Size)
+			}
 			assert.Equal(t, 1, n)
 
 			// stat
@@ -90,6 +89,24 @@ func testObjectStorage[T ObjectStorage](
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 			_, err = storage.Read(ctx, "filenotexists", nil, nil)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+
+			// sub dirs
+			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), 1, nil)
+			assert.Nil(t, err)
+			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), 1, nil)
+			assert.Nil(t, err)
+			n = 0
+			for _, err := range storage.List(ctx, "a/1") {
+				assert.Nil(t, err)
+				n++
+			}
+			assert.Equal(t, 1, n) // a/1/
+			n = 0
+			for _, err := range storage.List(ctx, "a/1/") {
+				assert.Nil(t, err)
+				n++
+			}
+			assert.Equal(t, 2, n)
 
 		})
 

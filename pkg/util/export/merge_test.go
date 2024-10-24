@@ -364,7 +364,8 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 			files := make([]string, 0, 1)
 			dir := []string{"/"}
 			for len(dir) > 0 {
-				entrys, _ := fs.List(tt.args.ctx, dir[0])
+				entrys, err := fileservice.SortedList(fs.List(tt.args.ctx, dir[0]))
+				require.Nil(t, err)
 				for _, e := range entrys {
 					p := path.Join(dir[0], e.Name)
 					if e.IsDir {

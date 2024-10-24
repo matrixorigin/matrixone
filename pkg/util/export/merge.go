@@ -226,16 +226,11 @@ func (m *Merge) Main(ctx context.Context) error {
 	var files = make([]*FileMeta, 0, 1000)
 	var totalSize int64
 
-	accounts, err := m.fs.List(ctx, "/")
-	if err != nil {
-		return err
-	}
-	if len(accounts) == 0 {
-		m.logger.Info("merge find empty data")
-		return nil
-	}
 	m.logger.Debug(fmt.Sprintf("merge task with max file: %v MB", m.MaxFileSize/mpool.MB))
-	for _, account := range accounts {
+	for account, err := range m.fs.List(ctx, "/") {
+		if err != nil {
+			return err
+		}
 		if !account.IsDir {
 			m.logger.Warn(fmt.Sprintf("path is not dir: %s", account.Name))
 			continue
@@ -257,14 +252,12 @@ func (m *Merge) Main(ctx context.Context) error {
 			m.logger.Info("start merge", logutil.TableField(m.table.GetIdentify()), logutil.PathField(rootPath),
 				zap.String("metadata.ID", m.task.Metadata.ID))
 
-			fileEntrys, err := m.fs.List(ctx, rootPath)
-			if err != nil {
-				// fixme: m.logger.Error()
-				return err
-			}
 			files = files[:0]
 			totalSize = 0
-			for _, f := range fileEntrys {
+			for f, err := range m.fs.List(ctx, rootPath) {
+				if err != nil {
+					return err
+				}
 				filepath := path.Join(rootPath, f.Name)
 				totalSize += f.Size
 				files = append(files, &FileMeta{filepath, f.Size})
@@ -285,7 +278,7 @@ func (m *Merge) Main(ctx context.Context) error {
 		}
 	}
 
-	return err
+	return nil
 }
 
 func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string, error) {
@@ -303,11 +296,10 @@ func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string
 		for j := 0; j < length; j++ {
 			elem := l.Remove(l.Front())
 			prefix := elem.(string)
-			entries, err := m.fs.List(ctx, prefix)
-			if err != nil {
-				return nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range m.fs.List(ctx, prefix) {
+				if err != nil {
+					return nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}

@@ -434,7 +434,7 @@ func copyFileAndGetMetaFiles(
 	decodeFunc func(string) (types.TS, types.TS, string),
 	copy bool,
 ) ([]*taeFile, []*checkpoint.MetaFile, []fileservice.DirEntry, error) {
-	files, err := srcFs.List(ctx, dir)
+	files, err := fileservice.SortedList(srcFs.List(ctx, dir))
 	if err != nil {
 		return nil, nil, nil, err
 	}

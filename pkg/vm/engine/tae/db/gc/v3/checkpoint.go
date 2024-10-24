@@ -274,7 +274,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	}()
 
 	var dirs []fileservice.DirEntry
-	if dirs, err = c.fs.ListDir(GCMetaDir); err != nil {
+	if dirs, err = fileservice.SortedList(c.fs.ListDir(GCMetaDir)); err != nil {
 		return
 	}
 	if len(dirs) == 0 {

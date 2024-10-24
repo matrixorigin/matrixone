@@ -100,7 +100,7 @@ func ListSnapshotMeta(
 	snapshot types.TS,
 	fs fileservice.FileService,
 ) ([]*MetaFile, error) {
-	dirs, err := fs.List(ctx, CheckpointDir)
+	dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
 	if err != nil {
 		return nil, err
 	}
