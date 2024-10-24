@@ -128,7 +128,7 @@ ext2    VARCHAR(1024)    YES        null        扩展字段
 ext3    VARCHAR(1024)    YES        null        扩展字段
 sub_company_id    VARCHAR(64)    YES    MUL    null        
 parent_project_id    VARCHAR(64)    YES        null        
-distinguish_suite    INT(32)    YES        '1'        是否分户(0,否 1，是)
+distinguish_suite    INT(32)    YES        1        是否分户(0,否 1，是)
 draw_switch    INT(32)    YES        null        
 version    VARCHAR(64)    YES        null        
 created_by    VARCHAR(64)    YES        null        
@@ -178,7 +178,7 @@ ext2    VARCHAR(1024)    YES        null        扩展字段
 ext3    VARCHAR(1024)    YES        null        扩展字段
 sub_company_id    VARCHAR(64)    YES    MUL    null        
 parent_project_id    VARCHAR(64)    YES        null        
-distinguish_suite    INT(32)    YES        '1'        是否分户(0,否 1，是)
+distinguish_suite    INT(32)    YES        1        是否分户(0,否 1，是)
 draw_switch2    INT(32)    YES        null        
 created_by    VARCHAR(64)    YES        null        
 created_time    DATETIME(0)    YES        null        
