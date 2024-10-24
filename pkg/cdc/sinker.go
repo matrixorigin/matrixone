@@ -599,19 +599,19 @@ func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
 }
 
 func (s *mysqlSink) SendCommit(_ context.Context) (err error) {
-	if err = s.tx.Commit(); err != nil {
-		return
-	}
-	s.tx = nil
-	return
+	defer func() {
+		s.tx = nil
+	}()
+
+	return s.tx.Commit()
 }
 
 func (s *mysqlSink) SendRollback(_ context.Context) (err error) {
-	if err = s.tx.Rollback(); err != nil {
-		return
-	}
-	s.tx = nil
-	return
+	defer func() {
+		s.tx = nil
+	}()
+
+	return s.tx.Rollback()
 }
 
 func (s *mysqlSink) Close() {
