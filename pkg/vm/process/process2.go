@@ -87,6 +87,7 @@ func NewTopProcess(
 		logger:         util.GetLogger(sid),
 		UnixTime:       time.Now().UnixNano(),
 		PostDmlSqlList: threadsafe.NewSlice[string](),
+		StageCache:     threadsafe.NewMap[string, StageDefIf](),
 	}
 
 	proc := &Process{
