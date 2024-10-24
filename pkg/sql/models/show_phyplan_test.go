@@ -17,6 +17,7 @@ package models
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -180,9 +181,29 @@ func TestExplainPhyPlan(t *testing.T) {
 	phyPlan.S3IOInputCount = 5
 	phyPlan.S3IOOutputCount = 0
 
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseDuration = 72872
+	statsInfo.PlanStage.PlanDuration = 7544049
+	statsInfo.PlanStage.BuildPlanStatsDuration = 142500
+	statsInfo.CompileStage.CompileDuration = 59396
+	statsInfo.CompileStage.CompileTableScanDuration = 260717
+	statsInfo.CompileStage.CompileS3Request = statistic.S3Request{
+		List:      0,
+		Get:       2,
+		Put:       1,
+		Head:      1,
+		Delete:    0,
+		DeleteMul: 0,
+	}
+
+	statsInfo.PrepareRunStage.CompilePreRunOnceDuration = 49396
+	statsInfo.PrepareRunStage.ScopePrepareDuration = 12000
+	statsInfo.PrepareRunStage.BuildReaderDuration = 11000
+
 	//------------------------------------------------------------------------------------------------------------------
 	type args struct {
 		plan   *PhyPlan
+		stats  *statistic.StatsInfo
 		option ExplainOption
 	}
 	tests := []struct {
@@ -202,10 +223,10 @@ func TestExplainPhyPlan(t *testing.T) {
 			name: "test02",
 			args: args{
 				plan:   phyPlan,
+				stats:  statsInfo,
 				option: NormalOption,
 			},
-			want: `RetryTime: 0, S3IOInputCount: 5, S3IOOutputCount: 0
-LOCAL SCOPES:
+			want: `LOCAL SCOPES:
 Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
   Pipeline: └── Output
                 └── Merge
@@ -249,7 +270,7 @@ Scope 1 (Magic: Normal, mcpu: 0, Receiver: [1])
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ExplainPhyPlan(tt.args.plan, tt.args.option)
+			got := ExplainPhyPlan(tt.args.plan, tt.args.stats, tt.args.option)
 			if got != tt.want {
 				t.Errorf("result:%v, want: %v", got, tt.want)
 			}
