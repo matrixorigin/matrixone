@@ -7810,6 +7810,18 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
 
+		var needValidate bool
+		needValidate, err = needValidatePassword(ses)
+		if err != nil {
+			return err
+		}
+		if needValidate {
+			err = validatePassword(ctx, password, ses, user.Username, ses.GetUserName())
+			if err != nil {
+				return err
+			}
+		}
+
 		//encryption the password
 		encryption := HashPassWord(password)
 
