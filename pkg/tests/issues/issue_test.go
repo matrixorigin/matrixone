@@ -545,7 +545,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 				},
 				executor.Options{}.
 					WithDatabase(db).
-					WithWaitCommittedLogApplied(),
+					WithMinCommittedTS(committedAt),
 			)
 			require.NoError(t, err)
 
