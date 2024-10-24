@@ -65,3 +65,27 @@ func RunBaseClusterTests(
 	fn(basicCluster)
 	return nil
 }
+
+func RunSpecificalClusterTest(
+	CNCount int,
+	preStart func(ServiceOperator),
+	fn func(Cluster),
+) error {
+	if CNCount < 1 {
+		panic("CNCount must be greater than 0")
+	}
+
+	c, err := NewCluster(
+		WithCNCount(CNCount),
+		WithPreStart(preStart),
+	)
+	if err != nil {
+		return err
+	}
+	err = c.Start()
+	if err != nil {
+		return err
+	}
+	fn(c)
+	return nil
+}

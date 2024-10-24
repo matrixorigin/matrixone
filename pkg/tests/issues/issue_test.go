@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -474,4 +475,143 @@ func TestDedupForAutoPk(t *testing.T) {
 			)
 			res.Close()
 		})
+}
+
+// #19384
+func TestLockNeedUpgrade(t *testing.T) {
+	CNCount := 2
+	preStart := func(svc embed.ServiceOperator) {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(
+				func(config *embed.ServiceConfig) {
+					config.CN.LockService.MaxFixedSliceSize = 10001
+					config.CN.LockService.MaxLockRowCount = 10000
+				},
+			)
+		}
+	}
+	embed.RunSpecificalClusterTest(
+		CNCount,
+		preStart,
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			cn2, err := c.GetCNService(1)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int primary key, id2 int)",
+				cn1,
+				cn2,
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"truncate table "+table+";",
+				"insert into "+table+" select result, result from generate_series(1,5000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
+			)
+
+			committedAt := testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+			)
+
+			// case 1
+			// test for local LocalTable that need upgrade row level lock to table level lock
+			exec1 := testutils.GetSQLExecutor(cn1)
+			err = exec1.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"delete from "+table+" where id > 1",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithWaitCommittedLogApplied(),
+			)
+			require.NoError(t, err)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"truncate table "+table+";",
+				"insert into "+table+" select result, result from generate_series(1,5000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
+			)
+
+			committedAt = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+			)
+
+			// case 2
+			// test for remote LockTable that need upgrade row level lock to table level lock
+			exec2 := testutils.GetSQLExecutor(cn2)
+			err = exec2.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"delete from "+table+" where id > 1",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithMinCommittedTS(committedAt),
+			)
+			require.NoError(t, err)
+		},
+	)
 }
