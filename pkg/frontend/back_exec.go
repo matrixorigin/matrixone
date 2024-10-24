@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -75,6 +76,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -137,6 +139,9 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
+
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -187,6 +192,9 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 }
 
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
+	if ctx == nil {
+		return moerr.NewInternalError(context.Background(), "context is nil")
+	}
 	return nil
 }
 
@@ -588,7 +596,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
 // It will not send the result to the client.
-func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch) error {
+func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil || dataSet == nil {
 		return nil
 	}
@@ -617,7 +625,7 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch) error {
+func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
 		return nil
 	}
@@ -631,7 +639,7 @@ func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch) error {
 
 // batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher(handle FeSession, _ *ExecCtx, dataSet *batch.Batch) error {
+func batchFetcher(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
 		return nil
 	}
@@ -700,9 +708,9 @@ func (backSes *backSession) Clear() {
 	backSes.feSessionImpl.Clear()
 }
 
-func (backSes *backSession) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch) error {
-	return func(bat *batch.Batch) error {
-		return backSes.outputCallback(backSes, execCtx, bat)
+func (backSes *backSession) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
+	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		return backSes.outputCallback(backSes, execCtx, bat, crs)
 	}
 }
 

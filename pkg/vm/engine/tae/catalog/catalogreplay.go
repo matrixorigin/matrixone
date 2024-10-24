@@ -247,12 +247,12 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 
 	// replay table catalog
 	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
-		if err := sortFunc(tableBatch.Vecs, 0); err != nil {
+		if err := sortFunc(tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX); err != nil {
 			panic(err)
 		}
 		defer tableBatch.Close()
 		columnBatch := readFunc(ctx, columnTbl, readTxn)
-		if err := sortFunc(columnBatch.Vecs, 0); err != nil {
+		if err := sortFunc(columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX); err != nil {
 			panic(err)
 		}
 		defer columnBatch.Close()

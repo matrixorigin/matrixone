@@ -73,7 +73,7 @@ func TestNodeGossip(t *testing.T) {
 	defer func() {
 		assert.NoError(t, n2.Leave(time.Millisecond*300))
 	}()
-	err = n2.Join([]string{fmt.Sprintf("127.0.0.1:%d", svcPort1)})
+	err = n2.Join([]string{n1.listenAddrFn()})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, n2.NumMembers())
 	assert.NotNil(t, n2.DistKeyCacheGetter()())

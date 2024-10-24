@@ -223,7 +223,12 @@ func genDatabaseKey(id uint32, name string) databaseKey {
 	}
 }
 
-func genTableKey(aid uint32, name string, databaseId uint64, databaseName string) tableKey {
+func genTableKey(
+	aid uint32,
+	name string,
+	databaseId uint64,
+	databaseName string,
+) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
@@ -232,6 +237,7 @@ func genTableKey(aid uint32, name string, databaseId uint64, databaseName string
 	}
 }
 
+// PXU TODO: optimize me
 // fillRandomRowidAndZeroTs modifies the input batch and returns the proto batch as a shallow copy.
 func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
@@ -268,7 +274,14 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 	return batch.BatchToProtoBatch(bat)
 }
 
-func getColPks(aid uint32, dbName, tblName string, cols []*plan.ColDef, packer *types.Packer) [][]byte {
+// PXU TODO: refactor me
+func getColPks(
+	aid uint32,
+	dbName,
+	tblName string,
+	cols []*plan.ColDef,
+	packer *types.Packer,
+) [][]byte {
 	pks := make([][]byte, 0, len(cols))
 	for _, col := range cols {
 		packer.Reset()
