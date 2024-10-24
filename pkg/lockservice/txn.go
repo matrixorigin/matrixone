@@ -121,7 +121,7 @@ func (txn *activeTxn) lockAdded(
 	if ok {
 		return v.append(locks)
 	}
-	cs, err :=  newCowSlice(txn.fsp, locks)
+	cs, err := newCowSlice(txn.fsp, locks)
 	if err != nil {
 		return err
 	}
