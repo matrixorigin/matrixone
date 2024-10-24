@@ -95,7 +95,7 @@ var (
 )
 
 var (
-	dropTableBeforeDropDatabase = `drop table if exists %v.%v;`
+	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
 )
 
 var (
