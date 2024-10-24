@@ -480,7 +480,7 @@ func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInf
 
 func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
 	if option.Analyze || option.Verbose {
-		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
+		gblStats := models.ExtractPhyPlanGlbStats(anal.phyPlan)
 		buffer.WriteString("Overview:\n")
 		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
 			gblStats.MemorySize,
@@ -492,7 +492,7 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 		if statsInfo != nil {
 			buffer.WriteString("\n")
 			// Calculate the total sum of S3 requests for each stage
-			list, head, put, get, delete, deleteMul := calcTotalS3Requests(gblStats, statsInfo)
+			list, head, put, get, delete, deleteMul := models.CalcTotalS3Requests(gblStats, statsInfo)
 			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 				list, head, put, get, delete, deleteMul,
 			))
@@ -577,19 +577,6 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			buffer.WriteString("Physical Plan Deployment:")
 		}
 	}
-}
-
-// calcTotalS3Requests calculates the total number of S3 requests (List, Head, Put, Get, Delete, DeleteMul)
-// by summing up values from global statistics (gblStats) and different stages of the execution process
-// (PlanStage, CompileStage, and PrepareRunStage) in the statsInfo.
-func calcTotalS3Requests(gblStats GblStats, statsInfo *statistic.StatsInfo) (list, head, put, get, delete, deleteMul int64) {
-	list = gblStats.S3ListRequest + statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.CompileStage.CompileS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.List
-	head = gblStats.S3HeadRequest + statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.CompileStage.CompileS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Head
-	put = gblStats.S3PutRequest + statsInfo.PlanStage.BuildPlanS3Request.Put + statsInfo.CompileStage.CompileS3Request.Put + statsInfo.PrepareRunStage.ScopePrepareS3Request.Put
-	get = gblStats.S3GetRequest + statsInfo.PlanStage.BuildPlanS3Request.Get + statsInfo.CompileStage.CompileS3Request.Get + statsInfo.PrepareRunStage.ScopePrepareS3Request.Get
-	delete = gblStats.S3DeleteRequest + statsInfo.PlanStage.BuildPlanS3Request.Delete + statsInfo.CompileStage.CompileS3Request.Delete + statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete
-	deleteMul = gblStats.S3DeleteMultiRequest + statsInfo.PlanStage.BuildPlanS3Request.DeleteMul + statsInfo.CompileStage.CompileS3Request.DeleteMul + statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul
-	return
 }
 
 func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
@@ -703,79 +690,4 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 	if isRoot {
 		trimLastNewline(buffer)
 	}
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-
-// GblStats used to hold the total time and wait time of physical plan execution
-type GblStats struct {
-	ScopePrepareTimeConsumed int64
-	OperatorTimeConsumed     int64
-	MemorySize               int64
-	NetWorkSize              int64
-	DiskIOSize               int64
-	S3ListRequest            int64
-	S3HeadRequest            int64
-	S3PutRequest             int64
-	S3GetRequest             int64
-	S3DeleteRequest          int64
-	S3DeleteMultiRequest     int64
-}
-
-// Function to recursively process PhyScope and extract stats from PhyOperator
-func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
-	if op == nil {
-		return
-	}
-
-	// Accumulate stats from the current operator
-	if op.OpStats != nil && op.NodeIdx >= 0 {
-		stats.OperatorTimeConsumed += op.OpStats.TimeConsumed
-		stats.MemorySize += op.OpStats.MemorySize
-		stats.NetWorkSize += op.OpStats.NetworkIO
-		stats.DiskIOSize += op.OpStats.DiskIO
-		stats.S3ListRequest += op.OpStats.S3List
-		stats.S3HeadRequest += op.OpStats.S3Head
-		stats.S3PutRequest += op.OpStats.S3Put
-		stats.S3GetRequest += op.OpStats.S3Get
-		stats.S3DeleteRequest += op.OpStats.S3Delete
-		stats.S3DeleteMultiRequest += op.OpStats.S3DeleteMul
-	}
-
-	// Recursively process child operators
-	for _, childOp := range op.Children {
-		handlePhyOperator(childOp, stats)
-	}
-}
-
-// Function to process PhyScope (including PreScopes and RootOperator)
-func handlePhyScope(scope *models.PhyScope, stats *GblStats) {
-	stats.ScopePrepareTimeConsumed += scope.PrepareTimeConsumed
-	// Process the RootOperator of the current scope
-	handlePhyOperator(scope.RootOperator, stats)
-
-	// Recursively process PreScopes (which are also PhyScopes)
-	for _, preScope := range scope.PreScopes {
-		handlePhyScope(&preScope, stats)
-	}
-}
-
-// Function to process all scopes in a PhyPlan (LocalScope and RemoteScope)
-func handlePhyPlanScopes(scopes []models.PhyScope, stats *GblStats) {
-	for _, scope := range scopes {
-		handlePhyScope(&scope, stats)
-	}
-}
-
-// Function to process the entire PhyPlan and extract the stats
-func extractPhyPlanGlbStats(plan *models.PhyPlan) GblStats {
-	var stats GblStats
-
-	// Process LocalScope
-	handlePhyPlanScopes(plan.LocalScope, &stats)
-
-	// Process RemoteScope
-	handlePhyPlanScopes(plan.RemoteScope, &stats)
-
-	return stats
 }
