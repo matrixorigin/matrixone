@@ -33,10 +33,44 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
-	assert.Equal(t, "true", c.Txn.IncrementalDedup)
+	assert.Equal(t, "incremental", c.Txn.DedupType)
 }
 
 func TestDefaulValue(t *testing.T) {
 	c := Config{}
+	c.SetDefaultValue()
+}
+
+func TestDedupOption(t *testing.T) {
+	c := Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Optimistic"
+	assert.NoError(t, c.Validate())
+	assert.Equal(t, c.Txn.DedupType, "skip-workspace")
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Pessimistic"
+	assert.NoError(t, c.Validate())
+	assert.Equal(t, c.Txn.DedupType, "incremental")
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.DedupType = "Invalid Type"
+	assert.Error(t, c.Validate())
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.DedupType = "Invalid Type"
+	c.SetDefaultValue()
+
+	c = Config{
+		UUID: "dn1",
+	}
+	c.Txn.Mode = "Optimistic"
 	c.SetDefaultValue()
 }

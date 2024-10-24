@@ -400,6 +400,10 @@ func InitTestDB(
 ) *db.DB {
 	blockio.Start("")
 	dir := testutils.InitTestEnv(moduleName, t)
+	if opts == nil {
+		opts = &options.Options{}
+	}
+	opts.DedupType = txnif.DedupPolicy_CheckAll
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
 	db.DiskCleaner.GetCleaner().AddChecker(

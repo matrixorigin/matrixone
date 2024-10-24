@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
@@ -198,12 +200,24 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		GCCfg:             gcCfg,
 		MergeCfg:          mergeCfg,
 		LogStoreT:         options.LogstoreLogservice,
-		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
 		IsStandalone:      s.cfg.InStandalone,
 		Ctx:               ctx,
 		MaxMessageSize:    max2LogServiceMsgSizeLimit,
 		TaskServiceGetter: s.GetTaskService,
 		SID:               s.cfg.UUID,
+	}
+
+	switch s.cfg.Txn.DedupType {
+	case "incremental":
+		opt.DedupType = txnif.DedupPolicy_CheckIncremental
+	case "skip-workspace":
+		opt.DedupType = txnif.DedupPolicy_SkipWorkspace
+	case "skip-all":
+		opt.DedupType = txnif.DedupPolicy_SkipAll
+	case "check-all":
+		opt.DedupType = txnif.DedupPolicy_CheckAll
+	default:
+		panic(fmt.Sprintf("invalid dedup type %v", s.cfg.Txn.DedupType))
 	}
 
 	return taestorage.NewTAEStorage(
