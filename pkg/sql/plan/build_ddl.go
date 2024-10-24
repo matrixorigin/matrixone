@@ -2658,7 +2658,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
-		ignore := ctx.GetContext().Value(defines.IgnoreForeignKey{}).(bool)
+		ignore := false
+		val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+		if val != nil {
+			ignore = val.(bool)
+		}
 
 		dropTable.TableId = tableDef.TblId
 		if tableDef.Fkeys != nil && !ignore {
