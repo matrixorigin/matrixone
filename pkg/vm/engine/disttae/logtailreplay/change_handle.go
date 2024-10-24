@@ -725,6 +725,8 @@ type ChangeHandler struct {
 	start, end types.TS
 	fs         fileservice.FileService
 	minTS      types.TS
+
+	LogThreshold time.Duration
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
@@ -737,6 +739,7 @@ func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPo
 		end:          end,
 		fs:           fs,
 		minTS:        state.minTS,
+		LogThreshold: LogThreshold,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -801,7 +804,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	if time.Since(p.lastPrint) > LogThreshold {
+	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
 			gcTS, err := getGCTS(ctx, p.fs)

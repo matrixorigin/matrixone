@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -1118,5 +1119,84 @@ func TestChangesHandleStaleFiles4(t *testing.T) {
 		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
+	}
+}
+
+func TestChangesHandleStaleFiles5(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(23, 9)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 163840)
+	mp := common.DebugAllocator
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	iter := rel.MakeObjectIt(false)
+	for iter.Next() {
+		obj := iter.GetObject()
+		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+	}
+	require.Nil(t, err)
+	require.Nil(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	require.Nil(t, err)
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		totalRows := 0
+		handle.(*logtailreplay.ChangeHandler).LogThreshold = time.Microsecond
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			if tombstone != nil {
+				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
+				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
+				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				tombstone.Clean(mp)
+			}
+			if data != nil {
+				checkInsertBatch(bat, data, t)
+				totalRows += data.Vecs[0].Length()
+				data.Clean(mp)
+			}
+		}
+		assert.Equal(t, totalRows, 163840)
+		assert.NoError(t, handle.Close())
 	}
 }
