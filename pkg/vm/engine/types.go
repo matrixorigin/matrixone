@@ -677,7 +677,7 @@ type RelData interface {
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	BuildEmptyRelData() RelData
+	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
 	// specified interface
@@ -1096,7 +1096,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
 	return &EmptyRelationData{}
 }
 
