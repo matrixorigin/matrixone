@@ -66,8 +66,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		if !checkTombstoneMeta(meta, entry.ID()) {
 			continue
 		}
-		tombstone := o.tombstones[i]
-		o.validTombstones[tombstone] = struct{}{}
+		o.validTombstones[o.tombstones[i]] = struct{}{}
 		o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
 	}
 	return false
