@@ -48,9 +48,11 @@ const (
 	DefaultGCCheckpointInterval         = time.Minute
 	DefaultOverallFlushMemControl       = common.Const1GBytes
 
-	DefaultScanGCInterval = time.Minute * 30
-	DefaultGCTTL          = time.Hour
-	DefaultGCMergeCount   = 40
+	DefaultScanGCInterval    = time.Minute * 30
+	DefaultGCTTL             = time.Hour
+	DefaultGCMergeCount      = 40
+	DefaultGCDeleteBatchSize = 1000
+	DefaultGCDeleteTimeout   = time.Minute * 10
 
 	DefaultCatalogGCInterval = time.Minute * 3
 

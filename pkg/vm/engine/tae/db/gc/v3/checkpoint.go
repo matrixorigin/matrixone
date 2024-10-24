@@ -49,7 +49,7 @@ type checkpointCleaner struct {
 	fs *objectio.ObjectFS
 
 	checkpointCli checkpoint.RunnerReader
-	delWorker     *GCWorker
+	deleter       *Deleter
 
 	watermarks struct {
 		// scanWaterMark is the watermark of the incremental checkpoint which has been
@@ -105,8 +105,9 @@ type checkpointCleaner struct {
 	mutation struct {
 		sync.Mutex
 		taskState struct {
-			id   uint64
-			name string
+			id        uint64
+			name      string
+			startTime time.Time
 		}
 		scanned      *GCWindow
 		metaFiles    map[string]GCMetaFile
@@ -178,7 +179,7 @@ func NewCheckpointCleaner(
 	for _, opt := range opts {
 		opt(cleaner)
 	}
-	cleaner.delWorker = NewGCWorker(fs, cleaner)
+	cleaner.deleter = NewDeleter(fs)
 	cleaner.options.gcEnabled.Store(true)
 	cleaner.mp = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
@@ -236,9 +237,19 @@ func (c *checkpointCleaner) StartMutationTask(name string) {
 	c.mutation.Lock()
 	c.mutation.taskState.id++
 	c.mutation.taskState.name = fmt.Sprintf("%s-%d", name, c.mutation.taskState.id)
+	c.mutation.taskState.startTime = time.Now()
+	logutil.Info(
+		"GC-Task-Started",
+		zap.String("task", c.TaskNameLocked()),
+	)
 }
 
 func (c *checkpointCleaner) StopMutationTask() {
+	logutil.Info(
+		"GC-Task-Done",
+		zap.String("task", c.TaskNameLocked()),
+		zap.Duration("duration", time.Since(c.mutation.taskState.startTime)),
+	)
 	c.mutation.taskState.name = ""
 	c.mutation.Unlock()
 }
@@ -398,14 +409,12 @@ func (c *checkpointCleaner) Replay() (err error) {
 		}
 		accountSnapshots := TransformToTSList(snapshots)
 		logtail.CloseSnapshotList(snapshots)
-		waterMark := compacted.GetEnd()
 		logtail.FillUsageBatOfCompacted(
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 			ckpData,
 			c.mutation.snapshotMeta,
 			accountSnapshots,
-			pitrs,
-			&waterMark)
+			pitrs)
 		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
@@ -879,8 +888,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		newCheckpointData,
 		c.mutation.snapshotMeta,
 		accountSnapshots,
-		pitrs,
-		&checkpointMaxEnd)
+		pitrs)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
@@ -1051,16 +1059,9 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
 	now := time.Now()
-	// TODO: no error here???
-	if !c.delWorker.Start() {
-		return
-	}
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string
 	defer func() {
-		if err != nil {
-			c.delWorker.Idle()
-		}
 		logtail.CloseSnapshotList(snapshots)
 		logutil.Info(
 			"GC-TRACE-TRY-GC-AGAINST-GCKP",
@@ -1091,7 +1092,11 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	}
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
-	if err = c.delWorker.ExecDelete(c.ctx, filesToGC); err != nil {
+	if err = c.deleter.DeleteMany(
+		c.ctx,
+		c.TaskNameLocked(),
+		filesToGC,
+	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
 	}
