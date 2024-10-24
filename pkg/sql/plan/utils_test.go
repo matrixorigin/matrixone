@@ -16,9 +16,13 @@ package plan
 
 import (
 	"fmt"
+	"net/url"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_removeIf(t *testing.T) {
@@ -64,4 +68,30 @@ func TestOffsetToString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInitStageS3Param(t *testing.T) {
+	param := &tree.ExternParam{}
+	u, err := url.Parse("s3://bucket/path?offset=0")
+	require.Nil(t, err)
+	s := stage.StageDef{Url: u}
+	err = InitStageS3Param(param, s)
+	require.NotNil(t, err)
+
+	param = &tree.ExternParam{}
+	u, err = url.Parse("https://bucket/path?offset=0")
+	require.Nil(t, err)
+	s = stage.StageDef{Url: u}
+	err = InitStageS3Param(param, s)
+	require.NotNil(t, err)
+
+	param = &tree.ExternParam{}
+	u, err = url.Parse("s3://bucket/path")
+	require.Nil(t, err)
+	s = stage.StageDef{Url: u,
+		Credentials: map[string]string{"aws_key_id": "abc", "aws_secret_key": "secret", "aws_region": "region", "endpoint": "endpoint", "provider": "amazon"},
+		Name:        "mystage",
+		Id:          1000}
+	err = InitStageS3Param(param, s)
+	require.Nil(t, err)
 }

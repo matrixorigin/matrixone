@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -601,6 +602,29 @@ func TestInProgressTransfer(t *testing.T) {
 	worker := ops.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
+
+	fault.Enable()
+	defer fault.Disable()
+	err1 := fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitDelete,
+		":::",
+		"echo",
+		0,
+		"trace delete",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
+	err1 = fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitSlowLog,
+		":::",
+		"echo",
+		0,
+		"trace slowlog",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
 
 	var did, tid uint64
 	var theRow *batch.Batch
