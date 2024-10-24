@@ -1545,7 +1545,8 @@ func rewriteJoinExprToHashBuildExpr(src []*plan.Expr) []*plan.Expr {
 
 	dst := make([]*plan.Expr, len(src))
 	for i := range src {
-		doRelIndexRewrite(plan2.DeepCopyExpr(src[i]))
+		dst[i] = plan2.DeepCopyExpr(src[i])
+		doRelIndexRewrite(dst[i])
 	}
 	return dst
 }
