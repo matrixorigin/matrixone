@@ -1431,6 +1431,7 @@ func (tbl *txnTable) RangeDelete(
 		return
 	}
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
 	for i := start; i <= end; i++ {
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), i)
 		rowIDVec.Append(rowID, false)
@@ -1441,19 +1442,13 @@ func (tbl *txnTable) RangeDelete(
 func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
-	dt handle.DeleteType) (err error) {
-	var rowIDStr string
+	dt handle.DeleteType,
+) (err error) {
 	defer func() {
 		if err == nil {
 			return
 		}
-		// if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		// 	moerr.NewTxnWriteConflictNoCtx("table-%d blk-%d delete rows from %d to %d",
-		// 		id.TableID,
-		// 		id.BlockID,
-		// 		start,
-		// 		end)
-		// }
+		rowIDStr := rowIDVec.PPString(1)
 		// This err also captured by txn's write conflict check.
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(pk.Length()))
@@ -1476,19 +1471,14 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 			)
 		}
 	}()
-	deleteBatch := tbl.createTombstoneBatch(rowIDVec, pk)
-	defer func() {
-		if err != nil {
-			rowIDStr = rowIDVec.PPString(1)
-		}
-		for _, attr := range deleteBatch.Attrs {
-			if attr == objectio.TombstoneAttr_PK_Attr {
-				// not close pk
-				continue
-			}
-			deleteBatch.GetVectorByName(attr).Close()
-		}
-	}()
+
+	// Don't close this batch in this function,
+	// the lifecycle of these two vectors is controlled by the upper layer that invokes them
+	deleteBatch := containers.NewBatchWithVectors(
+		[]containers.Vector{rowIDVec, pk},
+		[]string{objectio.TombstoneAttr_Rowid_Attr, objectio.TombstoneAttr_PK_Attr},
+	)
+
 	if tbl.tombstoneTable == nil {
 		tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
 	}
@@ -1611,15 +1601,6 @@ func (tbl *txnTable) contains(
 		}
 	}
 	return nil
-}
-func (tbl *txnTable) createTombstoneBatch(
-	rowIDs containers.Vector,
-	pk containers.Vector) *containers.Batch {
-	if pk.Length() != rowIDs.Length() {
-		panic(fmt.Sprintf("logic err, invalid pkVec length, pk length = %d, rowid length %d", pk.Length(), rowIDs.Length()))
-	}
-	bat := catalog.NewTombstoneBatchWithPKVector(pk, rowIDs, common.WorkspaceAllocator)
-	return bat
 }
 
 func (tbl *txnTable) AddPersistedTombstoneFile(id *common.ID, stats objectio.ObjectStats) (ok bool, err error) {
