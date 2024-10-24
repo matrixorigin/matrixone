@@ -59,6 +59,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("error", err.Error()))
 		}
 	}()
+	s.ScopeAnalyzer.Stop()
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte

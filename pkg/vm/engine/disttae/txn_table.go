@@ -1450,7 +1450,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
-	return tbl.getTxn().dumpBatch(tbl.getTxn().GetSnapshotWriteOffset())
+	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -1524,7 +1524,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) compaction(
+func (tbl *txnTable) compaction(ctx context.Context,
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
@@ -1552,7 +1552,7 @@ func (tbl *txnTable) compaction(
 		s3writer.StashBatch(tbl.getTxn().proc, bat)
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 	}
-	return s3writer.SortAndSync(tbl.getTxn().proc)
+	return s3writer.SortAndSync(ctx, tbl.getTxn().proc)
 }
 
 func (tbl *txnTable) Delete(

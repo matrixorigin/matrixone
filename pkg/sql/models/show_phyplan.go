@@ -35,6 +35,7 @@ const (
 	AnalyzeOption
 )
 
+// ExplainPhyPlan used to `mo_explan_phy` internal function
 func ExplainPhyPlan(phy *PhyPlan, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
@@ -104,7 +105,7 @@ func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, op
 		analyzeStr = fmt.Sprintf(" (idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
 	}
 	if option == AnalyzeOption && node.OpStats != nil {
-		analyzeStr += node.OpStats.ReducedString()
+		analyzeStr += node.OpStats.String()
 	}
 
 	// Write to the current node

@@ -141,6 +141,18 @@ func NewService(
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	srv.registerServices()
+
+	pu := config.NewParameterUnit(
+		&cfg.Frontend,
+		nil,
+		nil,
+		engine.Nodes{engine.Node{
+			Addr: srv.pipelineServiceServiceAddr(),
+		}})
+
+	frontend.InitServerVersion(pu.SV.MoVersion)
+	srv.pu = pu
+
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
@@ -158,15 +170,7 @@ func NewService(
 		},
 	}
 
-	pu := config.NewParameterUnit(
-		&cfg.Frontend,
-		nil,
-		nil,
-		engine.Nodes{engine.Node{
-			Addr: srv.pipelineServiceServiceAddr(),
-		}})
 	pu.HAKeeperClient = srv._hakeeperClient
-	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{
@@ -191,7 +195,6 @@ func NewService(
 		panic(err)
 	}
 
-	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryClient = srv.queryClient

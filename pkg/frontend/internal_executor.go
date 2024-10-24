@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -140,6 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
@@ -168,6 +170,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
+	ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
@@ -292,7 +295,7 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 	return false
 }
 
-func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+func (ip *internalProtocol) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	mrs := execCtx.ses.GetMysqlResultSet()
 	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
 	if err != nil {

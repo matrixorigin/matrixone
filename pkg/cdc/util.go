@@ -620,6 +620,14 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, mp)
 }
 
+var EnterRunSql = func(txnOp client.TxnOperator) {
+	txnOp.EnterRunSql()
+}
+
+var ExitRunSql = func(txnOp client.TxnOperator) {
+	txnOp.ExitRunSql()
+}
+
 func GetTableDef(
 	ctx context.Context,
 	txnOp client.TxnOperator,
