@@ -111,7 +111,7 @@ func (l *remoteLockTable) lock(
 	}
 
 	// encounter any error, we also added lock to txn, because we need unlock on remote
-	err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
