@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -477,22 +476,8 @@ func TestDedupForAutoPk(t *testing.T) {
 		})
 }
 
-// #19384
-func TestLockNeedUpgrade(t *testing.T) {
-	CNCount := 2
-	preStart := func(svc embed.ServiceOperator) {
-		if svc.ServiceType() == metadata.ServiceType_CN {
-			svc.Adjust(
-				func(config *embed.ServiceConfig) {
-					config.CN.LockService.MaxFixedSliceSize = 10001
-					config.CN.LockService.MaxLockRowCount = 10000
-				},
-			)
-		}
-	}
-	embed.RunSpecificalClusterTest(
-		CNCount,
-		preStart,
+func TestLockNeedUpgrade2(t *testing.T) {
+	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()

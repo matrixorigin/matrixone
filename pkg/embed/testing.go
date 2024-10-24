@@ -17,6 +17,7 @@ package embed
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -48,6 +49,16 @@ func RunBaseClusterTests(
 			c, err = NewCluster(
 				WithCNCount(3),
 				WithTesting(),
+				WithPreStart(func(svc ServiceOperator) {
+					if svc.ServiceType() == metadata.ServiceType_CN {
+						svc.Adjust(
+							func(config *ServiceConfig) {
+								config.CN.LockService.MaxFixedSliceSize = 10001
+								config.CN.LockService.MaxLockRowCount = 10000
+							},
+						)
+					}
+				}),
 			)
 			if err != nil {
 				return
@@ -63,29 +74,5 @@ func RunBaseClusterTests(
 		return err
 	}
 	fn(basicCluster)
-	return nil
-}
-
-func RunSpecificalClusterTest(
-	CNCount int,
-	preStart func(ServiceOperator),
-	fn func(Cluster),
-) error {
-	if CNCount < 1 {
-		panic("CNCount must be greater than 0")
-	}
-
-	c, err := NewCluster(
-		WithCNCount(CNCount),
-		WithPreStart(preStart),
-	)
-	if err != nil {
-		return err
-	}
-	err = c.Start()
-	if err != nil {
-		return err
-	}
-	fn(c)
 	return nil
 }
