@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -740,7 +741,7 @@ func (ec *ExportConfig) init() {
 	ec.WriteIndex.Store(0)
 }
 
-func (ec *ExportConfig) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	ec.Index.Add(1)
 	copied, err := bat.Dup(execCtx.ses.GetMemPool())
 	if err != nil {

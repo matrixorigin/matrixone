@@ -20,6 +20,9 @@ import (
 	"math"
 	"strings"
 
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -40,8 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -3295,6 +3296,15 @@ func lockTable(
 		}
 	}
 	return nil
+}
+
+// lockIndexTable
+func lockIndexTable(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
+	rel, err := dbSource.Relation(ctx, tableName, nil)
+	if err != nil {
+		return err
+	}
+	return doLockTable(eng, proc, rel, defChanged)
 }
 
 func lockRows(
