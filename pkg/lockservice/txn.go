@@ -121,10 +121,11 @@ func (txn *activeTxn) lockAdded(
 	if ok {
 		return v.append(locks)
 	}
-	h.tableKeys[bind.Table], err = newCowSlice(txn.fsp, locks)
+	cs, err :=  newCowSlice(txn.fsp, locks)
 	if err != nil {
 		return err
 	}
+	h.tableKeys[bind.Table] = cs
 	h.tableBinds[bind.Table] = bind
 	return nil
 }

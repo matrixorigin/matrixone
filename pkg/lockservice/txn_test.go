@@ -54,7 +54,7 @@ func TestLockAdded(t *testing.T) {
 	})
 }
 
-func TestLockAdded2(t *testing.T) {
+func TestLockAddedThatShouldFail(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("t1")
 		fsp := newFixedSlicePool(2)

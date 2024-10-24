@@ -42,12 +42,12 @@ type cowSlice struct {
 func newCowSlice(
 	fsp *fixedSlicePool,
 	values [][]byte) (*cowSlice, error) {
-	cs := reuse.Alloc[cowSlice](nil)
-	cs.fsp = fsp
 	fs, err := fsp.acquire(len(values))
 	if err != nil {
-		return cs, err
+		return nil, err
 	}
+	cs := reuse.Alloc[cowSlice](nil)
+	cs.fsp = fsp
 	fs.append(values)
 	cs.fs.Store(fs)
 	return cs, nil

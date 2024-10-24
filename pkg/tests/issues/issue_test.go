@@ -476,7 +476,7 @@ func TestDedupForAutoPk(t *testing.T) {
 		})
 }
 
-func TestLockNeedUpgrade2(t *testing.T) {
+func TestLockNeedUpgrade(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
