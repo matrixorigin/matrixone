@@ -1234,9 +1234,13 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 
 func (txn *Transaction) transferTombstonesByStatement(
 	ctx context.Context,
-	snapshotUpdated bool) error {
+	snapshotUpdated bool,
+	isCommit bool) error {
 
-	if (snapshotUpdated && !skipTransfer(ctx, txn)) || forceTransfer(ctx) {
+	// we would prefer delay this transfer util the commit if it is a commit
+	// statement. if it is not a commit statement, this transfer cannot be delay,
+	// or the later statements could miss any deletes that happened before that point.
+	if (snapshotUpdated || forceTransfer(ctx)) && !isCommit {
 
 		// if this transfer is triggered by UT solely,
 		// should advance the snapshot manually here.
@@ -1248,9 +1252,10 @@ func (txn *Transaction) transferTombstonesByStatement(
 
 		return txn.transferTombstones(ctx)
 
-	} else if snapshotUpdated {
-		// pending transfer until next statement or commit
-		txn.transfer.pendingTransfer = true
+	} else {
+		// pending transfer until the next statement or commit
+		txn.transfer.pendingTransfer =
+			txn.transfer.pendingTransfer || snapshotUpdated || forceTransfer(ctx)
 	}
 
 	return nil

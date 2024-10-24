@@ -547,7 +547,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			return err
 		}
 
-		return txn.transferTombstonesByStatement(ctx, updated)
+		return txn.transferTombstonesByStatement(ctx, updated, commit)
 	}
 
 	return nil
