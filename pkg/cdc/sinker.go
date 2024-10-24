@@ -113,7 +113,15 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	return nil
 }
 
-func (s *consoleSinker) SinkSql(_ context.Context, _ string) error {
+func (s *consoleSinker) SendBegin(_ context.Context) error {
+	return nil
+}
+
+func (s *consoleSinker) SendCommit(_ context.Context) error {
+	return nil
+}
+
+func (s *consoleSinker) SendRollback(_ context.Context) error {
 	return nil
 }
 
@@ -256,8 +264,16 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	return
 }
 
-func (s *mysqlSinker) SinkSql(ctx context.Context, sql string) error {
-	return s.mysql.Send(ctx, s.ar, sql)
+func (s *mysqlSinker) SendBegin(ctx context.Context) error {
+	return s.mysql.SendBegin(ctx)
+}
+
+func (s *mysqlSinker) SendCommit(ctx context.Context) error {
+	return s.mysql.SendCommit(ctx)
+}
+
+func (s *mysqlSinker) SendRollback(ctx context.Context) error {
+	return s.mysql.SendRollback(ctx)
 }
 
 func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) (err error) {
@@ -508,6 +524,7 @@ func (s *mysqlSinker) Close() {
 
 type mysqlSink struct {
 	conn           *sql.DB
+	tx             *sql.Tx
 	user, password string
 	ip             string
 	port           int
@@ -557,7 +574,11 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		}
 
 		start := time.Now()
-		_, err = s.conn.Exec(sql)
+		if s.tx != nil {
+			_, err = s.tx.Exec(sql)
+		} else {
+			_, err = s.conn.Exec(sql)
+		}
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		// return if success
 		if err == nil {
@@ -570,6 +591,27 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		time.Sleep(time.Second)
 	}
 	return moerr.NewInternalError(ctx, "mysql sink retry exceed retryTimes or retryDuration")
+}
+
+func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
+	s.tx, err = s.conn.BeginTx(ctx, nil)
+	return
+}
+
+func (s *mysqlSink) SendCommit(_ context.Context) (err error) {
+	if err = s.tx.Commit(); err != nil {
+		return
+	}
+	s.tx = nil
+	return
+}
+
+func (s *mysqlSink) SendRollback(_ context.Context) (err error) {
+	if err = s.tx.Rollback(); err != nil {
+		return
+	}
+	s.tx = nil
+	return
 }
 
 func (s *mysqlSink) Close() {
