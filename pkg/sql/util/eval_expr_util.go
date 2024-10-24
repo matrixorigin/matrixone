@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -671,7 +672,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 			}
 		}
 		if typ.Oid.IsDatalink() {
-			_, _, err2 := function.ParseDatalink(s, proc)
+			_, _, err2 := datalink.ParseDatalink(s, proc)
 			if err2 != nil {
 				return nil, err2
 			}
