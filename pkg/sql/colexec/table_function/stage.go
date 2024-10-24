@@ -20,12 +20,12 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -82,7 +82,7 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 		return nil
 	}
 
-	s, err := function.UrlToStageDef(string(filepath), proc)
+	s, err := stage.UrlToStageDef(string(filepath), proc)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 
 	pattern = path.Clean("/" + pattern)
 
-	fileList, err := function.StageListWithPattern(service, pattern, proc)
+	fileList, err := stage.StageListWithPattern(service, pattern, proc)
 	if err != nil {
 		return err
 	}
