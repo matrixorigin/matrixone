@@ -80,8 +80,7 @@ func (client *testHAKClient) GetBackupData(ctx context.Context) ([]byte, error) 
 }
 
 func (client *testHAKClient) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
-	//TODO implement me
-	panic("implement me")
+	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return_err")
 }
 
 func (client *testHAKClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {

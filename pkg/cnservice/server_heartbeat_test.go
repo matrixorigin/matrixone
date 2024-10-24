@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package cnservice
 
 import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
-func Test_NewAwsSDKv2(t *testing.T) {
-	_, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
-
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 0, moerr.NewInternalErrorNoCtx("ut tester"+
-		""))
+func Test_heartbeat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = NewAwsSDKv2(ctx, ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
+	conf := &Config{}
+	client := &testHAKClient{
+		cfg: conf,
+	}
+
+	sv := &service{
+		cfg:             conf,
+		_hakeeperClient: client,
+		config:          &util.ConfigData{},
+		logger:          logutil.GetPanicLogger(),
+	}
+	sv.heartbeat(ctx)
 }

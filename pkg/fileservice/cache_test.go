@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
@@ -54,4 +55,25 @@ func Test_readCache(t *testing.T) {
 
 	err := readCache(ctx, m, newReadVec())
 	assert.NoError(t, err)
+
+	ctx, cancel = context.WithTimeoutCause(context.Background(), 0, moerr.NewInternalErrorNoCtx("ut tester"))
+	defer cancel()
+
+	newReadVec2 := func() *IOVector {
+		vec := &IOVector{
+			FilePath: "etl:\u00ad",
+			Entries: []IOEntry{
+				{
+					Size: 3,
+					ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+						return nil, context.DeadlineExceeded
+					},
+				},
+			},
+		}
+		return vec
+	}
+
+	err = readCache(ctx, m, newReadVec2())
+	assert.Error(t, err)
 }
