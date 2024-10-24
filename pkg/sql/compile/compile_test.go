@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -95,7 +96,7 @@ func init() {
 	}
 }
 
-func testPrint(_ *batch.Batch) error {
+func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 	return nil
 }
 

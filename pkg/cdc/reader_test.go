@@ -164,6 +164,12 @@ func Test_tableReader_Run(t *testing.T) {
 		})
 	defer stub6.Reset()
 
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	defer stub7.Reset()
+
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	defer stub8.Reset()
+
 	u := &WatermarkUpdater{
 		accountId:    1,
 		taskId:       uuid.New(),
