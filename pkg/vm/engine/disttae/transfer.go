@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -30,15 +31,130 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"go.uber.org/zap"
 )
 
-func TransferTombstones(
+func transferInmemTombstones(
+	ctx context.Context,
+	txn *Transaction,
+	start, end types.TS,
+) (err error) {
+
+	return txn.forEachTableHasDeletesLocked(
+		false,
+		func(tbl *txnTable) error {
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				return err
+			}
+
+			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
+
+			trace.GetService(txn.proc.GetService()).ApplyFlush(
+				tbl.db.op.Txn().ID,
+				tbl.tableId,
+				start.ToTimestamp(),
+				tbl.db.op.SnapshotTS(),
+				len(deleteObjs))
+
+			if len(deleteObjs) > 0 {
+				if err := transferTombstones(
+					ctx,
+					tbl,
+					state,
+					deleteObjs,
+					createObjs,
+					txn.proc.Mp(),
+					txn.engine.fs,
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+}
+
+func transferTombstoneObjects(
+	ctx context.Context,
+	txn *Transaction,
+	start, end types.TS,
+) (err error) {
+
+	var logs []zap.Field
+	var flow *TransferFlow
+	return txn.forEachTableHasDeletesLocked(
+		true,
+		func(tbl *txnTable) error {
+			now := time.Now()
+			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
+				ctx, start, end,
+				tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
+				return err
+			} else if flow == nil {
+				return nil
+			}
+
+			defer func() {
+				err = flow.Close()
+			}()
+
+			if err = flow.Process(ctx); err != nil {
+				return err
+			}
+
+			statsList, tail := flow.GetResult()
+			if len(tail) > 0 {
+				logutil.Fatal("tombstone sinker tail size is not zero",
+					zap.Int("tail", len(tail)))
+			}
+
+			obj := make([]string, 0, len(statsList))
+			for i := range statsList {
+				fileName := statsList[i].ObjectLocation().String()
+				obj = append(obj, statsList[i].ObjectName().ObjectId().ShortStringEx())
+				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+				if err = vector.AppendBytes(
+					bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
+					return err
+				}
+
+				bat.SetRowCount(bat.Vecs[0].Length())
+
+				if err = txn.WriteFileLocked(
+					DELETE,
+					tbl.accountId, tbl.db.databaseId, tbl.tableId,
+					tbl.db.databaseName, tbl.tableName, fileName,
+					bat, txn.tnStores[0],
+				); err != nil {
+					return err
+				}
+			}
+
+			logs = append(logs,
+				zap.String("txn-id", txn.op.Txn().DebugString()),
+				zap.String("table",
+					fmt.Sprintf("%s(%d)-%s(%d)",
+						tbl.db.databaseName, tbl.db.databaseId, tbl.tableName, tbl.tableId)),
+				zap.Duration("time-spent", time.Since(now)),
+				zap.Int("transferred-row-cnt", flow.transferred),
+				zap.String("new-files", strings.Join(obj, "; ")))
+
+			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
+
+			return nil
+		})
+}
+
+func transferTombstones(
 	ctx context.Context,
 	table *txnTable,
 	state *logtailreplay.PartitionState,
@@ -73,6 +189,13 @@ func TransferTombstones(
 	for name := range createdObjects {
 		if obj, ok := state.GetObject(name); ok {
 			objectList = append(objectList, obj.ObjectStats)
+		}
+	}
+
+	if len(objectList) >= 10 {
+		proc := table.proc.Load()
+		for _, obj := range objectList {
+			blockio.Prefetch(proc.GetService(), proc.GetFileService(), obj.ObjectLocation())
 		}
 	}
 
@@ -292,6 +415,7 @@ func batchTransferToTombstones(
 	entryPositions := vector.MustFixedColWithTypeCheck[int32](searchEntryPos)
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
+
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
 		entry := txnWrites[entryPositions[pos]]
 		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](

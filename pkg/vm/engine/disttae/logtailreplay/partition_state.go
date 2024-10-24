@@ -18,14 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"math"
 	"regexp"
 	"runtime/trace"
 	"sync/atomic"
-
-	"go.uber.org/zap"
-
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {

@@ -242,7 +242,15 @@ func (tbl *txnTable) TransferDeletes(
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
 		tGetSoftdeleteObjects := time.Now()
-		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		startTS := tbl.transferedTS.Next()
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType.SkipTargetOldCommitted() {
+			txnStartTS := tbl.store.txn.GetStartTS()
+			if txnStartTS.GT(&startTS) {
+				startTS = txnStartTS
+			}
+		}
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
 		sort.Slice(softDeleteObjects, func(i, j int) bool {
 			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
 		})
@@ -365,7 +373,7 @@ func (tbl *txnTable) TransferDeletes(
 				"TN-TRANSFER-TOMBSTONE-FILES",
 				zap.String("table", tbl.GetLocalSchema(false).Name),
 				zap.String("phase", phase),
-				zap.String("from", tbl.transferedTS.Next().ToString()),
+				zap.String("from", startTS.ToString()),
 				zap.String("to", ts.ToString()),
 				zap.Int("s-cnt", len(softDeleteObjects)),
 				zap.String("txn", tbl.store.txn.String()),
