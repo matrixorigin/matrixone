@@ -14,6 +14,12 @@
 
 package fileservice
 
+import (
+	"cmp"
+	"iter"
+	"slices"
+)
+
 func ptrTo[T any](v T) *T {
 	return &v
 }
@@ -32,4 +38,17 @@ func zeroToNil[T comparable](v T) *T {
 		return nil
 	}
 	return &v
+}
+
+func SortedList(seq iter.Seq2[*DirEntry, error]) (ret []DirEntry, err error) {
+	for entry, err := range seq {
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, *entry)
+	}
+	slices.SortFunc(ret, func(a, b DirEntry) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return
 }

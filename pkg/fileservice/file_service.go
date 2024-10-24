@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ type FileService interface {
 	ReadCache(ctx context.Context, vector *IOVector) error
 
 	// List lists sub-entries in a dir
-	List(ctx context.Context, dirPath string) ([]DirEntry, error)
+	List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error]
 
 	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found

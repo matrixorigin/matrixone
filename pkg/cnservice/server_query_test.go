@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_file"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
@@ -48,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1016,11 +1016,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 	ctx := context.Background()
 	ctl := gomock.NewController(t)
 
-	mockFs := mock_file.NewMockFileService(ctl)
-	mockFs.EXPECT().Name().Return(defines.SharedFileServiceName).AnyTimes()
-	mockFs.EXPECT().ReadCache(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	fs, err := fileservice.NewFileServices("dummy", mockFs)
+	fs, err := fileservice.NewFileServices("dummy", testutil.NewSharedFS())
 	require.NoError(t, err)
 
 	mockQuery := mock_query.NewMockQueryService(ctl)

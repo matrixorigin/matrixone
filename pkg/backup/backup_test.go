@@ -394,7 +394,7 @@ func Test_backupConfigFile(t *testing.T) {
 			},
 			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 				assert.NoError(t, err)
-				list, err2 := Fs.List(context.Background(), configDir)
+				list, err2 := fileservice.SortedList(Fs.List(context.Background(), configDir))
 				assert.NoError(t, err2)
 				var configFile string
 				for _, entry := range list {
@@ -587,7 +587,7 @@ func TestBackup(t *testing.T) {
 				assert.NotNil(t, cfg)
 
 				//checkup config files
-				list, err2 := cfg.GeneralDir.List(context.Background(), configDir)
+				list, err2 := fileservice.SortedList(cfg.GeneralDir.List(context.Background(), configDir))
 				assert.NoError(t, err2)
 				var configFile string
 				for _, entry := range list {

@@ -55,7 +55,7 @@ func testFileService(
 
 		assert.True(t, strings.Contains(fs.Name(), fsName))
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(entries))
 
@@ -82,7 +82,7 @@ func testFileService(
 		})
 		assert.Nil(t, err)
 
-		entries, err = fs.List(ctx, "")
+		entries, err = SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 
@@ -427,7 +427,7 @@ func testFileService(
 			}
 
 			// list
-			entries, err := fs.List(ctx, "/")
+			entries, err := SortedList(fs.List(ctx, "/"))
 			assert.Nil(t, err)
 			for _, entry := range entries {
 				if entry.Name != filePath {
@@ -467,7 +467,7 @@ func testFileService(
 			}
 		}
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 11)
 		sort.Slice(entries, func(i, j int) bool {
@@ -495,11 +495,11 @@ func testFileService(
 			assert.Equal(t, entries[10].Size, int64(7))
 		}
 
-		entries, err = fs.List(ctx, "abc")
+		entries, err = SortedList(fs.List(ctx, "abc"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 0)
 
-		entries, err = fs.List(ctx, "foo")
+		entries, err = SortedList(fs.List(ctx, "foo"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -507,7 +507,7 @@ func testFileService(
 		assert.Equal(t, entries[7].IsDir, false)
 		assert.Equal(t, entries[7].Name, "7")
 
-		entries, err = fs.List(ctx, "qux/quux")
+		entries, err = SortedList(fs.List(ctx, "qux/quux"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -516,7 +516,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with / suffix
-		entries, err = fs.List(ctx, "qux/quux/")
+		entries, err = SortedList(fs.List(ctx, "qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -525,7 +525,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with / prefix
-		entries, err = fs.List(ctx, "/qux/quux/")
+		entries, err = SortedList(fs.List(ctx, "/qux/quux/"))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -534,7 +534,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name
-		entries, err = fs.List(ctx, JoinPath(fs.Name(), "qux/quux/"))
+		entries, err = SortedList(fs.List(ctx, JoinPath(fs.Name(), "qux/quux/")))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -543,7 +543,7 @@ func testFileService(
 		assert.Equal(t, entries[7].Name, "7")
 
 		// with fs name and / prefix and suffix
-		entries, err = fs.List(ctx, JoinPath(fs.Name(), "/qux/quux/"))
+		entries, err = SortedList(fs.List(ctx, JoinPath(fs.Name(), "/qux/quux/")))
 		assert.Nil(t, err)
 		assert.Equal(t, len(entries), 8)
 		assert.Equal(t, entries[0].IsDir, false)
@@ -558,7 +558,7 @@ func testFileService(
 			err = fs.Delete(ctx, path.Join("qux/quux", entry.Name))
 			assert.Nil(t, err)
 		}
-		entries, err = fs.List(ctx, "qux/quux")
+		entries, err = SortedList(fs.List(ctx, "qux/quux"))
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(entries))
 
@@ -663,7 +663,7 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 		err = fs.Read(ctx, &vector)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
-		_, err = fs.List(ctx, vector.FilePath)
+		_, err = SortedList(fs.List(ctx, vector.FilePath))
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 		err = fs.Delete(ctx, vector.FilePath)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
@@ -871,7 +871,7 @@ func testFileService(
 			Policy: policy,
 		})
 		assert.Nil(t, err)
-		entries, err := fs.List(ctx, JoinPath(fs.Name(), "/path"))
+		entries, err := SortedList(fs.List(ctx, JoinPath(fs.Name(), "/path")))
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, "to", entries[0].Name)
@@ -1005,7 +1005,7 @@ func testFileService(
 		})
 		assert.ErrorIs(t, err, context.Canceled)
 
-		_, err = fs.List(ctx, "")
+		_, err = SortedList(fs.List(ctx, ""))
 		assert.ErrorIs(t, err, context.Canceled)
 
 		err = fs.Delete(ctx, "")

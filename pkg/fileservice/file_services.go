@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"iter"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,19 +74,23 @@ func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error 
 	return fs.Delete(ctx, filePath)
 }
 
-func (f *FileServices) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
-	path, err := ParsePathAtService(dirPath, "")
-	if err != nil {
-		return nil, err
+func (f *FileServices) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		path, err := ParsePathAtService(dirPath, "")
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if path.Service == "" {
+			path.Service = f.defaultName
+		}
+		fs, err := Get[FileService](f, path.Service)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		fs.List(ctx, dirPath)(yield)
 	}
-	if path.Service == "" {
-		path.Service = f.defaultName
-	}
-	fs, err := Get[FileService](f, path.Service)
-	if err != nil {
-		return nil, err
-	}
-	return fs.List(ctx, dirPath)
 }
 
 func (f *FileServices) Name() string {
