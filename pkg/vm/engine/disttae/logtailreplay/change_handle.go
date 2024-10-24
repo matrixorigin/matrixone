@@ -724,6 +724,7 @@ type ChangeHandler struct {
 
 	start, end types.TS
 	fs         fileservice.FileService
+	minTS      types.TS
 }
 
 func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
@@ -735,6 +736,7 @@ func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPo
 		start:        start,
 		end:          end,
 		fs:           fs,
+		minTS:        state.minTS,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -802,8 +804,12 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	if time.Since(p.lastPrint) > LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v",
-				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration)
+			gcTS, err := getGCTS(ctx, p.fs)
+			if err != nil {
+				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
+			}
+			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v, start %v, minTS %v, gcTS %v",
+				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration, p.start.ToString(), p.minTS.ToString(), gcTS.ToString())
 		}
 	}
 	hint = engine.ChangesHandle_Tail_done
@@ -1121,11 +1127,22 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 }
 
 func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
+	maxGCTS, err := getGCTS(ctx, fs)
+	if err != nil {
+		return
+	}
+	if ts.LT(&maxGCTS) {
+		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
+	}
+	logutil.Infof("ChangesHandle-CheckGCTS, gc TS %v, start ts %v", ts.ToString(), ts.ToString())
+	return nil
+}
+
+func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
 	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
 	if err != nil {
 		return
 	}
-	maxGCTS := types.TS{}
 	for _, dir := range dirs {
 		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		if ext == blockio.CompactedExt {
@@ -1134,9 +1151,5 @@ func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (er
 			}
 		}
 	}
-	if ts.LT(&maxGCTS) {
-		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
-	}
-	logutil.Infof("ChangesHandle-CheckGCTS, gc TS %v, start ts %v", ts.ToString(), ts.ToString())
-	return nil
+	return
 }
