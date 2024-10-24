@@ -1820,8 +1820,6 @@ func (tbl *txnTable) getPartitionState(
 				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 			}
 			tbl._partState.Store(ps)
-			logutil.Infof("Get latest partition state, table:%s, tid:%v, txn:%s, ps:%p",
-				tbl.tableName, tbl.tableId, tbl.db.op.Txn().DebugString(), ps)
 		}
 		return tbl._partState.Load(), nil
 	}
