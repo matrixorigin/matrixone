@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 type reviseResult struct {
@@ -84,11 +85,22 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	ctx := context.Background()
 	defer func() {
 		if err != nil {
-			txn.Rollback(ctx)
 			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
+			err = txn.Rollback(ctx)
+			if err != nil {
+				logutil.Error("failed to rollback mergePolicy txn",
+					zap.Error(err))
+				return
+			}
 		} else {
 			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
-			txn.Commit(ctx)
+			err = txn.Commit(ctx)
+			logutil.Info("mergePolicy txn Commit", zap.String("commitTS", txn.GetCommitTS().ToString()))
+			if err != nil {
+				logutil.Error("failed to commit mergePolicy txn",
+					zap.Error(err))
+				return
+			}
 			g.configProvider.invalidCache(tbl)
 		}
 	}()
