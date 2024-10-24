@@ -75,7 +75,7 @@ var (
 	aggrCntCol   = table.Int64Column("aggr_count", "the number of statements aggregated")
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 	connIdCol    = table.Int64Column("connection_id", "connection id")
-	cuCol        = table.ValueColumn("cu", "cu cost")
+	cuCol        = table.ValueColumnWithPrec("cu", "cu cost", 6)
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountSys,

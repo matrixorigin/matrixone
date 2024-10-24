@@ -390,8 +390,9 @@ func (s *StatementInfo) free() {
 func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt := NewStatementInfo() // Get a new statement from the pool
 	stmt.StatementID = s.StatementID
-	stmt.SessionID = s.SessionID
 	stmt.TransactionID = s.TransactionID
+	stmt.SessionID = s.SessionID
+	stmt.ConnectionId = s.ConnectionId
 	stmt.Account = s.Account
 	stmt.User = s.User
 	stmt.Host = s.Host
@@ -428,8 +429,6 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	// part: skipTxn ctrl
 	stmt.skipTxnOnce = s.skipTxnOnce
 	stmt.skipTxnID = s.skipTxnID
-	// mo 2.0.0
-	stmt.ConnectionId = s.ConnectionId
 	return stmt
 }
 
@@ -480,7 +479,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	}
 	// stats := s.ExecPlan2Stats(ctx) // deprecated
 	stats := s.GetStatsArrayBytes()
-	row.SetColumnVal(cuCol, table.Float64Field(s.statsArray.GetCU()))
+	row.SetColumnVal(cuCol, table.Float64FieldWithPrec(s.statsArray.GetCU(), cuCol.Scale))
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
