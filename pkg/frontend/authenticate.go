@@ -2687,6 +2687,19 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	if len(password) == 0 {
 		return moerr.NewInternalError(ctx, "password is empty string")
 	}
+
+	var needValidate bool
+	needValidate, err = needValidatePassword(ses)
+	if err != nil {
+		return err
+	}
+	if needValidate {
+		err = validatePassword(ctx, password, ses, user.Username, ses.GetUserName())
+		if err != nil {
+			return err
+		}
+	}
+
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	defer func() {
