@@ -44,6 +44,8 @@ type Cache[K comparable, V any] struct {
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
+
+	overEvict atomic.Int64
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -124,12 +126,11 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) {
 	shard.Unlock()
 
 	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
 	c.queue1.enqueue(item)
 	c.used1 += size
-	if c.used1+c.used2 > c.capacity() {
-		c.evict(nil, 0)
-	}
+	c.queueLock.Unlock()
+
+	c.evict(nil, 0)
 }
 
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
@@ -164,18 +165,34 @@ func (c *Cache[K, V]) Delete(key K) {
 	// queues will be update in evict
 }
 
-// must call evict with queueLock held
 func (c *Cache[K, V]) evict(done chan int64, overEvict int64) {
+	if done == nil {
+		// can be async
+		if c.queueLock.TryLock() {
+			defer c.queueLock.Unlock()
+		} else {
+			if overEvict > 0 {
+				// let the holder do more evict
+				c.overEvict.Add(overEvict)
+			}
+			return
+		}
+	} else {
+		c.queueLock.Lock()
+		defer c.queueLock.Unlock()
+	}
+
 	var target int64
 	for {
-		target = c.capacity() - overEvict
+		globalOverEvict := c.overEvict.Swap(0)
+		target = c.capacity() - overEvict - globalOverEvict
 		if target < 0 {
 			target = 0
 		}
 		if c.used1+c.used2 <= target {
 			break
 		}
-		target1 := c.capacity1() - overEvict
+		target1 := c.capacity1() - overEvict - globalOverEvict
 		if target1 < 0 {
 			target1 = 0
 		}
@@ -249,7 +266,5 @@ func (c *Cache[K, V]) Evict(done chan int64) {
 	if done != nil && cap(done) < 1 {
 		panic("should be buffered chan")
 	}
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
 	c.evict(done, 0)
 }
