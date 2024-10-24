@@ -19,13 +19,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSortKey(t *testing.T) {
@@ -63,6 +64,7 @@ func TestSortKey(t *testing.T) {
 
 func TestSetStatsCNCreated(t *testing.T) {
 	proc := testutil.NewProc()
+	ctx := proc.Ctx
 	s3writer := &S3Writer{}
 	s3writer.sortIndex = 0
 	s3writer.isTombstone = true
@@ -80,7 +82,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 	bat.SetRowCount(100)
 
 	s3writer.StashBatch(proc, bat)
-	_, stats, err := s3writer.SortAndSync(proc)
+	_, stats, err := s3writer.SortAndSync(ctx, proc)
 	require.NoError(t, err)
 
 	require.True(t, stats.GetCNCreated())
@@ -413,12 +415,13 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	// test no data to flush
 	{
 		proc := testutil.NewProc()
+		ctx := proc.Ctx
 
 		s3writer := &S3Writer{}
 		s3writer.sortIndex = 0
 		s3writer.isTombstone = true
 
-		_, s, err := s3writer.SortAndSync(proc)
+		_, s, err := s3writer.SortAndSync(ctx, proc)
 		require.NoError(t, err)
 		require.True(t, s.IsZero())
 	}
@@ -427,26 +430,28 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 	{
 		proc := testutil.NewProc(
 			testutil.WithFileService(nil))
+		ctx := proc.Ctx
 
 		s3writer := &S3Writer{}
 		s3writer.sortIndex = -1
 		s3writer.isTombstone = true
 		s3writer.StashBatch(proc, bat)
 
-		_, _, err := s3writer.SortAndSync(proc)
+		_, _, err := s3writer.SortAndSync(ctx, proc)
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
 	}
 
 	// test normal flush
 	{
 		proc := testutil.NewProc()
+		ctx := proc.Ctx
 
 		s3writer := &S3Writer{}
 		s3writer.sortIndex = 0
 		s3writer.isTombstone = true
 		s3writer.StashBatch(proc, bat)
 
-		_, _, err = s3writer.SortAndSync(proc)
+		_, _, err = s3writer.SortAndSync(ctx, proc)
 		require.NoError(t, err)
 	}
 
@@ -457,6 +462,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		proc := testutil.NewProc(
 			testutil.WithMPool(pool))
+		ctx := proc.Ctx
 
 		bat2 := batch.NewWithSize(1)
 		bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -476,7 +482,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		s3writer.isTombstone = true
 		s3writer.StashBatch(proc, bat2)
 
-		_, _, err = s3writer.SortAndSync(proc)
+		_, _, err = s3writer.SortAndSync(ctx, proc)
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrTooLargeObjectSize)
 	}
 }

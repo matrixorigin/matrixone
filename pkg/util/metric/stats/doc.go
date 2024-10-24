@@ -28,7 +28,7 @@ Usage:
 			Put         stats.Counter
 			Get         stats.Counter
 			Delete      stats.Counter
-			DeleteMulti stats.Counter
+			DeleteMul stats.Counter
 		}
 	}
 
