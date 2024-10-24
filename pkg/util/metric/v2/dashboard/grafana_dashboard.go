@@ -241,7 +241,7 @@ func (c *DashboardCreator) getPercentHist(
 	options = append(options, opts...)
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
-		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
+		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le))", percent, metric)
 		legend := fmt.Sprintf("P%.0f", percent*100)
 		options = append(options, timeseries.WithPrometheusTarget(
 			query,

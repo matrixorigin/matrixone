@@ -42,57 +42,57 @@ tables_priv
 user
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
-Host    CHAR(255)    NO    PRI    ''        
-Db    CHAR(64)    NO    PRI    ''        
-User    CHAR(32)    NO    PRI    ''        
-Select_priv    VARCHAR(10)    NO        'N'        
-Insert_priv    VARCHAR(10)    NO        'N'        
-Update_priv    VARCHAR(10)    NO        'N'        
-Delete_priv    VARCHAR(10)    NO        'N'        
-Create_priv    VARCHAR(10)    NO        'N'        
-Drop_priv    VARCHAR(10)    NO        'N'        
-Grant_priv    VARCHAR(10)    NO        'N'        
-References_priv    VARCHAR(10)    NO        'N'        
-Index_priv    VARCHAR(10)    NO        'N'        
-Alter_priv    VARCHAR(10)    NO        'N'        
-Create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-Lock_tables_priv    VARCHAR(10)    NO        'N'        
-Create_view_priv    VARCHAR(10)    NO        'N'        
-Show_view_priv    VARCHAR(10)    NO        'N'        
-Create_routine_priv    VARCHAR(10)    NO        'N'        
-Alter_routine_priv    VARCHAR(10)    NO        'N'        
-Execute_priv    VARCHAR(10)    NO        'N'        
-Event_priv    VARCHAR(10)    NO        'N'        
-Trigger_priv    VARCHAR(10)    NO        'N'        
+Host    CHAR(255)    NO    PRI            
+Db    CHAR(64)    NO    PRI            
+User    CHAR(32)    NO    PRI            
+Select_priv    VARCHAR(10)    NO        N        
+Insert_priv    VARCHAR(10)    NO        N        
+Update_priv    VARCHAR(10)    NO        N        
+Delete_priv    VARCHAR(10)    NO        N        
+Create_priv    VARCHAR(10)    NO        N        
+Drop_priv    VARCHAR(10)    NO        N        
+Grant_priv    VARCHAR(10)    NO        N        
+References_priv    VARCHAR(10)    NO        N        
+Index_priv    VARCHAR(10)    NO        N        
+Alter_priv    VARCHAR(10)    NO        N        
+Create_tmp_table_priv    VARCHAR(10)    NO        N        
+Lock_tables_priv    VARCHAR(10)    NO        N        
+Create_view_priv    VARCHAR(10)    NO        N        
+Show_view_priv    VARCHAR(10)    NO        N        
+Create_routine_priv    VARCHAR(10)    NO        N        
+Alter_routine_priv    VARCHAR(10)    NO        N        
+Execute_priv    VARCHAR(10)    NO        N        
+Event_priv    VARCHAR(10)    NO        N        
+Trigger_priv    VARCHAR(10)    NO        N        
 show columns from `procs_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-Host    CHAR(255)    NO    PRI    ''        
-Db    CHAR(64)    NO    PRI    ''        
-User    CHAR(32)    NO    PRI    ''        
-Routine_name    CHAR(64)    NO    PRI    ''        
+Host    CHAR(255)    NO    PRI
+Db    CHAR(64)    NO    PRI
+User    CHAR(32)    NO    PRI
+Routine_name    CHAR(64)    NO    PRI
 Routine_type    VARCHAR(10)    NO    PRI    null        
-Grantor    VARCHAR(288)    NO    MUL    ''        
-Proc_priv    VARCHAR(10)    NO        ''        
+Grantor    VARCHAR(288)    NO    MUL
+Proc_priv    VARCHAR(10)    NO
 Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 show columns from `columns_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-Host    CHAR(255)    NO    PRI    ''        
-Db    CHAR(64)    NO    PRI    ''        
-User    CHAR(32)    NO    PRI    ''        
-Table_name    CHAR(64)    NO    PRI    ''        
-Column_name    CHAR(64)    NO    PRI    ''        
+Host    CHAR(255)    NO    PRI
+Db    CHAR(64)    NO    PRI
+User    CHAR(32)    NO    PRI
+Table_name    CHAR(64)    NO    PRI
+Column_name    CHAR(64)    NO    PRI
 Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-Column_priv    VARCHAR(10)    NO        ''        
+Column_priv    VARCHAR(10)    NO
 show columns from `tables_priv`;
 Field    Type    Null    Key    Default    Extra    Comment
-Host    CHAR(255)    NO    PRI    ''        
-Db    CHAR(64)    NO    PRI    ''        
-User    CHAR(32)    NO    PRI    ''        
-Table_name    CHAR(64)    NO    PRI    ''        
-Grantor    VARCHAR(288)    NO    MUL    ''        
+Host    CHAR(255)    NO    PRI
+Db    CHAR(64)    NO    PRI
+User    CHAR(32)    NO    PRI
+Table_name    CHAR(64)    NO    PRI
+Grantor    VARCHAR(288)    NO    MUL
 Timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-Table_priv    VARCHAR(10)    NO        ''        
-Column_priv    VARCHAR(10)    NO        ''        
+Table_priv    VARCHAR(10)    NO
+Column_priv    VARCHAR(10)    NO
 use information_schema;
 show tables;
 Tables_in_information_schema
@@ -160,10 +160,10 @@ generation_expression    VARCHAR(500)    NO        null
 srs_id    BIGINT(0)    YES        null        
 show columns from `PROFILING`;
 Field    Type    Null    Key    Default    Extra    Comment
-QUERY_ID    INT(32)    NO        '0'        
-SEQ    INT(32)    NO        '0'        
-STATE    VARCHAR(30)    NO        ''        
-DURATION    DECIMAL(9)    NO        '0.000000'        
+QUERY_ID    INT(32)    NO        0
+SEQ    INT(32)    NO        0
+STATE    VARCHAR(30)    NO
+DURATION    DECIMAL(9)    NO        0.000000
 CPU_USER    DECIMAL(9)    YES        null        
 CPU_SYSTEM    DECIMAL(9)    YES        null        
 CONTEXT_VOLUNTARY    INT(32)    YES        null        
@@ -180,10 +180,10 @@ SOURCE_FILE    VARCHAR(20)    YES        null
 SOURCE_LINE    INT(32)    YES        null        
 show columns from `USER_PRIVILEGES`;
 Field    Type    Null    Key    Default    Extra    Comment
-GRANTEE    VARCHAR(292)    NO        ''        
-TABLE_CATALOG    VARCHAR(512)    NO        ''        
-PRIVILEGE_TYPE    VARCHAR(64)    NO        ''        
-IS_GRANTABLE    VARCHAR(3)    NO        ''        
+GRANTEE    VARCHAR(292)    NO
+TABLE_CATALOG    VARCHAR(512)    NO
+PRIVILEGE_TYPE    VARCHAR(64)    NO
+IS_GRANTABLE    VARCHAR(3)    NO
 show columns from `SCHEMATA`;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR(3)    NO        null        

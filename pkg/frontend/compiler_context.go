@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -867,27 +868,53 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			break
 		}
 	}
+
 	var statsInfo *pb.StatsInfo
 	// This is a partition table.
 	if partitionInfo != nil {
+		crs := new(perfcounter.CounterSet)
 		statsInfo = plan2.NewStatsInfo()
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
 			if err != nil {
 				return cached, err
 			}
-			parStats, err := parTable.Stats(parCtx, true)
+			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			parStats, err := parTable.Stats(newParCtx, true)
 			if err != nil {
 				return cached, err
 			}
 			statsInfo.Merge(parStats)
 		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+
 	} else {
-		statsInfo, err = table.Stats(ctx, true)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
+		statsInfo, err = table.Stats(newCtx, true)
 		if err != nil {
 			return cached, err
 		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	}
+
 	if statsInfo != nil {
 		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
 		return statsInfo, nil
