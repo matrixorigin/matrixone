@@ -2405,7 +2405,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
-		ignore := ctx.GetContext().Value(defines.IgnoreForeignKey{}).(bool)
+		ignore := false
+		val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+		if val != nil {
+			ignore = val.(bool)
+		}
 		dropTable.TableId = tableDef.TblId
 		if tableDef.Fkeys != nil && !ignore {
 			for _, fk := range tableDef.Fkeys {
