@@ -82,7 +82,7 @@ func stageList(proc *process.Process, tableFunction *TableFunction, filepath str
 		return nil
 	}
 
-	s, err := stage.UrlToStageDef(string(filepath), proc)
+	s, err := stage.UrlToStageDef(string(filepath), proc, nil)
 	if err != nil {
 		return err
 	}

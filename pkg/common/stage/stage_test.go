@@ -15,6 +15,7 @@
 package stage
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,4 +35,42 @@ func TestS3ServiceProvider(t *testing.T) {
 	require.Nil(t, err)
 	assert.Equal(t, protocol, "minio")
 
+}
+
+func TestStageCache(t *testing.T) {
+	cache := make(map[string]StageDef)
+
+	credentials := make(map[string]string)
+	credentials["aws_region"] = "region"
+	credentials["aws_id"] = "id"
+	credentials["aws_secret"] = "secret"
+
+	rsu, err := url.Parse("file:///tmp")
+	require.Nil(t, err)
+	subu, err := url.Parse("stage://rsstage/substage")
+	require.Nil(t, err)
+
+	cache["rsstage"] = StageDef{Id: 1, Name: "rsstage", Url: rsu, Credentials: credentials}
+	cache["substage"] = StageDef{Id: 1, Name: "ftstage", Url: subu}
+
+	// get the final URL totally based on cache value
+	s, err := UrlToStageDef("stage://substage/a.csv", nil, cache)
+	require.Nil(t, err)
+
+	require.Equal(t, s.Url.String(), "file:///tmp/substage/a.csv")
+	require.Equal(t, s.Credentials["aws_region"], "region")
+	require.Equal(t, s.Credentials["aws_id"], "id")
+	require.Equal(t, s.Credentials["aws_secret"], "secret")
+
+	// change the local stagedef does not change the cache
+	s.Url, err = url.Parse("https://localhost/path")
+	require.Nil(t, err)
+
+	// preserve the cache
+	rs, ok := cache["rsstage"]
+	require.True(t, ok)
+	require.Equal(t, rs.Url.String(), "file:///tmp")
+	ss, ok := cache["substage"]
+	require.True(t, ok)
+	require.Equal(t, ss.Url.String(), "stage://rsstage/substage")
 }

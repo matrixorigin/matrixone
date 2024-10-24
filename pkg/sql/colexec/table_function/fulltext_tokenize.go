@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,9 +43,10 @@ type Document struct {
 }
 
 type tokenizeState struct {
-	inited bool
-	called bool
-	param  fulltext.FullTextParserParam
+	inited      bool
+	called      bool
+	param       fulltext.FullTextParserParam
+	stage_cache map[string]stage.StageDef
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -75,6 +77,7 @@ func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineF
 func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &tokenizeState{}
+	st.stage_cache = make(map[string]stage.StageDef)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
@@ -134,7 +137,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
 				// datalink
-				dl, err := datalink.NewDatalink(data, proc)
+				dl, err := datalink.NewDatalink(data, proc, u.stage_cache)
 				if err != nil {
 					return err
 				}

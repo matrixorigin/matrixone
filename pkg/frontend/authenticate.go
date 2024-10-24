@@ -3336,7 +3336,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 	filePath = ep.FilePath
 	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
 		// stage:// URL
-		s, err := stage.UrlToStageDef(filePath, ses.proc)
+		s, err := stage.UrlToStageDef(filePath, ses.proc, nil)
 		if err != nil {
 			return err
 		}

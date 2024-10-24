@@ -36,14 +36,14 @@ type Datalink struct {
 	MoPath string
 }
 
-func NewDatalink(aurl string, proc *process.Process) (Datalink, error) {
+func NewDatalink(aurl string, proc *process.Process, stage_cache map[string]stage.StageDef) (Datalink, error) {
 
 	u, err := url.Parse(aurl)
 	if err != nil {
 		return Datalink{}, err
 	}
 
-	moUrl, offsetSize, err := ParseDatalink(aurl, proc)
+	moUrl, offsetSize, err := ParseDatalink(aurl, proc, stage_cache)
 	if err != nil {
 		return Datalink{}, err
 	}
@@ -92,7 +92,7 @@ func (d Datalink) NewWriter(proc *process.Process) (*fileservice.FileServiceWrit
 // and returns the Mo FS url, []int{offset,size}, fileType and error
 // Mo FS url: The URL that is used by MO FS to access the file
 // offsetSize: The offset and size of the file to be read
-func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) {
+func ParseDatalink(fsPath string, proc *process.Process, stage_cache map[string]stage.StageDef) (string, []int, error) {
 	u, err := url.Parse(fsPath)
 	if err != nil {
 		return "", nil, err
@@ -104,7 +104,7 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int, error) 
 	case stage.FILE_PROTOCOL:
 		moUrl = strings.Join([]string{u.Host, u.Path}, "")
 	case stage.STAGE_PROTOCOL:
-		moUrl, _, err = stage.UrlToPath(fsPath, proc)
+		moUrl, _, err = stage.UrlToPath(fsPath, proc, stage_cache)
 		if err != nil {
 			return "", nil, err
 		}

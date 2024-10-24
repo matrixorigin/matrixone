@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
-	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -73,21 +72,21 @@ func (s *StageDef) GetCredentials(key string, defval string) (string, bool) {
 	return res, ok
 }
 
-func (s *StageDef) expandSubStage(proc *process.Process) (StageDef, error) {
+func (s *StageDef) expandSubStage(proc *process.Process, cache map[string]StageDef) (StageDef, error) {
 	if s.Url.Scheme == STAGE_PROTOCOL {
 		stagename, prefix, query, err := ParseStageUrl(s.Url)
 		if err != nil {
 			return StageDef{}, err
 		}
 
-		res, err := StageLoadCatalog(proc, stagename)
+		res, err := StageLoadCatalog(proc, stagename, cache)
 		if err != nil {
 			return StageDef{}, err
 		}
 
 		res.Url = res.Url.JoinPath(prefix)
 		res.Url.RawQuery = query
-		return res.expandSubStage(proc)
+		return res.expandSubStage(proc, cache)
 	}
 
 	return *s, nil
@@ -201,7 +200,14 @@ func credentialsToMap(cred string) (map[string]string, error) {
 	return credentials, nil
 }
 
-func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err error) {
+func StageLoadCatalog(proc *process.Process, stagename string, cache map[string]StageDef) (s StageDef, err error) {
+	if cache != nil {
+		s, ok := cache[stagename]
+		if ok {
+			return s, nil
+		}
+	}
+
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
 	res, err := runSql(proc, getAllStagesSql)
 	if err != nil {
@@ -245,12 +251,16 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 		return StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
+	if cache != nil {
+		cache[stagename] = reslist[0]
+	}
+
 	return reslist[0], nil
 }
 
-func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {
+func UrlToPath(furl string, proc *process.Process, cache map[string]StageDef) (path string, query string, err error) {
 
-	s, err := UrlToStageDef(furl, proc)
+	s, err := UrlToStageDef(furl, proc, cache)
 	if err != nil {
 		return "", "", err
 	}
@@ -288,7 +298,7 @@ func ParseS3Url(u *url.URL) (bucket, fpath, query string, err error) {
 	return
 }
 
-func UrlToStageDef(furl string, proc *process.Process) (s StageDef, err error) {
+func UrlToStageDef(furl string, proc *process.Process, cache map[string]StageDef) (s StageDef, err error) {
 
 	aurl, err := url.Parse(furl)
 	if err != nil {
@@ -304,20 +314,20 @@ func UrlToStageDef(furl string, proc *process.Process) (s StageDef, err error) {
 		return StageDef{}, err
 	}
 
-	sdef, err := StageLoadCatalog(proc, stagename)
+	sdef, err := StageLoadCatalog(proc, stagename, cache)
 	if err != nil {
 		return StageDef{}, err
 	}
 
-	s, err = sdef.expandSubStage(proc)
+	s, err = sdef.expandSubStage(proc, cache)
 	if err != nil {
 		return StageDef{}, err
 	}
 
 	s.Url = s.Url.JoinPath(subpath)
 	s.Url.RawQuery = query
-
 	return s, nil
+
 }
 
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {

@@ -34,6 +34,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/datalink"
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/RoaringBitmap/roaring"
@@ -581,6 +582,7 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	stage_cache := make(map[string]stage.StageDef)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		_filePath, null1 := filePathVec.GetStrValue(i)
@@ -592,7 +594,7 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		dl, err := datalink.NewDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc, stage_cache)
 		if err != nil {
 			return err
 		}
@@ -620,6 +622,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	rs := vector.MustFunctionResult[int64](result)
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
+	stage_cache := make(map[string]stage.StageDef)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		_filePath, null1 := filePathVec.GetStrValue(i)
@@ -631,7 +634,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		dl, err := datalink.NewDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc, stage_cache)
 		if err != nil {
 			return err
 		}

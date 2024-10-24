@@ -1,10 +1,11 @@
 set experimental_fulltext_index=1;
 
-create stage ftstage URL='file:///$resources/fulltext/';
+create stage rsstage URL='file:///$resources/';
+create stage ftstage URL='stage://rsstage/fulltext/';
 
 create table datasrc (id bigint primary key, fpath datalink, fulltext(fpath));
 
-insert into datasrc values (0, 'stage://ftstage/mo.pdf'), (1, 'file:///$resources/fulltext/chinese.pdf'), 
+insert into datasrc values (0, 'stage://ftstage/mo.pdf'), (1, 'stage://ftstage/chinese.pdf'), 
 (2, 'file:///$resources/fulltext/file-sample_100kB.docx');
 
 select id from datasrc where match(fpath) against('matrixone');
@@ -24,3 +25,4 @@ select id from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地
 drop table datasrc;
 
 drop stage ftstage;
+drop stage rsstage;

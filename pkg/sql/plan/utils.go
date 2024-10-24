@@ -1569,7 +1569,7 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return InitInfileParam(param)
 	}
 
-	s, err := stage.UrlToStageDef(fpath, proc)
+	s, err := stage.UrlToStageDef(fpath, proc, nil)
 	if err != nil {
 		return err
 	}
