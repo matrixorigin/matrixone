@@ -3417,6 +3417,9 @@ type jsonPlanHandler struct {
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
+	if strings.Contains(h.stmt.Statement, "SELECT ROUND(SUM(distance), 2) AS total_distance") {
+		fmt.Println("------------------")
+	}
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
@@ -3491,13 +3494,13 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		opt(&h.marshalPlanConfig)
 	}
 
-	if h.needMarshalPlan() {
-		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
-		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
-		}
+	//if h.needMarshalPlan() {
+	h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+	h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+	if phyPlan != nil {
+		h.marshalPlan.PhyPlan = *phyPlan
 	}
+	//}
 	return h
 }
 
