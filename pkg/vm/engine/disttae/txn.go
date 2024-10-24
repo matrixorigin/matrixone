@@ -1088,14 +1088,6 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 	return nil
 }
 
-//func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-//	return !txn.deletedBlocks.isEmpty()
-//}
-
-//func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-//	return txn.deletedBlocks.hasDeletes(id)
-//}
-
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(
 	appendTo func(stats *objectio.ObjectStats),

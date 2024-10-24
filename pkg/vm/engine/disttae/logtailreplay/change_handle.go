@@ -729,7 +729,14 @@ type ChangeHandler struct {
 	LogThreshold time.Duration
 }
 
-func NewChangesHandler(state *PartitionState, start, end types.TS, mp *mpool.MPool, maxRow uint32, fs fileservice.FileService, ctx context.Context) (changeHandle *ChangeHandler, err error) {
+func NewChangesHandler(
+	ctx context.Context,
+	state *PartitionState,
+	start, end types.TS,
+	maxRow uint32,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
 	if state.minTS.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
 	}
