@@ -449,9 +449,13 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
-	if s.AggrCount > 1 && GetTracerProvider().enableStmtMerge {
-		s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
-		s.StmtBuilder.Reset()
+	if s.AggrCount > 1 {
+		if GetTracerProvider().enableStmtMerge {
+			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
+			s.StmtBuilder.Reset()
+		} else {
+			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.Statement
+		}
 	}
 	row.SetColumnVal(stmtCol, table.StringField(s.Statement))
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
