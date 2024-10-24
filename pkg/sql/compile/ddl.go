@@ -82,12 +82,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
-	if len(sql) != 0 {
-		err := runDetectFkReferToDBSql(c, sql)
-		if err != nil {
-			return err
-		}
+	// whether foreign_key_checks = 0 or 1
+	err := s.removeFkeysRelationships(c, dbName)
+	if err != nil {
+		return err
 	}
 
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
@@ -101,6 +99,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	for _, t := range relations {
 		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
 		err = c.runSql(dropSql)
+		if err != nil {
+			return err
+		}
+	}
+
+	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
+	if len(sql) != 0 {
+		err := runDetectFkReferToDBSql(c, sql)
 		if err != nil {
 			return err
 		}
