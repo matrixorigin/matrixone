@@ -55,6 +55,10 @@ func newObjectStorageMetrics(
 
 var _ ObjectStorage = new(objectStorageMetrics)
 
+func (o *objectStorageMetrics) Concurrency() int64 {
+	return o.upstream.Concurrency()
+}
+
 func (o *objectStorageMetrics) Delete(ctx context.Context, keys ...string) (err error) {
 	o.numDelete.Inc()
 	return o.upstream.Delete(ctx, keys...)
