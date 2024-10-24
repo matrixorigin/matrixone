@@ -19,6 +19,8 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -292,7 +294,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName])
+	n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
 	n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
@@ -532,7 +534,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
 		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName])
+		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
 		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}
 }
@@ -597,9 +599,13 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	return false
 }
 
-func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
-	if s == nil || math.IsNaN(s.Uniform) || s.Uniform < uniformThreshold {
+func shouldUseShuffleRanges(s *pb.ShuffleRange, colname string) []float64 {
+	if s == nil || math.IsNaN(s.Uniform) || s.Result == nil {
 		return nil
 	}
-	return s.Result
+	if s.Uniform < uniformThreshold {
+		logutil.Infof("col %v data distribution is not uniformed, use shuffle range to avoid shuffle imbalance", colname)
+		return s.Result
+	}
+	return nil
 }

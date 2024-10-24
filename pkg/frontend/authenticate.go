@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -3305,8 +3306,8 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 			comment = cs.Comment.Comment
 		}
 
-		if !(strings.HasPrefix(cs.Url, function.STAGE_PROTOCOL+"://") || strings.HasPrefix(cs.Url, function.S3_PROTOCOL+"://") ||
-			strings.HasPrefix(cs.Url, function.FILE_PROTOCOL+":///")) {
+		if !(strings.HasPrefix(cs.Url, stage.STAGE_PROTOCOL+"://") || strings.HasPrefix(cs.Url, stage.S3_PROTOCOL+"://") ||
+			strings.HasPrefix(cs.Url, stage.FILE_PROTOCOL+":///")) {
 			return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
 		}
 
@@ -3333,9 +3334,9 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 	// detect filepath contain stage or not
 	filePath = ep.FilePath
-	if strings.HasPrefix(filePath, function.STAGE_PROTOCOL+"://") {
+	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
 		// stage:// URL
-		s, err := function.UrlToStageDef(filePath, ses.proc)
+		s, err := stage.UrlToStageDef(filePath, ses.proc)
 		if err != nil {
 			return err
 		}
@@ -3408,9 +3409,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		}
 	} else {
 		if as.UrlOption.Exist {
-			if !(strings.HasPrefix(as.UrlOption.Url, function.STAGE_PROTOCOL+"://") ||
-				strings.HasPrefix(as.UrlOption.Url, function.S3_PROTOCOL+"://") ||
-				strings.HasPrefix(as.UrlOption.Url, function.FILE_PROTOCOL+":///")) {
+			if !(strings.HasPrefix(as.UrlOption.Url, stage.STAGE_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, stage.S3_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, stage.FILE_PROTOCOL+":///")) {
 				return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
 			}
 			sql = getsqlForUpdateStageUrl(string(as.Name), as.UrlOption.Url)

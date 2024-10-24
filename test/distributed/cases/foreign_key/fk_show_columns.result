@@ -67,7 +67,7 @@ created_time    TIMESTAMP(0)    YES        null
 comments    VARCHAR(256)    YES        null        
 version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
-create_version    VARCHAR(50)    YES        '1.2.0'        
+create_version    VARCHAR(50)    YES        1.2.0
 desc	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
 user_id    INT(32)    NO    PRI    null    auto_increment    
@@ -385,7 +385,7 @@ created_time    TIMESTAMP(0)    YES        null
 comments    VARCHAR(256)    YES        null        
 version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
-create_version    VARCHAR(50)    YES        '1.2.0'        
+create_version    VARCHAR(50)    YES        1.2.0
 show columns from	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
 user_id    INT(32)    NO    PRI    null    auto_increment    

@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -127,7 +128,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		writer.StashBatch(proc, bat)
 
-		_, ss, err := writer.SortAndSync(proc)
+		_, ss, err := writer.SortAndSync(proc.Ctx, proc)
 		require.NoError(t, err)
 		require.False(t, ss.IsZero())
 
