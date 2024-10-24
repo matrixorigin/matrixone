@@ -43,7 +43,12 @@ func Test_handshake(t *testing.T) {
 		rm: rm,
 	}
 
-	ioses, err := NewIOSession(&testConn{}, pu, "")
+	tConn := &testConn{
+		mod:  testConnModReadBuffer,
+		rbuf: makePacket([]byte{0, 0}, 1),
+	}
+
+	ioses, err := NewIOSession(tConn, pu, "")
 	if err != nil {
 		panic(err)
 	}
@@ -58,6 +63,41 @@ func Test_handshake(t *testing.T) {
 
 	rm.setRoutine(ioses, 0, rt)
 
+	err = sv.handshake(ioses)
+	assert.Error(t, err)
+
+	////SSL handshake
+	data := gIO.AppendUint32(nil, DefaultCapability|CLIENT_SSL) //capability
+	data = gIO.AppendUint32(data, MaxPayloadSize)               //payload size
+	data = gIO.AppendUint8(data, 1)                             //collationid
+	data = append(data, make([]byte, 23)...)
+	tConn.rbuf = makePacket(data, 1)
+	err = sv.handshake(ioses)
+	assert.Error(t, err)
+
+	////no SSL handshake
+	data = gIO.AppendUint32(nil, DefaultCapability) //capability
+	data = gIO.AppendUint32(data, MaxPayloadSize)   //payload size
+	data = gIO.AppendUint8(data, 1)                 //collationid
+	data = append(data, make([]byte, 23)...)
+	data = append(data, []byte("abc")...) //user name
+	data = append(data, 0)
+
+	lenencBuffer := make([]byte, 9)
+	l := proto.writeIntLenEnc(lenencBuffer, 0, 3)
+	data = append(data, lenencBuffer[:l]...) //password length
+	data = append(data, []byte("111")...)    //password
+
+	data = append(data, []byte("db")...) //db name
+	data = append(data, 0)
+
+	data = append(data, []byte(AuthNativePassword)...) //plugin
+	data = append(data, 0)
+
+	l = proto.writeIntLenEnc(lenencBuffer, 0, 0)
+	data = append(data, lenencBuffer[:l]...) //connect attrs
+
+	tConn.rbuf = makePacket(data, 1)
 	err = sv.handshake(ioses)
 	assert.NoError(t, err)
 }

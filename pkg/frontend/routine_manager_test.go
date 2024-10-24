@@ -114,8 +114,8 @@ func (tc *testConn) Read(b []byte) (n int, err error) {
 		if readLen == 0 {
 			return 0, io.EOF
 		}
-		copy(b, tc.data[0:readLen])
-		tc.data = tc.data[readLen:]
+		copy(b, tc.rbuf[0:readLen])
+		tc.rbuf = tc.rbuf[readLen:]
 		return readLen, nil
 	}
 	blen := len(b)
