@@ -1184,6 +1184,8 @@ func FillUsageBatOfCompacted(
 	scan := func(bat *containers.Batch) {
 		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
 			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+		insCreateTSVec := vector.MustFixedColWithTypeCheck[types.TS](
+			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
 		dbid := vector.MustFixedColNoTypeCheck[uint64](
 			bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tableID := vector.MustFixedColNoTypeCheck[uint64](
@@ -1208,6 +1210,14 @@ func FillUsageBatOfCompacted(
 
 			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
 			stats := (objectio.ObjectStats)(buf)
+			if !ObjectIsSnapshotRefers(
+				&stats,
+				tablePitrs[tableID[i]],
+				&insCreateTSVec[i],
+				&insDeleteTSVec[i],
+				tableSnapshots[tableID[i]]) {
+				continue
+			}
 			// skip the same object
 			if _, ok = objectsName[stats.ObjectName().String()]; ok {
 				continue

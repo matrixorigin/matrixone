@@ -1434,7 +1434,7 @@ func (c *checkpointCleaner) DoCheck() error {
 		if cptCkpObjects[name] != nil {
 			continue
 		}
-		if isSnapshotRefers(
+		if logtail.ObjectIsSnapshotRefers(
 			entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 		) {
 			logutil.Error(
