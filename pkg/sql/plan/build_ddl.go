@@ -2658,8 +2658,10 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
+		ignore := ctx.GetContext().Value(defines.IgnoreForeignKey{}).(bool)
+
 		dropTable.TableId = tableDef.TblId
-		if tableDef.Fkeys != nil {
+		if tableDef.Fkeys != nil && !ignore {
 			for _, fk := range tableDef.Fkeys {
 				if fk.ForeignTbl == 0 {
 					continue
@@ -2670,7 +2672,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 
 		// collect child tables that needs remove fk relationships
 		// with the table
-		if tableDef.RefChildTbls != nil {
+		if tableDef.RefChildTbls != nil && !ignore {
 			for _, childTbl := range tableDef.RefChildTbls {
 				if childTbl == 0 {
 					continue
