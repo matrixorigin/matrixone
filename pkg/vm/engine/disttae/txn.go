@@ -158,10 +158,10 @@ func (txn *Transaction) WriteBatch(
 	return
 }
 
-func (txn *Transaction) dumpBatch(offset int) error {
+func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 	txn.Lock()
 	defer txn.Unlock()
-	return txn.dumpBatchLocked(offset)
+	return txn.dumpBatchLocked(ctx, offset)
 }
 
 func checkPKDupGeneric[T comparable](
@@ -407,7 +407,7 @@ func (txn *Transaction) checkDup() error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 // start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
 // modify txn.writes, so it can only be called right before txn.commit.
-func (txn *Transaction) dumpBatchLocked(offset int) error {
+func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
 
@@ -449,13 +449,13 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 	txn.hasS3Op.Store(true)
 
-	if err := txn.dumpInsertBatchLocked(offset, &size, &pkCount); err != nil {
+	if err := txn.dumpInsertBatchLocked(ctx, offset, &size, &pkCount); err != nil {
 		return err
 	}
 
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.insertEntryMaxCount {
-			if err := txn.dumpDeleteBatchLocked(offset); err != nil {
+			if err := txn.dumpDeleteBatchLocked(ctx, offset); err != nil {
 				return err
 			}
 		}
@@ -477,7 +477,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	return nil
 }
 
-func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount *int) error {
+func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
 	mp := make(map[tableKey][]*batch.Batch)
 	lastTxnWritesIndex := offset
 	write := txn.writes
@@ -540,7 +540,7 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
-		blockInfos, stats, err := s3Writer.SortAndSync(txn.proc)
+		blockInfos, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
 		if err != nil {
 			return err
 		}
@@ -584,7 +584,7 @@ func (txn *Transaction) dumpInsertBatchLocked(offset int, size *uint64, pkCount 
 	return nil
 }
 
-func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
+func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int) error {
 	deleteCnt := 0
 	mp := make(map[tableKey][]*batch.Batch)
 	lastTxnWritesIndex := offset
@@ -650,7 +650,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(offset int) error {
 		for i := 0; i < len(mp[tbKey]); i++ {
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
-		_, stats, err := s3Writer.SortAndSync(txn.proc)
+		_, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
 		if err != nil {
 			return err
 		}
@@ -960,7 +960,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspaceLocked() error {
+func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
 	if len(txn.batchSelectList) > 0 {
@@ -980,11 +980,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 			}
 		}
 	}
-	return txn.compactionBlksLocked()
+	return txn.compactionBlksLocked(ctx)
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) compactionBlksLocked() error {
+func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
@@ -1024,7 +1024,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 			delegate := rel.(*txnTableDelegate)
 			tbl = delegate.origin
 		}
-		createdBlks, stats, err := tbl.compaction(blks)
+		createdBlks, stats, err := tbl.compaction(ctx, blks)
 		if err != nil {
 			return err
 		}
@@ -1220,10 +1220,10 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	// 	return nil, err
 	// }
 
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(-1); err != nil {
+	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
 	}
 

@@ -134,6 +134,84 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
+				types.T_int16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:               container{},
+				ShuffleColIdx:     0,
+				ShuffleType:       int32(plan.ShuffleType_Range),
+				BucketNum:         5,
+				ShuffleRangeInt64: []int64{1, 100, 10000, 100000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:               container{},
+				ShuffleColIdx:     0,
+				ShuffleType:       int32(plan.ShuffleType_Range),
+				BucketNum:         4,
+				ShuffleRangeInt64: []int64{100, 10000, 100000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:               container{},
+				ShuffleColIdx:     0,
+				ShuffleType:       int32(plan.ShuffleType_Range),
+				BucketNum:         8,
+				ShuffleRangeInt64: []int64{1, 100, 10000, 100000, 200000, 300000, 400000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint16.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:                container{},
+				ShuffleColIdx:      0,
+				ShuffleType:        int32(plan.ShuffleType_Range),
+				BucketNum:          5,
+				ShuffleRangeUint64: []uint64{1, 100, 10000, 100000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint32.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:                container{},
+				ShuffleColIdx:      0,
+				ShuffleType:        int32(plan.ShuffleType_Range),
+				BucketNum:          3,
+				ShuffleRangeUint64: []uint64{100, 10000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_uint64.ToType(),
+			},
+			arg: &Shuffle{
+				ctr:                container{},
+				ShuffleColIdx:      0,
+				ShuffleType:        int32(plan.ShuffleType_Range),
+				BucketNum:          5,
+				ShuffleRangeUint64: []uint64{1, 100, 10000, 100000},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
 				types.T_int64.ToType(),
 			},
 			arg: &Shuffle{
