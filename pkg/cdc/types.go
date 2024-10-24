@@ -61,6 +61,7 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	SinkSql(ctx context.Context, sql string) error
 	Close()
 }
 
