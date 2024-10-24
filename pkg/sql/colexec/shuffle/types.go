@@ -73,7 +73,7 @@ func (shuffle *Shuffle) Release() {
 type container struct {
 	ending               bool
 	lastForShufflePool   bool
-	sels                 [][]int64
+	sels                 [][]int32
 	buf                  *batch.Batch
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool

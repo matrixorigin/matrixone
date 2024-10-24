@@ -1450,25 +1450,25 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		}
 		rowIDStr := rowIDVec.PPString(1)
 		// This err also captured by txn's write conflict check.
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(int(pk.Length())))
-			}
-
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(pk.Length()))
+		}
+		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[ts=%s]: table-%d delete rows(%v) %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				tbl.GetID(),
 				rowIDStr,
 				err)
-			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
-					tbl.store.txn.GetID(),
-					tbl.store.txn.GetStartTS().ToString(),
-					tbl.GetID(),
-					rowIDStr,
-					pk.PPString(pk.Length()),
-				)
-			}
+		})
+
+		if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
+				tbl.store.txn.GetID(),
+				tbl.store.txn.GetStartTS().ToString(),
+				tbl.GetID(),
+				rowIDStr,
+				pk.PPString(pk.Length()),
+			)
 		}
 	}()
 

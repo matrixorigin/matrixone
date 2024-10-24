@@ -42,4 +42,12 @@ var (
 			Help:      "Bucketed histogram of logservice append bytes.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
 		})
+
+	LogServiceReplicaHealthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "logservice",
+			Name:      "replica_health",
+			Help:      "logsevice replica health on the store",
+		})
 )
