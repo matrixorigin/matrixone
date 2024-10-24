@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -212,7 +213,7 @@ func (deletion *Deletion) AffectedRows() uint64 {
 	return deletion.ctr.affectedRows
 }
 
-func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
+func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch, analyzer process.Analyzer) error {
 	delCtx := deletion.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
 	if len(deletion.ctr.partitionSources) != 0 {
@@ -238,7 +239,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 	}
 	// we will flush all
 	if deletion.ctr.batch_size >= uint32(flushThreshold) {
-		size, err := deletion.ctr.flush(proc)
+		size, err := deletion.ctr.flush(proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -247,7 +248,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch)
 	return nil
 }
 
-func (ctr *container) flush(proc *process.Process) (uint32, error) {
+func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
 		s3writer, err := colexec.NewS3TombstoneWriter()
@@ -275,10 +276,14 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		_, stats, err := s3writer.SortAndSync(proc)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		_, stats, err := s3writer.SortAndSync(newCtx, proc)
 		if err != nil {
 			return 0, err
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
 		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))

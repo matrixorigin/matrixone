@@ -77,6 +77,7 @@
 # pkg/container
 /pkg/container @XuPeng-SH
 /pkg/container/vector @aunjgr @XuPeng-SH
+/pkg/container/pSpool @m-schen
 
 # pkg/defines
 /pkg/defines @daviszhen

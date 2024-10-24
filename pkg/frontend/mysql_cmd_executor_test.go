@@ -519,7 +519,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		err = getDataFromPipeline(ses, ec, batchCase1)
+		err = getDataFromPipeline(ses, ec, batchCase1, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2 := func() *batch.Batch {
@@ -532,7 +532,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -561,7 +561,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		convey.So(getDataFromPipeline(ses, ec, nil), convey.ShouldBeNil)
+		convey.So(getDataFromPipeline(ses, ec, nil, nil), convey.ShouldBeNil)
 
 		genBatch := func() *batch.Batch {
 			return allocTestBatch(
@@ -601,11 +601,11 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 	})

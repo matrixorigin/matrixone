@@ -423,7 +423,7 @@ table02    CREATE TABLE `table02` (\n  `col1` int NOT NULL,\n  `col2` char(1) DE
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
-col2    CHAR(1)    YES        'c'        
+col2    CHAR(1)    YES        c
 col3    DECIMAL(38)    NO        null        
 select * from table02;
 col1    col2    col3

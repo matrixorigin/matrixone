@@ -52,7 +52,7 @@ import (
 func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
-	resultWriteBack func(batch *batch.Batch) error) (err error) {
+	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
@@ -198,6 +198,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	stats := statistic.StatsInfoFromContext(execTopContext)
 	stats.ExecutionStart()
+	crs := new(perfcounter.CounterSet)
+	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
 	defer func() {
 		task.End()
@@ -224,14 +226,20 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// Record the time from the beginning of Run to just before runOnce().
+		preRunOnceStart := time.Now()
 		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
 		stats.ResetIOAccessTimeConsumption()
 		stats.ResetIOMergerTimeConsumption()
 		stats.ResetBuildReaderTimeConsumption()
+		stats.ResetCompilePreRunOnceDuration()
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
 			runC.MessageBoard.BeforeRunonce()
+			// Calculate time spent between the start and runOnce execution
+			stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
+
 			if err = runC.runOnce(); err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
@@ -290,7 +298,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	if c.hasValidQueryPlan() {
-		c.handlePlanAnalyze(runC, isExplainPhyPlan, queryResult, option)
+		c.handlePlanAnalyze(runC, queryResult, stats, isExplainPhyPlan, option)
 	}
 
 	return queryResult, err
@@ -411,9 +419,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	}
 }
 
-func (c *Compile) handlePlanAnalyze(runC *Compile, isExplainPhy bool, queryResult *util2.RunResult, option *ExplainOption) {
+func (c *Compile) handlePlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
 	c.GenPhyPlan(runC)
-	c.fillPlanNodeAnalyzeInfo()
+	c.fillPlanNodeAnalyzeInfo(stats)
 
 	if isExplainPhy {
 		topContext := c.proc.GetTopContext()
