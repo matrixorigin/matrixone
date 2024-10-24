@@ -94,6 +94,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
+	// NOTE: Stats May indirectly access the file service
 	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
@@ -615,7 +616,7 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	// false positive check
+	// false positive check, HasBlockTombstone will access FileService
 	HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
@@ -676,7 +677,7 @@ type RelData interface {
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	BuildEmptyRelData() RelData
+	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
 	// specified interface
@@ -829,6 +830,7 @@ type Relation interface {
 
 	GetHideKeys(context.Context) ([]*Attribute, error)
 
+	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 
 	Update(context.Context, *batch.Batch) error
@@ -854,6 +856,7 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
+	// Note: Write Will access Fileservice
 	BuildReaders(
 		ctx context.Context,
 		proc any,
@@ -885,6 +888,7 @@ type Relation interface {
 
 	GetProcess() any
 
+	// Note: GetColumMetadataScanInfo Will access Fileservice
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
@@ -1092,7 +1096,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
 	return &EmptyRelationData{}
 }
 
