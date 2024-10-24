@@ -216,10 +216,6 @@ func (i *BlockLocationsIterator) Next() BlockLocation {
 
 type BlockLocations []byte
 
-func NewEmptyBlockLocations() BlockLocations {
-	return make([]byte, 0)
-}
-
 func (l *BlockLocations) Append(loc BlockLocation) {
 	*l = append(*l, loc...)
 }

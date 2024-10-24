@@ -32,25 +32,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+const DefaultLoadParallism = 20
+
+func (tbl *txnTable) CollectChanges(
+	ctx context.Context,
+	from, to types.TS,
+	mp *mpool.MPool,
+) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
-		return NewCheckpointChangesHandle(to, tbl, mp, ctx)
+		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx)
+	return logtailreplay.NewChangesHandler(
+		ctx,
+		state,
+		from, to,
+		objectio.BlockMaxRows,
+		mp,
+		tbl.getTxn().engine.fs,
+	)
 }
-
-type ChangesHandle interface {
-	Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
-	Close() error
-}
-
-var (
-	LoadParallism = 20
-)
 
 type CheckpointChangesHandle struct {
 	end    types.TS
@@ -70,7 +74,12 @@ type CheckpointChangesHandle struct {
 	lastPrintTime time.Time
 }
 
-func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, ctx context.Context) (*CheckpointChangesHandle, error) {
+func NewCheckpointChangesHandle(
+	ctx context.Context,
+	table *txnTable,
+	end types.TS,
+	mp *mpool.MPool,
+) (*CheckpointChangesHandle, error) {
 	handle := &CheckpointChangesHandle{
 		end:   end,
 		table: table,
@@ -82,7 +91,7 @@ func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, 
 }
 func (h *CheckpointChangesHandle) prefetch() {
 	blkCount := h.blockList.Len()
-	for i := 0; i < LoadParallism; i++ {
+	for i := 0; i < DefaultLoadParallism; i++ {
 		if h.prefetchIdx >= blkCount {
 			return
 		}
@@ -94,7 +103,14 @@ func (h *CheckpointChangesHandle) prefetch() {
 		h.prefetchIdx++
 	}
 }
-func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+func (h *CheckpointChangesHandle) Next(
+	ctx context.Context, mp *mpool.MPool,
+) (
+	data *batch.Batch,
+	tombstone *batch.Batch,
+	hint engine.ChangesHandle_Hint,
+	err error,
+) {
 	if time.Since(h.lastPrintTime) > time.Minute {
 		h.lastPrintTime = time.Now()
 		if h.dataLength != 0 {
