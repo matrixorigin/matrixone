@@ -10,9 +10,9 @@ require (
 	github.com/K-Phoen/grabana v0.21.19
 	github.com/KimMachineGun/automemlimit v0.6.0
 	github.com/RoaringBitmap/roaring v1.2.3
-	github.com/aliyun/alibaba-cloud-sdk-go v1.62.654
-	github.com/aliyun/aliyun-oss-go-sdk v3.0.1+incompatible
-	github.com/aliyun/credentials-go v1.3.1
+	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
+	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
+	github.com/aliyun/credentials-go v1.3.10
 	github.com/aws/aws-sdk-go-v2 v1.32.2
 	github.com/aws/aws-sdk-go-v2/config v1.27.43
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.41
@@ -32,7 +32,7 @@ require (
 	github.com/extism/go-sdk v1.3.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
-	github.com/felixge/fgprof v0.9.3
+	github.com/felixge/fgprof v0.9.6-0.20240831122612-49987e680f04
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/gofrs/flock v0.8.1
 	github.com/gogo/protobuf v1.3.2
@@ -40,7 +40,7 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
-	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
+	github.com/google/pprof v0.0.0-20240625030939-27f56978b8b0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
@@ -53,7 +53,7 @@ require (
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
 	github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
-	github.com/minio/minio-go/v7 v7.0.77
+	github.com/minio/minio-go/v7 v7.0.78
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/ncruces/go-dns v1.2.5
 	github.com/panjf2000/ants/v2 v2.7.4
@@ -75,12 +75,12 @@ require (
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.55
 	github.com/ti-mo/conntrack v0.5.1
 	github.com/ti-mo/netfilter v0.5.2
-	github.com/tidwall/btree v1.6.0
+	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
-	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
+	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.26.0
 	gonum.org/v1/gonum v0.14.0
@@ -128,7 +128,7 @@ require (
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/tetratelabs/wazero v1.7.3 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
-	golang.org/x/net v0.29.0 // indirect
+	golang.org/x/net v0.30.0 // indirect
 	golang.org/x/text v0.19.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 )
@@ -136,8 +136,8 @@ require (
 require (
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/VictoriaMetrics/metrics v1.18.1 // indirect
-	github.com/alibabacloud-go/debug v0.0.0-20190504072949-9472017b5c68 // indirect
-	github.com/alibabacloud-go/tea v1.1.8 // indirect
+	github.com/alibabacloud-go/debug v1.0.1 // indirect
+	github.com/alibabacloud-go/tea v1.2.2 // indirect
 	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go v1.55.5
@@ -199,8 +199,8 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
+	golang.org/x/mod v0.21.0 // indirect
+	golang.org/x/tools v0.26.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
