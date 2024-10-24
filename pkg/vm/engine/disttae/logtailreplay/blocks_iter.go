@@ -122,10 +122,10 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.LT(&p.minTS) {
-		logutil.Infof("xxxx NewObjectsIter,tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
-			p.tid, p, snapshot.ToString(), p.minTS.ToString())
-		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
+			p.tid, p, snapshot.ToString(), p.start.ToString())
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.start.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 

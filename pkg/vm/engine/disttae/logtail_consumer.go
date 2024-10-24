@@ -1577,8 +1577,8 @@ func dispatchSubscribeResponse(
 			return err
 		}
 		if len(lt.CkpLocation) == 0 {
-			p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
-			p.UpdateDuration(types.TS{}, types.MaxTs())
+			//p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			//p.UpdateDuration(types.TS{}, types.MaxTs())
 			c := e.GetLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
 		}
@@ -1888,9 +1888,9 @@ func updatePartitionOfPush(
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
 			t0 = time.Now()
-			ckpStart, ckpEnd = parseCkpDuration(tl)
+			ckpStart, _ = parseCkpDuration(tl)
 			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
-				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
+				state.CacheCkpDuration(ckpStart, partition)
 			}
 			state.AppendCheckpoint(tl.CkpLocation, partition)
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
@@ -1929,12 +1929,16 @@ func updatePartitionOfPush(
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
 		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 			t0 = time.Now()
-			partition.UpdateDuration(ckpStart, types.MaxTs())
+			state.UpdateDuration(ckpStart, types.MaxTs())
 			//Notice that the checkpoint duration is same among all mo system tables,
 			//such as mo_databases, mo_tables, mo_columns.
 			e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
 			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
+	}
+
+	if len(tl.CkpLocation) == 0 {
+		state.UpdateDuration(types.TS{}, types.MaxTs())
 	}
 
 	doneMutate()

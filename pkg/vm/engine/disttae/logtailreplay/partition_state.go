@@ -50,8 +50,9 @@ type PartitionState struct {
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 
 	checkpoints []string
-	start       types.TS
-	end         types.TS
+	//current partitionState can serve snapshot read only if start <= ts <= end
+	start types.TS
+	end   types.TS
 
 	// index
 
@@ -573,13 +574,12 @@ func (p *PartitionState) Copy() *PartitionState {
 
 func (p *PartitionState) CacheCkpDuration(
 	start types.TS,
-	end types.TS,
 	partition *Partition) {
 	if partition.checkpointConsumed.Load() {
 		panic("checkpoints already consumed")
 	}
 	p.start = start
-	p.end = end
+	//p.end = end
 }
 
 func (p *PartitionState) AppendCheckpoint(
@@ -623,6 +623,7 @@ func NewPartitionState(
 		dataObjectTSIndex:         btree.NewBTreeGOptions(ObjectIndexByTSEntry.Less, opts),
 		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(ObjectEntry.ObjectDTSIndexLess, opts),
 		shared:                    new(sharedStates),
+		start:                     types.MaxTs(),
 	}
 }
 
@@ -657,11 +658,11 @@ func (p *PartitionState) truncateTombstoneObjects(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	if p.minTS.GT(&ts) {
-		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
+	if p.start.GT(&ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.start.ToString(), ts.ToString())
 		return
 	}
-	p.minTS = ts
+	p.start = ts
 
 	p.truncateTombstoneObjects(ids[0], ids[1], ts)
 
@@ -854,4 +855,25 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	}
 
 	return false
+}
+
+func (p *PartitionState) CanServe(ts types.TS) bool {
+	return ts.GE(&p.start) && ts.LE(&p.end)
+}
+
+func (p *PartitionState) UpdateDuration(start types.TS, end types.TS) {
+	p.start = start
+	p.end = end
+}
+
+func (p *PartitionState) GetDuration() (types.TS, types.TS) {
+	return p.start, p.end
+}
+
+func (p *PartitionState) IsValid() bool {
+	return p.start.LE(&p.end)
+}
+
+func (p *PartitionState) IsEmpty() bool {
+	return p.start == types.MaxTs()
 }
