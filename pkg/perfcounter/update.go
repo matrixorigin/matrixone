@@ -21,6 +21,24 @@ import (
 func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*CounterSet) {
 	var counterSets CounterSets
 
+	// Check if InternalExecutorKey is present in the context.
+	// No action is taken when InternalExecutorKey is present.
+	if ctx.Value(InternalExecutorKey{}) == nil {
+		// If the InternalExecutorKey does not exist, it means that you are using a generic executor.
+		if counter1, ok := ctx.Value(ExecPipelineMarkKey{}).(*CounterSet); ok && counter1 != nil {
+			// No code here; At this stage, independent functions are used to statistically analyze S3 requests
+		} else if counter2, ok := ctx.Value(CompilePlanMarkKey{}).(*CounterSet); ok && counter2 != nil {
+			fn(counter2)
+		} else if counter3, ok := ctx.Value(BuildPlanMarkKey{}).(*CounterSet); ok && counter3 != nil {
+			fn(counter3)
+		}
+
+		// Handling the usage of S3 resources when calling a function
+		if counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet); ok && counter != nil {
+			fn(counter)
+		}
+	}
+
 	// from context
 	v := ctx.Value(CtxKeyCounters)
 	if v != nil {

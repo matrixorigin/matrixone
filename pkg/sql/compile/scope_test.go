@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -176,8 +177,13 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+<<<<<<< HEAD
 		//qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
+=======
+		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
+		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch, crs *perfcounter.CounterSet) error {
+>>>>>>> ab0cdb8e24943f249b7cc3713cc50b02deba0f75
 			return nil
 		})
 		require.NoError(t1, err)
