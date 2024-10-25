@@ -477,6 +477,20 @@ func (stats *StatsInfo) ResetCompilePreRunOnceDuration() {
 	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceDuration, 0)
 }
 
+func (stats *StatsInfo) ResetCompilePreRunOnceWaitLock() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceWaitLock, 0)
+}
+
+func (stats *StatsInfo) ResetScopePrepareDuration() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.PrepareRunStage.ScopePrepareDuration, 0)
+}
+
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0

@@ -85,6 +85,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
 				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
