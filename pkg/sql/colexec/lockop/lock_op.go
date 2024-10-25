@@ -251,6 +251,8 @@ func LockTable(
 	stats := statistic.StatsInfoFromContext(proc.Ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      analyzer.GetOpStats().S3List,
 			Head:      analyzer.GetOpStats().S3Head,
@@ -311,6 +313,8 @@ func LockRows(
 	stats := statistic.StatsInfoFromContext(proc.Ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      analyzer.GetOpStats().S3List,
 			Head:      analyzer.GetOpStats().S3Head,
@@ -517,7 +521,7 @@ func doLock(
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		// wait last committed logtail applied
+		// wait last committed logtail applied, (IO wait not related to FileService)
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
