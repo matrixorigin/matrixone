@@ -336,7 +336,27 @@ func Test_processPhyScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			phyPlan := models.NewPhyPlan()
 			phyPlan.LocalScope = append(phyPlan.LocalScope, tt.args.scope)
-			explainPhyPlan := models.ExplainPhyPlan(phyPlan, models.NormalOption)
+
+			statsInfo := new(statistic.StatsInfo)
+			statsInfo.ParseStage.ParseDuration = 72872
+			statsInfo.PlanStage.PlanDuration = 7544049
+			statsInfo.PlanStage.BuildPlanStatsDuration = 142500
+			statsInfo.CompileStage.CompileDuration = 59396
+			statsInfo.CompileStage.CompileTableScanDuration = 260717
+			statsInfo.CompileStage.CompileS3Request = statistic.S3Request{
+				List:      0,
+				Get:       2,
+				Put:       1,
+				Head:      1,
+				Delete:    0,
+				DeleteMul: 0,
+			}
+
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration = 49396
+			statsInfo.PrepareRunStage.ScopePrepareDuration = 12000
+			statsInfo.PrepareRunStage.BuildReaderDuration = 11000
+
+			explainPhyPlan := models.ExplainPhyPlan(phyPlan, statsInfo, models.NormalOption)
 			t.Logf("%s", explainPhyPlan)
 			processPhyScope(&tt.args.scope, tt.args.nodes, new(statistic.StatsInfo))
 		})
