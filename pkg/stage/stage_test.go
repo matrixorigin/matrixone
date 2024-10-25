@@ -124,6 +124,48 @@ func TestToPath(t *testing.T) {
 	require.NotNil(t, err)
 }
 
+func TestToPathFail(t *testing.T) {
+	c := make(map[string]string)
+
+	// s3 path
+	u, err := url.Parse("s3://bucket/path/a.csv")
+	require.Nil(t, err)
+	s := StageDef{Id: 0,
+		Name:        "mystage",
+		Url:         u,
+		Credentials: c,
+		Status:      ""}
+
+	// no credentials
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+
+	// add key and failed with no secret key
+	c[PARAMKEY_AWS_KEY_ID] = "key"
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+
+	// add secert and failed with no region
+	c[PARAMKEY_AWS_SECRET_KEY] = "secret"
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+
+	// add region and failed with no endpoint
+	c[PARAMKEY_AWS_REGION] = "region"
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+
+	// add endpoint and failed with unknown provider
+	c[PARAMKEY_ENDPOINT] = "endpoint"
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+
+	// add unknown provider
+	c[PARAMKEY_PROVIDER] = "unknown"
+	_, _, err = s.ToPath()
+	require.NotNil(t, err)
+}
+
 func TestCredentialsToMap(t *testing.T) {
 
 	c := "aws_key_id=key,aws_secret_key=secret,aws_region=region,endpoint=ep,provider=minio"

@@ -62,3 +62,19 @@ func TestStageCache(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, ss.Url.String(), "stage://rsstage/substage")
 }
+
+func TestStageFail(t *testing.T) {
+
+	proc := testutil.NewProcess()
+	_, err := UrlToStageDef("stage:///path", proc)
+	require.NotNil(t, err)
+
+	u, err := url.Parse("stage:///path")
+	require.Nil(t, err)
+	s := stage.StageDef{Id: 1, Name: "rsstage", Url: u}
+	_, err = ExpandSubStage(s, proc)
+	require.NotNil(t, err)
+
+	_, err = UrlToStageDef("not a url", proc)
+	require.NotNil(t, err)
+}
