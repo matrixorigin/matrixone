@@ -312,6 +312,7 @@ func (e *Engine) getOrCreateSnapPart(
 		return nil, err
 	}
 	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	logutil.Infof("getOrCreateSnapPart: response: %v", resp)
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	if ok && resp.Succeed && len(resp.Entries) > 0 {
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
