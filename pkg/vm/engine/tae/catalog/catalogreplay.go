@@ -362,7 +362,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			},
 			TxnMVCCNode: txnNode,
 			BaseNode: &TableMVCCNode{
-				Schema: schema,
+				Schema:          schema,
+				TombstoneSchema: GetTombstoneSchema(schema),
 			},
 		}
 		tbl.InsertLocked(un)
@@ -394,7 +395,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		},
 		TxnMVCCNode: txnNode,
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	tbl.InsertLocked(un)

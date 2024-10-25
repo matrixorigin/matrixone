@@ -100,7 +100,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
-	e.CreateWithTSLocked(types.SystemDBTS, &TableMVCCNode{Schema: schema})
+	e.CreateWithTSLocked(types.SystemDBTS,
+		&TableMVCCNode{
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema)})
 
 	if DefaultTableDataFactory != nil {
 		e.tableData = DefaultTableDataFactory(e)
@@ -267,8 +270,8 @@ func (entry *TableEntry) GetLastestSchema(isTombstone bool) *Schema {
 
 // GetVisibleSchema returns committed schema visible at the given txn
 func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool) (schema *Schema) {
-	entry.Lock()
-	defer entry.Unlock()
+	entry.RLock()
+	defer entry.RUnlock()
 	node := entry.GetVisibleNodeLocked(txn)
 	if node != nil {
 		if isTombstone {
@@ -681,7 +684,8 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	entry.InsertLocked(node)
