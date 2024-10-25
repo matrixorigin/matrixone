@@ -155,6 +155,7 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+		node.AnalyzeInfo.WaitLockTime += op.OpStats.GetMetricByKey(process.OpWaitLockTime)
 
 		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
 			isMinor := true

@@ -708,6 +708,7 @@ const TimeConsumed = "Time Consumed"
 const WaitTime = "Wait Time"
 const ScanTime = "Scan Time"
 const InsertTime = "Insert Time"
+const WaitLockTime = "Wait Lock Time"
 
 const InputRows = "Input Rows"
 const OutputRows = "Output Rows"
@@ -716,8 +717,6 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
-const S3IOInputCount = "S3 IO Input Count"
-const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
 const S3List = "S3 List Count"
 const S3Head = "S3 Head Count"
@@ -778,6 +777,11 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  InsertTime,
 				Value: analyzeInfo.InsertTime,
+				Unit:  Statistic_Unit_ns,
+			},
+			{
+				Name:  WaitLockTime,
+				Value: analyzeInfo.WaitLockTime,
 				Unit:  Statistic_Unit_ns,
 			},
 		}
