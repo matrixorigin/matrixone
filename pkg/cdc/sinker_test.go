@@ -840,11 +840,15 @@ func Test_mysqlSinker_Close(t *testing.T) {
 	sinker.Close()
 }
 
-func Test_mysqlSinker_SinkSql(t *testing.T) {
+func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 0))
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectRollback()
 
+	ctx := context.Background()
 	sinker := &mysqlSinker{
 		mysql: &mysqlSink{
 			retryTimes:    3,
@@ -853,6 +857,24 @@ func Test_mysqlSinker_SinkSql(t *testing.T) {
 		},
 		ar: NewCdcActiveRoutine(),
 	}
-	err = sinker.SinkSql(context.Background(), "sql")
+	err = sinker.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = sinker.SendCommit(ctx)
+	assert.NoError(t, err)
+
+	err = sinker.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = sinker.SendRollback(ctx)
+	assert.NoError(t, err)
+}
+
+func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
+	ctx := context.Background()
+	s := &consoleSinker{}
+	err := s.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = s.SendCommit(ctx)
+	assert.NoError(t, err)
+	err = s.SendRollback(ctx)
 	assert.NoError(t, err)
 }
