@@ -564,6 +564,12 @@ func (tbl *txnTable) TransferDeleteRows(
 	// here we can convert the error back to r-w conflict
 	if err != nil {
 		err = moerr.NewTxnRWConflictNoCtx()
+		logutil.Info("TN-TRANSFER-INMEMORY",
+			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
+			common.OperationField("transfer-deletes"),
+			common.OperandField(id.BlockString()),
+			common.AnyField("phase", phase),
+			common.ErrorField(err))
 		return
 	}
 	memo[id.BlockID] = pinned

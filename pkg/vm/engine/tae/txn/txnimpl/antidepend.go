@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -135,6 +136,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, obj := range checker.readSet {
 		if err = readWriteConfilictCheck(obj, ts); err != nil {
+			logutil.Info(
+				"RW-ERROR",
+				common.AnyField("object id", obj.ID().String()),
+				common.AnyField("TS", ts.ToString()),
+				common.AnyField("err", err.Error()),
+			)
 			return
 		}
 	}
