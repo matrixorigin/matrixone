@@ -34,6 +34,8 @@ import (
 
 	"github.com/felixge/fgprof"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -42,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
-	"go.uber.org/zap"
 )
 
 var (
@@ -397,6 +398,8 @@ func saveProfilesLoop(sigs chan os.Signal) {
 		*profileInterval = time.Second * 10
 	}
 
+	cpuProfileInterval := *profileInterval / 2
+
 	quit := false
 	tk := time.NewTicker(*profileInterval)
 	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval))
@@ -405,6 +408,7 @@ func saveProfilesLoop(sigs chan os.Signal) {
 		case <-tk.C:
 			logutil.GetGlobalLogger().Info("save profiles start")
 			saveProfiles()
+			saveCpuProfile(cpuProfileInterval)
 			logutil.GetGlobalLogger().Info("save profiles end")
 		case <-sigs:
 			quit = true
@@ -430,6 +434,43 @@ func saveProfile(typ string) string {
 	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath
+}
+
+func saveCpuProfile(cpuInterval time.Duration) {
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, "cpu", name.String()) + ".gz"
+	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
+
+	buf := bytes.Buffer{}
+	w := gzip.NewWriter(&buf)
+
+	err := pprof.StartCPUProfile(w)
+	if err != nil {
+		logutil.GetGlobalLogger().Error("start cpu profile", zap.Error(err))
+		return
+	}
+	time.Sleep(cpuInterval)
+	pprof.StopCPUProfile()
+
+	if err := w.Close(); err != nil {
+		return
+	}
+
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Data:   buf.Bytes(),
+				Size:   int64(len(buf.Bytes())),
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
+		logutil.GetGlobalLogger().Error("failed to save cpu profile", zap.Error(err))
+	}
 }
 
 func saveMallocProfile() {
