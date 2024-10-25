@@ -252,14 +252,13 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 
 	if builder == nil {
-		logutil.Infof("col %v return 1", col.Name)
 		return
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
-		logutil.Infof("debug1: col relpos %v colpos %v  return 2", col.RelPos, col.ColPos)
-		for k, v := range builder.tag2Table {
-			logutil.Infof("debug1: builder tag2table k %v v %v", k, v.Name)
+		child := builder.qry.Nodes[n.Children[0]]
+		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle {
+			logutil.Infof("debug1: agg tags0 %v tags1 %v", child.BindingTags[0], child.BindingTags[1])
 		}
 		return
 	}
@@ -292,12 +291,10 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 
 	s := builder.getStatsInfoByTableID(tableDef.TblId)
 	if s == nil {
-		logutil.Infof("col %v return 4", col.Name)
 		return
 	}
 	if n.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-			logutil.Infof("col %v return 5", col.Name)
 			return
 		}
 	}
