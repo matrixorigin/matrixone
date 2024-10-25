@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -120,8 +122,10 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.LT(&p.minTS) {
-		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
+			p.tid, p, snapshot.ToString(), p.start.ToString())
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.start.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 

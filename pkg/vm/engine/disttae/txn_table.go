@@ -1833,6 +1833,11 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			ps)
 		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
