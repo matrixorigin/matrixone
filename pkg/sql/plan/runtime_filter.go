@@ -192,7 +192,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+		if convertToCPKey {
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr))
+		} else {
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+		}
 		recalcStatsByRuntimeFilter(leftChild, node, builder)
 		return
 	}

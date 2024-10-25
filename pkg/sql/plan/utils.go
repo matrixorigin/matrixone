@@ -2176,6 +2176,16 @@ func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *p
 	}
 }
 
+func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        serialExpr,
+		MatchPrefix: matchPrefix,
+	}
+}
+
 func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
