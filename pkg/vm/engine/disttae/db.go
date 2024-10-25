@@ -305,11 +305,9 @@ func (e *Engine) getOrCreateSnapPart(
 
 	response, err := requestSnapshotRead(ctx, tbl, &ts)
 	if err != nil {
-		logutil.Infof("getOrCreateSnapPart: requestSnapshotRead failed: %v", err)
 		return nil, err
 	}
 	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	logutil.Infof("getOrCreateSnapPart: response: %v, ok %v", resp, ok)
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	if ok && resp.Succeed && len(resp.Entries) > 0 {
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
@@ -323,7 +321,6 @@ func (e *Engine) getOrCreateSnapPart(
 			checkpointEntries = append(checkpointEntries, checkpointEntry)
 		}
 	}
-	logutil.Infof("getOrCreateSnapPart: checkpointEntries: %d", len(checkpointEntries))
 	if len(checkpointEntries) == 0 {
 		//check whether the latest partition is available for reuse.
 		if _, err := tbl.tryToSubscribe(ctx); err == nil {
@@ -331,9 +328,6 @@ func (e *Engine) getOrCreateSnapPart(
 				return p.Snapshot(), nil
 			}
 		}
-	}
-	for _, ckp := range checkpointEntries {
-		logutil.Infof("getOrCreateSnapPart: checkpointEntry: %s", ckp.String())
 	}
 
 	//subscribe failed : 1. network timeout,

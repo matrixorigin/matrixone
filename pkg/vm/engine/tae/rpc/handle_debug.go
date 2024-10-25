@@ -86,17 +86,20 @@ func (h *Handle) HandleSnapshotRead(
 	}()
 	maxEnd := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint().GetEnd()
 	snapshot := types.TimestampToTS(*req.Snapshot)
-	logutil.Infof("SnapshotRead: %s, maxEnd is %v", snapshot.ToString(), maxEnd.ToString())
 	if snapshot.GT(&maxEnd) {
 		resp.Succeed = false
 		return nil, nil
 	}
-	checkpoints, err := checkpoint.ListSnapshotCheckpointWithMetas(ctx, "", h.db.Runtime.Fs.Service, snapshot, h.db.BGCheckpointRunner.GetCheckpointMetaFiles())
+	checkpoints, err := checkpoint.ListSnapshotCheckpointWithMetas(
+		ctx,
+		"",
+		h.db.Runtime.Fs.Service,
+		snapshot,
+		h.db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	if err != nil {
 		resp.Succeed = false
 		return nil, err
 	}
-	logutil.Infof("SnapshotRead: %s, checkpoints: %d", snapshot.ToString(), len(checkpoints))
 	resp.Succeed = true
 	resp.Entries = make([]*cmd_util.CheckpointEntryResp, 0, len(checkpoints))
 	for _, ckp := range checkpoints {

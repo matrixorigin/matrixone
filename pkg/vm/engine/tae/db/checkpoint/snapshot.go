@@ -79,6 +79,48 @@ func FilterSortedMetaFilesByTimestamp(
 	return files
 }
 
+func getSnapshotMetaFiles(
+	metaFiles, compactedFiles []*MetaFile,
+	snapshot *types.TS,
+) []*MetaFile {
+	sort.Slice(compactedFiles, func(i, j int) bool {
+		return compactedFiles[i].end.LT(&compactedFiles[j].end)
+	})
+
+	sort.Slice(metaFiles, func(i, j int) bool {
+		return metaFiles[i].end.LT(&metaFiles[j].end)
+	})
+
+	retFiles := make([]*MetaFile, 0)
+	if len(compactedFiles) > 0 {
+		file := compactedFiles[len(compactedFiles)-1]
+		retFiles = append(retFiles, file)
+		if snapshot.LE(&compactedFiles[len(compactedFiles)-1].end) {
+			// If this condition is met, you can return the compacted checkpoint + one normal checkpoint,
+			// otherwise you need to call FilterSortedMetaFilesByTimestamp to handle it normally.
+
+			// The compacted checkpoint already contains the range of the snapshot, but in
+			// order to avoid data loss, an additional checkpoint is still needed, because
+			// the object flushed by the snapshot may be in the next checkpoint
+			for _, f := range metaFiles {
+				if !f.start.IsEmpty() && f.start.GE(&file.end) {
+					retFiles = append(retFiles, f)
+					break
+				}
+			}
+			return retFiles
+		}
+	}
+
+	// The normal checkpoint meta file records a checkpoint interval,
+	// so you only need to read the last meta file
+	ickpFiles := FilterSortedMetaFilesByTimestamp(snapshot, metaFiles)
+
+	retFiles = append(retFiles, ickpFiles...)
+
+	return retFiles
+}
+
 func ListSnapshotCheckpointWithMetas(
 	ctx context.Context,
 	sid string,
@@ -86,7 +128,6 @@ func ListSnapshotCheckpointWithMetas(
 	snapshot types.TS,
 	files map[string]struct{},
 ) ([]*CheckpointEntry, error) {
-	logutil.Infof("ListSnapshotCheckpointWithMetas: files=%s, snapshot=%v", len(files), snapshot.ToString())
 	if len(files) == 0 {
 		return nil, nil
 	}
@@ -105,55 +146,7 @@ func ListSnapshotCheckpointWithMetas(
 			metaFiles = append(metaFiles, file)
 		}
 	}
-	getMetaFiles := func() []*MetaFile {
-		sort.Slice(compactedFiles, func(i, j int) bool {
-			return compactedFiles[i].end.LT(&compactedFiles[j].end)
-		})
-
-		sort.Slice(metaFiles, func(i, j int) bool {
-			return metaFiles[i].end.LT(&metaFiles[j].end)
-		})
-
-		for i, file := range metaFiles {
-			// TODO: remove debug log
-			logutil.Infof("metaFiles[%d]: %v", i, file.String())
-		}
-		for i, file := range compactedFiles {
-			// TODO: remove debug log
-			logutil.Infof("compactedFiles[%d]: %v", i, file.String())
-		}
-
-		retFiles := make([]*MetaFile, 0)
-		if len(compactedFiles) > 0 {
-			file := compactedFiles[len(compactedFiles)-1]
-			retFiles = append(retFiles, file)
-			if snapshot.LE(&compactedFiles[len(compactedFiles)-1].end) {
-				// If this condition is met, you can return the compacted checkpoint + one normal checkpoint,
-				// otherwise you need to call FilterSortedMetaFilesByTimestamp to handle it normally.
-
-				// The compacted checkpoint already contains the range of the snapshot, but in
-				// order to avoid data loss, an additional checkpoint is still needed, because
-				// the object flushed by the snapshot may be in the next checkpoint
-				for _, f := range metaFiles {
-					if !f.start.IsEmpty() && f.start.GE(&file.end) {
-						retFiles = append(retFiles, f)
-						break
-					}
-				}
-				return retFiles
-			}
-		}
-
-		// The normal checkpoint meta file records a checkpoint interval,
-		// so you only need to read the last meta file
-		ickpFiles := FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
-
-		retFiles = append(retFiles, ickpFiles...)
-
-		return retFiles
-	}
-
-	return loadCheckpointMeta(ctx, sid, fs, getMetaFiles())
+	return loadCheckpointMeta(ctx, sid, fs, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot))
 }
 
 func ListSnapshotCheckpoint(
@@ -202,51 +195,7 @@ func ListSnapshotMeta(
 		}
 	}
 
-	sort.Slice(compactedFiles, func(i, j int) bool {
-		return compactedFiles[i].end.LT(&compactedFiles[j].end)
-	})
-
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.LT(&metaFiles[j].end)
-	})
-
-	//for i, file := range metaFiles {
-	//	// TODO: remove debug log
-	//	logutil.Infof("metaFiles[%d]: %v", i, file.String())
-	//}
-	//for i, file := range compactedFiles {
-	//	// TODO: remove debug log
-	//	logutil.Infof("compactedFiles[%d]: %v", i, file.String())
-	//}
-
-	retFiles := make([]*MetaFile, 0)
-	if len(compactedFiles) > 0 {
-		file := compactedFiles[len(compactedFiles)-1]
-		retFiles = append(retFiles, file)
-		if snapshot.LE(&compactedFiles[len(compactedFiles)-1].end) {
-			// If this condition is met, you can return the compacted checkpoint + one normal checkpoint,
-			// otherwise you need to call FilterSortedMetaFilesByTimestamp to handle it normally.
-
-			// The compacted checkpoint already contains the range of the snapshot, but in
-			// order to avoid data loss, an additional checkpoint is still needed, because
-			// the object flushed by the snapshot may be in the next checkpoint
-			for _, f := range metaFiles {
-				if !f.start.IsEmpty() && f.start.GE(&file.end) {
-					retFiles = append(retFiles, f)
-					break
-				}
-			}
-			return retFiles, nil
-		}
-	}
-
-	// The normal checkpoint meta file records a checkpoint interval,
-	// so you only need to read the last meta file
-	ickpFiles := FilterSortedMetaFilesByTimestamp(&snapshot, metaFiles)
-
-	retFiles = append(retFiles, ickpFiles...)
-
-	return retFiles, nil
+	return getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot), nil
 }
 
 func loadCheckpointMeta(
