@@ -642,7 +642,11 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().GetID(), tbl.entry.ID, id, isTombstone)
+	tbl.store.txn.GetMemo().AddObject(
+		tbl.entry.GetDB().GetID(),
+		tbl.entry.ID,
+		id,
+		isTombstone)
 	return
 }
 
@@ -651,8 +655,15 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		counter.TAE.Object.Create.Add(1)
 	})
 	sorted := isTombstone
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, sorted, false)
-	return tbl.createObject(&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone})
+	stats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectid(),
+		true,
+		sorted,
+		false)
+	return tbl.createObject(
+		&objectio.CreateObjOpt{
+			Stats:       stats,
+			IsTombstone: isTombstone})
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -668,7 +679,10 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 		factory = tbl.store.dataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.CreateObject(tbl.store.txn, opts, factory); err != nil {
+	if meta, err = tbl.entry.CreateObject(
+		tbl.store.txn,
+		opts,
+		factory); err != nil {
 		return
 	}
 	obj = newObject(tbl, meta)
@@ -740,7 +754,10 @@ func (tbl *txnTable) IsDeleted() bool {
 func (tbl *txnTable) GetLocalSchema(isTombstone bool) *catalog.Schema {
 	if isTombstone {
 		if tbl.tombstoneTable == nil {
-			tbl.tombstoneTable = newBaseTable(tbl.entry.GetLastestSchema(true), true, tbl)
+			tbl.tombstoneTable = newBaseTable(
+				tbl.entry.GetLastestSchema(true),
+				true,
+				tbl)
 		}
 		return tbl.tombstoneTable.schema
 	}
@@ -786,7 +803,9 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 	if !dedupType.SkipTargetOldCommitted() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
-			pk, false, isTombstone); err != nil {
+			pk,
+			false,
+			isTombstone); err != nil {
 			return
 		}
 	} else {
