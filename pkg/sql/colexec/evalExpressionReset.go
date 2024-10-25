@@ -136,12 +136,14 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 				continue
 			}
 		}
-		if pExpr, ok := param.(*ParamExpressionExecutor); ok && atRuntime {
-			expr.parameterResults[i], err = pExpr.Eval(proc, nil, nil)
-			if err != nil {
-				return
+		if atRuntime {
+			if pExpr, ok := param.(*ParamExpressionExecutor); ok {
+				expr.parameterResults[i], err = pExpr.Eval(proc, nil, nil)
+				if err != nil {
+					return
+				}
+				continue
 			}
-			continue
 		}
 
 		allParametersFolded = false
