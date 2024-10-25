@@ -19,13 +19,14 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
@@ -181,7 +182,7 @@ func (l *remoteLockTable) doUnlock(
 	txn *activeTxn,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoUnlock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -198,11 +199,11 @@ func (l *remoteLockTable) doUnlock(
 		defer releaseResponse(resp)
 		return l.maybeHandleBindChanged(resp)
 	}
-	return err
+	return moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoGetLock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -235,7 +236,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		}
 		return lock, true, nil
 	}
-	return Lock{}, false, err
+	return Lock{}, false, moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) getBind() pb.LockTable {

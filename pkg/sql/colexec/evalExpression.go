@@ -86,6 +86,8 @@ type ExpressionExecutor interface {
 
 	// IsColumnExpr returns true if the expression is a column expression.
 	IsColumnExpr() bool
+
+	TypeName() string
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -263,7 +265,7 @@ type ParamExpressionExecutor struct {
 	typ  types.Type
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
