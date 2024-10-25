@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"go.uber.org/zap"
 )
 
 const (
@@ -289,7 +290,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	req.ResetSessionRequest = &query.ResetSessionRequest{
 		ConnID: sc.ConnID(),
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseResetSession)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
@@ -298,6 +299,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		c.logger.Error("failed to send clear session request",
 			zap.Uint32("conn ID", sc.ConnID()), zap.Error(err))
 		return nil, err
