@@ -16,14 +16,10 @@ package logtailreplay
 
 import (
 	"bytes"
-	"fmt"
-	"github.com/tidwall/btree"
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -107,8 +103,10 @@ type primaryKeyIter struct {
 	rows         *btree.BTreeG[RowEntry]
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	curRow       RowEntry
-	Opt          bool
-	OkCnt        int
+
+	specHint struct {
+		isDelIter bool
+	}
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -117,13 +115,7 @@ type PrimaryKeyMatchSpec struct {
 	Name string
 }
 
-var debug atomic.Bool
-
 func Exact(key []byte, name string) PrimaryKeyMatchSpec {
-	//if strings.Contains(name, "hhh") {
-	//	debug.Store(true)
-	//}
-
 	first := true
 	cnt := 2
 	return PrimaryKeyMatchSpec{
@@ -131,45 +123,39 @@ func Exact(key []byte, name string) PrimaryKeyMatchSpec {
 		Move: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
-				//if debug.Load() && strings.Contains(name, "bmsql") {
-				//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
-				//		tt, _ := types.Unpack(item.Bytes)
-				//		fmt.Printf("has: %s, %v, %s, %s, %s, %d, %v\n",
-				//			name,
-				//			item.Bytes,
-				//			tt.SQLStrings(nil),
-				//			item.RowID.String(),
-				//			item.Time.ToString(),
-				//			item.RowEntryID,
-				//			item.Deleted)
-				//		return true
-				//	})
-				//}
-
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
+				if ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: key,
 					Time:  p.ts,
-				})
+				}); !ok {
+					return false
+				}
+
 			} else {
 				ok = p.iter.Next()
 
-				if cnt--; p.Opt && cnt <= 0 {
-					//if ok {
-					//	if debug.Load() && strings.Contains(name, "bmsql") {
-					//		fmt.Printf("stop: %s, %v, %s, %d\n",
-					//			name,
-					//			p.iter.Item().Bytes,
-					//			p.iter.Item().RowID.String(),
-					//			p.iter.Item().RowEntryID)
-					//	}
-					//}
-					//return false
+				if !p.specHint.isDelIter {
+					cnt--
 				}
-			}
 
-			if !ok {
-				return false
+				// Note that:
+				// delete a pk may happen twice, means there may have two deletes
+				// for one pk both pushed to CN, and they have different TS.
+				// this happened when an update or delete commit to TN during flush,
+				// the delete target is transferred to a new object, so the extra delete was generated.
+				// the new delete may have bigger TS than the older one.
+				//
+				// update case:
+				//    delete pk  t1
+				//    insert pk  t1
+				//
+				//    flush ----> transfer delete ---> delete pk t2
+				//
+				// if the Exact only consider the latest one records, it may miss the insert!
+				//
+				if !ok || cnt <= 0 {
+					return false
+				}
 			}
 
 			item := p.iter.Item()
@@ -415,28 +401,10 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 var _ RowsIter = new(primaryKeyIter)
 
-var exactCallCnt int64
-var exactMoveCnt int64
-var last time.Time = time.Now()
-
 func (p *primaryKeyIter) Next() bool {
-	var dd bool
-	if p.spec.Name == "Exact" {
-		dd = true
-		exactCallCnt++
-	}
-
 	for {
 		if !p.spec.Move(p) {
 			return false
-		}
-
-		if dd {
-			exactMoveCnt++
-			if time.Since(last) > time.Second*10 {
-				last = time.Now()
-				fmt.Println(exactCallCnt, exactMoveCnt, float64(exactMoveCnt)/float64(exactCallCnt))
-			}
 		}
 
 		entry := p.iter.Item()
@@ -478,7 +446,6 @@ func (p *primaryKeyIter) Next() bool {
 			continue
 		}
 
-		p.OkCnt++
 		return true
 	}
 }
@@ -577,7 +544,6 @@ func (p *PartitionState) NewPrimaryKeyIter(
 		iter:         index.Iter(),
 		primaryIndex: index,
 		rows:         p.rows.Copy(),
-		Opt:          true,
 	}
 }
 
@@ -587,7 +553,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	bid *types.Blockid,
 ) *primaryKeyDelIter {
 	index := p.rowPrimaryKeyIndex.Copy()
-	return &primaryKeyDelIter{
+	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:           *ts,
 			spec:         spec,
@@ -597,4 +563,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 		},
 		bid: *bid,
 	}
+
+	delIter.specHint.isDelIter = true
+	return delIter
 }

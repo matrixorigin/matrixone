@@ -234,13 +234,6 @@ func (p *PartitionState) HandleDataObjectList(
 					if entry.Time.LE(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
-						//
-						//fmt.Println("gc",
-						//	entry.PrimaryIndexBytes,
-						//	entry.RowID.String(),
-						//	entry.Time.ToString(),
-						//	entry.Deleted,
-						//	entry.ID)
 
 						// delete the row's primary index
 						if len(entry.PrimaryIndexBytes) > 0 {
@@ -470,7 +463,6 @@ func (p *PartitionState) HandleRowsDelete(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
-				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
@@ -552,7 +544,6 @@ func (p *PartitionState) HandleRowsInsert(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
-				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(entry)
 		}
