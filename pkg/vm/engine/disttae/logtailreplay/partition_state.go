@@ -564,7 +564,6 @@ func (p *PartitionState) CacheCkpDuration(
 		panic("checkpoints already consumed")
 	}
 	p.start = start
-	//p.end = end
 }
 
 func (p *PartitionState) AppendCheckpoint(

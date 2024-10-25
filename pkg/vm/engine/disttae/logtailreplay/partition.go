@@ -157,11 +157,12 @@ func (p *Partition) ConsumeCheckpoints(
 	if p.checkpointConsumed.Load() {
 		return nil
 	}
-	curState := p.state.Load()
-	if len(curState.checkpoints) == 0 {
-		//p.UpdateDuration(types.TS{}, types.MaxTs())
-		return nil
-	}
+
+	//curState := p.state.Load()
+	//if len(curState.checkpoints) == 0 {
+	//	p.UpdateDuration(types.TS{}, types.MaxTs())
+	//	return nil
+	//}
 
 	lockErr := p.Lock(ctx)
 	if lockErr != nil {
@@ -169,14 +170,23 @@ func (p *Partition) ConsumeCheckpoints(
 	}
 	defer p.Unlock()
 
-	curState = p.state.Load()
-	if len(curState.checkpoints) == 0 {
-		//p.UpdateDuration(types.TS{}, types.MaxTs())
-		return nil
-	}
+	curState := p.state.Load()
+	//if len(curState.checkpoints) == 0 {
+	//	p.UpdateDuration(types.TS{}, types.MaxTs())
+	//	return nil
+	//}
 
 	state := curState.Copy()
 
+	if len(state.checkpoints) == 0 {
+		state.UpdateDuration(types.TS{}, types.MaxTs())
+		if !p.state.CompareAndSwap(curState, state) {
+			panic("concurrent mutation")
+		}
+		return nil
+	}
+
+	//consume checkpoints.
 	if err := state.consumeCheckpoints(fn); err != nil {
 		return err
 	}

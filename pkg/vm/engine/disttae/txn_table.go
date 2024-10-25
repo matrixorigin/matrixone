@@ -2028,12 +2028,11 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
+
+	snap, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return false, err
 	}
-
-	snap := part.Snapshot()
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)
 	defer put.Put()

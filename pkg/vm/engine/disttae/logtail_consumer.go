@@ -1576,12 +1576,12 @@ func dispatchSubscribeResponse(
 		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
 			return err
 		}
-		if len(lt.CkpLocation) == 0 {
-			//p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
-			//p.UpdateDuration(types.TS{}, types.MaxTs())
-			c := e.GetLatestCatalogCache()
-			c.UpdateDuration(types.TS{}, types.MaxTs())
-		}
+		//if len(lt.CkpLocation) == 0 {
+		//	p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
+		//	p.UpdateDuration(types.TS{}, types.MaxTs())
+		//	c := e.GetLatestCatalogCache()
+		//	c.UpdateDuration(types.TS{}, types.MaxTs())
+		//}
 		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
@@ -1926,19 +1926,20 @@ func updatePartitionOfPush(
 
 	//After consume checkpoints finished ,then update the start and end of
 	//the mo system table's partition and catalog.
-	if !lazyLoad && len(tl.CkpLocation) != 0 {
-		if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
-			t0 = time.Now()
-			state.UpdateDuration(ckpStart, types.MaxTs())
-			//Notice that the checkpoint duration is same among all mo system tables,
-			//such as mo_databases, mo_tables, mo_columns.
-			e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
-			v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
+	if !lazyLoad {
+		if len(tl.CkpLocation) != 0 {
+			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
+				t0 = time.Now()
+				state.UpdateDuration(ckpStart, types.MaxTs())
+				//Notice that the checkpoint duration is same among all mo system tables,
+				//such as mo_databases, mo_tables, mo_columns.
+				e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
+				v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
+			}
+		} else {
+			state.UpdateDuration(types.TS{}, types.MaxTs())
+			e.GetLatestCatalogCache().UpdateDuration(types.TS{}, types.MaxTs())
 		}
-	}
-
-	if len(tl.CkpLocation) == 0 {
-		state.UpdateDuration(types.TS{}, types.MaxTs())
 	}
 
 	doneMutate()
