@@ -164,9 +164,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					convertToCPKey = true
 				}
 			}
-			if probeCol.Name != tableDef.Pkey.PkeyColName && builder.getColOverlap(probeCol) > overlapThreshold {
-				return
-			}
+			//todo: need to fix this in the future
+			//if probeCol.Name != tableDef.Pkey.PkeyColName && builder.getColOverlap(probeCol) > overlapThreshold {
+			//	return
+			//}
 		}
 
 		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
