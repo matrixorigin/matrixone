@@ -263,7 +263,7 @@ type OperatorStats struct {
 	S3DeleteMul      int64                `json:"S3DeleteMul,omitempty"`
 	InputBlocks      int64                `json:"-"`
 	ScanBytes        int64                `json:"-"`
-	DiskIO           int64                `json:"-"`
+	DiskIO           int64                `json:"DiskIO,omitempty"`
 	OperatorMetrics  map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
@@ -306,7 +306,7 @@ func (ps *OperatorStats) String() string {
 			case OpIncrementTime:
 				metricName = "IncrementTime"
 			}
-			metricsStr += fmt.Sprintf("%s: %dns", metricName, v)
+			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
 		}
 	}
 
