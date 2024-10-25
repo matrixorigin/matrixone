@@ -184,7 +184,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        '2023-06-21 12:34:45'        
+c    DATETIME(0)    YES        2023-06-21 12:34:45
 d    DECIMAL(7)    YES        null        
 select * from t1;
 a    b    c    d
@@ -209,7 +209,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    '2023-06-21'        
+c    DATETIME(0)    NO    PRI    2023-06-21
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -232,7 +232,7 @@ c    a    b
 alter table t1 modify c datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-c    DATETIME(0)    NO    PRI    '2023-06-21'        
+c    DATETIME(0)    NO    PRI    2023-06-21
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 select * from t1;

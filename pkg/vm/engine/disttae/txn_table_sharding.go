@@ -657,8 +657,8 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		return nil, err
 	}
 	group := func(rd engine.RelData) (local engine.RelData, remote engine.RelData) {
-		local = rd.BuildEmptyRelData()
-		remote = rd.BuildEmptyRelData()
+		local = rd.BuildEmptyRelData(0)
+		remote = rd.BuildEmptyRelData(0)
 		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi *objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
 				local.AppendBlockInfo(bi)
@@ -728,6 +728,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				engine_util.GetThresholdForReader(newNum),
 			)
 			if err != nil {
 				return nil, err

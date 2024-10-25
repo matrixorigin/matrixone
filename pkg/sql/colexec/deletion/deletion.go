@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -121,7 +122,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 				continue
 			}
 
-			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
+			if err = deletion.SplitBatch(proc, result.Batch, analyzer); err != nil {
 				return result, err
 			}
 		}
@@ -260,25 +261,34 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 			tempRows := uint64(deletion.ctr.resBat.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = deletion.ctr.partitionSources[partIdx].Delete(proc.Ctx, deletion.ctr.resBat, catalog.Row_ID)
+
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+				err = deletion.ctr.partitionSources[partIdx].Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
 				if err != nil {
 					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 		}
 	} else {
-		err := colexec.FilterRowIdForDel(proc, deletion.ctr.resBat, bat, delCtx.RowIdIdx,
+		err = colexec.FilterRowIdForDel(proc, deletion.ctr.resBat, bat, delCtx.RowIdIdx,
 			delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return result, err
 		}
 		affectedRows = uint64(deletion.ctr.resBat.RowCount())
 		if affectedRows > 0 {
-			err = deletion.ctr.source.Delete(proc.Ctx, deletion.ctr.resBat, catalog.Row_ID)
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
 			if err != nil {
 				return result, err
 			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	}
 

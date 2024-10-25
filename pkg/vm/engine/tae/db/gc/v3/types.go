@@ -37,7 +37,6 @@ const (
 )
 
 type BatchType int8
-type CleanerState int8
 
 const CurrentVersion = uint16(3)
 
@@ -53,11 +52,6 @@ const (
 	DropDB
 	DeleteFile
 	Tombstone
-)
-
-const (
-	Idle CleanerState = iota
-	Running
 )
 
 const (
