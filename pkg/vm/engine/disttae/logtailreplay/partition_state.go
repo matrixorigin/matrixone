@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"regexp"
 	"runtime/trace"
 	"sync/atomic"
 
@@ -37,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionState struct {
@@ -94,15 +92,6 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsTombstoneObjectList(entry.TableName) {
 			p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 		} else {
-			//TODO::debug for #19202, remove it later.
-			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(entry.TableName) {
-				bat, _ := batch.ProtoBatchToBatch(entry.Bat)
-				logutil.Infof("xxxx HandleLogtailEntry,ps:%p,table name:%s, tid:%v, bat:%s",
-					p,
-					entry.TableName,
-					p.tid,
-					common.MoBatchToString(bat, 10))
-			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
 		}
 
