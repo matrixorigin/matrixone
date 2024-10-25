@@ -260,17 +260,14 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
 			col = child.GroupBy[col.ColPos].GetCol()
 			if col == nil {
-				logutil.Infof("debug1: return 1")
 				return
 			}
 			tableDef, ok = builder.tag2Table[col.RelPos]
 			if !ok {
-				logutil.Infof("debug1: return 2")
 				return
 			}
 			s := builder.getStatsInfoByTableID(tableDef.TblId)
 			if s == nil {
-				logutil.Infof("debug1: return 3")
 				return
 			}
 
