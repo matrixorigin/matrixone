@@ -34,15 +34,17 @@ import (
 
 	"github.com/felixge/fgprof"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
-	"go.uber.org/zap"
 )
 
 var (
@@ -454,9 +456,10 @@ func saveMallocProfile() {
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveMallocProfileTimeout)
 	defer cancel()
 	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.GetGlobalLogger().Error("failed to save malloc profile", zap.Error(err))
 	}
 }

@@ -1824,3 +1824,7 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 	defer lca.Unlock()
 	return lca.allocated == lca.freed && len(lca.records) == 0
 }
+
+func Slice(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}

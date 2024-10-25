@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -41,11 +42,11 @@ func (h *handler) bootstrap(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			func(ctx context.Context) {
-				ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+				ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseProxyBootstrap)
 				defer cancel()
 				state, err = h.haKeeperClient.GetClusterState(ctx)
 				if err != nil {
-					panic(err)
+					panic(moerr.AttachCause(ctx, err))
 				}
 			}(ctx)
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {

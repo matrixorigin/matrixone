@@ -1701,7 +1701,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseMigrate)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
@@ -1724,7 +1724,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ctx, ses); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	var maxStmtID uint32
@@ -1734,7 +1734,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
 		if err := pm.Migrate(ctx, ses); err != nil {
-			return err
+			return moerr.AttachCause(ctx, err)
 		}
 		id := parsePrepareStmtID(p.Name)
 		if id > maxStmtID {
