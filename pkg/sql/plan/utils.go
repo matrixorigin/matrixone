@@ -2160,6 +2160,21 @@ func MakeFalseExpr() *Expr {
 	}
 }
 
+func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
+	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok {
+		panic("fail to convert runtime filter to composite primary key!")
+	}
+	col := expr.GetCol()
+	col.ColPos = cpkeyIdx
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: true,
+	}
+}
+
 func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
