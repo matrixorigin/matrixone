@@ -44,3 +44,10 @@ replace into t4 values (1, 'b');
 select * from t4;
 a    b
 1    b
+create database replace_db;
+use replace_db;
+replace into `replace`.`names` values (2, "Dylan", 20);
+select name, age from `replace`.`names` where id = 2;
+name    age
+Dylan    20
+drop database replace_db;
