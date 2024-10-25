@@ -15,12 +15,13 @@
 package pSpool
 
 const (
+	// noneLastPop indicate the last pop element has been release or just empty.
 	noneLastPop int8 = -1
 )
 
 // receiver will be a unlimited queue for int8.
 type receiver struct {
-	// todo: I ensure that this elements will never be full, so there is no need set a lock here.
+	// I ensure that the elements will never be full, so it is no need set a lock here.
 	lastPop    int8
 	head, tail int
 	andBase    int
@@ -51,6 +52,10 @@ func newReceivers(count int, cp int32) []receiver {
 
 func (r *receiver) getLastPop() int8 {
 	return r.lastPop
+}
+
+func (r *receiver) flagLastPopRelease() {
+	r.lastPop = noneLastPop
 }
 
 func (r *receiver) popNextIndex() int8 {

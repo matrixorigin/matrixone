@@ -1457,6 +1457,24 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	return nil
 }
 
+func (sm *SnapshotMeta) GetTableDropAt(tid uint64) (types.TS, bool) {
+	sm.RLock()
+	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return types.TS{}, false
+	}
+	return sm.tableIDIndex[tid].deleteAt, true
+}
+
+func (sm *SnapshotMeta) GetAccountId(tid uint64) (uint32, bool) {
+	sm.RLock()
+	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return 0, false
+	}
+	return sm.tableIDIndex[tid].accountID, true
+}
+
 // for test
 func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
 	sm.RLock()
@@ -1489,6 +1507,69 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
 			return true
 		} else if snapTS.LT(&table.createAt) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
+}
+
+func ObjectIsSnapshotRefers(
+	obj *objectio.ObjectStats,
+	pitr, createTS, dropTS *types.TS,
+	snapshots []types.TS,
+) bool {
+	// no snapshot and no pitr
+	if len(snapshots) == 0 && (pitr == nil || pitr.IsEmpty()) {
+		return false
+	}
+
+	// if dropTS is empty, it means the object is not dropped
+	if dropTS.IsEmpty() {
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"GCJOB-DEBUG-1",
+				zap.String("obj", obj.ObjectName().String()),
+				zap.String("create-ts", createTS.ToString()),
+				zap.String("drop-ts", createTS.ToString()),
+			)
+		})
+		return true
+	}
+
+	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
+	if pitr != nil && !pitr.IsEmpty() {
+		if dropTS.GT(pitr) {
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-PITR-PIN",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", pitr.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
+			return true
+		}
+	}
+
+	left, right := 0, len(snapshots)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		snapTS := snapshots[mid]
+		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-DEBUG-2",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", snapTS.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
+			return true
+		} else if snapTS.LT(createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1

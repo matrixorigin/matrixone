@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 
@@ -366,26 +365,6 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 	if ls.category != engine.ShardingLocalDataSource {
 		if err = ls.filterInMemCommittedInserts(ctx, colTypes, seqNums, mp, outBatch); err != nil {
 			return err
-		}
-		//TODO::add debug for #19202, remove it later.
-		if ls.category == engine.ShardingRemoteDataSource {
-			if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(ls.table.tableName) {
-				rows := ""
-				iter := ls.pState.NewRowsIter(types.MaxTs(), nil, false)
-				for iter.Next() {
-					e := iter.Entry()
-					rows = fmt.Sprintf("%s, [%s, %s]", rows, e.RowID.String(), e.Time.ToString())
-				}
-				iter.Close()
-				logutil.Infof("xxxx IterateInmemData, txn:%s, ls.ps:%p,rows:%s, table name:%s, tid:%v, outBatch:%s",
-					ls.table.db.op.Txn().DebugString(),
-					ls.pState,
-					rows,
-					ls.table.tableName,
-					ls.table.tableId,
-					common.MoBatchToString(outBatch, 10),
-				)
-			}
 		}
 	}
 

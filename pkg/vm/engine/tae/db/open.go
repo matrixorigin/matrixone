@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -249,6 +250,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
+	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
+	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
 	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
 		opts.SID, fs, db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),

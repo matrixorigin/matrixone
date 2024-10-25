@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -33,10 +34,12 @@ func TestLockAdded(t *testing.T) {
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
-		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")}, getLogger(""))
-		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")}, getLogger(""))
-		txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")}, getLogger(""))
-
+		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")}, getLogger(""))
+		assert.NoError(t, err)
+		err = txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")}, getLogger(""))
+		assert.NoError(t, err)
+		err = txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")}, getLogger(""))
+		assert.NoError(t, err)
 		assert.Equal(t, 2, len(txn.getHoldLocksLocked(0).tableKeys))
 
 		sp := txn.getHoldLocksLocked(0).tableKeys[1]
@@ -48,6 +51,18 @@ func TestLockAdded(t *testing.T) {
 		s2 := sp2.slice()
 		defer s2.unref()
 		assert.Equal(t, 2, s2.len())
+	})
+}
+
+func TestLockAddedThatShouldFail(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("t1")
+		fsp := newFixedSlicePool(2)
+		txn := newActiveTxn(id, string(id), fsp, "")
+		defer reuse.Free(txn, nil)
+		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k2"), []byte("k22"), []byte("k222")}, getLogger(""))
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 	})
 }
 
