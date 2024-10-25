@@ -41,11 +41,11 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	args := []arg{
 		{
 			s:    "show accounts;",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
 		},
 		{
 			s:    "show accounts like '%abc';",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
+			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
 		},
 	}
 
@@ -86,7 +86,7 @@ func Test_updateCount(t *testing.T) {
 	require.Equal(t, ori+add, vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
 }
 
-func Test_updateStorageUsageCache(t *testing.T) {
+func Test_updateStorageUsageCache_V2(t *testing.T) {
 	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
@@ -97,20 +97,66 @@ func Test_updateStorageUsageCache(t *testing.T) {
 		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
 	}
 
+	updateStorageUsageCache_V2(&rep)
+
+	usages := cnUsageCache.GatherAllAccSize()
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, rep.Sizes[i], usages[uint64(i)][0])
+	}
+}
+
+func Test_updateStorageUsageCache(t *testing.T) {
+	rep := cmd_util.StorageUsageResp_V3{}
+
+	for i := 0; i < 10; i++ {
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.SnapshotSizes = append(rep.SnapshotSizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
+	}
+
 	updateStorageUsageCache(&rep)
 
 	usages := cnUsageCache.GatherAllAccSize()
 	for i := 0; i < len(rep.AccIds); i++ {
-		require.Equal(t, rep.Sizes[i], usages[uint64(i)])
+		require.Equal(t, rep.Sizes[i], usages[uint64(i)][0])
+		require.Equal(t, rep.SnapshotSizes[i], usages[uint64(i)][1])
 	}
 }
 
-func Test_checkStorageUsageCache(t *testing.T) {
+func Test_checkStorageUsageCache_V2(t *testing.T) {
 	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
 		rep.AccIds = append(rep.AccIds, int64(i))
 		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
+	}
+
+	updateStorageUsageCache_V2(&rep)
+
+	usages, ok := checkStorageUsageCache([][]int64{rep.AccIds})
+	require.True(t, ok)
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, rep.Sizes[i], usages[int64(i)][0])
+	}
+
+	time.Sleep(time.Second * 6)
+	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+	require.False(t, ok)
+}
+
+func Test_checkStorageUsageCache(t *testing.T) {
+	rep := cmd_util.StorageUsageResp_V3{}
+
+	for i := 0; i < 10; i++ {
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.SnapshotSizes = append(rep.SnapshotSizes, rand.Uint64())
 		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
 		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
 		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
@@ -121,7 +167,8 @@ func Test_checkStorageUsageCache(t *testing.T) {
 	usages, ok := checkStorageUsageCache([][]int64{rep.AccIds})
 	require.True(t, ok)
 	for i := 0; i < len(rep.AccIds); i++ {
-		require.Equal(t, rep.Sizes[i], usages[int64(i)])
+		require.Equal(t, rep.Sizes[i], usages[int64(i)][0])
+		require.Equal(t, rep.SnapshotSizes[i], usages[int64(i)][1])
 	}
 
 	time.Sleep(time.Second * 6)
@@ -129,12 +176,32 @@ func Test_checkStorageUsageCache(t *testing.T) {
 	require.False(t, ok)
 }
 
-func Test_GetObjectCount(t *testing.T) {
+func Test_GetObjectCount_V2(t *testing.T) {
 	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
 		rep.AccIds = append(rep.AccIds, int64(i))
 		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
+		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
+		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
+	}
+
+	updateStorageUsageCache_V2(&rep)
+
+	abstract := cnUsageCache.GatherObjectAbstractForAccounts()
+	for i := 0; i < len(rep.AccIds); i++ {
+		require.Equal(t, int(rep.ObjCnts[i]), abstract[uint64(rep.AccIds[i])].TotalObjCnt)
+	}
+}
+
+func Test_GetObjectCount(t *testing.T) {
+	rep := cmd_util.StorageUsageResp_V3{}
+
+	for i := 0; i < 10; i++ {
+		rep.AccIds = append(rep.AccIds, int64(i))
+		rep.Sizes = append(rep.Sizes, rand.Uint64())
+		rep.SnapshotSizes = append(rep.SnapshotSizes, rand.Uint64())
 		rep.ObjCnts = append(rep.ObjCnts, rand.Uint64())
 		rep.BlkCnts = append(rep.BlkCnts, rand.Uint64())
 		rep.RowCnts = append(rep.RowCnts, rand.Uint64())
