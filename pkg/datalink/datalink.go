@@ -21,11 +21,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink/docx"
-	"github.com/matrixorigin/matrixone/pkg/common/datalink/pdf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
+	"github.com/matrixorigin/matrixone/pkg/datalink/docx"
+	"github.com/matrixorigin/matrixone/pkg/datalink/pdf"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

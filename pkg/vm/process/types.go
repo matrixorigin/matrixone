@@ -260,7 +260,7 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// StageDefIf interface is to avoid cycle import compile error (see common/stage/stage.go for implementation)
+// StageDefIf interface is to avoid cycle import compile error (see stage/stage.go for implementation)
 type StageDefIf interface {
 	GetCredentials(key string, defval string) (string, bool)
 	ToPath() (mopath string, query string, err error)
