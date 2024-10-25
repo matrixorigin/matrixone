@@ -15,6 +15,8 @@
 package main
 
 import (
+	"context"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -53,4 +55,10 @@ func Test_saveProfile3(t *testing.T) {
 	defer fs.Close()
 	globalEtlFS = fs
 	saveProfilesLoop(sigs)
+}
+
+func Test_saveProfile4(t *testing.T) {
+	saveProfileWithType("cpu", func(writer io.Writer) error {
+		return context.DeadlineExceeded
+	})
 }
