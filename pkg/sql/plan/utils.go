@@ -20,12 +20,13 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"path"
 	"slices"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
