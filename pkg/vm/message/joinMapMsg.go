@@ -20,10 +20,9 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
 var _ Message = new(JoinMapMsg)
@@ -74,6 +73,7 @@ type JoinMap struct {
 	mpool            *mpool.MPool
 	multiSels        JoinSels
 	batches          []*batch.Batch
+	//ignoreRows       *bitmap.Bitmap
 }
 
 func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -127,6 +127,14 @@ func (jm *JoinMap) HashOnUnique() bool {
 func (jm *JoinMap) GetSels(k uint64) []int32 {
 	return jm.multiSels.GetSels(int32(k))
 }
+
+//func (jm *JoinMap) GetIgnoreRows() *bitmap.Bitmap {
+//	return jm.ignoreRows
+//}
+
+//func (jm *JoinMap) SetIgnoreRows(ignoreRows *bitmap.Bitmap) {
+//	jm.ignoreRows = ignoreRows
+//}
 
 func (jm *JoinMap) NewIterator() hashmap.Iterator {
 	if jm.shm != nil {

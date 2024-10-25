@@ -1,9 +1,9 @@
 create table index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
 insert into index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
 insert into index_01 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
-Duplicate entry '13456789872' for key '__mo_index_idx_col'
+Duplicate entry '13456789872' for key 'col2'
 insert into index_01 values (4,'13866666666',20.23,'5678'),(5,'13873458290',100.00,'23'),(6,'13777777777',100.00,'23');
-Duplicate entry '13873458290' for key '__mo_index_idx_col'
+Duplicate entry '13873458290' for key 'col2'
 select col2,col4 from index_01;
 col2    col4
 13456789872    5678
@@ -12,9 +12,9 @@ null    23
 create table index_02 (col1 bigint primary key,col2 char(25) unique key,col3 float,col4 char(50),key num_id(col4));
 insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
 insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
-Duplicate entry '' for key '__mo_index_idx_col'
+Duplicate entry '' for key 'col2'
 insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
-Duplicate entry '67834' for key 'col1'
+Duplicate entry '(\d{5})' for key 'col1'
 insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
 select col2,col4 from index_02;
 col2    col4
@@ -28,7 +28,7 @@ col1    col2    col3    col4
 5    MMEabc$%^123    0.2
 create table index_03 (col1 bigint auto_increment primary key,col2 int,col3 float,col4 int,unique key id1(col2),key id2(col4));
 insert into index_03(col2,col3,col4) values (10,20.23,4090),(10,100.00,5678);
-Duplicate entry '10' for key '__mo_index_idx_col'
+Duplicate entry '10' for key 'col2'
 insert into index_03(col2,col3,col4) values (10,20.23,4090),(11,100.00,4090);
 insert into index_03(col2,col3,col4) values (67834,20.23,4090),(56473,100.00,5678),(NULL,0.01,NULL);
 insert into index_03(col2,col3,col4) values (-2147483648,1.2,100),(2147483647,2.0,5);
@@ -46,10 +46,10 @@ col1    col2    col3    col4
 8    -2147483648    1.2    100
 create table index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint,unique key id1(col1),key id2(col4));
 insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
-Duplicate entry '67834' for key '__mo_index_idx_col'
+Duplicate entry '67834' for key 'col1'
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
-Duplicate entry ('\(\d{4}\,\d\)'|'\d') for key ('__mo_index_idx_col'|'\w{3}\d')
+Duplicate entry '4' for key 'col2'
 select * from index_04;
 col1    col2    col3    col4
 1    2    20.23    4090
@@ -59,7 +59,7 @@ select * from index_04 where col1 between 10 and 1000000;
 col1    col2    col3    col4
 create table index_05 (col1 smallint unique key,col2 int primary key,col3 float,col4 smallint,key id2(col4));
 insert into index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 select * from index_05;
 col1    col2    col3    col4
@@ -68,7 +68,7 @@ col1    col2    col3    col4
 null    3    0.01    null
 create table index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint,unique key id1(col1),key id2(col4));
 insert into index_06 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_06;
 col1    col2    col3    col4
@@ -78,7 +78,7 @@ null    3    0.01    null
 create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
 insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry (.*) for key (.*)
+Duplicate entry '2' for key 'col2'
 select * from index_07;
 col1    col2    col3    col4
 1    2    20.23    56
@@ -86,7 +86,7 @@ col1    col2    col3    col4
 null    3    0.01    null
 create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned,unique key id1(col1),key id2(col4));
 insert into index_08 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_08;
 col1    col2    col3    col4
@@ -95,7 +95,7 @@ col1    col2    col3    col4
 null    3    0.01    null
 create table index_09 (col1 bigint primary key,col2 decimal(4,2),col3 decimal(4,2),unique key d1(col2),key d2(col3));
 insert into index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23' for key 'col2'
 insert into index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from index_09;
 col1    col2    col3
@@ -104,7 +104,7 @@ col1    col2    col3
 1100    null    null
 create table index_10 (col1 bigint primary key,col2 float,col3 float,unique key d1(col2),key d2(col3));
 insert into index_10 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23' for key 'col2'
 insert into index_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from index_10;
 col1    col2    col3
@@ -113,7 +113,7 @@ col1    col2    col3
 1100    null    null
 create table index_11 (col1 bigint primary key,col2 double,col3 double,unique key d1(col2),key d2(col3));
 insert into index_11 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23' for key 'col2'
 insert into index_11 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from index_11;
 col1    col2    col3
@@ -122,7 +122,7 @@ col1    col2    col3
 1100    null    null
 create table index_12 (col1 bigint auto_increment primary key,col2 date,col3 date,unique key d1(col2),key d2(col3));
 insert into index_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
-Duplicate entry '2013-01-01' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01' for key 'col2'
 insert into index_12(col2,col3) values (NULL,'2014-02-01'),(NULL,NULL);
 select col2 from index_12;
 col2
@@ -130,15 +130,15 @@ null
 null
 create table index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime,unique key d1(col2),key d2(col3));
 insert into index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00' for key 'col2'
 insert into index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp,unique key d1(col2),key d2(col3));
 insert into index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00' for key 'col2'
 insert into index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_15 (col1 bigint primary key,col2 bool,unique key c2(col2));
 insert into index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
-(Duplicate entry ')([\d\D][true|false]*)(' for key '__mo_index_idx_col')
+Duplicate entry 'true' for key 'col2'
 insert into index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from index_15;
 col1    col2
@@ -167,7 +167,7 @@ create table index_table_01 (col1 bigint auto_increment primary key,col2 varchar
 insert into index_table_01 values (67834,'13456789872',20.23,4090),(56473,'',100.00,5678);
 insert into index_table_01 values (34,NULL,4090,1);
 insert into index_table_01 values (56478,'',103.00,5670);
-Duplicate entry '' for key '__mo_index_idx_col'
+Duplicate entry '' for key 'col2'
 select * from index_table_01;
 col1    col2    col3    col4
 67834    13456789872    20.23    4090
@@ -181,7 +181,7 @@ drop table index_table_02;
 create table index_table_02 (col1 bigint primary key,col2 int default 0,unique key col2(col2));
 insert into index_table_02(col1) values (1);
 insert into index_table_02(col1) values (2),(3);
-Duplicate entry '0' for key '__mo_index_idx_col'
+Duplicate entry '0' for key 'col2'
 drop table index_table_02;
 create table index_table_03 (col1 bigint,col2 int,unique key col2(col2));
 insert into index_table_03 values (1,20),(2,NULL),(3,90);
@@ -233,7 +233,7 @@ code_id    code_type    code_no    code_rule_no    org_no
 1009    39    8744    0000243    yy10
 truncate table t_code_rule;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule fields terminated by ',';
-Duplicate entry '30' for key '__mo_index_idx_col'
+Duplicate entry '30' for key 'code_type'
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
 create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
@@ -254,12 +254,12 @@ code_id    code_type    code_no    code_rule_no    org_no
 truncate table index_temp;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp fields terminated by ',';
 insert into t_code_rule select * from index_temp;
-(Duplicate entry ')([\d\D]*)(' for key '__mo_index_idx_col')
+Duplicate entry ')([\d\D]*)(' for key '__mo_index_idx_col'
 create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2,col3),key num_id(col4));
 insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key '(col2,col3)'
 insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
 select * from index_table_04;
 col1    col2    col3    col4
@@ -270,9 +270,9 @@ drop table index_table_04;
 create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2),unique key m2(col3),key num_id(col4));
 insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
-Duplicate entry 'apple' for key '__mo_index_idx_col'
+Duplicate entry 'apple' for key 'col2'
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry 'apple' for key '__mo_index_idx_col'
+Duplicate entry 'apple' for key 'col2'
 insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
 select * from index_table_04;
 col1    col2    col3    col4
@@ -305,7 +305,7 @@ col1    col2    col3    col4
 2    chart    2    11
 truncate table index_table_05;
 insert into index_table_05(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
-Duplicate entry 'apple' for key '__mo_index_idx_col'
+Duplicate entry 'apple' for key 'col2'
 select * from index_table_05;
 col1    col2    col3    col4
 drop table index_table_05;
@@ -341,7 +341,7 @@ create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 floa
 create unique index varchar_index on create_index_01(col2) comment 'create varchar index';
 insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
 insert into create_index_01 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
-Duplicate entry '13456789872' for key '__mo_index_idx_col'
+Duplicate entry '13456789872' for key 'col2'
 select col2,col4 from create_index_01;
 col2    col4
 13456789872    5678
@@ -372,7 +372,7 @@ drop index char_index on create_index_02;
 create table create_index_03 (col1 bigint auto_increment,col2 int,col3 float,col4 int);
 create unique index int_index on create_index_03(col2);
 insert into create_index_03(col2,col3,col4) values (10,20.23,4090),(10,100.00,5678);
-Duplicate entry '10' for key '__mo_index_idx_col'
+Duplicate entry '10' for key 'col2'
 insert into create_index_03(col2,col3,col4) values (10,20.23,4090),(11,100.00,4090);
 insert into create_index_03(col2,col3,col4) values (67834,20.23,4090),(56473,100.00,5678),(NULL,0.01,NULL);
 select * from create_index_03;
@@ -386,7 +386,7 @@ drop index int_index on create_index_03;
 create table create_index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint);
 create unique index bigint_index on create_index_04(col1);
 insert into create_index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
-Duplicate entry '67834' for key '__mo_index_idx_col'
+Duplicate entry '67834' for key 'col1'
 insert into create_index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 insert into create_index_04 values (-9223372036854775808,5,20.23,4090),(9223372036854775807,6,100.00,4091);
 select * from create_index_04;
@@ -403,7 +403,7 @@ col1    col2    col3    col4
 create table create_index_05 (col1 smallint,col2 int primary key,col3 float,col4 smallint);
 create unique index smallint_index on create_index_05(col1);
 insert into create_index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into create_index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 select * from create_index_05;
 col1    col2    col3    col4
@@ -413,7 +413,7 @@ null    3    0.01    null
 create table create_index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint);
 create unique index tinyint_index on create_index_06(col1);
 insert into create_index_06 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into create_index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from create_index_06;
 col1    col2    col3    col4
@@ -424,7 +424,7 @@ create table create_index_07 (col1 int unsigned,col2 int primary key,col3 float,
 create unique index int_unsigned_index on create_index_07(col1);
 insert into create_index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 insert into create_index_07 values (1,2,20.23,56),(1,4,100.00,90);
-(Duplicate entry ')([\d\D]*)(' for key ')([col2|__mo_index_idx_col]*)(')
+Duplicate entry '2' for key 'col2'
 select * from create_index_07;
 col1    col2    col3    col4
 1    2    20.23    56
@@ -433,7 +433,7 @@ null    3    0.01    null
 create table create_index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
 create unique index bigint_unsigned_index on create_index_08(col1);
 insert into create_index_08 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'col1'
 insert into create_index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from create_index_08;
 col1    col2    col3    col4
@@ -443,7 +443,7 @@ null    3    0.01    null
 create table create_index_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
 create unique index decimal_index on create_index_09(col2);
 insert into create_index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23000000' for key '__mo_index_idx_col'
+Duplicate entry '20.23000000' for key 'col2'
 insert into create_index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from create_index_09;
 col1    col2    col3
@@ -453,7 +453,7 @@ col1    col2    col3
 create table create_index_10 (col1 bigint primary key,col2 float,col3 float);
 create unique index float_index on create_index_10(col2);
 insert into create_index_10 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23' for key 'col2'
 insert into create_index_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from create_index_10;
 col1    col2    col3
@@ -463,7 +463,7 @@ col1    col2    col3
 create table create_index_11 (col1 bigint primary key,col2 double,col3 double);
 create unique index double_index on create_index_11(col2);
 insert into create_index_11 values (1000,20.23,20.00),(1200,20.23,0.10);
-Duplicate entry '20.23' for key '__mo_index_idx_col'
+Duplicate entry '20.23' for key 'col2'
 insert into create_index_11 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
 select * from create_index_11;
 col1    col2    col3
@@ -473,22 +473,22 @@ col1    col2    col3
 create table create_index_12(col1 bigint auto_increment primary key,col2 date,col3 date);
 create unique index date_index on create_index_12(col2);
 insert into create_index_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
-Duplicate entry '2013-01-01' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01' for key 'col2'
 insert into create_index_12(col2,col3) values (NULL,'2014-02-01'),(NULL,NULL);
 create table create_index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime);
 create unique index datetime_index on create_index_13(col2);
 insert into create_index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00' for key 'col2'
 insert into create_index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp);
 create unique index timestamp_index on create_index_14(col2);
 insert into create_index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
-Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+Duplicate entry '2013-01-01 12:00:00' for key 'col2'
 insert into create_index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_15 (col1 bigint primary key,col2 bool);
 create unique index bool_index on create_index_15(col2);
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
-(Duplicate entry ')([\d\D][true|false]*)(' for key '__mo_index_idx_col')
+Duplicate entry 'true' for key 'col2'
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;
 col1    col2
@@ -523,7 +523,7 @@ create unique index m1_index on create_index_18(col2,col3);
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key '(col2,col3)'
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 select * from create_index_18;
 col1    col2    col3    col4
@@ -538,7 +538,7 @@ insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2,12)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2,12)' for key '(col2,col3,col4)'
 select * from create_index_18;
 col1    col2    col3    col4
 1    apple    1    10
@@ -603,7 +603,7 @@ col1    col2    col3    col4
 2    chart    2    11
 truncate table create_index_19;
 insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
-Duplicate entry 'apple' for key '__mo_index_idx_col'
+Duplicate entry 'apple' for key 'col2'
 select * from create_index_19;
 col1    col2    col3    col4
 drop table create_index_19;
@@ -640,7 +640,7 @@ create unique index varchar_index on trans_index_01(col2) comment 'create varcha
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
 use unique_secondary_index;
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23');
-Duplicate entry (\'\d{11}\'|'\d') for key ('__mo_index_idx_col'|'\w{3}\d')
+Duplicate entry '1' for key 'col1'
 commit;
 select * from trans_index_01;
 col1    col2    col3    col4

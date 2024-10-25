@@ -7,6 +7,7 @@ select col2,col4 from index_01;
 create table index_02 (col1 bigint primary key,col2 char(25) unique key,col3 float,col4 char(50),key num_id(col4));
 insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
 insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+-- @pattern
 insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
 insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
 select col2,col4 from index_02;

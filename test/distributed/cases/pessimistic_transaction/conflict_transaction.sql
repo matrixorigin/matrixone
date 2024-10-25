@@ -98,7 +98,6 @@ create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
--- @pattern
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 select * from ct_07;
 commit;

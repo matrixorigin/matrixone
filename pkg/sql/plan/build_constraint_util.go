@@ -429,7 +429,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -439,7 +439,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -866,7 +866,7 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
 
-	return builder.buildSelect(astSelect, bindCtx, false)
+	return builder.bindSelect(astSelect, bindCtx, false)
 }
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
