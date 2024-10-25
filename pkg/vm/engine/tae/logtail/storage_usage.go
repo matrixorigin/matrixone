@@ -103,10 +103,11 @@ const (
 )
 
 type UsageData struct {
-	AccId uint64
-	DbId  uint64
-	TblId uint64
-	Size  uint64
+	AccId        uint64
+	DbId         uint64
+	TblId        uint64
+	Size         uint64
+	SnapshotSize uint64
 
 	special triode
 
@@ -123,11 +124,12 @@ type ObjectAbstract struct {
 }
 
 var zeroUsageData UsageData = UsageData{
-	AccId:   math.MaxUint32,
-	DbId:    math.MaxUint64,
-	TblId:   math.MaxUint64,
-	Size:    math.MaxInt64,
-	special: unknown,
+	AccId:        math.MaxUint32,
+	DbId:         math.MaxUint64,
+	TblId:        math.MaxUint64,
+	Size:         math.MaxInt64,
+	SnapshotSize: math.MaxInt64,
+	special:      unknown,
 }
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
@@ -155,8 +157,8 @@ func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result 
 }
 
 func (u UsageData) String() string {
-	return fmt.Sprintf("account id = %d; database id = %d; table id = %d; size = %d",
-		u.AccId, u.DbId, u.TblId, u.Size)
+	return fmt.Sprintf("account id = %d; database id = %d; table id = %d; size = %d; snapshot size = %d",
+		u.AccId, u.DbId, u.TblId, u.Size, u.SnapshotSize)
 }
 
 func (u *UsageData) Merge(other UsageData, delete bool) {
@@ -292,10 +294,14 @@ func (c *StorageUsageCache) ClearForUpdate() {
 	c.data.Clear()
 }
 
-func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64]uint64) {
-	usages = make(map[uint64]uint64)
+func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64][]uint64) {
+	usages = make(map[uint64][]uint64)
 	c.data.Scan(func(item UsageData) bool {
-		usages[item.AccId] += item.Size
+		if len(usages[item.AccId]) == 0 {
+			usages[item.AccId] = make([]uint64, 2)
+		}
+		usages[item.AccId][0] += item.Size
+		usages[item.AccId][1] += item.SnapshotSize
 		return true
 	})
 
@@ -317,7 +323,7 @@ func (c *StorageUsageCache) GatherObjectAbstractForAccounts() (abstract map[uint
 	return
 }
 
-func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist bool) {
+func (c *StorageUsageCache) GatherAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	iter := c.data.Iter()
 	defer iter.Release()
 
@@ -332,8 +338,10 @@ func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist boo
 	}
 
 	size += iter.Item().Size
+	snapshotSize += iter.Item().SnapshotSize
 	for iter.Next() && iter.Item().AccId == id {
 		size += iter.Item().Size
+		snapshotSize += iter.Item().SnapshotSize
 	}
 
 	exist = true
@@ -462,8 +470,8 @@ func (m *TNUsageMemo) MemoryUsed() float64 {
 }
 
 func (m *TNUsageMemo) EnterProcessing() {
-	m.cache.Lock()
 	m.Lock()
+	m.cache.Lock()
 }
 
 func (m *TNUsageMemo) LeaveProcessing() {
@@ -475,7 +483,7 @@ func (m *TNUsageMemo) HasUpdate() bool {
 	return m.pending
 }
 
-func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint64) (size, snapshotSize uint64, exist bool) {
 	return cache.GatherAccountSize(id)
 }
 
@@ -483,7 +491,7 @@ func (m *TNUsageMemo) GatherObjectAbstractForAllAccount() map[uint64]ObjectAbstr
 	return m.cache.GatherObjectAbstractForAccounts()
 }
 
-func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
 
@@ -571,11 +579,11 @@ func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
 	return size
 }
 
-func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size, snapshotSize uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.newAccCache, id)
 }
 
-func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64]uint64) {
+func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64][]uint64) {
 	return m.cache.GatherAllAccSize()
 }
 
@@ -585,6 +593,7 @@ func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, de
 	if old, found := cache.Get(usage); found {
 		size = old.Size
 		special = old.special
+		usage.SnapshotSize = old.SnapshotSize
 
 		usage.ObjectAbstract = old.ObjectAbstract
 	}
@@ -983,6 +992,24 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		return "", 0
 	}
 
+	iter := collector.UsageMemo.cache.data.Iter()
+	for iter.Next() {
+		val := iter.Item()
+		key := [3]uint64{val.AccId, val.DbId, val.TblId}
+		ud, ok := tblChanges[key]
+		if val.SnapshotSize == 0 {
+			continue
+		}
+		if !ok {
+			val.Size = 0
+			tblChanges[key] = val
+			continue
+		}
+		ud.SnapshotSize = val.SnapshotSize
+		tblChanges[key] = ud
+	}
+	iter.Release()
+
 	memo.GetCache().ClearForUpdate()
 
 	for uniqueTbl, usage := range tblChanges {
@@ -991,11 +1018,19 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		}
 
 		if _, ok := delDbs[uniqueTbl[1]]; ok {
-			continue
+			if usage.SnapshotSize == 0 {
+				continue
+			}
+			usage.Size = 0
+			usage.ObjectAbstract = ObjectAbstract{}
 		}
 
 		if _, ok := delTbls[uniqueTbl[2]]; ok {
-			continue
+			if usage.SnapshotSize == 0 {
+				continue
+			}
+			usage.Size = 0
+			usage.ObjectAbstract = ObjectAbstract{}
 		}
 
 		memo.Replace(UsageData{
@@ -1003,6 +1038,7 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 			TblId:          uniqueTbl[2],
 			DbId:           uniqueTbl[1],
 			AccId:          uniqueTbl[0],
+			SnapshotSize:   usage.SnapshotSize,
 			ObjectAbstract: usage.ObjectAbstract,
 		})
 
@@ -1120,6 +1156,111 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	doSummary("I",
 		zap.Float64("cache mem used", memoryUsed),
 		zap.String("applied deletes", log1))
+}
+
+func FillUsageBatOfCompacted(
+	usage *TNUsageMemo,
+	data *CheckpointData,
+	meta *SnapshotMeta,
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *PitrInfo,
+) {
+	now := time.Now()
+	var memoryUsed float64
+	usage.EnterProcessing()
+	defer func() {
+		v2.TaskStorageUsageCacheMemUsedGauge.Set(memoryUsed)
+		v2.TaskCompactedCollectUsageDurationHistogram.Observe(time.Since(now).Seconds())
+		usage.LeaveProcessing()
+	}()
+	objects := data.GetObjectBatchs()
+	tombstones := data.GetTombstoneObjectBatchs()
+	usageData := make(map[[3]uint64]UsageData)
+	tableSnapshots, tablePitrs := meta.AccountToTableSnapshots(
+		accountSnapshots,
+		pitrs,
+	)
+	objectsName := make(map[string]struct{})
+	scan := func(bat *containers.Batch) {
+		insDeleteTSVec := vector.MustFixedColWithTypeCheck[types.TS](
+			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+		insCreateTSVec := vector.MustFixedColWithTypeCheck[types.TS](
+			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
+		dbid := vector.MustFixedColNoTypeCheck[uint64](
+			bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+		tableID := vector.MustFixedColNoTypeCheck[uint64](
+			bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		for i := 0; i < bat.Length(); i++ {
+			if insDeleteTSVec[i].IsEmpty() {
+				dropTs, ok := meta.GetTableDropAt(tableID[i])
+				if !ok || dropTs.IsEmpty() {
+					continue
+				}
+			}
+			id, ok := meta.GetAccountId(tableID[i])
+			if !ok {
+				continue
+			}
+			accountId := uint64(id)
+			if len(tableSnapshots[tableID[i]]) == 0 &&
+				(tablePitrs[tableID[i]] == nil ||
+					tablePitrs[tableID[i]].IsEmpty()) {
+				continue
+			}
+
+			buf := bat.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector().GetRawBytesAt(i)
+			stats := (objectio.ObjectStats)(buf)
+			if !ObjectIsSnapshotRefers(
+				&stats,
+				tablePitrs[tableID[i]],
+				&insCreateTSVec[i],
+				&insDeleteTSVec[i],
+				tableSnapshots[tableID[i]]) {
+				continue
+			}
+			// skip the same object
+			if _, ok = objectsName[stats.ObjectName().String()]; ok {
+				continue
+			}
+			key := [3]uint64{accountId, dbid[i], tableID[i]}
+			snapSize := usageData[key].SnapshotSize
+			snapSize += uint64(stats.Size())
+			usageData[key] = UsageData{
+				AccId:        accountId,
+				DbId:         dbid[i],
+				TblId:        tableID[i],
+				SnapshotSize: snapSize,
+			}
+
+			objectsName[stats.ObjectName().String()] = struct{}{}
+		}
+	}
+	scan(objects)
+	scan(tombstones)
+	iter := usage.cache.data.Iter()
+	update := make(map[[3]uint64]UsageData)
+	for iter.Next() {
+		val := iter.Item()
+		key := [3]uint64{val.AccId, val.DbId, val.TblId}
+		ud, ok := usageData[key]
+		if val.SnapshotSize == 0 && !ok {
+			continue
+		}
+		val.SnapshotSize = ud.SnapshotSize
+		update[key] = val
+		delete(usageData, key)
+	}
+	iter.Release()
+
+	for _, v := range update {
+		usage.cache.SetOrReplace(v)
+	}
+
+	// table has been dropped
+	for _, v := range usageData {
+		usage.cache.SetOrReplace(v)
+	}
+	memoryUsed = usage.MemoryUsed()
 }
 
 // GetStorageUsageHistory is for debug to show these storage usage changes.

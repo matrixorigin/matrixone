@@ -204,6 +204,7 @@ func (r *CheckpointReader) LoadBatchData(
 		for i := range bats {
 			cnBat := containers.ToCNBatch(bats[i])
 			bat, err = bat.Append(ctx, mp, cnBat)
+			bats[i].Close()
 			if err != nil {
 				logutil.Infof("err is %v", err)
 				return false, err
