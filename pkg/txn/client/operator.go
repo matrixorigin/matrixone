@@ -388,6 +388,8 @@ func newTxnOperatorWithSnapshot(
 	tc.mu.txn.Mirror = true
 	tc.mu.lockTables = snapshot.LockTables
 
+	tc.logger = util.GetLogger("")
+
 	tc.adjust()
 	util.LogTxnCreated(tc.logger, tc.mu.txn)
 	return tc
