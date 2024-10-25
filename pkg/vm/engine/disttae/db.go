@@ -286,7 +286,12 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		// try the previous RPC method
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
 	}
-
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Data.([]any)) == 0 {
+		return cmd_util.SnapshotReadResp{Succeed: false}, nil
+	}
 	return result.Data.([]any)[0], nil
 }
 
@@ -350,9 +355,6 @@ func (e *Engine) getOrCreateSnapPart(
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
 	ckps := checkpointEntries
-	if err != nil {
-		return nil, err
-	}
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
