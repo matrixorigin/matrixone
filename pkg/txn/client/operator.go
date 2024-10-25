@@ -367,6 +367,7 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 
 	op.reset.workspace = tc.reset.workspace.CloneSnapshotWS()
 	op.reset.workspace.BindTxnOp(op)
+	tc.logger = util.GetLogger("")
 
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -387,8 +388,6 @@ func newTxnOperatorWithSnapshot(
 	tc.mu.txn = snapshot.Txn
 	tc.mu.txn.Mirror = true
 	tc.mu.lockTables = snapshot.LockTables
-
-	tc.logger = util.GetLogger("")
 
 	tc.adjust()
 	util.LogTxnCreated(tc.logger, tc.mu.txn)
