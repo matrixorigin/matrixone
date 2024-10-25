@@ -266,11 +266,25 @@ func tableItemLess(a, b *TableItem) bool {
 }
 
 func databaseItemCPKeyLess(a, b *DatabaseItem) bool {
-	return bytes.Compare(a.CPKey[:], b.CPKey[:]) < 0
+	cmp := bytes.Compare(a.CPKey[:], b.CPKey[:])
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	return a.Ts.Greater(b.Ts)
 }
 
 func tableItemCPKeyLess(a, b *TableItem) bool {
-	return bytes.Compare(a.CPKey[:], b.CPKey[:]) < 0
+	cmp := bytes.Compare(a.CPKey[:], b.CPKey[:])
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	return a.Ts.Greater(b.Ts)
 }
 
 // copyTableItem copies src to dst

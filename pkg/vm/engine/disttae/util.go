@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -764,7 +763,7 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 }
 
 func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
-	tidIdx := cache.MO_OFF + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
+	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
 	if len(bs) == 1 {
 		return true
 	}
