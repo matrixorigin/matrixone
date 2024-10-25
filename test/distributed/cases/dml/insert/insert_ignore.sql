@@ -29,10 +29,8 @@ insert ignore into insert_ignore_03(c2) values(7),(2),(5),(10),(12),(NULL);
 select * from insert_ignore_03;
 -- @bvt:issue
 -- insert ignore not null and default constraint
--- @bvt:issue#15358
 create table insert_ignore_04 (product_id INT NOT NULL AUTO_INCREMENT,product_name VARCHAR(255) NOT NULL,quantity_in_stock INT DEFAULT 0,price DECIMAL(10, 2) NOT NULL,PRIMARY KEY (product_id));
 insert ignore into insert_ignore_04(product_name, price) VALUES('Laptop', 1200.00),('Monitor', 150.00),('Keyboard', NULL),('Mouse', 15.00);
--- @bvt:issue
 -- @bvt:issue#15345
 insert ignore into insert_ignore_04(product_name, quantity_in_stock,price) VALUES(NULL, 5,1200.00),('board',6, NULL),('phone',NULL,1500.00);
 select * from insert_ignore_04;
