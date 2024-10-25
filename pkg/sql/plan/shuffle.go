@@ -286,8 +286,10 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if s == nil {
 		return
 	}
-	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-		return
+	if n.NodeType == plan.Node_AGG {
+		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+			return
+		}
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
