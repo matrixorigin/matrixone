@@ -87,20 +87,12 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 		if err != nil {
 			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
 			err = txn.Rollback(ctx)
-			if err != nil {
-				logutil.Error("failed to rollback mergePolicy txn",
-					zap.Error(err))
-				return
-			}
+			logutil.Error("rollback mergePolicy txn err", zap.Error(err))
 		} else {
 			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
 			err = txn.Commit(ctx)
-			logutil.Info("mergePolicy txn Commit", zap.String("commitTS", txn.GetCommitTS().ToString()))
-			if err != nil {
-				logutil.Error("failed to commit mergePolicy txn",
-					zap.Error(err))
-				return
-			}
+			logutil.Info("mergePolicy txn commit", zap.String("commitTS", txn.GetCommitTS().ToString()))
+			logutil.Error("commit mergePolicy txn err", zap.Error(err))
 			g.configProvider.invalidCache(tbl)
 		}
 	}()
