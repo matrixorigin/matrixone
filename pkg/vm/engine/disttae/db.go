@@ -278,7 +278,7 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		if err = checkpoints.Unmarshal(payload); err != nil {
 			return nil, err
 		}
-		logutil.Infof("snapshot read response: %v", checkpoints.String())
+		logutil.Infof("snapshot read response: %v-%v", checkpoints.Succeed, len(checkpoints.Entries))
 		return checkpoints, nil
 	}
 	// create a new proc for `handler`
