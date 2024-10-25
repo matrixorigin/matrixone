@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -3336,7 +3337,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 	filePath = ep.FilePath
 	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
 		// stage:// URL
-		s, err := stage.UrlToStageDef(filePath, ses.proc)
+		s, err := stageutil.UrlToStageDef(filePath, ses.proc)
 		if err != nil {
 			return err
 		}

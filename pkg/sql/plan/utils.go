@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1569,7 +1570,7 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return InitInfileParam(param)
 	}
 
-	s, err := stage.UrlToStageDef(fpath, proc)
+	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
 		return err
 	}

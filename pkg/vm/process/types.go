@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -260,12 +261,6 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// StageDefIf interface is to avoid cycle import compile error (see stage/stage.go for implementation)
-type StageDefIf interface {
-	GetCredentials(key string, defval string) (string, bool)
-	ToPath() (mopath string, query string, err error)
-}
-
 type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
 	sqlContext QueryBaseContext
@@ -306,7 +301,7 @@ type BaseProcess struct {
 	PostDmlSqlList *threadsafe.Slice[string]
 
 	// stage cache to avoid to run same stage SQL repeatedly
-	StageCache *threadsafe.Map[string, StageDefIf]
+	StageCache *threadsafe.Map[string, stage.StageDef]
 }
 
 // Process contains context used in query execution
@@ -467,7 +462,7 @@ func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
 	return proc.Base.PostDmlSqlList
 }
 
-func (proc *Process) GetStageCache() *threadsafe.Map[string, StageDefIf] {
+func (proc *Process) GetStageCache() *threadsafe.Map[string, stage.StageDef] {
 	return proc.Base.StageCache
 }
 
