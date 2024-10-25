@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
-	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -59,7 +58,7 @@ type StageDef struct {
 	Status      string
 }
 
-func (s *StageDef) GetCredentials(key string, defval string) (string, bool) {
+func (s StageDef) GetCredentials(key string, defval string) (string, bool) {
 	if s.Credentials == nil {
 		// no credential in this stage
 		return defval, false
@@ -98,7 +97,7 @@ func (s *StageDef) expandSubStage(proc *process.Process) (StageDef, error) {
 // or minio,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
 // expand the subpath to MO path.
 // subpath is in the format like path or path with query like path?q1=v1&q2=v2...
-func (s *StageDef) ToPath() (mopath string, query string, err error) {
+func (s StageDef) ToPath() (mopath string, query string, err error) {
 
 	if s.Url.Scheme == S3_PROTOCOL {
 		bucket, prefix, query, err := ParseS3Url(s.Url)
@@ -202,6 +201,13 @@ func credentialsToMap(cred string) (map[string]string, error) {
 }
 
 func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err error) {
+
+	cache := proc.GetStageCache()
+	sif, ok := cache.Get(stagename)
+	if ok {
+		return sif.(StageDef), nil
+	}
+
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
 	res, err := runSql(proc, getAllStagesSql)
 	if err != nil {
@@ -235,7 +241,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 					stage_status := string(batch.Vecs[status_idx].GetBytesAt(i))
 
 					//logutil.Infof("CATALOG: ID %d,  stage %s url %s cred %s", stage_id, stage_name, stage_url, stage_cred)
-					reslist = append(reslist, StageDef{stage_id, stage_name, stage_url, credmap, stage_status})
+					reslist = append(reslist, StageDef{Id: stage_id, Name: stage_name, Url: stage_url, Credentials: credmap, Status: stage_status})
 				}
 			}
 		}
@@ -245,6 +251,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 		return StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
+	cache.Set(stagename, reslist[0])
 	return reslist[0], nil
 }
 
