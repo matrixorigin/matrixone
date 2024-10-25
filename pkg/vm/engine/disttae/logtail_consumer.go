@@ -1576,12 +1576,6 @@ func dispatchSubscribeResponse(
 		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
 			return err
 		}
-		//if len(lt.CkpLocation) == 0 {
-		//	p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
-		//	p.UpdateDuration(types.TS{}, types.MaxTs())
-		//	c := e.GetLatestCatalogCache()
-		//	c.UpdateDuration(types.TS{}, types.MaxTs())
-		//}
 		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
@@ -1888,10 +1882,8 @@ func updatePartitionOfPush(
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
 			t0 = time.Now()
-			ckpStart, _ = parseCkpDuration(tl)
-			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
-				state.CacheCkpDuration(ckpStart, partition)
-			}
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+			state.CacheCkpDuration(ckpStart, partition)
 			state.AppendCheckpoint(tl.CkpLocation, partition)
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
