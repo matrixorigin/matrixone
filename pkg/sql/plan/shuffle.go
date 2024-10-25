@@ -266,18 +266,12 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			if !ok {
 				return
 			}
-			s := builder.getStatsInfoByTableID(tableDef.TblId)
-			if s == nil {
-				return
-			}
-
-			colName := tableDef.Cols[col.ColPos].Name
 			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-			n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
-			n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
+			n.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
+			n.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
+			n.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
+			n.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
 		}
 		return
 	}
