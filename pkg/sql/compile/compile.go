@@ -478,11 +478,11 @@ func (c *Compile) runOnce() (err error) {
 			errSubmit := ants.Submit(func() {
 				defer func() {
 					if e := recover(); e != nil {
-						panicErr := moerr.ConvertPanicError(c.proc.Ctx, e)
+						err := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", c.sql),
-							zap.String("error", panicErr.Error()))
-						errC <- panicErr
+							zap.String("error", err.Error()))
+						errC <- err
 					}
 				}()
 				errC <- c.run(scope)
@@ -508,7 +508,9 @@ func (c *Compile) runOnce() (err error) {
 		}
 		close(errC)
 
-		return errToThrowOut
+		if errToThrowOut != nil {
+			return errToThrowOut
+		}
 	}
 
 	// cleanup post dml sql
