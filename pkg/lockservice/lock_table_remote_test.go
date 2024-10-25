@@ -61,6 +61,41 @@ func TestLockRemote(t *testing.T) {
 	)
 }
 
+func TestLockRemoteWithNeedUpgrade(t *testing.T) {
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(4), "")
+			rows := newTestRows(1, 2, 3, 4, 5)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			txn.Lock()
+			defer txn.Unlock()
+			l.lock(ctx, txn, rows, LockOptions{}, func(r pb.Result, err error) {
+				assert.Error(t, err)
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+			})
+			reuse.Free(txn, nil)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
 func TestUnlockRemote(t *testing.T) {
 	runRemoteLockTableTests(
 		t,

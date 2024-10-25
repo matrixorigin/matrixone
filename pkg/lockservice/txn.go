@@ -78,7 +78,7 @@ func (txn *activeTxn) lockRemoved(
 	if !ok {
 		return
 	}
-	newV := newCowSlice(txn.fsp, nil)
+	newV, _ := newCowSlice(txn.fsp, nil)
 	s := v.slice()
 	defer s.unref()
 	s.iter(func(v []byte) bool {
@@ -96,7 +96,7 @@ func (txn *activeTxn) lockAdded(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
-) {
+) error {
 
 	// only in the lockservice node where the transaction was
 	// initiated will it be holds all locks. A remote transaction
@@ -117,12 +117,17 @@ func (txn *activeTxn) lockAdded(
 	defer logTxnLockAdded(logger, txn, locks)
 	h := txn.getHoldLocksLocked(group)
 	v, ok := h.tableKeys[bind.Table]
+	var err error
 	if ok {
-		v.append(locks)
-		return
+		return v.append(locks)
 	}
-	h.tableKeys[bind.Table] = newCowSlice(txn.fsp, locks)
+	cs, err := newCowSlice(txn.fsp, locks)
+	if err != nil {
+		return err
+	}
+	h.tableKeys[bind.Table] = cs
 	h.tableBinds[bind.Table] = bind
+	return nil
 }
 
 func (txn *activeTxn) close(

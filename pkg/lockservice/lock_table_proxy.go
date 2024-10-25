@@ -109,7 +109,8 @@ func (lp *localLockTableProxy) lock(
 
 	defer func() {
 		bind := lp.getBind()
-		txn.lockAdded(bind.Group, bind, rows, lp.logger)
+		err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
+		cb(r, err)
 	}()
 
 	// wait first done
@@ -118,7 +119,6 @@ func (lp *localLockTableProxy) lock(
 		return
 	}
 
-	cb(r, nil)
 }
 
 func (lp *localLockTableProxy) unlock(
