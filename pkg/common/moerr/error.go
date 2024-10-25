@@ -238,6 +238,8 @@ const (
 	ErrCannotCommitOrphan uint16 = 20705
 	// ErrLockConflict lock operation conflict
 	ErrLockConflict uint16 = 20706
+	// ErrLockNeedUpgrade row level lock is too large that need upgrade to table level lock
+	ErrLockNeedUpgrade uint16 = 20707
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -470,6 +472,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
 	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
 	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
