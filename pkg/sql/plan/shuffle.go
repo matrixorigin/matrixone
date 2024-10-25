@@ -38,7 +38,7 @@ const (
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 2000000
 	ShuffleThreshHoldOfNDV          = 50000
-	ShuffleTypeThreshHoldLowerLimit = 16
+	ShuffleTypeThreshHoldLowerLimit = 32
 	ShuffleTypeThreshHoldUpperLimit = 1024
 
 	overlapThreshold = 0.95
