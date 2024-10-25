@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -166,7 +167,7 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	return nil
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	c.proc = proc
@@ -316,6 +317,7 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
 	switch s.Magic {
 	case Normal:
 		err := s.Run(c)
@@ -3768,6 +3770,12 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
 		return true //avoid bugs
 	}
+	if len(n.AggList) > 0 {
+		partialResult, _, _ := checkAggOptimize(n)
+		if partialResult != nil {
+			return true
+		}
+	}
 	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
@@ -3867,7 +3875,7 @@ func collectTombstones(
 func (c *Compile) expandRanges(
 	n *plan.Node,
 	rel engine.Relation,
-	blockFilterList []*plan.Expr) (engine.RelData, error) {
+	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 	var err error
 	var db engine.Database
 	var relData engine.RelData
@@ -3915,7 +3923,9 @@ func (c *Compile) expandRanges(
 			preAllocSize = int(n.Stats.BlockNum)
 		}
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, preAllocSize, c.TxnOffset)
+
+	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3925,11 +3935,11 @@ func (c *Compile) expandRanges(
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3947,11 +3957,11 @@ func (c *Compile) expandRanges(
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
 				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -3965,6 +3975,7 @@ func (c *Compile) expandRanges(
 			}
 		}
 	}
+
 	return relData, nil
 
 }
@@ -4056,10 +4067,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		relData, err = c.expandRanges(n, rel, filterExpr)
+		crs := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, rel, filterExpr, crs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.CompileExpandRangesS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	} else {
 		// add current CN
 		nodes = append(nodes, engine.Node{
@@ -4074,7 +4096,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		var columnMap map[int]int
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
-			newRelData := relData.BuildEmptyRelData()
+			newRelData := relData.BuildEmptyRelData(1)
 			blk := relData.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 
@@ -4136,18 +4158,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for an ordered scan, put all paylonds in current CN
+	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
-	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	// if not disttae engine, just put all payloads in current CN
+	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae {
 		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
 	}
-	// disttae engine
-	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
-		return nodes, partialResults, partialResultTypes, err
-	}
-	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
+	// only support disttae engine for now
+	nodes, err = shuffleBlocksToMultiCN(c, rel, relData, n)
+	return nodes, partialResults, partialResultTypes, err
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
@@ -4481,82 +4500,6 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
-	var nodes engine.Nodes
-	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < relData.DataCnt(); i += step {
-		j := i / step
-		if i+step >= relData.DataCnt() {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		} else {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		}
-	}
-	return nodes
-}
-
 func removeEmtpyNodes(
 	c *Compile,
 	n *plan.Node,
@@ -4609,7 +4552,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData()
+	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
@@ -4619,7 +4562,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
-				Data: relData.BuildEmptyRelData(),
+				Data: relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList)),
 			})
 		}
 	}

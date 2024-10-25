@@ -22,13 +22,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
@@ -77,6 +75,7 @@ const (
 		"		db_tbl_counts.db_count," +
 		"		db_tbl_counts.tbl_count," +
 		"		CAST(0 AS DOUBLE) AS size," +
+		"		CAST(0 AS DOUBLE) AS snapshot_size," +
 		"		ma.comments" +
 		"		%s" + // possible placeholder for object count
 		"	FROM" +
@@ -104,6 +103,7 @@ const (
 	idxOfDbCount
 	idxOfTableCount
 	idxOfSize
+	idxOfSnapshotSize
 	idxOfComment
 )
 
@@ -153,7 +153,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
-		usage := &cmd_util.StorageUsageResp_V2{}
+		usage := &cmd_util.StorageUsageResp_V3{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
 		}
@@ -174,9 +174,9 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		// try the previous RPC method
-		payload_V0 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
-		responseUnmarshaler_V0 := func(payload []byte) (interface{}, error) {
-			usage := &cmd_util.StorageUsageResp_V0{}
+		payload_V2 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
+		responseUnmarshaler_V2 := func(payload []byte) (interface{}, error) {
+			usage := &cmd_util.StorageUsageResp_V2{}
 			if err := usage.Unmarshal(payload); err != nil {
 				return nil, err
 			}
@@ -185,7 +185,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 
 		tried = true
 		CmdMethod_StorageUsage := api.OpCode(14)
-		handler = ctl.GetTNHandlerFunc(CmdMethod_StorageUsage, whichTN, payload_V0, responseUnmarshaler_V0)
+		handler = ctl.GetTNHandlerFunc(CmdMethod_StorageUsage, whichTN, payload_V2, responseUnmarshaler_V2)
 		result, err = handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 
 		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
@@ -200,44 +200,17 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 	return result.Data.([]any)[0], tried, nil
 }
 
-func handleStorageUsageResponse_V0(
+func handleStorageUsageResponse_V2(
 	ctx context.Context,
-	sid string,
-	fs fileservice.FileService,
-	usage *cmd_util.StorageUsageResp_V0,
-	logger SessionLogger,
-) (map[int64]uint64, error) {
-	result := make(map[int64]uint64, 0)
-	for idx := range usage.CkpEntries {
-		version := usage.CkpEntries[idx].Version
-		location := usage.CkpEntries[idx].Location
+	usage *cmd_util.StorageUsageResp_V2,
+) (map[int64][]uint64, error) {
+	result := make(map[int64][]uint64, 0)
 
-		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, sid, location, version, logtail.StorageUsageInsIDX, fs)
-		if err != nil {
-			return nil, err
+	for x := range usage.AccIds {
+		if result[usage.AccIds[x]] == nil {
+			result[usage.AccIds[x]] = make([]uint64, 2)
 		}
-
-		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
-		accIDVec := vector.MustFixedColWithTypeCheck[uint64](
-			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
-		)
-		sizeVec := vector.MustFixedColWithTypeCheck[uint64](
-			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
-		)
-
-		size := uint64(0)
-		length := len(accIDVec)
-		for i := 0; i < length; i++ {
-			result[int64(accIDVec[i])] += sizeVec[i]
-			size += sizeVec[i]
-		}
-
-		ckpData.Close()
-	}
-
-	// [account_id, db_id, table_id, obj_id, table_total_size]
-	for _, info := range usage.BlockEntries {
-		result[int64(info.Info[0])] += info.Info[3]
+		result[usage.AccIds[x]][0] += usage.Sizes[x]
 	}
 
 	return result, nil
@@ -245,18 +218,22 @@ func handleStorageUsageResponse_V0(
 
 func handleStorageUsageResponse(
 	ctx context.Context,
-	usage *cmd_util.StorageUsageResp_V2,
-) (map[int64]uint64, error) {
-	result := make(map[int64]uint64, 0)
+	usage *cmd_util.StorageUsageResp_V3,
+) (map[int64][]uint64, error) {
+	result := make(map[int64][]uint64, 0)
 
 	for x := range usage.AccIds {
-		result[usage.AccIds[x]] += usage.Sizes[x]
+		if result[usage.AccIds[x]] == nil {
+			result[usage.AccIds[x]] = make([]uint64, 2)
+		}
+		result[usage.AccIds[x]][0] += usage.Sizes[x]
+		result[usage.AccIds[x]][1] += usage.SnapshotSizes[x]
 	}
 
 	return result, nil
 }
 
-func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed bool) {
+func checkStorageUsageCache(accIds [][]int64) (result map[int64][]uint64, succeed bool) {
 	cnUsageCache.Lock()
 	defer cnUsageCache.Unlock()
 
@@ -264,23 +241,27 @@ func checkStorageUsageCache(accIds [][]int64) (result map[int64]uint64, succeed 
 		return nil, false
 	}
 
-	result = make(map[int64]uint64)
+	result = make(map[int64][]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
-			size, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
+			size, snapshotSize, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
 			if !exist {
 				// one missed, update all
 				return nil, false
 			}
+			if len(result[accIds[x][y]]) == 0 {
+				result[accIds[x][y]] = make([]uint64, 2)
+			}
+			result[accIds[x][y]][0] = size
+			result[accIds[x][y]][1] = snapshotSize
 
-			result[accIds[x][y]] = size
 		}
 	}
 
 	return result, true
 }
 
-func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
+func updateStorageUsageCache_V2(usages *cmd_util.StorageUsageResp_V2) {
 
 	if len(usages.AccIds) == 0 {
 		return
@@ -303,6 +284,35 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
 				TotalRowCnt: int(usages.RowCnts[x]),
 			},
 		}
+
+		cnUsageCache.SetOrReplace(usage)
+	}
+}
+
+func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
+
+	if len(usages.AccIds) == 0 {
+		return
+	}
+
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
+
+	// step 1: delete stale accounts
+	cnUsageCache.ClearForUpdate()
+
+	// step 2: update
+	for x := range usages.AccIds {
+		usage := logtail.UsageData{
+			AccId:        uint64(usages.AccIds[x]),
+			Size:         usages.Sizes[x],
+			SnapshotSize: usages.SnapshotSizes[x],
+			ObjectAbstract: logtail.ObjectAbstract{
+				TotalObjCnt: int(usages.ObjCnts[x]),
+				TotalBlkCnt: int(usages.BlkCnts[x]),
+				TotalRowCnt: int(usages.RowCnts[x]),
+			},
+		}
 		//if old, exist := cnUsageCache.Get(usage); exist {
 		//	usage.Size += old.Size
 		//}
@@ -313,7 +323,7 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V2) {
 
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64]uint64, error) {
+func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (map[int64][]uint64, error) {
 	if len(accIds) == 0 {
 		return nil, nil
 	}
@@ -330,21 +340,16 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int64
 	}
 
 	if tried {
-		usage, ok := response.(*cmd_util.StorageUsageResp_V0)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V2)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
-
-		fs, err := fileservice.Get[fileservice.FileService](getPu(ses.GetService()).FileService, defines.SharedFileServiceName)
-		if err != nil {
-			return nil, err
-		}
-
+		updateStorageUsageCache_V2(usage)
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, ses.GetService(), fs, usage, ses.GetLogger())
+		return handleStorageUsageResponse_V2(ctx, usage)
 
 	} else {
-		usage, ok := response.(*cmd_util.StorageUsageResp_V2)
+		usage, ok := response.(*cmd_util.StorageUsageResp_V3)
 		if !ok || usage.Magic != logtail.StorageUsageMagic {
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
@@ -467,7 +472,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	for x := range accIds {
 		for y := range accIds[x] {
-			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], usage[accIds[x][y]], y)
+			var size, snapshotSize uint64
+			if len(usage[accIds[x][y]]) > 0 {
+				size = usage[accIds[x][y]][0]
+				snapshotSize = usage[accIds[x][y]][1]
+			}
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSize], size, y)
+			updateStorageSize(accInfosBatches[x].Vecs[idxOfSnapshotSize], snapshotSize, y)
 			if accIds[x][y] != sysAccountID {
 				updateCount(accInfosBatches[x].Vecs[idxOfDbCount], specialDBCnt, y)
 				updateCount(accInfosBatches[x].Vecs[idxOfTableCount], specialTableCnt, y)

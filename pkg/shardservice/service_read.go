@@ -19,7 +19,6 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -198,13 +197,6 @@ func (s *service) doRead(
 	); err != nil {
 		return nil, err
 	}
-
-	//TODO::debug for 19202, remove it later.
-	logutil.Infof("xxxx shard service doRead, WaitLogAppliedAt success, readAt:%s, table:%s, txn:%s",
-		readAt.DebugString(),
-		param.TxnTable.TableName,
-		param.Process.Snapshot.Txn.DebugString(),
-	)
 
 	return s.storage.Read(
 		ctx,

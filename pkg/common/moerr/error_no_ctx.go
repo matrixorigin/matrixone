@@ -394,6 +394,10 @@ func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
 }
 
+func NewLockNeedUpgradeNoCtx() *Error {
+	return newError(Context(), ErrLockNeedUpgrade)
+}
+
 func NewUDFAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFunctionAlreadyExists, f)
 }

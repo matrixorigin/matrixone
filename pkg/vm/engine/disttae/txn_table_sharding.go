@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -105,8 +104,6 @@ func MockTableDelegate(
 		origin: delegate.origin,
 		isMock: true,
 	}
-	tbl.shard.service = service
-
 	tbl.shard.service = service
 	tbl.shard.is = false
 	tbl.isLocal = tbl.isLocalFunc
@@ -515,15 +512,6 @@ func (r *shardingLocalReader) Read(
 		if err != nil || isEnd {
 			r.close()
 		}
-		//for test issue-19202
-		logutil.Infof("xxxx shardingLocalReader read, "+
-			"txn:%s, table:%s, isEnd:%v,err:%v, bat:%s, state:%v",
-			r.tblDelegate.origin.db.op.Txn().DebugString(),
-			r.tblDelegate.origin.tableName,
-			isEnd,
-			err,
-			common.MoBatchToString(bat, 10),
-			r.iteratePhase)
 	}()
 
 	for {
@@ -669,8 +657,8 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		return nil, err
 	}
 	group := func(rd engine.RelData) (local engine.RelData, remote engine.RelData) {
-		local = rd.BuildEmptyRelData()
-		remote = rd.BuildEmptyRelData()
+		local = rd.BuildEmptyRelData(0)
+		remote = rd.BuildEmptyRelData(0)
 		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi *objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
 				local.AppendBlockInfo(bi)
@@ -740,6 +728,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				engine_util.GetThresholdForReader(newNum),
 			)
 			if err != nil {
 				return nil, err
@@ -1121,7 +1110,9 @@ func (tbl *txnTableDelegate) forwardRead(
 	err = tbl.shard.service.Read(
 		ctx,
 		request,
-		shardservice.ReadOptions{}.Shard(shardID),
+		shardservice.ReadOptions{}.
+			ReadAt(tbl.origin.getTxn().op.SnapshotTS()).
+			Shard(shardID),
 	)
 	if err != nil {
 		return err

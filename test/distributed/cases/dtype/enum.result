@@ -265,7 +265,7 @@ drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        'T'        
+col1    ENUM('T','E')    NO        T
 insert into default01 values(default);
 select * from default01;
 col1
@@ -275,7 +275,7 @@ drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        '1'        
+col1    ENUM('T','E')    NO        1
 insert into default02 values(default);
 select * from default02;
 col1
@@ -305,7 +305,7 @@ drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        '2'        
+col1    ENUM('T','E')    NO        2
 insert into default05 values(default);
 select * from default05;
 col1

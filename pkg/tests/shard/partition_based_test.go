@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -494,10 +493,6 @@ func mustValueCanRead(
 					return true
 				},
 			)
-			//for test issue-19202
-			logutil.Infof("xxxx txn:%s execute select value from %s where id=%d, actual:%d, min:%s",
-				txn.Txn().Txn().DebugString(),
-				table, id, actual, min.DebugString())
 			return nil
 		},
 		executor.Options{}.
