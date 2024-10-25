@@ -117,7 +117,7 @@ type PrimaryKeyMatchSpec struct {
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
 	first := true
-	cnt := 2
+	cnt := 3
 	return PrimaryKeyMatchSpec{
 		Name: "Exact",
 		Move: func(p *primaryKeyIter) bool {
