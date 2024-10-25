@@ -288,7 +288,7 @@ var upg_system_stmt_info_add_column_conn_id = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM,
 	TableName: catalog.MO_STATEMENT,
 	UpgType:   versions.ADD_COLUMN,
-	UpgSql:    `alter table system.statement_info add column connection_id BIGINT DEFAULT '0' comment "connection id"`,
+	UpgSql:    `alter table system.statement_info ADD COLUMN connection_id BIGINT DEFAULT '0' comment "connection id", ADD COLUMN cu DOUBLE DEFAULT '0.0' COMMENT 'cu cost';`,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT, "connection_id")
 		if err != nil {
