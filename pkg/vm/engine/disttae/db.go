@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,15 +263,70 @@ func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog
 }
 
+func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+	whichTN := func(string) ([]uint64, error) { return nil, nil }
+	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		req := cmd_util.SnapshotReadReq{}
+		ts := snapshot.ToTimestamp()
+		req.Snapshot = &ts
+
+		return req.Marshal()
+	}
+
+	responseUnmarshaler := func(payload []byte) (any, error) {
+		checkpoints := &cmd_util.SnapshotReadResp{}
+		if err = checkpoints.Unmarshal(payload); err != nil {
+			return nil, err
+		}
+		return checkpoints, nil
+	}
+
+	// create a new proc for `handler`
+	proc := tbl.GetProcess().(*process.Process)
+
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
+	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// try the previous RPC method
+		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Data.([]any)[0], nil
+}
+
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
 
-	//check whether the latest partition is available for reuse.
-	if _, err := tbl.tryToSubscribe(ctx); err == nil {
-		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-			return p.Snapshot(), nil
+	response, err := requestSnapshotRead(ctx, tbl, &ts)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	var checkpointEntries []*checkpoint.CheckpointEntry
+	if ok && len(resp.Entries) > 0 {
+		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+		entries := resp.Entries
+		for _, entry := range entries {
+			start := types.TimestampToTS(*entry.Start)
+			end := types.TimestampToTS(*entry.End)
+			entryType := entry.EntryType
+			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
+			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+			checkpointEntries = append(checkpointEntries, checkpointEntry)
+		}
+	}
+	if len(checkpointEntries) == 0 {
+		//check whether the latest partition is available for reuse.
+		if _, err := tbl.tryToSubscribe(ctx); err == nil {
+			if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+				return p.Snapshot(), nil
+			}
 		}
 	}
 
@@ -298,7 +357,7 @@ func (e *Engine) getOrCreateSnapPart(
 	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId)
+	ckps := checkpointEntries
 	if err != nil {
 		return nil, err
 	}

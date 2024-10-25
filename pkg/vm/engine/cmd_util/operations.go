@@ -17,6 +17,7 @@ package cmd_util
 import (
 	"context"
 	fmt "fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -337,5 +338,47 @@ func (s *StorageUsageResp_V3) MarshalBinary() ([]byte, error) {
 }
 
 func (s *StorageUsageResp_V3) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}
+
+type SnapshotReadReq struct {
+	Snapshot *timestamp.Timestamp
+}
+
+func (s *SnapshotReadReq) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *SnapshotReadReq) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}
+
+type CheckpointEntryResp struct {
+	Start     *timestamp.Timestamp
+	End       *timestamp.Timestamp
+	Location1 []byte
+	Location2 []byte
+	EntryType int32
+	Version   uint32
+}
+
+func (c *CheckpointEntryResp) MarshalBinary() ([]byte, error) {
+	return c.Marshal()
+}
+
+func (c *CheckpointEntryResp) UnmarshalBinary(data []byte) error {
+	return c.Unmarshal(data)
+}
+
+type SnapshotReadResp struct {
+	Succeed bool
+	Entries []*CheckpointEntryResp
+}
+
+func (s *SnapshotReadResp) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *SnapshotReadResp) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }
