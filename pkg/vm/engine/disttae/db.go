@@ -270,12 +270,12 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		ts := snapshot.ToTimestamp()
 		req.Snapshot = &ts
 
-		return req.Marshal()
+		return req.MarshalBinary()
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
 		checkpoints := &cmd_util.SnapshotReadResp{}
-		if err = checkpoints.Unmarshal(payload); err != nil {
+		if err = checkpoints.UnmarshalBinary(payload); err != nil {
 			return nil, err
 		}
 		return checkpoints, nil
