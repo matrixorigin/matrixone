@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -468,8 +467,6 @@ func (c *Compile) prePipelineInitializer() (err error) {
 // run once
 func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
-	var wg sync.WaitGroup
-
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -477,45 +474,41 @@ func (c *Compile) runOnce() (err error) {
 	} else {
 		errC := make(chan error, len(c.scopes))
 		for i := range c.scopes {
-			wg.Add(1)
 			scope := c.scopes[i]
 			errSubmit := ants.Submit(func() {
 				defer func() {
 					if e := recover(); e != nil {
-						err := moerr.ConvertPanicError(c.proc.Ctx, e)
+						panicErr := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", c.sql),
-							zap.String("error", err.Error()))
-						errC <- err
+							zap.String("error", panicErr.Error()))
+						errC <- panicErr
 					}
-					wg.Done()
 				}()
 				errC <- c.run(scope)
 			})
 			if errSubmit != nil {
 				errC <- errSubmit
-				wg.Done()
 			}
 		}
-		wg.Wait()
+
+		var errToThrowOut error
+		for i := 0; i < cap(errC); i++ {
+			e := <-errC
+
+			// if any error happens,
+			// just cancel this function and throw it.
+			if e != nil && errToThrowOut == nil {
+				errToThrowOut = e
+
+				// cancel query.
+				_, queryCancel := process.GetQueryCtxFromProc(c.proc)
+				queryCancel()
+			}
+		}
 		close(errC)
 
-		errList := make([]error, 0, len(c.scopes))
-		for e := range errC {
-			if e != nil {
-				errList = append(errList, e)
-				if c.isRetryErr(e) {
-					return e
-				}
-			}
-		}
-
-		if len(errList) > 0 {
-			err = errList[0]
-		}
-		if err != nil {
-			return err
-		}
+		return errToThrowOut
 	}
 
 	// cleanup post dml sql
