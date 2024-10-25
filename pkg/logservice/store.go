@@ -18,11 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
@@ -31,6 +32,7 @@ import (
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -366,12 +368,13 @@ func (l *store) addReplica(shardID uint64, replicaID uint64,
 	// Set timeout to a little bigger value to prevent Timeout Error and
 	// returns a dragonboat.ErrRejected at last, in which case, it will take
 	// longer time to finish this operation.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseAddReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -391,12 +394,13 @@ func (l *store) addNonVotingReplica(
 	target dragonboat.Target,
 	cci uint64,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseAddNonVotingReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestAddNonVoting(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -411,12 +415,13 @@ func (l *store) addNonVotingReplica(
 }
 
 func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseRemoveReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestDeleteReplica(ctx, shardID, replicaID, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -1060,10 +1065,11 @@ func (l *store) hakeeperTick() {
 
 	if isLeader {
 		cmd := hakeeper.GetTickCmd()
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseHakeeperTick)
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 		if _, err := l.propose(ctx, session, cmd); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			l.runtime.Logger().Error("propose tick failed", zap.Error(err))
 			return
 		}

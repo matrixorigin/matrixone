@@ -759,10 +759,11 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 		return false
 	}
 	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
 	defer cancel()
 	err = client.Ping(ctx, addr)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		// ping failed
 		logutil.Debugf("ping %s err %+v\n", addr, err)
 		return false

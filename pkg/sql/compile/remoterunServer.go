@@ -141,12 +141,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		// todo : the timeout should be removed.
 		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+		timeLimit, cancel := context.WithTimeoutCause(context.TODO(), HandleNotifyTimeout, moerr.CauseHandlePipelineMessage)
 
 		succeed := false
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
+			err = moerr.AttachCause(timeLimit, err)
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
@@ -522,14 +523,15 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 }
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	tout, tcancel := context.WithTimeout(context.Background(), timeout)
+	tout, tcancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseGetProcByUuid)
 
 	for {
 		select {
 		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
+			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
 			tcancel()
-			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			return nil, nil, err
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)

@@ -22,14 +22,17 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/stretchr/testify/require"
 )
 
 func TestTunnelClientToServer(t *testing.T) {
@@ -762,4 +765,63 @@ func TestCheckTxnStatus(t *testing.T) {
 		require.True(t, ok)
 		require.False(t, inTxn)
 	})
+}
+
+func Test_transfer(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// cancel the context immediately
+	cancel()
+
+	clientProxy, serverProxy := net.Pipe()
+	defer clientProxy.Close()
+	defer serverProxy.Close()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	tun := newTunnel(ctx, logger, newCounterSet())
+
+	tun.mu.started = true
+
+	p1 := &pipe{}
+	p1.src = &MySQLConn{
+		Conn: clientProxy,
+	}
+	p1.mu.cond = sync.NewCond(&p1.mu)
+	p1.mu.started = true
+
+	tun.mu.scp = p1
+
+	p2 := &pipe{}
+	p2.src = &MySQLConn{
+		Conn: serverProxy,
+	}
+	p2.mu.cond = sync.NewCond(&p2.mu)
+	p2.mu.started = true
+
+	tun.mu.csp = p2
+
+	///test 1
+	err := tun.transfer(ctx)
+	assert.Error(t, err)
+
+	///test 2
+	p2.mu.started = false
+	err = tun.transfer(ctx)
+	assert.Error(t, err)
+
+	///test 3
+	p2.mu.started = false
+	p1.mu.started = false
+	err = tun.transfer(ctx)
+	assert.NoError(t, err)
+
+	///test 4
+	p2.mu.started = false
+	p1.mu.started = false
+	err = tun.transferSync(ctx)
+	assert.Error(t, err)
+
 }

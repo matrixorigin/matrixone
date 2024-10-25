@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 // MaybeUpgradeTenant used to check the tenant need upgrade or not. If need upgrade, it will
@@ -131,7 +132,7 @@ func (s *service) MaybeUpgradeTenant(
 // parallel based on the grouped tenant batch.
 func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	fn := func() (bool, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTenantTask)
 		defer cancel()
 
 		hasUpgradeTenants := false
@@ -264,6 +265,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			},
 			opts)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			s.logger.Error("tenant task handle failed",
 				zap.Error(err))
 			return false, err

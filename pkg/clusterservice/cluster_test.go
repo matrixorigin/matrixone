@@ -20,12 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestClusterReady(t *testing.T) {
@@ -124,6 +125,24 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 			require.Equal(t, map[string]metadata.LabelList{
 				"k1": {Labels: []string{"v1"}},
 			}, cns[0].Labels)
+		})
+}
+
+func TestCluster_DebugUpdateCNWorkState(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			var cns []metadata.CNService
+			apply := func(c metadata.CNService) bool {
+				cns = append(cns, c)
+				return true
+			}
+			hc.addCN("cn0")
+			err := c.DebugUpdateCNWorkState("cn0", int(metadata.WorkState_Draining))
+			require.NoError(t, err)
+			c.ForceRefresh(true)
+			c.GetCNService(NewServiceIDSelector("cn0"), apply)
+			require.Equal(t, 0, len(cns))
 		})
 }
 

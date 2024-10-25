@@ -173,7 +173,7 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 	if entry == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CauseCleanUpUselessFiles)
 	defer cancel()
 	for _, filepath := range entry.BookingLoc {
 		_ = fs.Delete(ctx, filepath)

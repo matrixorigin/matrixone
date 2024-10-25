@@ -73,11 +73,11 @@ func (s *service) AddStatementFilter(
 		return moerr.NewNotSupportedNoCtxf("method %s not support", method)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseAddStatementFilter)
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			r, err := txn.Exec(addStatementFilterSQL(method, value), executor.StatementOption{})
@@ -92,10 +92,11 @@ func (s *service) AddStatementFilter(
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) ClearStatementFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseClearStatementFilters)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -118,14 +119,14 @@ func (s *service) ClearStatementFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	return s.RefreshTableFilters()
 }
 
 func (s *service) RefreshStatementFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshStatementFilters)
 	defer cancel()
 
 	var filters []StatementFilter
@@ -159,7 +160,7 @@ func (s *service) RefreshStatementFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	for i, method := range methods {

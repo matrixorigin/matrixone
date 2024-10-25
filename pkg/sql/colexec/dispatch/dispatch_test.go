@@ -18,11 +18,13 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPrepareRemote(t *testing.T) {
@@ -64,4 +66,18 @@ func TestReceiverDone(t *testing.T) {
 	bat.SetRowCount(1)
 	sendBatToIndex(d, proc, bat, 0)
 	sendBatToMultiMatchedReg(d, proc, bat, 0)
+}
+
+func Test_waitRemoteRegsReady(t *testing.T) {
+	d := &Dispatch{
+		ctr: &container{},
+		RemoteRegs: []colexec.ReceiveInfo{
+			{},
+		},
+	}
+	proc := testutil.NewProcess()
+	//wait waitNotifyTimeout seconds
+	ret, err := d.waitRemoteRegsReady(proc)
+	assert.Error(t, err)
+	assert.False(t, ret)
 }

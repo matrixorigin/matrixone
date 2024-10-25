@@ -22,6 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,7 +32,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"go.uber.org/zap"
 )
 
 type CacheConfig struct {
@@ -153,7 +155,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 
 	if slowCacheReadThreshold > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
+		ctx, cancel = context.WithTimeoutCause(ctx, slowCacheReadThreshold, moerr.CauseReadCache)
 		defer cancel()
 	}
 
@@ -161,6 +163,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 	if err != nil {
 
 		if errors.Is(err, context.DeadlineExceeded) {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Warn("cache read exceed deadline",
 				zap.Any("err", err),
 				zap.Any("cache type", fmt.Sprintf("%T", cache)),

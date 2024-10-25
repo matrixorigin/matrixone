@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -98,21 +99,21 @@ func NewHakeeperIDGenerator(
 var _ IDGenerator = new(HakeeperIDGenerator)
 
 func (h *HakeeperIDGenerator) NewID(ctx context.Context) (ID, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseHakeeperIDGeneratorNew)
 	defer cancel()
 	id, err := h.generator.AllocateID(ctx)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	return ID(id), nil
 }
 
 func (h *HakeeperIDGenerator) NewIDByKey(ctx context.Context, key string) (ID, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseHakeeperIDGeneratorNewIDByKey)
 	defer cancel()
 	id, err := h.generator.AllocateIDByKey(ctx, key)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	return ID(id), nil
 }

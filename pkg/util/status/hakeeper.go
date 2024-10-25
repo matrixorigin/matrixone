@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -47,10 +48,11 @@ func (s *HAKeeperStatus) fill(client logservice.ClusterHAKeeperClient) {
 	if client == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseHakeeperStatsFill)
 	defer cancel()
 	details, err := client.GetClusterDetails(ctx)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		s.ErrMsg = err.Error()
 		return
 	}
