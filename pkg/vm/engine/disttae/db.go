@@ -278,7 +278,6 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		if err = checkpoints.Unmarshal(payload); err != nil {
 			return nil, err
 		}
-		logutil.Infof("snapshot read response: %v-%v", checkpoints.Succeed, len(checkpoints.Entries))
 		return checkpoints, nil
 	}
 	// create a new proc for `handler`
@@ -306,10 +305,11 @@ func (e *Engine) getOrCreateSnapPart(
 
 	response, err := requestSnapshotRead(ctx, tbl, &ts)
 	if err != nil {
+		logutil.Infof("getOrCreateSnapPart: requestSnapshotRead failed: %v", err)
 		return nil, err
 	}
 	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	logutil.Infof("getOrCreateSnapPart: response: %v", resp)
+	logutil.Infof("getOrCreateSnapPart: response: %v, ok %v", resp, ok)
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	if ok && resp.Succeed && len(resp.Entries) > 0 {
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
