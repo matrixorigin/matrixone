@@ -158,7 +158,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if !builder.qry.LoadTag {
+	if builder.qry.LoadTag {
+		// load do not handle primary/unique key confliction
+		for i, tableDef := range dmlCtx.tableDefs {
+			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
+			idxTableDefs[i] = make([]*plan.TableDef, len(tableDef.Indexes))
+
+			for j, idxDef := range tableDef.Indexes {
+				if !idxDef.TableExist || skipUniqueIdx[j] {
+					continue
+				}
+
+				idxObjRefs[i][j], idxTableDefs[i][j] = builder.compCtx.Resolve(dmlCtx.objRefs[i].SchemaName, idxDef.IndexTableName, bindCtx.snapshot)
+			}
+		}
+	} else {
 		for i, tableDef := range dmlCtx.tableDefs {
 			pkName := tableDef.Pkey.PkeyColName
 			pkPos := tableDef.Name2ColIndex[pkName]
