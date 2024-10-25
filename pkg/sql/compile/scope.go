@@ -312,6 +312,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 			if result.sender != nil {
 				result.sender.close()
 			}
+			if result.err != nil {
+				s.Proc.Infof(s.Proc.Ctx, "send notify message failed : %s", result.err)
+			}
 		}
 	}()
 
