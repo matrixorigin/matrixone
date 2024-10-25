@@ -279,11 +279,14 @@ type PrepareStmt struct {
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql    = "__++__internal_cmd_field_list"
-	cmdFieldListSqlLen = len(cmdFieldListSql)
-	cloudUserTag       = "cloud_user"
-	cloudNoUserTag     = "cloud_nonuser"
-	saveResultTag      = "save_result"
+	cmdFieldListSql           = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen        = len(cmdFieldListSql)
+	cloudUserTag              = "cloud_user"
+	cloudNoUserTag            = "cloud_nonuser"
+	saveResultTag             = "save_result"
+	validatePasswordPolicyTag = "validate_password.policy"
+	validatePasswordPolicyLow = "low"
+	validatePasswordPolicyMed = "medium"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -989,6 +992,16 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if !def.GetDynamic() {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if policy, ok := val.(string); ok && name == validatePasswordPolicyTag {
+		if strings.ToLower(policy) == validatePasswordPolicyLow {
+			// convert to 0
+			val = int64(0)
+		} else if strings.ToLower(policy) == validatePasswordPolicyMed {
+			// convert to 1
+			val = int64(1)
+		}
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
