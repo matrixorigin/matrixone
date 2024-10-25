@@ -93,12 +93,8 @@ type MultiUpdateCtx struct {
 	ObjRef   *plan.ObjectRef
 	TableDef *plan.TableDef
 
-	TableType UpdateTableType
-
 	InsertCols []int
 	DeleteCols []int
-
-	InsertAttrs []string
 
 	PartitionTableIDs   []uint64 // Align array index with the partition number
 	PartitionTableNames []string // Align array index with the partition number
@@ -107,6 +103,9 @@ type MultiUpdateCtx struct {
 
 	Source           engine.Relation
 	PartitionSources []engine.Relation // Align array index with the partition number
+
+	tableType   UpdateTableType
+	insertAttrs []string
 }
 
 func (update MultiUpdate) TypeName() string {

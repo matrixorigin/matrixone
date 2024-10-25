@@ -17,6 +17,7 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -41,6 +42,24 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.OpAnalyzer = process.NewAnalyzer(update.GetIdx(), update.IsFirst, update.IsLast, opName)
 	} else {
 		update.OpAnalyzer.Reset()
+	}
+
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if len(updateCtx.insertAttrs) == 0 {
+			for _, col := range updateCtx.TableDef.Cols {
+				if col.Name != catalog.Row_ID {
+					updateCtx.insertAttrs = append(updateCtx.insertAttrs, col.Name)
+				}
+			}
+
+			tableType := UpdateMainTable
+			if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+				tableType = UpdateUniqueIndexTable
+			} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+				tableType = UpdateSecondaryIndexTable
+			}
+			updateCtx.tableType = tableType
+		}
 	}
 
 	if len(update.ctr.insertBuf) == 0 {
@@ -109,16 +128,6 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.ctr.action = actionInsert
 	} else {
 		update.ctr.action = actionDelete
-	}
-
-	for _, updateCtx := range update.MultiUpdateCtx {
-		if len(updateCtx.InsertAttrs) == 0 {
-			for _, col := range updateCtx.TableDef.Cols {
-				if col.Name != catalog.Row_ID {
-					updateCtx.InsertAttrs = append(updateCtx.InsertAttrs, col.Name)
-				}
-			}
-		}
 	}
 
 	return nil
@@ -257,7 +266,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
 				return input, err
 			}
-			update.addDeleteAffectRows(updateCtx.TableType, rowCounts[i])
+			update.addDeleteAffectRows(updateCtx.tableType, rowCounts[i])
 			name := nameData[i].UnsafeGetString(nameArea)
 			if isPartition {
 				err = updateCtx.PartitionSources[partitionIdx[i]].Delete(ctx, batBufs[actionDelete], name)
@@ -274,7 +283,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			update.addInsertAffectRows(updateCtx.TableType, rowCounts[i])
+			update.addInsertAffectRows(updateCtx.tableType, rowCounts[i])
 			if isPartition {
 				err = updateCtx.PartitionSources[partitionIdx[i]].Write(ctx, batBufs[actionInsert])
 			} else {
@@ -315,7 +324,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 
 		// insert rows
 		if len(updateCtx.InsertCols) > 0 {
-			switch updateCtx.TableType {
+			switch updateCtx.tableType {
 			case UpdateMainTable:
 				err = update.insert_main_table(proc, i, bat)
 			case UpdateUniqueIndexTable:
