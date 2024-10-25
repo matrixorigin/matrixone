@@ -1673,22 +1673,18 @@ variable:
 system_variable:
     AT_AT_ID
     {
-        vs := strings.Split($1, ".")
+        v := strings.ToLower($1)
         var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-           r = vs[1]
-        } else if len(vs) == 1 {
-           r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		}
         $$ = &tree.VarExpr{
-            Name: r,
+            Name: v,
             System: true,
             Global: isGlobal,
         }
@@ -2576,24 +2572,20 @@ var_assignment:
     }
 |   AT_AT_ID equal_or_assignment set_expr
     {
-        vs := strings.Split($1, ".")
-        var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-            r = vs[1]
-        } else if len(vs) == 1{
-            r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        v := strings.ToLower($1)
+		var isGlobal bool
+		if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
-            Name: r,
+            Name: v,
             Value: $3,
         }
     }

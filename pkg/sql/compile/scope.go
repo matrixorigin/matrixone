@@ -559,8 +559,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
 			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
 		}
 	}
@@ -786,13 +786,14 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 }
 
 func (s *Scope) replace(c *Compile) error {
+	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
 	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
