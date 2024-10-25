@@ -17,6 +17,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -81,7 +82,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return input, nil
 	}
 	bat := input.Batch
-	if err := mergeBlock.Split(proc, bat); err != nil {
+	if err := mergeBlock.Split(proc, bat, analyzer); err != nil {
 		return input, err
 	}
 
@@ -90,17 +91,27 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		// 'i' aligns with partition number
 		for i := range mergeBlock.container.partitionSources {
 			if mergeBlock.container.mp[i].RowCount() > 0 {
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 				// batches in mp will be deeply copied into txn's workspace.
-				if err = mergeBlock.container.partitionSources[i].Write(proc.Ctx, mergeBlock.container.mp[i]); err != nil {
+				if err = mergeBlock.container.partitionSources[i].Write(newCtx, mergeBlock.container.mp[i]); err != nil {
 					return input, err
 				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 
 			for _, bat := range mergeBlock.container.mp2[i] {
+				crs := new(perfcounter.CounterSet)
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 				// batches in mp2 will be deeply copied into txn's workspace.
-				if err = mergeBlock.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
+				if err = mergeBlock.container.partitionSources[i].Write(newCtx, bat); err != nil {
 					return input, err
 				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
+
 				bat.Clean(proc.GetMPool())
 			}
 			mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
@@ -108,17 +119,27 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 	} else {
 		// handle origin/main table.
 		if mergeBlock.container.mp[0].RowCount() > 0 {
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
 			//batches in mp will be deeply copied into txn's workspace.
-			if err = mergeBlock.container.source.Write(proc.Ctx, mergeBlock.container.mp[0]); err != nil {
+			if err = mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0]); err != nil {
 				return input, err
 			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 
 		for _, bat := range mergeBlock.container.mp2[0] {
+			crs := new(perfcounter.CounterSet)
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			//batches in mp2 will be deeply copied into txn's workspace.
-			if err = mergeBlock.container.source.Write(proc.Ctx, bat); err != nil {
+			if err = mergeBlock.container.source.Write(newCtx, bat); err != nil {
 				return input, err
 			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+
 			bat.Clean(proc.GetMPool())
 		}
 		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]

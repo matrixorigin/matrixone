@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pierrec/lz4/v4"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -47,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -58,7 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/pierrec/lz4/v4"
 )
 
 var (
@@ -201,7 +203,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
-	err = scanFileData(ctx, param, proc, external.ctr.buf)
+	err = scanFileData(ctx, param, proc, external.ctr.buf, analyzer)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
@@ -924,6 +926,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	return nil
 }
 
+// note: getBatchFromZonemapFile will access Fileservice
 func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) (err error) {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
@@ -965,6 +968,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
+	// note: getBatchFromZonemapFile will access Fileservice
 	tmpBat, release, err = objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
 	if err != nil {
 		return err
@@ -1051,7 +1055,8 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) error {
 	var err error
-	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
+	// note: LoadAllBlocks will access Fileservice,must user `ctx` as paramenter
+	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(ctx, proc.GetMPool())
 	if err != nil {
 		return err
 	}
@@ -1064,19 +1069,25 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 			param.Zoneparam.offset++
 		}
 	}
+	// note: getBatchFromZonemapFile will access Fileservice, must user `ctx` as paramenter
 	return getBatchFromZonemapFile(ctx, param, proc, objectReader, bat)
 }
 
-func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
+func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	var err error
 	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return err
 	}
 
-	if err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader, bat); err != nil {
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	// getZonemapBatch will access Fileservice
+	if err := getZonemapBatch(newCtx, param, proc, param.Filter.blockReader, bat); err != nil {
 		return err
 	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		param.Filter.blockReader = nil
@@ -1092,9 +1103,9 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 }
 
 // scanFileData read batch data from external file
-func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
+func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	if param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN) {
-		return scanZonemapFile(ctx, param, proc, bat)
+		return scanZonemapFile(ctx, param, proc, bat, analyzer)
 	}
 	if param.Extern.Format == tree.PARQUET {
 		return scanParquetFile(ctx, param, proc, bat)
