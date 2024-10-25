@@ -137,7 +137,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 	// set row count.
 	dst.SetRowCount(src.RowCount())
 
-	return dst, false, cacheID, nil
+	return dst, true, cacheID, nil
 }
 
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
