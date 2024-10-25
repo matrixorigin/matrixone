@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -112,14 +113,14 @@ func ListSnapshotCheckpointWithMetas(
 			return metaFiles[i].end.LT(&metaFiles[j].end)
 		})
 
-		//for i, file := range metaFiles {
-		//	// TODO: remove debug log
-		//	logutil.Infof("metaFiles[%d]: %v", i, file.String())
-		//}
-		//for i, file := range compactedFiles {
-		//	// TODO: remove debug log
-		//	logutil.Infof("compactedFiles[%d]: %v", i, file.String())
-		//}
+		for i, file := range metaFiles {
+			// TODO: remove debug log
+			logutil.Infof("metaFiles[%d]: %v", i, file.String())
+		}
+		for i, file := range compactedFiles {
+			// TODO: remove debug log
+			logutil.Infof("compactedFiles[%d]: %v", i, file.String())
+		}
 
 		retFiles := make([]*MetaFile, 0)
 		if len(compactedFiles) > 0 {

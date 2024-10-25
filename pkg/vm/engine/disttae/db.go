@@ -313,7 +313,7 @@ func (e *Engine) getOrCreateSnapPart(
 	}
 	resp, ok := response.(*cmd_util.SnapshotReadResp)
 	var checkpointEntries []*checkpoint.CheckpointEntry
-	if ok && len(resp.Entries) > 0 {
+	if ok && resp.Succeed && len(resp.Entries) > 0 {
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
