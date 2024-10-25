@@ -129,7 +129,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *cmd_util.StorageUsageReq,
-		resp *cmd_util.StorageUsageResp_V2,
+		resp *cmd_util.StorageUsageResp_V3,
 	) (func(), error)
 
 	HandleInterceptCommit(

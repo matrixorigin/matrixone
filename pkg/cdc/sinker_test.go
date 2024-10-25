@@ -91,14 +91,14 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine, _ bool) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, true)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -320,7 +320,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), true)
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine())
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -344,7 +344,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 
 	s := &mysqlSinker{
 		mysql:          sink,
-		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+2+SqlBufReserved),
+		sqlBuf:         make([]byte, 0, len(tsDeletePrefix)+len("delete")+SqlBufReserved),
 		tsInsertPrefix: []byte(tsInsertPrefix),
 		tsDeletePrefix: []byte(tsDeletePrefix),
 		preRowType:     NoOp,
@@ -472,7 +472,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		},
 	}
 
-	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine(), true)
+	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, NewCdcActiveRoutine())
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -601,8 +601,6 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 func Test_mysqlSinker_sinkSnapshot(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
 
 	sinker := &mysqlSinker{
@@ -615,9 +613,8 @@ func Test_mysqlSinker_sinkSnapshot(t *testing.T) {
 			retryDuration: 3 * time.Second,
 			conn:          db,
 		},
-		ar:                   NewCdcActiveRoutine(),
-		sqlBuf:               make([]byte, 1024),
-		initSnapshotSplitTxn: false,
+		ar:     NewCdcActiveRoutine(),
+		sqlBuf: make([]byte, 1024),
 	}
 
 	insertBat := batch.New([]string{"a", "ts"})
@@ -755,9 +752,7 @@ func Test_mysqlsink(t *testing.T) {
 func Test_mysqlSinker_sinkTail(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectExec("begin;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("rollback;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(".*").WillReturnError(moerr.NewInternalErrorNoCtx(""))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -843,4 +838,43 @@ func Test_mysqlSinker_Close(t *testing.T) {
 	}
 
 	sinker.Close()
+}
+
+func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	ctx := context.Background()
+	sinker := &mysqlSinker{
+		mysql: &mysqlSink{
+			retryTimes:    3,
+			retryDuration: 3 * time.Second,
+			conn:          db,
+		},
+		ar: NewCdcActiveRoutine(),
+	}
+	err = sinker.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = sinker.SendCommit(ctx)
+	assert.NoError(t, err)
+
+	err = sinker.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = sinker.SendRollback(ctx)
+	assert.NoError(t, err)
+}
+
+func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
+	ctx := context.Background()
+	s := &consoleSinker{}
+	err := s.SendBegin(ctx)
+	assert.NoError(t, err)
+	err = s.SendCommit(ctx)
+	assert.NoError(t, err)
+	err = s.SendRollback(ctx)
+	assert.NoError(t, err)
 }

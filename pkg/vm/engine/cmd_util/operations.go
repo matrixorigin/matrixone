@@ -319,3 +319,23 @@ func (s *StorageUsageResp_V2) MarshalBinary() ([]byte, error) {
 func (s *StorageUsageResp_V2) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }
+
+type StorageUsageResp_V3 struct {
+	Succeed bool
+	AccIds  []int64
+	Sizes   []uint64
+	Magic   uint64
+
+	ObjCnts       []uint64
+	BlkCnts       []uint64
+	RowCnts       []uint64
+	SnapshotSizes []uint64
+}
+
+func (s *StorageUsageResp_V3) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *StorageUsageResp_V3) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}

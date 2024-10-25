@@ -52,6 +52,7 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.CacheSize = 1
 	opts.GCCfg.GCProbility = 0.000001
+	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()
@@ -78,6 +79,7 @@ func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
 	return opts
 }
@@ -113,6 +115,7 @@ func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Option
 	opts.GCCfg = new(options.GCCfg)
 	opts.GCCfg.ScanGCInterval = time.Second * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
 	return opts
 }
