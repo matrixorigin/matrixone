@@ -667,8 +667,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		} else {
 			args := make([]*plan.Expr, argsLen)
 
+			var colPos int32
+			var ok bool
 			for k := 0; k < argsLen; k++ {
-				colPos := colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]
+				if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
+					errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
+					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), errMsg)
+				}
 				args[k] = DeepCopyExpr(projList2[colPos])
 			}
 

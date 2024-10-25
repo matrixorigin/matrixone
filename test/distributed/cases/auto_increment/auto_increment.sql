@@ -20,6 +20,7 @@ Drop table if exists auto_increment02;
 Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
 Insert into auto_increment02 values();
 Select * from auto_increment02;
+-- @pattern
 Insert into auto_increment02 values(10);
 insert into auto_increment02 values(100);
 select last_insert_id();
