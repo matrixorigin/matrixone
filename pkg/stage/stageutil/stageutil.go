@@ -34,7 +34,7 @@ import (
 
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
 	if s.Url.Scheme == stage.STAGE_PROTOCOL {
-		stagename, prefix, query, err := ParseStageUrl(s.Url)
+		stagename, prefix, query, err := stage.ParseStageUrl(s.Url)
 		if err != nil {
 			return stage.StageDef{}, err
 		}
@@ -134,22 +134,6 @@ func UrlToPath(furl string, proc *process.Process) (path string, query string, e
 	return s.ToPath()
 }
 
-func ParseStageUrl(u *url.URL) (stagename, prefix, query string, err error) {
-	if u.Scheme != stage.STAGE_PROTOCOL {
-		return "", "", "", moerr.NewBadConfig(context.TODO(), "ParseStageUrl: URL protocol is not stage://")
-	}
-
-	stagename = u.Host
-	if len(stagename) == 0 {
-		return "", "", "", moerr.NewBadConfig(context.TODO(), "Invalid stage URL: stage name is empty string")
-	}
-
-	prefix = u.Path
-	query = u.RawQuery
-
-	return
-}
-
 func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err error) {
 
 	aurl, err := url.Parse(furl)
@@ -161,7 +145,7 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
 	}
 
-	stagename, subpath, query, err := ParseStageUrl(aurl)
+	stagename, subpath, query, err := stage.ParseStageUrl(aurl)
 	if err != nil {
 		return stage.StageDef{}, err
 	}

@@ -168,3 +168,19 @@ func ParseS3Url(u *url.URL) (bucket, fpath, query string, err error) {
 
 	return
 }
+
+func ParseStageUrl(u *url.URL) (stagename, prefix, query string, err error) {
+	if u.Scheme != STAGE_PROTOCOL {
+		return "", "", "", moerr.NewBadConfig(context.TODO(), "ParseStageUrl: URL protocol is not stage://")
+	}
+
+	stagename = u.Host
+	if len(stagename) == 0 {
+		return "", "", "", moerr.NewBadConfig(context.TODO(), "Invalid stage URL: stage name is empty string")
+	}
+
+	prefix = u.Path
+	query = u.RawQuery
+
+	return
+}
