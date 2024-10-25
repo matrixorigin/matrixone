@@ -126,6 +126,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
 		}
+		// [issue#19574]
+		// if < 0, it's special for agg or others.
+		if ce.relIndex < 0 {
+			ce.relIndex = 0
+		}
 		return ce, nil
 
 	case *plan.Expr_P:
@@ -657,10 +662,6 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 
 func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	relIndex := expr.relIndex
-	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
-	if len(batches) == 1 {
-		relIndex = 0
-	}
 
 	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
 	if batches[relIndex] == batch.EmptyForConstFoldBatch {
