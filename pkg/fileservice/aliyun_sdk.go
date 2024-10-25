@@ -473,7 +473,7 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return DoWithRetry[bool](
+	return DoWithRetry(
 		"s3 delete object",
 		func() (bool, error) {
 			if err := a.bucket.DeleteObject(
@@ -495,7 +495,7 @@ func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, er
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return DoWithRetry[bool](
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (bool, error) {
 			_, err := a.bucket.DeleteObjects(
@@ -666,33 +666,44 @@ type ossCredentialProvider struct {
 var _ oss.CredentialsProvider = new(ossCredentialProvider)
 
 func (o *ossCredentialProvider) GetCredentials() oss.Credentials {
-	return o
-}
-
-var _ oss.Credentials = new(ossCredentialProvider)
-
-func (o *ossCredentialProvider) GetAccessKeyID() string {
-	ret, err := o.upstream.GetAccessKeyId()
+	creds, err := o.upstream.GetCredential()
 	if err != nil {
 		throw(err)
 	}
-	return *ret
+	return toOSSCredential(creds)
 }
 
-func (o *ossCredentialProvider) GetAccessKeySecret() string {
-	ret, err := o.upstream.GetAccessKeySecret()
-	if err != nil {
-		throw(err)
+func toOSSCredential(creds *credentials.CredentialModel) oss.Credentials {
+	return &ossCredential{
+		upstream: creds,
 	}
-	return *ret
 }
 
-func (o *ossCredentialProvider) GetSecurityToken() string {
-	ret, err := o.upstream.GetSecurityToken()
-	if err != nil {
-		throw(err)
+type ossCredential struct {
+	upstream *credentials.CredentialModel
+}
+
+var _ oss.Credentials = new(ossCredential)
+
+func (o *ossCredential) GetAccessKeyID() string {
+	if p := o.upstream.AccessKeyId; p != nil {
+		return *p
 	}
-	return *ret
+	return ""
+}
+
+func (o *ossCredential) GetAccessKeySecret() string {
+	if p := o.upstream.AccessKeySecret; p != nil {
+		return *p
+	}
+	return ""
+}
+
+func (o *ossCredential) GetSecurityToken() string {
+	if p := o.upstream.SecurityToken; p != nil {
+		return *p
+	}
+	return ""
 }
 
 type aliyunAssumeRoleCredentialsProvider struct {
