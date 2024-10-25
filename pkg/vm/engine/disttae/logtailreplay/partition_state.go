@@ -234,12 +234,20 @@ func (p *PartitionState) HandleDataObjectList(
 					if entry.Time.LE(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
+						//
+						//fmt.Println("gc",
+						//	entry.PrimaryIndexBytes,
+						//	entry.RowID.String(),
+						//	entry.Time.ToString(),
+						//	entry.Deleted,
+						//	entry.ID)
 
 						// delete the row's primary index
 						if len(entry.PrimaryIndexBytes) > 0 {
 							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
+								Time:       entry.Time,
 							})
 						}
 						numDeleted++
@@ -354,6 +362,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
+			Time:  types.MaxTs(),
 		}); ok; ok = tbIter.Next() {
 			if truncatePoint.LT(&tbIter.Item().Time) {
 				continue
@@ -376,10 +385,11 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
 			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-					Bytes:      deletedRow.PrimaryIndexBytes,
-					RowEntryID: deletedRow.ID,
-				})
+				//p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+				//	Bytes:      deletedRow.PrimaryIndexBytes,
+				//	RowEntryID: deletedRow.ID,
+				//	Time:       deletedRow.Time,
+				//})
 			}
 		}
 	}
@@ -460,6 +470,7 @@ func (p *PartitionState) HandleRowsDelete(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
@@ -541,6 +552,7 @@ func (p *PartitionState) HandleRowsInsert(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(entry)
 		}
@@ -773,6 +785,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	for _, key := range keys {
 
 		idxEntry.Bytes = key
+		idxEntry.Time = types.MaxTs()
 
 		for ok := iter.Seek(idxEntry); ok; ok = iter.Next() {
 

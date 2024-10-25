@@ -146,16 +146,31 @@ type PrimaryIndexEntry struct {
 	BlockID objectio.Blockid
 	RowID   objectio.Rowid
 	Time    types.TS
+	Deleted bool
 }
 
 func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
-	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
-		return true
-	} else if res > 0 {
-		return false
+	if res := bytes.Compare(p.Bytes, than.Bytes); res != 0 {
+		return res < 0
 	}
-	return p.RowEntryID < than.RowEntryID
+
+	// desc
+	if res := p.Time.Compare(&than.Time); res != 0 {
+		return res > 0
+	}
+
+	// desc
+	return p.RowEntryID > than.RowEntryID
 }
+
+//func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
+//	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
+//		return true
+//	} else if res > 0 {
+//		return false
+//	}
+//	return p.RowEntryID < than.RowEntryID
+//}
 
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
