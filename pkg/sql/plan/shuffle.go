@@ -262,7 +262,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			if col == nil {
 				return
 			}
-			tableDef, ok = builder.tag2Table[col.RelPos]
+			_, ok = builder.tag2Table[col.RelPos]
 			if !ok {
 				return
 			}
