@@ -211,6 +211,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.GCCfg.GCMergeCount = DefaultGCMergeCount
 	}
 
+	if o.GCCfg.GCDeleteTimeout <= 0 {
+		o.GCCfg.GCDeleteTimeout = DefaultGCDeleteTimeout
+	}
+	if o.GCCfg.GCDeleteBatchSize <= 0 {
+		o.GCCfg.GCDeleteBatchSize = DefaultGCDeleteBatchSize
+	}
+
 	if o.SchedulerCfg == nil {
 		ioworkers := DefaultIOWorkers
 		procs := runtime.GOMAXPROCS(0)
