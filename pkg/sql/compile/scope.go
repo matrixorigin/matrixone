@@ -559,8 +559,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
 			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
 		}
 	}
