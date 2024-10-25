@@ -257,8 +257,15 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
 		child := builder.qry.Nodes[n.Children[0]]
-		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle {
-			logutil.Infof("debug1: agg tags0 %v tags1 %v", child.BindingTags[0], child.BindingTags[1])
+		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
+			col = child.GroupBy[col.ColPos].GetCol()
+			if col == nil {
+				return
+			}
+			tableDef, ok = builder.tag2Table[col.RelPos]
+			if !ok {
+				return
+			}
 		}
 		return
 	}
@@ -280,7 +287,6 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			if n.BuildOnLeft {
 				// its better for right join to go shuffle, but can not go complex shuffle
 				if n.BuildOnLeft && leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
-					logutil.Infof("col %v return 3", col.Name)
 					return
 				}
 			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
