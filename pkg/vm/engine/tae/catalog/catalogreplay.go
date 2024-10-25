@@ -88,10 +88,8 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 	dbun := db.SearchNodeLocked(un)
 	if dbun == nil {
-		logutil.Infof("replay database %v insert dnode %v", cmd.ID.DbID, un.String())
 		db.InsertLocked(un)
 	} else {
-		logutil.Infof("replay database %v skip dnode %v", cmd.ID.DbID, un.String())
 		return
 		// panic(fmt.Sprintf("logic err: duplicate node %v and %v", dbun.String(), un.String()))
 	}
@@ -233,10 +231,29 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 	if err != nil {
 		panic(err)
 	}
+
+	////  Note: do not use ckp-end as txnNode
+	// Running
+	// ------+------+---------+----+-----------+-> time
+	//       |      |         |    |           |
+	//  create-db-s |         |  ckp-end     drop-db-c
+	//         create-db-c  drop-db-s
+	//
+	// Replay
+	// -----------------------+----+-----------+-> time
+	//                        |    |           |
+	//                  drop-db-s  |          drop-db-c
+	//                             ckp-end
+	//                             create-db-s
+	//                             create-db-c
+	// create-db entry was replayed from checkpoint and drop-db entry was replayed from WAL
+	// If ckp-end was used, the create-db and drop-db are disordered, leading to ExpectedDup error
+
+	panguEpoch := types.BuildTS(42424242, 0)
 	txnNode := &txnbase.TxnMVCCNode{
-		Start:   readTxn.GetStartTS(),
-		Prepare: readTxn.GetStartTS(),
-		End:     readTxn.GetStartTS(),
+		Start:   panguEpoch,
+		Prepare: panguEpoch,
+		End:     panguEpoch,
 	}
 
 	// replay database catalog
