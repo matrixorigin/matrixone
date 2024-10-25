@@ -257,9 +257,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
-		logutil.Infof("col relpos %v colpos %v  return 2", col.RelPos, col.ColPos)
+		logutil.Infof("debug1: col relpos %v colpos %v  return 2", col.RelPos, col.ColPos)
 		for k, v := range builder.tag2Table {
-			logutil.Infof("builder tag2table k %v v %v", k, v)
+			logutil.Infof("debug1: builder tag2table k %v v %v", k, v.Name)
 		}
 		return
 	}
