@@ -126,5 +126,5 @@ Project
               Block Filter Cond: (t2.c3 < 5)
 select count(*) from t1,t2 where t1.c2=t2.c1 and t2.c3<5;
 count(*)
-49
+400
 drop database if exists d1;
