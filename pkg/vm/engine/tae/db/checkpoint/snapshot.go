@@ -120,7 +120,7 @@ func getSnapshotMetaFiles(
 	return retFiles
 }
 
-func ListSnapshotCheckpointWithMetas(
+func ListSnapshotCheckpoint(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
@@ -146,55 +146,6 @@ func ListSnapshotCheckpointWithMetas(
 		}
 	}
 	return loadCheckpointMeta(ctx, sid, fs, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot))
-}
-
-func ListSnapshotCheckpoint(
-	ctx context.Context,
-	sid string,
-	fs fileservice.FileService,
-	snapshot types.TS,
-	_ uint64,
-) ([]*CheckpointEntry, error) {
-	metaFiles, err := ListSnapshotMeta(ctx, snapshot, fs)
-	if err != nil {
-		return nil, err
-	}
-	if len(metaFiles) == 0 {
-		return nil, nil
-	}
-	return loadCheckpointMeta(ctx, sid, fs, metaFiles)
-}
-
-func ListSnapshotMeta(
-	ctx context.Context,
-	snapshot types.TS,
-	fs fileservice.FileService,
-) ([]*MetaFile, error) {
-	dirs, err := fs.List(ctx, CheckpointDir)
-	if err != nil {
-		return nil, err
-	}
-	if len(dirs) == 0 {
-		return nil, nil
-	}
-	metaFiles := make([]*MetaFile, 0)
-	compactedFiles := make([]*MetaFile, 0)
-	for i, dir := range dirs {
-		start, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		file := &MetaFile{
-			start: start,
-			end:   end,
-			index: i,
-			name:  dir.Name,
-		}
-		if ext == blockio.CompactedExt {
-			compactedFiles = append(compactedFiles, file)
-		} else {
-			metaFiles = append(metaFiles, file)
-		}
-	}
-
-	return getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot), nil
 }
 
 func loadCheckpointMeta(

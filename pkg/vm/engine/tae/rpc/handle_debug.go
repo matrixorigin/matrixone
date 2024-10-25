@@ -90,7 +90,7 @@ func (h *Handle) HandleSnapshotRead(
 		resp.Succeed = false
 		return nil, nil
 	}
-	checkpoints, err := checkpoint.ListSnapshotCheckpointWithMetas(
+	checkpoints, err := checkpoint.ListSnapshotCheckpoint(
 		ctx,
 		"",
 		h.db.Runtime.Fs.Service,
