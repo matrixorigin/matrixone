@@ -17,6 +17,7 @@ package embed
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -48,6 +49,16 @@ func RunBaseClusterTests(
 			c, err = NewCluster(
 				WithCNCount(3),
 				WithTesting(),
+				WithPreStart(func(svc ServiceOperator) {
+					if svc.ServiceType() == metadata.ServiceType_CN {
+						svc.Adjust(
+							func(config *ServiceConfig) {
+								config.CN.LockService.MaxFixedSliceSize = 10001
+								config.CN.LockService.MaxLockRowCount = 10000
+							},
+						)
+					}
+				}),
 			)
 			if err != nil {
 				return
