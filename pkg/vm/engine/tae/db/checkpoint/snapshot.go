@@ -86,6 +86,7 @@ func ListSnapshotCheckpointWithMetas(
 	snapshot types.TS,
 	files map[string]struct{},
 ) ([]*CheckpointEntry, error) {
+	logutil.Infof("ListSnapshotCheckpointWithMetas: files=%s, snapshot=%v", len(files), snapshot.ToString())
 	if len(files) == 0 {
 		return nil, nil
 	}

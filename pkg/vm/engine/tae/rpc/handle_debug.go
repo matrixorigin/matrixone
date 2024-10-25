@@ -86,7 +86,7 @@ func (h *Handle) HandleSnapshotRead(
 	}()
 	maxEnd := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint().GetEnd()
 	snapshot := types.TimestampToTS(*req.Snapshot)
-	logutil.Infof("SnapshotRead: %s", snapshot.ToString())
+	logutil.Infof("SnapshotRead: %s, maxEnd is %v", snapshot.ToString(), maxEnd.ToString())
 	if snapshot.LE(&maxEnd) {
 		resp.Succeed = false
 		return nil, nil
