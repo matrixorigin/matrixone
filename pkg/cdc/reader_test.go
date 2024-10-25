@@ -76,7 +76,7 @@ func TestNewTableReader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.NotNilf(t, NewTableReader(tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc), "NewTableReader(%v, %v, %v, %v, %v, %v, %v, %v, %v)", tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc)
+			assert.NotNilf(t, NewTableReader(tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc, true), "NewTableReader(%v, %v, %v, %v, %v, %v, %v, %v, %v)", tt.args.cnTxnClient, tt.args.cnEngine, tt.args.mp, tt.args.packerPool, tt.args.info, tt.args.sinker, tt.args.wMarkUpdater, tt.args.tableDef, tt.args.restartFunc)
 		})
 	}
 }
@@ -163,6 +163,12 @@ func Test_tableReader_Run(t *testing.T) {
 				nil
 		})
 	defer stub6.Reset()
+
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	defer stub7.Reset()
+
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	defer stub8.Reset()
 
 	u := &WatermarkUpdater{
 		accountId:    1,
@@ -263,6 +269,69 @@ func Test_tableReader_Run_NonStaleReadErr(t *testing.T) {
 		restartFunc: func(*DbTableInfo) error { return nil },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
+}
+
+func Test_tableReader_readTableWithTxn(t *testing.T) {
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer {
+			return types.NewPacker()
+		},
+		func(packer *types.Packer) {
+			packer.Reset()
+		},
+		func(packer *types.Packer) {
+			packer.Close()
+		},
+	)
+	var packer *types.Packer
+	put := pool.Get(&packer)
+	defer put.Put()
+
+	watermarkUpdater := &WatermarkUpdater{
+		accountId:    1,
+		taskId:       uuid.New(),
+		ie:           newWmMockSQLExecutor(),
+		watermarkMap: &sync.Map{},
+	}
+
+	mp := mpool.MustNewZero()
+
+	reader := &tableReader{
+		info: &DbTableInfo{
+			SourceTblName:  "t1",
+			SourceTblIdStr: "123",
+		},
+		packerPool:            pool,
+		wMarkUpdater:          watermarkUpdater,
+		mp:                    mp,
+		insTsColIdx:           0,
+		insCompositedPkColIdx: 3,
+		sinker:                NewConsoleSinker(nil, nil),
+	}
+
+	getRelationByIdStub := gostub.Stub(&GetRelationById, func(_ context.Context, _ engine.Engine, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+		return "", "", nil, nil
+	})
+	defer getRelationByIdStub.Reset()
+
+	getSnapshotTSStub := gostub.Stub(&GetSnapshotTS, func(_ client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{
+			PhysicalTime: 100,
+			LogicalTime:  0,
+		}
+	})
+	defer getSnapshotTSStub.Reset()
+
+	collectChangesStub := gostub.Stub(&CollectChanges, func(_ context.Context, _ engine.Relation, _, _ types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		handle := newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer)
+		handle.called = batchCnt - 2
+		return handle, nil
+	})
+	defer collectChangesStub.Reset()
+
+	err := reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	assert.NoError(t, err)
 }
 
 //func Test_tableReader_readTable(t *testing.T) {

@@ -29,12 +29,12 @@ type CounterSet struct {
 
 type FileServiceCounterSet struct {
 	S3 struct {
-		List        stats.Counter
-		Head        stats.Counter
-		Put         stats.Counter
-		Get         stats.Counter
-		Delete      stats.Counter
-		DeleteMulti stats.Counter
+		List        stats.Counter // listObjects:List all Objects  [Put type request]
+		Head        stats.Counter // statObject:View all meta information contained in the object [Get type request]
+		Put         stats.Counter // putObject:Upload an Object   [Put type request]
+		Get         stats.Counter // getObject:Download an Object   [Get type request]
+		Delete      stats.Counter // deleteObject:Delete a single Object [Put type request]
+		DeleteMulti stats.Counter // deleteObjects:Delete multiple Objects [Put type request]
 	}
 
 	Cache struct {
@@ -70,10 +70,10 @@ type FileServiceCounterSet struct {
 	}
 
 	FileWithChecksum struct {
-		Read            stats.Counter
-		Write           stats.Counter
-		UnderlyingRead  stats.Counter
-		UnderlyingWrite stats.Counter
+		Read            stats.Counter // logical read, unit：bytes
+		Write           stats.Counter // logical write, unit：bytes
+		UnderlyingRead  stats.Counter // physical read, unit：bytes
+		UnderlyingWrite stats.Counter // physical write, unit：bytes
 	}
 }
 

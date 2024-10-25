@@ -88,11 +88,9 @@ type GCReport struct {
 	TScanItem  int
 	TStaleItem int
 	TStaleCpk  int
-	TDelCpk    int
 	DScanItem  int
 	DStaleItem int
 	DStaleCpk  int
-	DDelCpk    int
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
@@ -133,9 +131,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			if item.Name != prevName {
 				prevName = item.Name
 				seenLargest = false
-				if item.deleted {
-					deletedCpkey = append(deletedCpkey, item)
-				}
 			}
 
 			if item.Ts.Less(ts) {
@@ -146,6 +141,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 					}
 				} else if item.Id > catalog.MO_COLUMNS_ID {
 					deletedItems = append(deletedItems, item)
+					if !item.deleted {
+						deletedCpkey = append(deletedCpkey, item)
+					}
 				}
 			}
 			r.TScanItem++
@@ -157,11 +155,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.tables.data.Delete(item)
 		}
 		for _, item := range deletedCpkey {
-			lastest, exist := cc.tables.cpkeyIndex.Get(item)
-			if !exist || lastest.Ts.Greater(item.Ts) {
-				continue
-			}
-			r.TDelCpk += 1
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
@@ -176,11 +169,7 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			if item.Name != prevName {
 				prevName = item.Name
 				seenLargest = false
-				if item.deleted {
-					deletedCpkey = append(deletedCpkey, item)
-				}
 			}
-
 			if item.Ts.Less(ts) {
 				if !seenLargest {
 					seenLargest = true
@@ -189,6 +178,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 					}
 				} else {
 					deletedItems = append(deletedItems, item)
+					if !item.deleted {
+						deletedCpkey = append(deletedCpkey, item)
+					}
 				}
 			}
 			r.DScanItem++
@@ -201,11 +193,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.databases.data.Delete(item)
 		}
 		for _, item := range deletedCpkey {
-			lastest, exist := cc.databases.cpkeyIndex.Get(item)
-			if !exist || lastest.Ts.Greater(item.Ts) {
-				continue
-			}
-			r.DDelCpk += 1
 			cc.databases.cpkeyIndex.Delete(item)
 		}
 	}
@@ -437,10 +424,7 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
-		if item, ok := cc.tables.cpkeyIndex.Get(&TableItem{CPKey: pk}); ok {
-			// Note: the newItem.Id is the latest id under the name of the table,
-			// not the id that should be seen at the moment ts.
-			// Lucy thing is that the wrong tableid hold by this delete item will never be used.
+		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
 			newItem := &TableItem{
 				deleted:    true,
 				Id:         item.Id,
@@ -451,7 +435,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				Ts:         ts.ToTimestamp(),
 			}
 			cc.tables.data.Set(newItem)
-		}
+			return false
+		})
 	}
 }
 
@@ -460,7 +445,7 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
-		if item, ok := cc.databases.cpkeyIndex.Get(&DatabaseItem{CPKey: pk}); ok {
+		cc.databases.cpkeyIndex.Ascend(&DatabaseItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *DatabaseItem) bool {
 			newItem := &DatabaseItem{
 				deleted:   true,
 				Id:        item.Id,
@@ -473,7 +458,8 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        ts.ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
-		}
+			return false
+		})
 	}
 }
 
