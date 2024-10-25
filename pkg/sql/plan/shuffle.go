@@ -260,12 +260,27 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
 			col = child.GroupBy[col.ColPos].GetCol()
 			if col == nil {
+				logutil.Infof("debug1: return 1")
 				return
 			}
 			tableDef, ok = builder.tag2Table[col.RelPos]
 			if !ok {
+				logutil.Infof("debug1: return 2")
 				return
 			}
+			s := builder.getStatsInfoByTableID(tableDef.TblId)
+			if s == nil {
+				logutil.Infof("debug1: return 3")
+				return
+			}
+
+			colName := tableDef.Cols[col.ColPos].Name
+			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
+			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
+			n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
+			n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 		}
 		return
 	}
