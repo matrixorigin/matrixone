@@ -108,6 +108,7 @@ func TestToPath(t *testing.T) {
 
 	mopath, query, err = s.ToPath()
 	require.Nil(t, err)
+	require.Equal(t, query, "")
 
 	require.Equal(t, mopath, "/tmp/dir/subdir/file.pdf")
 
@@ -119,7 +120,7 @@ func TestToPath(t *testing.T) {
 		Url:    u,
 		Status: ""}
 
-	mopath, query, err = s.ToPath()
+	_, _, err = s.ToPath()
 	require.NotNil(t, err)
 }
 
