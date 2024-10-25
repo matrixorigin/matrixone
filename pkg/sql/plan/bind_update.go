@@ -270,8 +270,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 			args := make([]*plan.Expr, len(idxDef.Parts))
 
+			var colPos int32
+			var ok bool
 			for k, colName := range idxDef.Parts {
-				colPos := int32(colName2Idx[alias+"."+colName])
+				if colPos, ok = colName2Idx[alias+"."+catalog.ResolveAlias(colName)]; !ok {
+					errMsg := fmt.Sprintf("bind update err, can not find colName = %s", colName)
+					return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+				}
 				args[k] = &plan.Expr{
 					Typ: selectNode.ProjectList[colPos].Typ,
 					Expr: &plan.Expr_Col{

@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -194,9 +196,13 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
-
+				var colPos int32
+				var ok bool
 				for k, colName := range idxDef.Parts {
-					colPos := int32(colName2Idx[i][colName])
+					if colPos, ok = colName2Idx[i][catalog.ResolveAlias(colName)]; !ok {
+						errMsg := fmt.Sprintf("bind delete err, can not find colName = %s", colName)
+						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					}
 					args[k] = &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
