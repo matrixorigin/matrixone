@@ -1403,7 +1403,6 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
 		cdc.activeRoutine,
-		cdc.initSnapshotSplitTxn,
 	)
 	if err != nil {
 		return err
@@ -1420,6 +1419,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc.sunkWatermarkUpdater,
 		tableDef,
 		cdc.ResetWatermarkForTable,
+		cdc.initSnapshotSplitTxn,
 	)
 	go reader.Run(ctx, cdc.activeRoutine)
 

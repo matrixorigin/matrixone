@@ -36,6 +36,7 @@ var (
 	// storage usage / show accounts metrics
 	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
 	TaskICkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("ickp_collect_usage")
+	TaskCompactedCollectUsageDurationHistogram     = taskShortDurationHistogram.WithLabelValues("compacted_collect_usage")
 	TaskStorageUsageReqDurationHistogram           = taskShortDurationHistogram.WithLabelValues("handle_usage_request")
 	TaskShowAccountsGetTableStatsDurationHistogram = taskShortDurationHistogram.WithLabelValues("show_accounts_get_table_stats")
 	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")

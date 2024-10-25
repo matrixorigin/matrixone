@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
@@ -26,15 +25,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -312,30 +309,6 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 	reldata := &engine_util.BlockListRelData{}
 	reldata.SetBlockList(s)
 	putBlocksInCurrentCN(testCompile, reldata)
-}
-
-func TestPutBlocksInAverage(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
-	var ranges memoryengine.ShardIdSlice
-	id := make([]byte, 8)
-	binary.LittleEndian.PutUint64(id, 1)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	relData := &memoryengine.MemRelationData{
-		Shards: ranges,
-	}
-	n := &plan.Node{Stats: plan2.DefaultStats()}
-	putBlocksInAverage(testCompile, relData, n)
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {
