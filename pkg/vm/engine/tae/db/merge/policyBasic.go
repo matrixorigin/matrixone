@@ -85,7 +85,7 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	ctx := context.Background()
 	defer func() {
 		if err != nil {
-			err = txn.Rollback(ctx)
+			txn.Rollback(ctx)
 			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
 		} else {
 			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
