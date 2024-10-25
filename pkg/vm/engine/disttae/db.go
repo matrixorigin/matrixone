@@ -282,10 +282,16 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 	}
 
 	// create a new proc for `handler`
-	proc := tbl.GetProcess().(*process.Process)
+	//tableProc := tbl.getTxn().GetProc()
+	//proc := process.NewTopProcess(ctx, tableProc.GetMPool(),
+	//	tableProc.Base.TxnClient, tbl.getTxn().op,
+	//	tableProc.Base.FileService, tableProc.Base.LockService,
+	//	tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
+	//	tableProc.Base.UdfService, tableProc.Base.Aicm,
+	//)
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
-	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	result, err := handler(tbl.getTxn().GetProc(), "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		// try the previous RPC method
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
