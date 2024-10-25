@@ -267,8 +267,8 @@ func (entry *TableEntry) GetLastestSchema(isTombstone bool) *Schema {
 
 // GetVisibleSchema returns committed schema visible at the given txn
 func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool) (schema *Schema) {
-	entry.RLock()
-	defer entry.RUnlock()
+	entry.Lock()
+	defer entry.Unlock()
 	node := entry.GetVisibleNodeLocked(txn)
 	if node != nil {
 		if isTombstone {
