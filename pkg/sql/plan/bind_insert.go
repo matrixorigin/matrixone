@@ -298,11 +298,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if len(idxDef.Parts) == 1 {
 					dedupColName = idxDef.Parts[0]
 				} else {
-					dedupColName = "(" + strings.Join(idxDef.Parts, ",") + ")"
+					dedupColName = "("
+					for j, part := range idxDef.Parts {
+						if j == 0 {
+							dedupColName += catalog.ResolveAlias(part)
+						} else {
+							dedupColName += "," + catalog.ResolveAlias(part)
+						}
+					}
+					dedupColName += ")"
 				}
 
 				for j, part := range idxDef.Parts {
-					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[part]].Typ
+					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(part)]].Typ
 				}
 
 				lastNodeID = builder.appendNode(&plan.Node{
@@ -660,7 +668,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			args := make([]*plan.Expr, argsLen)
 
 			for k := 0; k < argsLen; k++ {
-				colPos := colName2Idx[tableDef.Name+"."+idxDef.Parts[k]]
+				colPos := colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]
 				args[k] = DeepCopyExpr(projList2[colPos])
 			}
 
