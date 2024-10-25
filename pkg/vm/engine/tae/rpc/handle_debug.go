@@ -96,6 +96,7 @@ func (h *Handle) HandleSnapshotRead(
 		resp.Succeed = false
 		return nil, err
 	}
+	logutil.Infof("SnapshotRead: %s, checkpoints: %d", snapshot.ToString(), len(checkpoints))
 	resp.Succeed = true
 	resp.Entries = make([]*cmd_util.CheckpointEntryResp, 0, len(checkpoints))
 	for _, ckp := range checkpoints {
