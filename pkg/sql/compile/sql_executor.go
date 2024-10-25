@@ -262,6 +262,11 @@ func (exec *txnExecutor) Exec(
 		defer recoverAccount(exec, originAccountID)
 	}
 	//-----------------------------------------------------------------------------------------
+	if statementOption.IgnoreForeignKey() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.IgnoreForeignKey{},
+			true)
+	}
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()

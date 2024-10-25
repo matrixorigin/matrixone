@@ -227,6 +227,8 @@ type IsMoLogger struct{}
 
 type SourceScanResKey struct{}
 
+type IgnoreForeignKey struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 
