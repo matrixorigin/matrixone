@@ -15,6 +15,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ func Test_saveProfile(t *testing.T) {
 	dir := t.TempDir()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
 	assert.Nil(t, err)
+	defer fs.Close()
 	globalEtlFS = fs
 	saveCpuProfile(time.Second)
 	saveMallocProfile()
@@ -36,6 +38,19 @@ func Test_saveProfile(t *testing.T) {
 func Test_saveProfile2(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
+	defer fs.Close()
 	globalEtlFS = fs
 	saveCpuProfile(time.Second)
+}
+
+func Test_saveProfile3(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	close(sigs)
+	*profileInterval = time.Second * 10
+	dir := t.TempDir()
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
+	assert.Nil(t, err)
+	defer fs.Close()
+	globalEtlFS = fs
+	saveProfilesLoop(sigs)
 }
