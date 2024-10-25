@@ -24,14 +24,15 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestHAKeeperClientConfigIsValidated(t *testing.T) {
@@ -828,4 +829,13 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 		}
 		runServiceTest(t, true, true, fn)
 	})
+}
+
+func Test_NewLogHAKeeperClientWithRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.NewInternalErrorNoCtx("ut tester"))
+	defer cancel()
+	cfg := HAKeeperClientConfig{
+		DiscoveryAddress: "wrongaddress",
+	}
+	NewLogHAKeeperClientWithRetry(ctx, "", cfg)
 }
