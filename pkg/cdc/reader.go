@@ -249,9 +249,9 @@ func (reader *tableReader) readTableWithTxn(
 	defer func() {
 		if hasBegin {
 			if err == nil {
-				_ = reader.sinker.SinkSql(ctx, "commit;")
+				_ = reader.sinker.SendCommit(ctx)
 			} else {
-				_ = reader.sinker.SinkSql(ctx, "rollback;")
+				_ = reader.sinker.SendRollback(ctx)
 			}
 		}
 	}()
@@ -292,7 +292,7 @@ func (reader *tableReader) readTableWithTxn(
 		case engine.ChangesHandle_Snapshot:
 			// output sql in a txn
 			if !hasBegin && !reader.initSnapshotSplitTxn {
-				if err = reader.sinker.SinkSql(ctx, "begin;"); err != nil {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
 					return err
 				}
 				hasBegin = true
@@ -330,7 +330,7 @@ func (reader *tableReader) readTableWithTxn(
 
 			// output sql in a txn
 			if !hasBegin {
-				if err = reader.sinker.SinkSql(ctx, "begin;"); err != nil {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
 					return err
 				}
 				hasBegin = true
