@@ -556,7 +556,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+Unknown database test01
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 employeeid    employeename    salary    salaryrank
 3    Charlie    90000.00    1
@@ -795,13 +795,13 @@ drop snapshot if exists sp100;
 create snapshot sp100 for account sys;
 drop database test04;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
 department_id    department_name
 1    HR
 2    Engineering
 select * from test05.employee_with_department_view;
-invalid database test04
+Unknown database test04
 select * from test04.employee_view {snapshot = 'sp100'};
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -821,11 +821,11 @@ create snapshot sp101 for account sys;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
-invalid database test03
+Unknown database test03
 select * from test05.employee_with_department_view;
-invalid database test05
+Unknown database test05
 select * from test04.employee_view {snapshot = 'sp100'};
 employee_id    first_name    last_name    department_id
 1    John    Doe    1

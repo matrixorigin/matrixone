@@ -253,7 +253,7 @@ mysql
 system
 system_metrics
 use sub04;
-invalid database sub04
+Unknown database sub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub04    db01    *    acc01        2024-08-01 16:54:07    null    create pub04

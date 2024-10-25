@@ -115,7 +115,7 @@ select * from dis_table_04;
 a
 rollback ;
 select * from dis_db_01.dis_table_04;
-invalid database dis_db_01
+Unknown database dis_db_01
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
@@ -258,7 +258,7 @@ aaaa    2222-07-12 00:00:00
 ccc    null
 oppo    1009-11-11 00:00:00
 use dis_db_02;
-invalid database dis_db_02
+Unknown database dis_db_02
 select b, c from dis_table_02;
 b    c
 aaaa    2020-09-08 00:00:00
@@ -441,9 +441,9 @@ create table iso_table_0001(a int);
 commit;
 w-w conflict
 use iso_db_02;
-invalid database iso_db_02
+Unknown database iso_db_02
 select * from iso_table_0001;
-not connect to a database
+No database selected
 use isolation_2;
 create table dis_table_04(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
 insert into dis_table_04 values (6666,'kkkk','2010-11-25');

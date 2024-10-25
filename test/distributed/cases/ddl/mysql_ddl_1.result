@@ -20,7 +20,7 @@ select database();
 database()
 mysql_ddl_test_db_2
 /*!40101 use mysql_ddl_test_db_3; */
-invalid database mysql_ddl_test_db_3
+Unknown database mysql_ddl_test_db_3
 select database();
 database()
 mysql_ddl_test_db_2

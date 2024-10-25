@@ -538,7 +538,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+Unknown database test01
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 employeeid    employeename    salary    salaryrank
 3    Charlie    90000.00    1
@@ -600,14 +600,14 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 drop database test02;
 select * from test02.employees_view;
-invalid database test02
+Unknown database test02
 select * from test02.employees_view{snapshot = 'sp10'};
 id    name    department    salary    hire_date
 1    Job    Doct    10000.00    2000-10-10
 2    Mary    Farmer    10000.00    2012-10-10
 3    Lucy    Programmer    20000.00    2021-10-10
 select * from test02.employees_by_salary_view;
-invalid database test02
+Unknown database test02
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 name    salary
 Lucy    20000.00
@@ -699,13 +699,13 @@ drop snapshot if exists sp100;
 create snapshot sp100 for cluster;
 drop database test04;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
 department_id    department_name
 1    HR
 2    Engineering
 select * from test05.employee_with_department_view;
-invalid database test04
+Unknown database test04
 select * from test04.employee_view {snapshot = 'sp100'};
 employee_id    first_name    last_name    department_id
 1    John    Doe    1
@@ -725,11 +725,11 @@ create snapshot sp101 for cluster;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
-invalid database test03
+Unknown database test03
 select * from test05.employee_with_department_view;
-invalid database test05
+Unknown database test05
 select * from test04.employee_view {snapshot = 'sp100'};
 employee_id    first_name    last_name    department_id
 1    John    Doe    1

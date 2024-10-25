@@ -231,9 +231,9 @@ SHOW CREATE TABLE mo_catalog.mo_columns;
 Table    Create Table
 mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` varchar(256) DEFAULT NULL,\n  `account_id` int unsigned DEFAULT NULL,\n  `att_database_id` bigint unsigned DEFAULT NULL,\n  `att_database` varchar(256) DEFAULT NULL,\n  `att_relname_id` bigint unsigned DEFAULT NULL,\n  `att_relname` varchar(256) DEFAULT NULL,\n  `attname` varchar(256) DEFAULT NULL,\n  `atttyp` varchar(256) DEFAULT NULL,\n  `attnum` int DEFAULT NULL,\n  `att_length` int DEFAULT NULL,\n  `attnotnull` tinyint DEFAULT NULL,\n  `atthasdef` tinyint DEFAULT NULL,\n  `att_default` varchar(2048) DEFAULT NULL,\n  `attisdropped` tinyint DEFAULT NULL,\n  `att_constraint_type` char(1) DEFAULT NULL,\n  `att_is_unsigned` tinyint DEFAULT NULL,\n  `att_is_auto_increment` tinyint DEFAULT NULL,\n  `att_comment` varchar(2048) DEFAULT NULL,\n  `att_is_hidden` tinyint DEFAULT NULL,\n  `attr_has_update` tinyint DEFAULT NULL,\n  `attr_update` varchar(2048) DEFAULT NULL,\n  `attr_is_clusterby` tinyint DEFAULT NULL,\n  `attr_seqnum` smallint unsigned DEFAULT NULL,\n  `attr_enum` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)\n)
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mysql.columns_priv;
 Table    Create Table
 columns_priv    CREATE TABLE `columns_priv` (\n  `Host` char(255) NOT NULL DEFAULT '',\n  `Db` char(64) NOT NULL DEFAULT '',\n  `User` char(32) NOT NULL DEFAULT '',\n  `Table_name` char(64) NOT NULL DEFAULT '',\n  `Column_name` char(64) NOT NULL DEFAULT '',\n  `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Column_priv` varchar(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`,`Column_name`)\n)
@@ -270,7 +270,7 @@ save_query_result    off
 SHOW SUBSCRIPTIONS;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 SHOW TABLES FROM mo_sample_data_tpch_sf1;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 UPDATE `mo_mo`.`operation` SET `created_at`='2023-07-28 05:00:13.704',`statement_id`='a3055a4e-2d03-11ee-9e81-96ce077ba0f3',`connection_id`=11349,`db`='mo_sample_data_tpch_sf10',`run_status`='success' WHERE `id` = '3b30a3c1-4dca-4ded-9576-51a99e47b53a';
 drop table if exists `mo_catalog`.`statement_mo`;
 internal error: do not have privilege to execute the statement
@@ -386,17 +386,17 @@ attr_is_clusterby    TINYINT(0)    YES        null
 attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
 attr_enum    VARCHAR(65535)    YES        null        
 DESC `mo_sample_data_tpch_sf10`.`region` ;
-invalid database mo_sample_data_tpch_sf10
+Unknown database mo_sample_data_tpch_sf10
 DESC `mo_sample_data_tpch_sf1`.`customer` ;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 DESC `mo_sample_data_tpch_sf1`.`lineitem` ;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 DESC `mo_sample_data_tpch_sf1`.`nation` ;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 DESC `mo_sample_data_tpch_sf1`.`orders` ;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 DESC `mo_sample_data_tpch_sf1`.`supplier` ;
-invalid database mo_sample_data_tpch_sf1
+Unknown database mo_sample_data_tpch_sf1
 DESC `mysql`.`columns_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
 Host    CHAR(255)    NO    PRI

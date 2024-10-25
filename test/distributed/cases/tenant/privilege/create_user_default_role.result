@@ -14,7 +14,7 @@ grant show tables on database * to r1;
 use mo_catalog;
 internal error: do not have privilege to execute the statement
 show tables;
-not connect to a database
+No database selected
 create database t;
 internal error: do not have privilege to execute the statement
 grant connect on account * to r1;

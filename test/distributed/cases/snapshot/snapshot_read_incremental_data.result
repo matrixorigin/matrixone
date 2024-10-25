@@ -19,7 +19,7 @@ L_COMMENT      VARCHAR(44) NOT NULL,
 PRIMARY KEY (L_LINEITEM_ID)
 );
 use tpch;
-invalid database tpch
+Unknown database tpch
 insert into lineitem values
 (1,1,156,4,1,17,17954.55,0.04,0.02,"N","O","1996-03-13","1996-02-12","1996-03-22","DELIVER IN PERSON","TRUCK","egular courts above the"),
 (2,1,68,9,2,36,34850.16,0.09,0.06,"N","O","1996-04-12","1996-02-28","1996-04-20","TAKE BACK RETURN","MAIL","ly final dependencies: slyly bold "),

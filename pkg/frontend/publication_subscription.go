@@ -226,7 +226,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	dbName := string(cp.Database)
 	comment := cp.Comment
 	if _, ok := sysDatabases[dbName]; ok {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", dbName)
+		err = moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		return
 	}
 
@@ -424,7 +424,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.DbName != "" {
 		dbName = ap.DbName
 		if _, ok := sysDatabases[dbName]; ok {
-			return moerr.NewInternalErrorf(ctx, "invalid database name '%s', not support publishing system database", dbName)
+			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
 
 		if dbId, dbType, err = getDbIdAndType(ctx, bh, dbName); err != nil {

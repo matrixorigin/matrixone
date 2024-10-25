@@ -126,7 +126,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account sys;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
-invalid database snapshot_read
+Unknown database snapshot_read
 restore account sys database snapshot_read table users from snapshot sp_01;
 select count(*) from snapshot_read.users;
 count(*)
@@ -262,7 +262,7 @@ drop snapshot if exists sp_01;
 create snapshot sp_01 for account test_account;
 drop database snapshot_read;
 select count(*) from snapshot_read.users;
-invalid database snapshot_read
+Unknown database snapshot_read
 restore account test_account database snapshot_read table users from snapshot sp_01;
 select count(*) from snapshot_read.users;
 count(*)
