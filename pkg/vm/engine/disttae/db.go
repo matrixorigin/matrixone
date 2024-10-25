@@ -274,10 +274,18 @@ func (e *Engine) getOrCreateSnapPart(
 				tbl.db.op.Txn().DebugString())
 			return ps, nil
 		}
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
+		}
 		logutil.Infof("getOrCreateSnapPart, "+
-			"latest partition state can't serve snapshot read at ts :%s, table:%s, tid:%v, txn:%s",
+			"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, table:%s, relKind:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
 			ts.ToString(),
 			tbl.tableName,
+			tbl.relKind,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
 	}
@@ -388,8 +396,15 @@ func (e *Engine) getOrCreateSnapPart(
 				end.ToString())
 			return ps, nil
 		}
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
+		}
 		logutil.Infof("getOrCreateSnapPart: "+
-			"latest partition state can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
 			ts.ToString(),
 			tbl.tableName,
 			tbl.tableId,

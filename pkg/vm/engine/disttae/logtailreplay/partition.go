@@ -204,8 +204,6 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 
 	state.truncate(ids, ts)
 
-	state.start = ts
-
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
