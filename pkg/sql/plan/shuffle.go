@@ -38,7 +38,7 @@ const (
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 2000000
 	ShuffleThreshHoldOfNDV          = 50000
-	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 
 	overlapThreshold = 0.95
@@ -252,10 +252,12 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 
 	if builder == nil {
+		logutil.Infof("col %v return 1", col.Name)
 		return
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
+		logutil.Infof("col %v return 2", col.Name)
 		return
 	}
 	colName := tableDef.Cols[col.ColPos].Name
@@ -276,6 +278,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			if n.BuildOnLeft {
 				// its better for right join to go shuffle, but can not go complex shuffle
 				if n.BuildOnLeft && leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
+					logutil.Infof("col %v return 3", col.Name)
 					return
 				}
 			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
@@ -286,10 +289,12 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 
 	s := builder.getStatsInfoByTableID(tableDef.TblId)
 	if s == nil {
+		logutil.Infof("col %v return 4", col.Name)
 		return
 	}
 	if n.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+			logutil.Infof("col %v return 5", col.Name)
 			return
 		}
 	}
