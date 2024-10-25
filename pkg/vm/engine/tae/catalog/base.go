@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"fmt"
-	// "io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,15 +33,6 @@ type BaseEntry interface {
 	RUnlock()
 	DeleteBeforeLocked(ts types.TS) bool
 	DeleteBefore(ts types.TS) bool
-}
-
-func CompareUint64(left, right uint64) int {
-	if left > right {
-		return 1
-	} else if left < right {
-		return -1
-	}
-	return 0
 }
 
 type BaseEntryImpl[T BaseNode[T]] struct {

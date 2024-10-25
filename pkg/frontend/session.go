@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -873,11 +874,11 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 	return ses.showStmtType
 }
 
-func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch) error {
+func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return func(bat *batch.Batch) error {
-		return ses.outputCallback(ses, execCtx, bat)
+	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }
 

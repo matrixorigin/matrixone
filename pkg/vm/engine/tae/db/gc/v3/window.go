@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
@@ -189,6 +188,7 @@ func (w *GCWindow) ScanCheckpoints(
 		if err != nil {
 			return false, err
 		}
+		defer data.Close()
 		if processCkpData != nil {
 			if err = processCkpData(checkpointEntries[0], data); err != nil {
 				return false, err
@@ -239,69 +239,6 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	w.files = append(w.files, newFiles...)
 	return metaFile, nil
-}
-
-func isSnapshotRefers(
-	obj *objectio.ObjectStats,
-	pitr, createTS, dropTS *types.TS,
-	snapshots []types.TS,
-) bool {
-	// no snapshot and no pitr
-	if len(snapshots) == 0 && (pitr == nil || pitr.IsEmpty()) {
-		return false
-	}
-
-	// if dropTS is empty, it means the object is not dropped
-	if dropTS.IsEmpty() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debug(
-				"GCJOB-DEBUG-1",
-				zap.String("obj", obj.ObjectName().String()),
-				zap.String("create-ts", createTS.ToString()),
-				zap.String("drop-ts", createTS.ToString()),
-			)
-		})
-		return true
-	}
-
-	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
-	if pitr != nil && !pitr.IsEmpty() {
-		if dropTS.GT(pitr) {
-			common.DoIfDebugEnabled(func() {
-				logutil.Debug(
-					"GCJOB-PITR-PIN",
-					zap.String("name", obj.ObjectName().String()),
-					zap.String("pitr", pitr.ToString()),
-					zap.String("create-ts", createTS.ToString()),
-					zap.String("drop-ts", dropTS.ToString()),
-				)
-			})
-			return true
-		}
-	}
-
-	left, right := 0, len(snapshots)-1
-	for left <= right {
-		mid := left + (right-left)/2
-		snapTS := snapshots[mid]
-		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
-			common.DoIfDebugEnabled(func() {
-				logutil.Debug(
-					"GCJOB-DEBUG-2",
-					zap.String("name", obj.ObjectName().String()),
-					zap.String("pitr", snapTS.ToString()),
-					zap.String("create-ts", createTS.ToString()),
-					zap.String("drop-ts", dropTS.ToString()),
-				)
-			})
-			return true
-		} else if snapTS.LT(createTS) {
-			left = mid + 1
-		} else {
-			right = mid - 1
-		}
-	}
-	return false
 }
 
 func (w *GCWindow) getSinker(
@@ -505,7 +442,7 @@ func (w *GCWindow) replayData(
 	bs []objectio.BlockObject,
 	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
 	idxes := []uint16{0}
-	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), w.mp)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -528,7 +465,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.Obje
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, w.mp)
 	if err != nil {
 		return err
 	}
@@ -631,7 +568,8 @@ func (w *GCWindow) String(objects map[string]*ObjectEntry) string {
 	var buf bytes.Buffer
 	_, _ = buf.WriteString("objects:[\n")
 	for name, entry := range objects {
-		_, _ = buf.WriteString(fmt.Sprintf("name: %s, createTS: %v ", name, entry.createTS.ToString()))
+		_, _ = buf.WriteString(fmt.Sprintf("name: %s, createTS: %v dropTS: %v",
+			name, entry.createTS.ToString(), entry.dropTS.ToString()))
 	}
 	_, _ = buf.WriteString("]\n")
 	return buf.String()
