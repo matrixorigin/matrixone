@@ -115,7 +115,7 @@ type PrimaryKeyMatchSpec struct {
 	Name string
 }
 
-func Exact(key []byte, name string) PrimaryKeyMatchSpec {
+func Exact(key []byte) PrimaryKeyMatchSpec {
 	first := true
 	cnt := 2
 	return PrimaryKeyMatchSpec{
