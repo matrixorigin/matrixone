@@ -16,8 +16,10 @@ package logtailreplay
 
 import (
 	"bytes"
-
+	"fmt"
 	"github.com/tidwall/btree"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -105,6 +107,8 @@ type primaryKeyIter struct {
 	rows         *btree.BTreeG[RowEntry]
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	curRow       RowEntry
+	Opt          bool
+	OkCnt        int
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -113,19 +117,55 @@ type PrimaryKeyMatchSpec struct {
 	Name string
 }
 
-func Exact(key []byte) PrimaryKeyMatchSpec {
+var debug atomic.Bool
+
+func Exact(key []byte, name string) PrimaryKeyMatchSpec {
+	//if strings.Contains(name, "hhh") {
+	//	debug.Store(true)
+	//}
+
 	first := true
+	cnt := 2
 	return PrimaryKeyMatchSpec{
 		Name: "Exact",
 		Move: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
+				//if debug.Load() && strings.Contains(name, "bmsql") {
+				//	p.primaryIndex.Scan(func(item *PrimaryIndexEntry) bool {
+				//		tt, _ := types.Unpack(item.Bytes)
+				//		fmt.Printf("has: %s, %v, %s, %s, %s, %d, %v\n",
+				//			name,
+				//			item.Bytes,
+				//			tt.SQLStrings(nil),
+				//			item.RowID.String(),
+				//			item.Time.ToString(),
+				//			item.RowEntryID,
+				//			item.Deleted)
+				//		return true
+				//	})
+				//}
+
 				first = false
 				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: key,
+					Time:  p.ts,
 				})
 			} else {
 				ok = p.iter.Next()
+
+				if cnt--; p.Opt && cnt <= 0 {
+					//if ok {
+					//	if debug.Load() && strings.Contains(name, "bmsql") {
+					//		fmt.Printf("stop: %s, %v, %s, %d\n",
+					//			name,
+					//			p.iter.Item().Bytes,
+					//			p.iter.Item().RowID.String(),
+					//			p.iter.Item().RowEntryID)
+					//	}
+					//}
+					//return false
+				}
 			}
 
 			if !ok {
@@ -148,6 +188,7 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				first = false
 				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: prefix,
+					Time:  p.ts,
 				})
 			} else {
 				ok = p.iter.Next()
@@ -220,7 +261,10 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				if ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb}); ok {
+				if ok = p.iter.Seek(&PrimaryIndexEntry{
+					Bytes: lb,
+					Time:  p.ts,
+				}); ok {
 					ok = seek2First(&p.iter)
 				}
 			} else {
@@ -279,7 +323,9 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb})
+				ok = p.iter.Seek(&PrimaryIndexEntry{
+					Bytes: lb,
+					Time:  p.ts})
 
 				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
 					ok = p.iter.Next()
@@ -341,7 +387,10 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 						// out of vec
 						return false
 					}
-					if !p.iter.Seek(&PrimaryIndexEntry{Bytes: encoded}) {
+					if !p.iter.Seek(&PrimaryIndexEntry{
+						Bytes: encoded,
+						Time:  p.ts,
+					}) {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -366,10 +415,28 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 var _ RowsIter = new(primaryKeyIter)
 
+var exactCallCnt int64
+var exactMoveCnt int64
+var last time.Time = time.Now()
+
 func (p *primaryKeyIter) Next() bool {
+	var dd bool
+	if p.spec.Name == "Exact" {
+		dd = true
+		exactCallCnt++
+	}
+
 	for {
 		if !p.spec.Move(p) {
 			return false
+		}
+
+		if dd {
+			exactMoveCnt++
+			if time.Since(last) > time.Second*10 {
+				last = time.Now()
+				fmt.Println(exactCallCnt, exactMoveCnt, float64(exactMoveCnt)/float64(exactCallCnt))
+			}
 		}
 
 		entry := p.iter.Item()
@@ -411,6 +478,7 @@ func (p *primaryKeyIter) Next() bool {
 			continue
 		}
 
+		p.OkCnt++
 		return true
 	}
 }
@@ -509,13 +577,9 @@ func (p *PartitionState) NewPrimaryKeyIter(
 		iter:         index.Iter(),
 		primaryIndex: index,
 		rows:         p.rows.Copy(),
+		Opt:          true,
 	}
 }
-
-//type primaryKeyDelIter struct {
-//	primaryKeyIter
-//	bid types.Blockid
-//}
 
 func (p *PartitionState) NewPrimaryKeyDelIter(
 	ts *types.TS,
