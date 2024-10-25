@@ -67,4 +67,9 @@ func TestTestClient(t *testing.T) {
 
 	client3 := NewStandbyClientWithRetry(ctx, "", ccfg)
 	defer client3.Close()
+
+	//let ValidateStandbyClient return error
+	ccfg.LogShardID = 0
+	client4 := NewStandbyClientWithRetry(ctx, "", ccfg)
+	assert.Nil(t, client4)
 }

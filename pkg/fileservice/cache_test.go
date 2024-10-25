@@ -77,3 +77,64 @@ func Test_readCache(t *testing.T) {
 	err = readCache(ctx, m, newReadVec2())
 	assert.Error(t, err)
 }
+
+var _ IOVectorCache = (*testCache)(nil)
+
+type testCache struct {
+}
+
+func (cache *testCache) Read(ctx context.Context, vector *IOVector) error {
+	return context.DeadlineExceeded
+}
+
+func (cache *testCache) Update(ctx context.Context, vector *IOVector, async bool) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cache *testCache) Flush() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cache *testCache) DeletePaths(ctx context.Context, paths []string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cache *testCache) Evict(done chan int64) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cache *testCache) Close() {}
+
+func Test_readCache2(t *testing.T) {
+	slowCacheReadThreshold = time.Second
+
+	m := &testCache{}
+	defer m.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
+	defer cancel()
+
+	newReadVec := func() *IOVector {
+		vec := &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: 3,
+					ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+						cacheData := allocator.AllocateCacheData(1)
+						cacheData.Bytes()[0] = 42
+						return cacheData, nil
+					},
+				},
+			},
+		}
+		return vec
+	}
+
+	err := readCache(ctx, m, newReadVec())
+	assert.NoError(t, err)
+}

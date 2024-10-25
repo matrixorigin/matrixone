@@ -61,7 +61,6 @@ func Test_handleCoreDump(t *testing.T) {
 
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
-	//ctx, cancel := context.WithCancel(context.TODO())
 	mc := clusterservice.NewMOCluster(
 		"",
 		nil,
@@ -71,7 +70,6 @@ func Test_handleCoreDump(t *testing.T) {
 			[]metadata.CNService{
 				{
 					ServiceID: "mock",
-					//LockServiceAddress: testSockets,
 				},
 			}, nil,
 		),
