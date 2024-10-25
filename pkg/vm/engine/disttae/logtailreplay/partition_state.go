@@ -378,11 +378,11 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
 			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				//p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-				//	Bytes:      deletedRow.PrimaryIndexBytes,
-				//	RowEntryID: deletedRow.ID,
-				//	Time:       deletedRow.Time,
-				//})
+				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+					Bytes:      deletedRow.PrimaryIndexBytes,
+					RowEntryID: deletedRow.ID,
+					Time:       deletedRow.Time,
+				})
 			}
 		}
 	}
