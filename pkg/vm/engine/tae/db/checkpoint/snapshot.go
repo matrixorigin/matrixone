@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -210,9 +209,6 @@ func loadCheckpointMeta(
 	var (
 		tmpBat *batch.Batch
 	)
-	for _, file := range metaFiles {
-		logutil.Infof("load checkpoint meta file: %s", file.name)
-	}
 	loader := func(name string, start, end types.TS) (err error) {
 		var reader *blockio.BlockReader
 		var bats []*batch.Batch
