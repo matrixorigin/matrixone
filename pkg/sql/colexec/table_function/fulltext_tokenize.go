@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -86,7 +87,7 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
@@ -130,7 +131,22 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			if i > 1 {
 				c += "\n"
 			}
-			c += tf.ctr.argVecs[i].GetStringAt(nthRow)
+			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
+			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+				// datalink
+				dl, err := datalink.NewDatalink(data, proc)
+				if err != nil {
+					return err
+				}
+				b, err := dl.GetPlainText(proc)
+				if err != nil {
+					return err
+				}
+
+				c += string(b)
+			} else {
+				c += data
+			}
 		}
 
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))

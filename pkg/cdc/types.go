@@ -61,12 +61,18 @@ type Reader interface {
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Sink(ctx context.Context, data *DecoderOutput) error
+	SendBegin(ctx context.Context) error
+	SendCommit(ctx context.Context) error
+	SendRollback(ctx context.Context) error
 	Close()
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
 	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
+	SendBegin(ctx context.Context) error
+	SendCommit(ctx context.Context) error
+	SendRollback(ctx context.Context) error
 	Close()
 }
 

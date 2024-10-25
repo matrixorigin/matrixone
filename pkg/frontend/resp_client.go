@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -120,10 +121,10 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 	return resper.respColumnDefsWithoutFlush(execCtx.ses.(*Session), execCtx, columns)
 }
 
-func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err error) {
+func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
 	if resper.binWr != nil {
 		//write batch into fileservice
-		err = resper.binWr.Write(execCtx, bat)
+		err = resper.binWr.Write(execCtx, crs, bat)
 		if err != nil {
 			return err
 		}
@@ -138,9 +139,9 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, bat *batch.Batch) (err err
 	ec := ses.GetExportConfig()
 
 	if ec.needExportToFile() {
-		err = ec.Write(execCtx, bat)
+		err = ec.Write(execCtx, crs, bat)
 	} else {
-		err = resper.mysqlRrWr.Write(execCtx, bat)
+		err = resper.mysqlRrWr.Write(execCtx, crs, bat)
 	}
 	return
 }
@@ -231,7 +232,7 @@ func (resper *NullResp) RespPreMeta(ctx *ExecCtx, a any) error {
 	return nil
 }
 
-func (resper *NullResp) RespResult(ctx *ExecCtx, b *batch.Batch) error {
+func (resper *NullResp) RespResult(ctx *ExecCtx, crs *perfcounter.CounterSet, b *batch.Batch) error {
 	return nil
 }
 

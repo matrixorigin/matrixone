@@ -193,6 +193,32 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	}
 }
 
+func (s *Service) checkReplicaHealth(ctx context.Context) {
+	details, err := s.store.getClusterDetails(ctx)
+	if err != nil {
+		s.runtime.Logger().Error("failed to get cluster details",
+			zap.Error(err))
+		return
+	}
+	var tnShardID uint64
+	for _, tnStore := range details.TNStores {
+		for _, shard := range tnStore.Shards {
+			tnShardID = shard.ShardID
+		}
+	}
+	if tnShardID == 0 {
+		s.runtime.Logger().Error("failed to get tn shard ID",
+			zap.Uint64("shardID", tnShardID))
+		return
+	}
+	if err := s.store.checkHealth(tnShardID); err != nil {
+		s.runtime.Logger().Error("failed to check health", zap.Error(err))
+		v2.LogServiceReplicaHealthGauge.Set(0)
+	} else {
+		v2.LogServiceReplicaHealthGauge.Set(1)
+	}
+}
+
 func (s *Service) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
@@ -212,6 +238,9 @@ func (s *Service) heartbeat(ctx context.Context) {
 		}
 		s.haClient = cc
 	}
+
+	// check the logService TN replica's health on this store.
+	s.checkReplicaHealth(ctx)
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
