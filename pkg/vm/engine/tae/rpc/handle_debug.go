@@ -84,7 +84,11 @@ func (h *Handle) HandleSnapshotRead(
 	defer func() {
 		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
-	maxEnd := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint().GetEnd()
+	maxEnd := types.TS{}
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	if maxCheckpoint != nil {
+		maxEnd = maxCheckpoint.GetEnd()
+	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
 		resp.Succeed = false

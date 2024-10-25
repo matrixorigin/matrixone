@@ -4,7 +4,6 @@ use db1;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3), (4), (5);
-create snapshot snapshot01 for account sys;
 select mo_ctl('dn','checkpoint','');
 mo_ctl(dn, checkpoint, )
 {\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
@@ -23,17 +22,20 @@ select * from t;
 a
 4
 5
-select * from t {snapshot = 'snapshot01'};
+drop table if exists t;
+create table t (a int);
+insert into t values (1), (2), (3), (4), (5);
+select mo_ctl('dn','checkpoint','');
+mo_ctl(dn, checkpoint, )
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+create snapshot snapshot01 for account sys;
+select * from t;
 a
 1
 2
 3
 4
 5
-drop snapshot snapshot01;
-drop table if exists t;
-create table t (a int);
-insert into t values (1), (2), (3), (4), (5);
 delete from t where a = 2;
 insert into t values (6);
 delete from t where a = 3;
@@ -46,6 +48,14 @@ a
 4
 5
 6
+select * from t {snapshot = 'snapshot01'};
+a
+1
+2
+3
+4
+5
+drop snapshot snapshot01;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3), (4), (5);
