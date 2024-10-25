@@ -746,7 +746,7 @@ func NewChangesHandler(
 		start:        start,
 		end:          end,
 		fs:           fs,
-		minTS:        state.minTS,
+		minTS:        state.start,
 		LogThreshold: LogThreshold,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
