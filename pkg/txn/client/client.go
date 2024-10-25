@@ -23,6 +23,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/ratelimit"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -33,8 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/ratelimit"
-	"go.uber.org/zap"
 )
 
 // WithTxnIDGenerator setup txn id generator
@@ -463,11 +464,12 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}})
 	if client.timestampWaiter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseSyncLatestCommitT)
 		defer cancel()
 		for {
 			_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
 			if err != nil {
+				err = moerr.AttachCause(ctx, err)
 				// If the error is moerr.ErrWaiterPaused, retry to get the timestamp,
 				// but not FATAL immediately.
 				if moerr.IsMoErrCode(err, moerr.ErrWaiterPaused) {
