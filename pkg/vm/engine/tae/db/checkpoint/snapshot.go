@@ -261,6 +261,9 @@ func loadCheckpointMeta(
 	var (
 		tmpBat *batch.Batch
 	)
+	for _, file := range metaFiles {
+		logutil.Infof("load checkpoint meta file: %s", file.name)
+	}
 	loader := func(name string, start, end types.TS) (err error) {
 		var reader *blockio.BlockReader
 		var bats []*batch.Batch
