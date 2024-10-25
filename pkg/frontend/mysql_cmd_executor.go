@@ -217,6 +217,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		requestAt = time.Now()
 	}
 
+	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
