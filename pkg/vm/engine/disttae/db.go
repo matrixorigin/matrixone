@@ -296,10 +296,6 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
 	return result.Data, nil
 }
 
