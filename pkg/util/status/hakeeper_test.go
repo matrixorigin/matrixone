@@ -18,12 +18,14 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type mockHAKeeperClient struct {
 	details pb.ClusterDetails
+	mode    int
 }
 
 func (c *mockHAKeeperClient) Close() error {
@@ -43,6 +45,9 @@ func (c *mockHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 }
 
 func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	if c.mode == 1 {
+		return pb.ClusterDetails{}, context.DeadlineExceeded
+	}
 	return c.details, nil
 }
 
@@ -74,4 +79,7 @@ func TestFillHAKeeper(t *testing.T) {
 	status.HAKeeperStatus.fill(&client)
 	assert.Equal(t, 10, len(status.HAKeeperStatus.Nodes))
 	assert.Equal(t, 10, len(status.HAKeeperStatus.DeletedNodes))
+
+	client.mode = 1
+	status.HAKeeperStatus.fill(&client)
 }

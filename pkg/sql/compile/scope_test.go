@@ -498,3 +498,40 @@ func TestRemoveStringBetween(t *testing.T) {
 		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
 	}
 }
+
+type fakeStreamSender2 struct {
+	morpc.Stream
+	number int
+}
+
+func (s *fakeStreamSender2) Close(_ bool) error {
+	s.number++
+	return nil
+}
+
+func TestNotifyMessageClean(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	ff := &fakeStreamSender2{
+		number: 0,
+	}
+	sender := &messageSenderOnClient{
+		streamSender: ff,
+		safeToClose:  true,
+	}
+	// no matter error happens or not, clean method should close the sender.
+	n1 := notifyMessageResult{
+		sender: sender,
+		err:    moerr.NewInternalErrorNoCtx("there is an error."),
+	}
+	n2 := notifyMessageResult{
+		sender: sender,
+		err:    nil,
+	}
+
+	n1.clean(proc)
+	require.Equal(t, 1, ff.number)
+
+	n2.clean(proc)
+	require.Equal(t, 2, ff.number)
+}

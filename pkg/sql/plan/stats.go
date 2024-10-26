@@ -404,13 +404,13 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return s.NdvMap[col.Name]
 }
 
-func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
-	s := builder.getStatsInfoByCol(col)
-	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
-		return 1.0
-	}
-	return s.ShuffleRangeMap[col.Name].Overlap
-}
+//func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
+//	s := builder.getStatsInfoByCol(col)
+//	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
+//		return 1.0
+//	}
+//	return s.ShuffleRangeMap[col.Name].Overlap
+//}
 
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
@@ -1475,7 +1475,7 @@ func andSelectivity(s1, s2 float64) float64 {
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
-	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
+	if s1 > 0.02 && s2 > 0.02 {
 		return s1 * s2
 	}
 	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))

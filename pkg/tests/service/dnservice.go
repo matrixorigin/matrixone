@@ -203,8 +203,9 @@ func buildTNConfig(
 func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 	// factory to construct client for hakeeper
 	hakeeperClientFactory := func() (logservice.TNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), cfg.HAKeeper.DiscoveryTimeout.Duration,
+			moerr.CauseBuildTNOptions,
 		)
 		defer cancel()
 
@@ -215,28 +216,33 @@ func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 			ctx, cfg.UUID, cfg.HAKeeper.ClientConfig,
 		)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 		return client, nil
 	}
 
 	// factory to construct client for log service
 	logServiceClientFactory := func(shard metadata.TNShard) (logservice.Client, error) {
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), cfg.LogService.ConnectTimeout.Duration,
+			moerr.CauseBuildTNOptions2,
 		)
 		defer cancel()
 
 		// transfer morpc.BackendOption via context
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
-		return logservice.NewClient(ctx, cfg.UUID, logservice.ClientConfig{
+		client, err := logservice.NewClient(ctx, cfg.UUID, logservice.ClientConfig{
 			Tag:              "Test-TN",
 			ReadOnly:         false,
 			LogShardID:       shard.LogShardID,
 			TNReplicaID:      shard.ReplicaID,
 			ServiceAddresses: cfg.HAKeeper.ClientConfig.ServiceAddresses,
 		})
+		if err != nil {
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		return client, nil
 	}
 
 	return []tnservice.Option{
