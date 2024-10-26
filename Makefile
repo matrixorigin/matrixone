@@ -250,6 +250,11 @@ fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
 errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
+withTimeout := $(shell grep -onr 'context.WithTimeout' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+withDeadline := $(shell grep -onr 'context.WithDeadline' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+
 
 .PHONY: err-check
 err-check:
@@ -262,8 +267,15 @@ ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
 		$(warning 'errors.New()' is found.)
 		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
  endif
-
+ ifneq ("$(strip $(withTimeout))", "")
+ 		$(warning 'context.WithTimeout' is found.)
+ 		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+ endif
+ ifneq ("$(strip $(withDeadline))", "")
+ 		$(warning 'context.WithDeadline' is found.)
+ 		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+ endif
 	$(error Use moerr instead.)
 else
-	$(info Neither 'fmt.Errorf()' nor 'errors.New()' is found)
+	$(info Does not find 'fmt.Errorf()', 'errors.New()','context.WithTimeout' and 'context.WithDeadline')
 endif

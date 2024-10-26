@@ -24,7 +24,7 @@ import (
 
 // ReadFile read all data from file
 func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseReadFile)
 	defer cancel()
 
 	vec := &fileservice.IOVector{
@@ -37,6 +37,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 		},
 	}
 	if err := fs.Read(ctx, vec); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, nil
 		}
@@ -47,7 +48,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 
 // WriteFile write data to file
 func WriteFile(fs fileservice.ReplaceableFileService, file string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseWriteFile)
 	defer cancel()
 
 	vec := fileservice.IOVector{
@@ -60,5 +61,6 @@ func WriteFile(fs fileservice.ReplaceableFileService, file string, data []byte) 
 			},
 		},
 	}
-	return fs.Replace(ctx, vec)
+	err := fs.Replace(ctx, vec)
+	return moerr.AttachCause(ctx, err)
 }

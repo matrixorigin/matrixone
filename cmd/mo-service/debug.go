@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -478,9 +479,10 @@ func saveProfileWithType(typ string, genData func(writer io.Writer) error) {
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveMallocProfileTimeout)
 	defer cancel()
 	if err := globalEtlFS.Write(ctx, writeVec); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.GetGlobalLogger().Error(fmt.Sprintf("failed to write %s profile", typ), zap.Error(err))
 	}
 }

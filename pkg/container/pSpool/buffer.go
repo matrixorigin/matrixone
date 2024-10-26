@@ -32,24 +32,23 @@ type spoolBuffer struct {
 }
 
 type readyToUseItem struct {
-	whichCacheToUse   int8
+	whichCacheToUse   uint32
 	whichPointerToUse *batch.Batch
 }
 
-func initSpoolBuffer(size int8) *spoolBuffer {
+func initSpoolBuffer(size uint32) *spoolBuffer {
 	b := new(spoolBuffer)
 	b.bytesCache = make([]oneBatchMemoryCache, size)
 	b.readyToUse = make([]readyToUseItem, size)
 
-	for i := range b.readyToUse {
-		b.readyToUse[i].whichCacheToUse = int8(i)
+	for i := uint32(0); i < size; i++ {
+		b.readyToUse[i].whichCacheToUse = i
 		b.readyToUse[i].whichPointerToUse = batch.NewOffHeapEmpty()
 	}
-
 	return b
 }
 
-func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
+func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 	// do batch clean and put its memory into cache[id].
 	for i, vec := range bat.Vecs {
 		if vec == nil {
@@ -93,7 +92,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id int8, bat *batch.Batch) {
 	b.Unlock()
 }
 
-func (b *spoolBuffer) getCacheID() (int8, *batch.Batch) {
+func (b *spoolBuffer) getCacheID() (uint32, *batch.Batch) {
 	b.Lock()
 	k := len(b.readyToUse) - 1
 	index, bat := b.readyToUse[k].whichCacheToUse, b.readyToUse[k].whichPointerToUse

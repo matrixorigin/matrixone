@@ -34,30 +34,26 @@ type cachedBatch struct {
 	buffer *spoolBuffer
 }
 
-const (
-	notUsingAnyCache int8 = -1
-)
-
 type oneBatchMemoryCache struct {
 	// bytes to copy vector's data and area to.
 	bs [][]byte
 }
 
-func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
+func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
 	if capacity < 1 {
 		capacity = 1
 	}
 
 	cb := &cachedBatch{
 		mp:     mp,
-		buffer: initSpoolBuffer(int8(capacity)),
+		buffer: initSpoolBuffer(capacity),
 	}
 
 	return cb
 }
 
-func (cb *cachedBatch) CacheBatch(whichCacheDoesThisDataUse int8, data *batch.Batch) {
-	if whichCacheDoesThisDataUse == notUsingAnyCache {
+func (cb *cachedBatch) CacheBatch(useCache bool, whichCacheDoesThisDataUse uint32, data *batch.Batch) {
+	if !useCache {
 		return
 	}
 	cb.buffer.putCacheID(cb.mp, whichCacheDoesThisDataUse, data)
@@ -67,10 +63,10 @@ func (cb *cachedBatch) CacheBatch(whichCacheDoesThisDataUse int8, data *batch.Ba
 //
 // if this is a special batch which will never be released, just return it and do not using any cache.
 func (cb *cachedBatch) GetCopiedBatch(
-	src *batch.Batch) (dst *batch.Batch, cacheID int8, err error) {
+	src *batch.Batch) (dst *batch.Batch, useCache bool, cacheID uint32, err error) {
 
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
-		return src, notUsingAnyCache, nil
+		return src, false, 0, nil
 	}
 
 	cacheID, dst = cb.buffer.getCacheID()
@@ -109,7 +105,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
 				dst.Clean(cb.mp)
-				return nil, notUsingAnyCache, err
+				return nil, false, 0, err
 			}
 
 		} else {
@@ -120,7 +116,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				dst.Vecs[i],
 				vec); err != nil {
 				dst.Clean(cb.mp)
-				return nil, notUsingAnyCache, err
+				return nil, false, 0, err
 			}
 
 			dst.Vecs[i].SetSorted(vec.GetSorted())
@@ -141,7 +137,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 	// set row count.
 	dst.SetRowCount(src.RowCount())
 
-	return dst, cacheID, nil
+	return dst, true, cacheID, nil
 }
 
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
