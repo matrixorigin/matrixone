@@ -24,7 +24,7 @@ import (
 
 const (
 	InFilterCardLimitNonPK   = 10000
-	InFilterCardLimitPK      = 320000
+	InFilterCardLimitPK      = 1000000
 	BloomFilterCardLimit     = 100 * InFilterCardLimitNonPK
 	InFilterSelectivityLimit = 0.05
 )
@@ -143,44 +143,45 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
+		convertToCPKey := false
+		tableDef := leftChild.TableDef
+		probeCol := probeExprs[0].GetCol()
+		if probeCol == nil {
+			return
+		}
+		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
 		if node.JoinType != plan.Node_INDEX {
 			probeNdv := getExprNdv(probeExprs[0], builder)
 			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
 				return
 			}
-
-			switch col := probeExprs[0].Expr.(type) {
-			case *plan.Expr_Col:
-				ctx := builder.ctxByNode[leftChild.NodeId]
-				if ctx == nil {
+			if sortOrder != 0 {
+				if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 					return
 				}
-				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
-					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
-						if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-							return
-						}
-					}
-					if builder.getColOverlap(col.Col) > overlapThreshold {
-						return
-					}
-				} else {
-					return
+			} else {
+				if len(tableDef.Pkey.Names) > 1 {
+					convertToCPKey = true
 				}
-			default:
-				return
 			}
+			//todo: need to fix this in the future
+			//if probeCol.Name != tableDef.Pkey.PkeyColName && builder.getColOverlap(probeCol) > overlapThreshold {
+			//	return
+			//}
 		}
 
 		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
 			return
 		}
 
-		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
-		col := probeExprs[0].GetCol()
+		if convertToCPKey {
+			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef))
+		} else {
+			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
+		}
+
 		inLimit := GetInFilterCardLimit(sid)
-		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
+		if sortOrder == 0 {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
 		}
 		buildExpr := &plan.Expr{
@@ -192,7 +193,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+		if convertToCPKey {
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr))
+		} else {
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+		}
 		recalcStatsByRuntimeFilter(leftChild, node, builder)
 		return
 	}

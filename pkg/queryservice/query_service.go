@@ -19,11 +19,12 @@ import (
 	"sync"
 
 	"github.com/lni/dragonboat/v4/logger"
+	"github.com/pkg/errors"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/pkg/errors"
 )
 
 // QueryService is used to send query request to another CN service.
@@ -189,7 +190,7 @@ func RequestMultipleCn(ctx context.Context,
 				}
 			}
 		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
 		}
 		nodesLeft--
 	}
