@@ -300,7 +300,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	if c.hasValidQueryPlan() && !isInExecutor {
+	if !isInExecutor {
 		c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
 	}
 
@@ -423,12 +423,12 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 }
 
 func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
-	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-		if qry.Query.StmtType != plan.Query_REPLACE {
+	switch planType := c.pn.Plan.(type) {
+	case *plan.Plan_Query:
+		if planType.Query.StmtType != plan.Query_REPLACE {
 			c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
 		}
-	}
-	if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+	case *plan.Plan_Ddl:
 		handleDdlPlanAnalyze(runC, stats)
 	}
 }

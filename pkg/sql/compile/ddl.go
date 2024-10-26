@@ -58,7 +58,6 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	dbName := createDatabase.GetDatabase()
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
-			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
@@ -77,7 +76,6 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 	}
-	s.ScopeAnalyzer.Stop()
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
@@ -116,7 +114,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
-			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
@@ -125,7 +122,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
-	s.ScopeAnalyzer.Stop()
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -870,7 +866,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
-			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 
@@ -906,7 +901,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
-	s.ScopeAnalyzer.Stop()
 
 	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
@@ -1385,6 +1379,12 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 }
 
 func (s *Scope) CreateView(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateView()
 
 	// convert the plan's cols to the execution's cols
@@ -1583,8 +1583,13 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
-	qry := s.Plan.GetDdl().GetCreateIndex()
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
+	qry := s.Plan.GetDdl().GetCreateIndex()
 	{
 		// lockMoTable will lock Table  mo_catalog.mo_tables
 		// for the row with db_name=dbName & table_name = tblName。
@@ -2242,7 +2247,6 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
-			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return err
@@ -2252,7 +2256,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if dbSource == nil && qry.GetIfExists() {
-			s.ScopeAnalyzer.Stop()
 			return nil
 		} else if e != nil {
 			return err
@@ -2260,7 +2263,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if e != nil {
 			if qry.GetIfExists() {
-				s.ScopeAnalyzer.Stop()
 				return nil
 			} else {
 				return err
@@ -2290,7 +2292,6 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
-	s.ScopeAnalyzer.Stop()
 
 	// if dbSource is a pub, update tableList
 	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
