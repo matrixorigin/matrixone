@@ -166,7 +166,7 @@ func (s *serverConn) RawConn() net.Conn {
 func (s *serverConn) HandleHandshake(
 	handshakeResp *frontend.Packet, timeout time.Duration,
 ) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	var r *frontend.Packet
@@ -190,7 +190,7 @@ func (s *serverConn) HandleHandshake(
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
 			s.cnServer.addr, timeout, s.connID)
 		// Return a retryable error.
-		return nil, newConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
+		return nil, newConnectErr(context.DeadlineExceeded)
 	}
 }
 

@@ -20,11 +20,8 @@ import (
 	"fmt"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -89,7 +87,7 @@ func NewShardStorage(
 func (s *storage) Get(
 	table uint64,
 ) (uint64, pb.ShardsMetadata, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseGet)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -152,7 +150,7 @@ func (s *storage) Get(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return 0, pb.ShardsMetadata{}, moerr.AttachCause(ctx, err)
+		return 0, pb.ShardsMetadata{}, err
 	}
 	if metadata.IsEmpty() {
 		shardTableID = 0
@@ -165,7 +163,7 @@ func (s *storage) GetChanged(
 	applyDeleted func(uint64),
 	applyChanged func(uint64),
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseGetChanged)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	targets := make([]string, 0, len(tables))
@@ -208,7 +206,7 @@ func (s *storage) GetChanged(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 
 	s.logger.Info("get sharding metadata",
@@ -356,13 +354,12 @@ func (s *storage) Read(
 func (s *storage) Unsubscribe(
 	tables ...uint64,
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseUnsubscribe)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	var err error
 	for _, tid := range tables {
 		if e := s.engine.UnsubscribeTable(ctx, 0, tid); e != nil {
-			e = moerr.AttachCause(ctx, e)
 			err = errors.Join(err, e)
 		}
 	}

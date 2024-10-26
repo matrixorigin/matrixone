@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -270,7 +269,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 // according to the created upgrade steps
 func (s *service) asyncUpgradeTask(ctx context.Context) {
 	fn := func() (bool, error) {
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTask)
+		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
 		defer cancel()
 
 		var err error
@@ -287,7 +286,7 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 				return err
 			},
 			opts)
-		return completed, moerr.AttachCause(ctx, err)
+		return completed, err
 	}
 
 	timer := time.NewTimer(s.upgrade.checkUpgradeDuration)

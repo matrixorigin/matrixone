@@ -18,12 +18,10 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 func (s *store) heartbeatTask(ctx context.Context) {
@@ -58,7 +56,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	defer func() {
 		v2.TNHeartbeatHistogram.Observe(time.Since(start).Seconds())
 	}()
-	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseTnServiceHeartbeat)
+	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 	defer cancel()
 
 	hb := logservicepb.TNStoreHeartbeat{
@@ -78,7 +76,6 @@ func (s *store) heartbeat(ctx context.Context) {
 
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	if err != nil {
-		err = moerr.AttachCause(ctx2, err)
 		v2.TNHeartbeatFailureCounter.Inc()
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
 		return

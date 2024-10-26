@@ -20,10 +20,8 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"go.uber.org/zap"
 )
 
 type snapshotInfo struct {
@@ -213,12 +211,11 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	lsnInSM, err := l.getTruncatedLsn(ctx, shardID)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
 		if !errors.Is(err, dragonboat.ErrTimeout) && !errors.Is(err, dragonboat.ErrInvalidDeadline) {
 			l.runtime.Logger().Error("get truncated lsn in state machine failed",
 				zap.Uint64("shard ID", shardID), zap.Error(err))
@@ -263,11 +260,11 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 // It is different from the other shards. For HAKeeper shard, we just send
 // snapshot request to dragonboat directly and nothing else needs to do.
 func (l *store) processHAKeeperTruncation(ctx context.Context) error {
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseProcessHAKeeperTruncation)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.IndexQuery{})
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 	lsn := v.(uint64)
 	if lsn > 1 {
@@ -276,7 +273,6 @@ func (l *store) processHAKeeperTruncation(ctx context.Context) error {
 			CompactionIndex:            lsn - 1,
 		}
 		if _, err := l.nh.SyncRequestSnapshot(ctx, hakeeper.DefaultHAKeeperShardID, opts); err != nil {
-			err = moerr.AttachCause(ctx, err)
 			l.runtime.Logger().Error("SyncRequestSnapshot failed", zap.Error(err))
 			return err
 		}

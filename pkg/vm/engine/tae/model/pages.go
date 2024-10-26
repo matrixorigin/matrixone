@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -268,11 +267,10 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 		return m
 	}
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseLoadTable)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := page.fs.Read(ctx, &ioVector)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
 		return nil
 	}
@@ -299,11 +297,10 @@ func (page *TransferHashPage) ClearPersistTable() {
 		return
 	}
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := page.fs.Delete(ctx, page.path.Name)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] clear transfer table %v: %v", page.path.Name, err)
 	}
 }
@@ -338,7 +335,7 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) err
 }
 
 func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
-	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWriteTransferPage)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := fs.Write(ctx, ioVector)
 	if err != nil {

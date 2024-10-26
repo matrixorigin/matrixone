@@ -507,14 +507,3 @@ func TestCheckReplicaHealth(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
-
-func Test_heartbeat(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-
-	srv := &Service{
-		runtime: runtime.DefaultRuntime(),
-	}
-	srv.cfg.HAKeeperClientConfig.ServiceAddresses = []string{"wrong address"}
-	srv.heartbeat(ctx)
-}

@@ -354,14 +354,14 @@ func (r *taskRunner) fetch(ctx context.Context) {
 }
 
 func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), r.options.fetchTimeout, moerr.CauseDoFetch)
+	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
 	tasks, err := r.service.QueryAsyncTask(ctx,
 		WithTaskStatusCond(task.TaskStatus_Running),
 		WithLimitCond(r.options.queryLimit),
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
 	if err != nil {
-		return nil, moerr.AttachCause(ctx, err)
+		return nil, err
 	}
 	newTasks := tasks[:0]
 	r.runningTasks.Lock()

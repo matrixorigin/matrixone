@@ -23,14 +23,13 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"go.uber.org/zap"
 )
 
 func getBufferLimit(bufferLimitStr string) int {
@@ -58,13 +57,13 @@ func KafkaSinkConnectorExecutor(
 	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
 ) func(context.Context, task.Task) error {
 	return func(ctx context.Context, t task.Task) error {
-		ctx1, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseKafkaSinkConnectorExecutor)
+		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 		tasks, err := ts.QueryDaemonTask(ctx1,
 			taskservice.WithTaskIDCond(taskservice.EQ, t.GetID()),
 		)
 		if err != nil {
-			return moerr.AttachCause(ctx1, err)
+			return err
 		}
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))

@@ -26,16 +26,11 @@ import (
 
 type memExecutor struct {
 	mocker func(sql string) (Result, error)
-	txnOp  client.TxnOperator
 }
 
 // NewMemExecutor used to testing
 func NewMemExecutor(mocker func(sql string) (Result, error)) SQLExecutor {
 	return &memExecutor{mocker: mocker}
-}
-
-func NewMemExecutor2(mocker func(sql string) (Result, error), txnOp client.TxnOperator) SQLExecutor {
-	return &memExecutor{mocker: mocker, txnOp: txnOp}
 }
 
 func (e *memExecutor) NewTxnOperator(_ context.Context) client.TxnOperator {
@@ -53,10 +48,7 @@ func (e *memExecutor) ExecTxn(
 	ctx context.Context,
 	execFunc func(TxnExecutor) error,
 	opts Options) error {
-	te := &memTxnExecutor{
-		mocker:      e.mocker,
-		txnOperator: e.txnOp,
-	}
+	te := &memTxnExecutor{mocker: e.mocker}
 	return execFunc(te)
 }
 

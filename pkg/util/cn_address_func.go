@@ -43,7 +43,7 @@ func AddressFunc(
 		if getClient == nil || getClient() == nil {
 			return "", moerr.NewNoHAKeeper(ctx)
 		}
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseAddressFunc)
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		selector := clusterservice.NewSelector().SelectByLabel(nil, clusterservice.EQ)
 		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.BackgroundCNSelector); exist {
@@ -51,7 +51,7 @@ func AddressFunc(
 		}
 		details, err := getClient().GetClusterDetails(ctx)
 		if err != nil {
-			return "", moerr.AttachCause(ctx, err)
+			return "", err
 		}
 		cns := make([]pb.CNStore, 0, len(details.CNStores))
 		labeled_cns := make([]pb.CNStore, 0, len(details.CNStores))

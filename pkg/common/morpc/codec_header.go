@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -52,7 +50,7 @@ func (hc *deadlineContextCodec) Decode(msg *RPCMessage, data []byte) (int, error
 		msg.Ctx = context.Background()
 	}
 
-	msg.Ctx, msg.Cancel = context.WithTimeoutCause(msg.Ctx, time.Duration(buf.Byte2Int64(data)), moerr.CauseDeadlineContextCodec)
+	msg.Ctx, msg.Cancel = context.WithTimeout(msg.Ctx, time.Duration(buf.Byte2Int64(data)))
 	return 8, nil
 }
 

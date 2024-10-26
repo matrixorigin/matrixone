@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/format"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,14 +46,14 @@ func handleReloadAutoIncrementCache(
 			addrs = append(addrs, c.QueryAddress)
 			return true
 		})
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleReloadAutoIncrementCache)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	for _, addr := range addrs {
 		req := qt.NewRequest(querypb.CmdMethod_ReloadAutoIncrementCache)
 		req.ReloadAutoIncrementCache = &querypb.ReloadAutoIncrementCacheRequest{TableID: tableID}
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, moerr.AttachCause(ctx, err)
+			return Result{}, err
 		}
 		qt.Release(resp)
 	}

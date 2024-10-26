@@ -94,20 +94,18 @@ func DoTxnRequest[
 		})
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*10, moerr.CauseDoTxnRequest)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
 	var result *rpc.SendResult
 	if isRead {
 		result, err = txnOperator.Read(ctx, requests)
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
 			return
 		}
 	} else {
 		result, err = txnOperator.Write(ctx, requests)
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
 			return
 		}
 	}

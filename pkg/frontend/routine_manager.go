@@ -215,11 +215,11 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	if getPu(rm.service).HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
-	ctx, cancel := context.WithTimeoutCause(rm.ctx, time.Second*2, moerr.CauseGetConnID)
+	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
 	defer cancel()
 	connID, err := getPu(rm.service).HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
+		return 0, err
 	}
 	// Convert uint64 to uint32 to adapt MySQL protocol.
 	return uint32(connID), nil

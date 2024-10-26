@@ -116,7 +116,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		func(ctx context.Context) {
-			ctx, cancel := context.WithTimeoutCause(ctx, time.Second*2, moerr.CauseRemoteCacheRead)
+			ctx, cancel := context.WithTimeout(ctx, time.Second*2)
 			defer cancel()
 			resp, err := r.client.SendMessage(ctx, target, req)
 			if err != nil {

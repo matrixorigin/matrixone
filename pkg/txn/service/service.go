@@ -23,10 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/hack"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -34,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/zap"
 )
 
 var _ TxnService = (*service)(nil)
@@ -246,7 +244,6 @@ func (s *service) parallelSendWithRetry(
 			util.LogTxnSendRequests(s.logger, requests)
 			result, err := s.sender.Send(ctx, requests)
 			if err != nil {
-				err = moerr.AttachCause(ctx, err)
 				util.LogTxnSendRequestsFailed(s.logger, requests, err)
 				continue
 			}

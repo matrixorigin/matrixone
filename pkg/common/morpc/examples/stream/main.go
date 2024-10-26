@@ -20,7 +20,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,11 +56,11 @@ func main() {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*10, moerr.CauseStreamMain)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
 	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}); err != nil {
-		panic(moerr.AttachCause(ctx, err))
+		panic(err)
 	}
 
 	ch, err := st.Receive()

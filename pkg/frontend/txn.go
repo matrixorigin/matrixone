@@ -482,10 +482,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 	storage := th.storage
-	ctx2, cancel := context.WithTimeoutCause(
+	ctx2, cancel := context.WithTimeout(
 		th.txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
-		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
@@ -520,7 +519,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
-			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
@@ -596,10 +594,9 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
 		}
 	}
-	ctx2, cancel := context.WithTimeoutCause(
+	ctx2, cancel := context.WithTimeout(
 		th.txnCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
-		moerr.CauseRollbackUnsafe,
 	)
 	defer cancel()
 	defer func() {
@@ -626,7 +623,6 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
-			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
 		}
 	}

@@ -27,8 +27,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -41,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -677,10 +676,9 @@ func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
 	wg.Add(1)
 	if err := s.stopper.RunNamedTask("add new log shard", func(ctx context.Context) {
 		defer wg.Done()
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseHandleAddLogShard)
+		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
 		if err := s.store.addLogShard(ctx, pb.AddLogShard{ShardID: shardID}); err != nil {
-			err = moerr.AttachCause(ctx, err)
 			s.runtime.Logger().Error("failed to add shard",
 				zap.Uint64("shard ID", shardID),
 				zap.Error(err),

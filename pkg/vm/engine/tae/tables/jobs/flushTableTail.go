@@ -20,9 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -47,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -828,7 +827,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 // waitFlushAObjForSnapshot waits all io tasks about flushing aobject for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, subtasks []*flushObjTask, isTombstone bool) (err error) {
-	ictx, cancel := context.WithTimeoutCause(ctx, 6*time.Minute, moerr.CauseWaitFlushAObjForSnapshot)
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
 	var handles []handle.Object
 	if isTombstone {
@@ -841,7 +840,7 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 			continue
 		}
 		if err = subtask.WaitDone(ictx); err != nil {
-			return moerr.AttachCause(ictx, err)
+			return
 		}
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
@@ -859,10 +858,9 @@ func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, e
 			zap.String("task", ftask.Name()),
 		)
 		// add a timeout to avoid WaitDone block the whole process
-		ictx, cancel := context.WithTimeoutCause(
+		ictx, cancel := context.WithTimeout(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/
-			moerr.CauseReleaseFlushObjTasks,
 		)
 		defer cancel()
 		for _, subtask := range subtasks {

@@ -21,8 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 var (
@@ -420,7 +419,7 @@ func (s *service) destroyTables(ctx context.Context) {
 			s.mu.Unlock()
 
 			for _, dc := range deletes {
-				ctx, cancel := context.WithTimeoutCause(defines.AttachAccountId(ctx, dc.accountID), time.Second*30, moerr.CauseDestroyTables)
+				ctx, cancel := context.WithTimeout(defines.AttachAccountId(ctx, dc.accountID), time.Second*30)
 				if err := s.store.Delete(ctx, dc.tableID); err == nil {
 					s.mu.Lock()
 					delete(s.mu.destroyed, dc.tableID)

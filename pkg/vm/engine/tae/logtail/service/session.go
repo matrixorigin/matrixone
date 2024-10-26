@@ -315,7 +315,7 @@ func NewSession(
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
 
-					ctx, cancel := context.WithTimeoutCause(ss.sessionCtx, msg.timeout, moerr.CauseNewSession)
+					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
 
 					now := time.Now()
@@ -329,7 +329,6 @@ func NewSession(
 					err := ss.stream.write(ctx, msg.response)
 					ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
 					if err != nil {
-						err = moerr.AttachCause(ctx, err)
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
 							zap.String("timeout", msg.timeout.String()),
@@ -475,7 +474,7 @@ func (ss *Session) Publish(
 		}
 	}
 
-	sendCtx, cancel := context.WithTimeoutCause(ctx, ss.sendTimeout, moerr.CausePublish)
+	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
 	beforeSend := time.Now()
@@ -484,7 +483,6 @@ func (ss *Session) Publish(
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
 	} else {
-		err = moerr.AttachCause(sendCtx, err)
 		ss.logger.Error("send update response failed",
 			zap.String("send timeout value", ss.sendTimeout.String()),
 			zap.String("send duration", time.Since(beforeSend).String()),

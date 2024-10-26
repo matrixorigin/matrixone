@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -198,15 +197,13 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	record := c.record
 	copy(record.Payload(), recordEntry.payload)
 	record.ResizePayload(size)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	_, err := c.c.Append(ctx, c.record)
-	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(r.d.config.RetryTimeout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd2)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			_, err := c.c.Append(ctx, c.record)
-			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err == nil
 		})

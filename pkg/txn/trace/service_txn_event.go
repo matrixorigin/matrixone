@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/format"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -32,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 func (s *service) TxnCreated(op client.TxnOperator) {
@@ -817,11 +816,11 @@ func (s *service) AddTxnFilter(method, value string) error {
 		return moerr.NewNotSupportedNoCtxf("method %s not support", method)
 	}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseAddTxnFilter)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
+	return s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			r, err := txn.Exec(addTxnFilterSQL(method, value), executor.StatementOption{})
@@ -836,11 +835,10 @@ func (s *service) AddTxnFilter(method, value string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
-	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) ClearTxnFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseClearTxnFilters)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -863,14 +861,14 @@ func (s *service) ClearTxnFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 
 	return s.RefreshTxnFilters()
 }
 
 func (s *service) RefreshTxnFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshTxnFilters)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var filters []TxnFilter
@@ -904,7 +902,7 @@ func (s *service) RefreshTxnFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 
 	filters = append(filters, &disableFilter{})
@@ -972,7 +970,7 @@ func (s *service) handleTxnError(
 func (s *service) doAddTxnError(
 	sql string,
 ) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseDoAddTxnError)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -993,7 +991,6 @@ func (s *service) doAddTxnError(
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
 		s.logger.Error("exec txn error trace failed",
 			zap.String("sql", sql),
 			zap.Error(err))

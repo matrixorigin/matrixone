@@ -16,14 +16,12 @@ package datasync
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 const (
@@ -135,11 +133,11 @@ func (c *logClient) getLeaderID(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLeaderID)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
 	leaderID, err := c.client.GetLeaderID(ctx)
 	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
+		return 0, err
 	}
 	return leaderID, nil
 }
@@ -148,91 +146,63 @@ func (c *logClient) write(ctx context.Context, data []byte) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientWrite)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	lsn, err := c.client.Append(ctx, pb.LogRecord{Data: data})
-	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
-	}
-	return lsn, nil
+	return c.client.Append(ctx, pb.LogRecord{Data: data})
 }
 
 func (c *logClient) readEntries(ctx context.Context, lsn uint64) ([]logservice.LogRecord, uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return nil, 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientReadEntries)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	records, lsn, err := c.client.Read(ctx, lsn, recordMaxSize)
-	if err != nil {
-		return nil, 0, moerr.AttachCause(ctx, err)
-	}
-	return records, lsn, nil
+	return c.client.Read(ctx, lsn, recordMaxSize)
 }
 
 func (c *logClient) truncate(ctx context.Context, lsn uint64) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientTruncate)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	err := c.client.Truncate(ctx, lsn)
-	if err != nil {
-		return moerr.AttachCause(ctx, err)
-	}
-	return nil
+	return c.client.Truncate(ctx, lsn)
 }
 
 func (c *logClient) getTruncatedLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetTruncatedLsn)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	lsn, err := c.client.GetTruncatedLsn(ctx)
-	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
-	}
-	return lsn, nil
+	return c.client.GetTruncatedLsn(ctx)
 }
 
 func (c *logClient) getLatestLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLatestLsn)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	lsn, err := c.client.GetLatestLsn(ctx)
-	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
-	}
-	return lsn, nil
+	return c.client.GetLatestLsn(ctx)
 }
 
 func (c *logClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientSetRequiredLsn)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	err := c.client.SetRequiredLsn(ctx, lsn)
-	if err != nil {
-		return moerr.AttachCause(ctx, err)
-	}
-	return nil
+	return c.client.SetRequiredLsn(ctx, lsn)
 }
 
 func (c *logClient) getRequiredLsn(ctx context.Context) (uint64, error) {
 	if err := c.prepare(ctx); err != nil {
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetRequiredLsn)
+	ctx, cancel := context.WithTimeout(ctx, contextTimeout)
 	defer cancel()
-	lsn, err := c.client.GetRequiredLsn(ctx)
-	if err != nil {
-		return 0, moerr.AttachCause(ctx, err)
-	}
-	return lsn, nil
+	return c.client.GetRequiredLsn(ctx)
 }
 
 func (c *logClient) writeWithRetry(ctx context.Context, data []byte, retryTimes int) (uint64, error) {

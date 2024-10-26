@@ -21,14 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -174,11 +173,10 @@ func NewLogHAKeeperClientWithRetry(
 ) ClusterHAKeeperClient {
 	var c ClusterHAKeeperClient
 	createFn := func() error {
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewLogHAKeeperClientWithRetry)
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create HAKeeper client: %v", err)
 			return err
 		}

@@ -929,13 +929,13 @@ func RegisterCdcExecutor(
 	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
-		ctx1, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseRegisterCdc)
+		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 		tasks, err := ts.QueryDaemonTask(ctx1,
 			taskservice.WithTaskIDCond(taskservice.EQ, T.GetID()),
 		)
 		if err != nil {
-			return moerr.AttachCause(ctx1, err)
+			return err
 		}
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))

@@ -19,7 +19,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,12 +44,12 @@ func main() {
 		panic(err)
 	}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CausePingPongMain)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"})
 	if err != nil {
-		panic(moerr.AttachCause(ctx, err))
+		panic(err)
 	}
 	defer f.Close()
 

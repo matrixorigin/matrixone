@@ -21,14 +21,13 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 var (
@@ -217,23 +216,22 @@ func waitHAKeeperReady(
 	cfg logservice.HAKeeperClientConfig,
 ) (logservice.CNHAKeeperClient, error) {
 	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReader1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("hakeeper not ready, err: %v", err)
 			return nil, err
 		}
 		return client, nil
 	}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReader2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), context.Cause(ctx))
+			return nil, moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout")
 		default:
 			client, err := getClient()
 			if err == nil {
@@ -245,14 +243,14 @@ func waitHAKeeperReady(
 }
 
 func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunning)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*2)
 	defer cancel()
 
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
 		if errors.Is(err, context.DeadlineExceeded) {
-			return moerr.AttachCause(ctx, err)
+			return err
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
@@ -266,7 +264,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 }
 
 func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReady)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
 	defer cancel()
 
 	// wait shard ready
@@ -275,7 +273,6 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			details, err := client.GetClusterDetails(ctx)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
-					err = moerr.AttachCause(ctx, err)
 					logutil.Errorf("wait TN ready timeout: %s", err)
 					return false, err
 				}

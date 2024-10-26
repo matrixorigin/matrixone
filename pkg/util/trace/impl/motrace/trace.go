@@ -215,11 +215,11 @@ func Shutdown(ctx context.Context) error {
 	}
 	GetTracerProvider().SetEnable(false)
 
-	shutdownCtx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseShutdown)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for _, p := range GetTracerProvider().spanProcessors {
 		if err := p.Shutdown(shutdownCtx); err != nil {
-			return moerr.AttachCause(shutdownCtx, err)
+			return err
 		}
 	}
 	logutil.Info("Shutdown trace complete.")

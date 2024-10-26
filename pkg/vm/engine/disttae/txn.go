@@ -941,10 +941,9 @@ func (txn *Transaction) deleteTableWrites(
 }
 
 func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseAllocateID)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	id, err := txn.idGen.AllocateID(ctx)
-	return id, moerr.AttachCause(ctx, err)
+	return txn.idGen.AllocateID(ctx)
 }
 
 func (txn *Transaction) genBlock() {

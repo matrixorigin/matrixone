@@ -18,10 +18,9 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	// "time"
 )
 
@@ -93,9 +92,8 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 		panic(err)
 	}
 	defer d.clientPool.Put(client)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.TruncateDuration, moerr.CauseTruncateLogservice)
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 	err = client.c.Truncate(ctx, lsn)
-	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
 		truncatedLsn := d.getLogserviceTruncate()
@@ -106,9 +104,8 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry truncate, lsn %d err is %v", lsn, err)
-			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.TruncateDuration, moerr.CauseTruncateLogservice2)
+			ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 			err = client.c.Truncate(ctx, lsn)
-			err = moerr.AttachCause(ctx, err)
 			cancel()
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
 				truncatedLsn := d.getLogserviceTruncate()
@@ -136,16 +133,14 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 		panic(err)
 	}
 	defer d.clientPool.Put(client)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate)
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.GetTruncateDuration)
 	lsn, err = client.c.GetTruncatedLsn(ctx)
-	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
 			logutil.Infof("LogService Driver: retry gettruncate, err is %v", err)
-			ctx, cancel := context.WithTimeoutCause(context.Background(), d.config.GetTruncateDuration, moerr.CauseGetLogserviceTruncate2)
+			ctx, cancel := context.WithTimeout(context.Background(), d.config.GetTruncateDuration)
 			lsn, err = client.c.GetTruncatedLsn(ctx)
-			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err == nil
 		})

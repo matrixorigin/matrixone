@@ -866,7 +866,7 @@ func (h *Handle) HandleWrite(
 		//wait for loading deleted row-id done.
 		nctx := context.Background()
 		if deadline, ok := ctx.Deadline(); ok {
-			_, req.Cancel = context.WithTimeoutCause(nctx, time.Until(deadline), moerr.CauseHandleWrite)
+			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		rowidIdx := 0
 		pkIdx := 1

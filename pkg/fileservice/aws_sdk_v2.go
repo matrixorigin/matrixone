@@ -34,12 +34,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type AwsSDKv2 struct {
@@ -60,7 +59,7 @@ func NewAwsSDKv2(
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseNewAwsSDKv2)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
 	// options for loading configs
@@ -87,14 +86,14 @@ func NewAwsSDKv2(
 
 	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
 	if err != nil {
-		return nil, moerr.AttachCause(ctx, err)
+		return nil, err
 	}
 
 	// validate
 	if credentialProvider != nil {
 		_, err := credentialProvider.Retrieve(ctx)
 		if err != nil {
-			return nil, moerr.AttachCause(ctx, err)
+			return nil, err
 		}
 	}
 
@@ -113,7 +112,7 @@ func NewAwsSDKv2(
 
 	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 	if err != nil {
-		return nil, moerr.AttachCause(ctx, err)
+		return nil, err
 	}
 
 	// options for s3 client
@@ -174,7 +173,6 @@ func NewAwsSDKv2(
 			Bucket: ptrTo(args.Bucket),
 		})
 		if err != nil {
-			err = moerr.AttachCause(ctx, err)
 			return nil, moerr.NewInternalErrorNoCtxf("bad s3 config: %v", err)
 		}
 	}

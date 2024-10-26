@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
@@ -78,9 +77,8 @@ func NewTestConfig(sid string, ccfg *logservice.ClientConfig) *Config {
 		ReadDuration:         time.Second,
 	}
 	cfg.ClientFactory = func() (logservice.Client, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), cfg.NewClientDuration, moerr.CauseNewTestConfig)
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.NewClientDuration)
 		logserviceClient, err := logservice.NewClient(ctx, sid, *ccfg)
-		err = moerr.AttachCause(ctx, err)
 		cancel()
 		return logserviceClient, err
 	}

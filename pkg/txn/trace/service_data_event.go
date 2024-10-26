@@ -224,11 +224,11 @@ func (s *service) ApplyDeleteObject(
 }
 
 func (s *service) AddTableFilter(name string, columns []string) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseAddTableFilter)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
+	return s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txn.Use("mo_catalog")
@@ -261,11 +261,10 @@ func (s *service) AddTableFilter(name string, columns []string) error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
-	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) ClearTableFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseClearTableFilters)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -288,14 +287,14 @@ func (s *service) ClearTableFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 
 	return s.RefreshTableFilters()
 }
 
 func (s *service) RefreshTableFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshTableFilters)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var filters []EntryFilter
@@ -328,7 +327,7 @@ func (s *service) RefreshTableFilters() error {
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied())
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return err
 	}
 
 	s.atomic.tableFilters.Store(&tableFilters{filters: filters})

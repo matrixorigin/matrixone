@@ -263,7 +263,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	parameters := rt.getParameters()
 	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseHandleRequest)
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses.EnterFPrint(FPHandleRequest)
 	defer ses.ExitFPrint(FPHandleRequest)
@@ -285,7 +285,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	execCtx.reqCtx = tenantCtx
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
-		err = moerr.AttachCause(tenantCtx, err)
 		if !skipClientQuit(err.Error()) {
 			ses.Error(tenantCtx,
 				"Failed to execute request",
@@ -295,7 +294,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp != nil {
 		if err = rt.getProtocol().WriteResponse(tenantCtx, resp); err != nil {
-			err = moerr.AttachCause(tenantCtx, err)
 			if resp.isIssue3482 {
 				ses.Error(tenantCtx,
 					"Failed to send response",

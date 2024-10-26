@@ -19,7 +19,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -142,7 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer ie.Unlock()
 	var cancel context.CancelFunc
 	ctx = perfcounter.AttachInternalExecutorKey(ctx)
-	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
@@ -159,11 +158,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
-	if err != nil {
-		return moerr.AttachCause(ctx, err)
-	}
-	return
+	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -171,7 +166,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer ie.Unlock()
 	var cancel context.CancelFunc
 	ctx = perfcounter.AttachInternalExecutorKey(ctx)
-	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
+	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
@@ -186,7 +181,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
-	res.err = moerr.AttachCause(ctx, err)
+	res.err = err
 	return res
 }
 
