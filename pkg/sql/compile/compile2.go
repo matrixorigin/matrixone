@@ -207,6 +207,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
 		if !isInExecutor {
+			if err != nil {
+				stats.ResetCompilePreRunOnceWaitLock()
+			}
 			stats.ExecutionEnd()
 		}
 

@@ -1772,6 +1772,12 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
@@ -2006,6 +2012,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	var err error
 	var isTemp bool
 	var newId uint64
+
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
