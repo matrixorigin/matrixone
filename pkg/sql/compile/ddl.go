@@ -2203,6 +2203,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 }
 
 func (s *Scope) DropSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropSequence()
 	dbName := qry.GetDatabase()
 	var dbSource engine.Database
@@ -2597,6 +2603,12 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2661,6 +2673,12 @@ func (s *Scope) CreateSequence(c *Compile) error {
 }
 
 func (s *Scope) AlterSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	var values []interface{}
 	var curval string
 	qry := s.Plan.GetDdl().GetAlterSequence()
