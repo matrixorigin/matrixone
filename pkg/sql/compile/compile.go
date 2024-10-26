@@ -500,9 +500,12 @@ func (c *Compile) runOnce() (err error) {
 			if e != nil && errToThrowOut == nil {
 				errToThrowOut = e
 
-				// cancel query.
-				_, queryCancel := process.GetQueryCtxFromProc(c.proc)
-				queryCancel()
+				// cancel all scope tree.
+				for j := range c.scopes {
+					if c.scopes[j].Proc != nil {
+						c.scopes[j].Proc.Cancel()
+					}
+				}
 			}
 
 			// if any error already return is retryable, we should throw this one
