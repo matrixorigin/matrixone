@@ -878,6 +878,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		toMergeEntries,
 		bf,
 		&checkpointMaxEnd,
+		c.checkpointCli,
 		c.mp,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
