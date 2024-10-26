@@ -309,7 +309,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
 		for len(notifyMessageResultReceiveChan) > 0 {
 			result := <-notifyMessageResultReceiveChan
-			result.clean(s.Proc)
+			if result.sender != nil {
+				result.sender.close()
+			}
 		}
 	}()
 
@@ -701,16 +703,6 @@ func (s *Scope) setRootOperator(op vm.Operator) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
-}
-
-// clean do final work for a notifyMessageResult.
-func (r *notifyMessageResult) clean(proc *process.Process) {
-	if r.sender != nil {
-		r.sender.close()
-	}
-	if r.err != nil {
-		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
-	}
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
