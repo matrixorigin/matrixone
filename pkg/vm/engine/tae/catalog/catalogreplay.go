@@ -214,7 +214,8 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 	readTxn txnif.AsyncTxn,
 	dataFactory DataFactory,
 	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
-	sortFunc func([]containers.Vector, int) error) {
+	sortFunc func([]containers.Vector, int) error,
+) {
 	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
 		panic(err)

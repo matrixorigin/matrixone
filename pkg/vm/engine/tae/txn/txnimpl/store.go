@@ -763,8 +763,9 @@ func (store *txnStore) approxSize() int {
 func (store *txnStore) PrepareCommit() (err error) {
 	if store.warChecker != nil {
 		if err = store.warChecker.checkAll(
-			store.txn.GetPrepareTS()); err != nil {
-			return err
+			store.txn.GetPrepareTS(),
+		); err != nil {
+			return
 		}
 	}
 	for _, db := range store.dbs {
