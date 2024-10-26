@@ -205,14 +205,14 @@ func handleSyncCommit(
 			addrs = append(addrs, c.QueryAddress)
 			return true
 		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleSyncCommit)
 	defer cancel()
 	maxCommitTS := timestamp.Timestamp{}
 	for _, addr := range addrs {
 		req := qt.NewRequest(querypb.CmdMethod_GetCommit)
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS

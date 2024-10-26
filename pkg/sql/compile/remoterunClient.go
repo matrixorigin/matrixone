@@ -354,7 +354,7 @@ func newMessageSenderOnClient(
 	}
 
 	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, MaxRpcTime)
+		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
 	} else {
 		sender.ctx = ctx
 	}
@@ -364,7 +364,7 @@ func newMessageSenderOnClient(
 	}
 
 	v2.PipelineMessageSenderCounter.Inc()
-	return sender, err
+	return sender, moerr.AttachCause(ctx, err)
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
@@ -483,7 +483,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
-	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	maxWaitingTime, cancel := context.WithTimeoutCause(context.TODO(), 30*time.Second, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.

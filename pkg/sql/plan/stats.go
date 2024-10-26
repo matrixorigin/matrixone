@@ -404,13 +404,13 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return s.NdvMap[col.Name]
 }
 
-func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
-	s := builder.getStatsInfoByCol(col)
-	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
-		return 1.0
-	}
-	return s.ShuffleRangeMap[col.Name].Overlap
-}
+//func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
+//	s := builder.getStatsInfoByCol(col)
+//	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
+//		return 1.0
+//	}
+//	return s.ShuffleRangeMap[col.Name].Overlap
+//}
 
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {

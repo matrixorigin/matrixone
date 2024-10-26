@@ -18,10 +18,11 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
@@ -29,7 +30,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sqlAddr)
 	if addr == "" {
@@ -37,7 +38,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	r := resp.MigrateConnFromResponse
 
@@ -91,11 +92,11 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 		DB:           info.DB,
 		PrepareStmts: info.PrepareStmts,
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnTo)
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	c.queryClient.Release(resp)
 	return nil

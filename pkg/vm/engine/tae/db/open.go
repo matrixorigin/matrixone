@@ -210,7 +210,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		store.BindTxn(txn)
 	}
 	// 2. replay all table Entries
-	ckpReplayer.ReplayCatalog(txn)
+	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
+		panic(err)
+	}
 
 	// 3. replay other tables' objectlist
 	if err = ckpReplayer.ReplayObjectlist(); err != nil {
