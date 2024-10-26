@@ -288,8 +288,10 @@ func (catalog *Catalog) RemoveDBEntry(database *DBEntry) error {
 		logutil.Warnf("system db cannot be removed")
 		return moerr.NewTAEErrorNoCtx("not permitted")
 	}
-	logutil.Info("[Catalog]", common.OperationField("remove"),
-		common.OperandField(database.String()))
+	logutil.Info(
+		"Catalog-Trace-RM-DB",
+		zap.String("db", database.String()),
+	)
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.ID]; !ok {
@@ -342,7 +344,11 @@ func (catalog *Catalog) CreateDBEntry(name, createSql, datTyp string, txn txnif.
 	return catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 }
 
-func (catalog *Catalog) CreateDBEntryWithID(name, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntryWithID(
+	name, createSql, datTyp string,
+	id uint64,
+	txn txnif.AsyncTxn,
+) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()

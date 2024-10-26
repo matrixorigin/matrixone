@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -319,11 +320,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, indexDef := range def.Indexes {
-				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql)
 				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
-					return "", err
+					return "", moerr.AttachCause(ctx, err)
 				}
 
 				for i, part := range indexDef.Parts {
@@ -403,11 +404,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2)
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			cancelFunc()
 			if err != nil {
-				return "", err
+				return "", moerr.AttachCause(ctx, err)
 			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				for i, colName := range def.Pkey.Names {
