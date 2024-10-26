@@ -3299,6 +3299,7 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 					mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					ss[i].setRootOperator(mergeArg)
 					ss[i].Proc = c.proc.NewNoContextChildProc(1)
+					ss[i].NodeInfo = engine.Node{Addr: oldScope.NodeInfo.Addr, Mcpu: 1}
 				}
 				_, dispatchOp := constructDispatchLocalAndRemote(0, ss, oldScope)
 				dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
