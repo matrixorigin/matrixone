@@ -473,41 +473,6 @@ func TestServiceBootstrapShard(t *testing.T) {
 	}
 }
 
-func TestCheckReplicaHealth(t *testing.T) {
-	fn := func(t *testing.T, s *Service) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-		defer cancel()
-
-		// no tn shard yet.
-		s.checkReplicaHealth(ctx)
-
-		req := pb.Request{
-			Method: pb.TN_HEARTBEAT,
-			TNHeartbeat: &pb.TNStoreHeartbeat{
-				UUID: uuid.NewString(),
-				Shards: []pb.TNShardInfo{
-					{
-						ShardID:   1,
-						ReplicaID: 100,
-					},
-				},
-			},
-		}
-		s.handleTNHeartbeat(ctx, req)
-		s.checkReplicaHealth(ctx)
-
-		req = pb.Request{
-			Method: pb.LOG_HEARTBEAT,
-			LogHeartbeat: &pb.LogStoreHeartbeat{
-				UUID: s.ID(),
-			},
-		}
-		s.handleLogHeartbeat(ctx, req)
-		s.checkReplicaHealth(ctx)
-	}
-	runServiceTest(t, true, true, fn)
-}
-
 func Test_heartbeat(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()

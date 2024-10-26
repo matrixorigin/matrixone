@@ -496,14 +496,22 @@ func (c *Compile) runOnce() (err error) {
 		for i := 0; i < cap(errC); i++ {
 			e := <-errC
 
-			// if any error happens,
-			// just cancel this function and throw it.
+			// cancel this query if the first error occurs.
 			if e != nil && errToThrowOut == nil {
 				errToThrowOut = e
 
-				// cancel query.
-				_, queryCancel := process.GetQueryCtxFromProc(c.proc)
-				queryCancel()
+				// cancel all scope tree.
+				for j := range c.scopes {
+					if c.scopes[j].Proc != nil {
+						c.scopes[j].Proc.Cancel()
+					}
+				}
+			}
+
+			// if any error already return is retryable, we should throw this one
+			// to make sure query will retry.
+			if e != nil && c.isRetryErr(e) {
+				errToThrowOut = e
 			}
 		}
 		close(errC)
