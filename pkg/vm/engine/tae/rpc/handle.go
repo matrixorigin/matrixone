@@ -962,20 +962,36 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *api.AlterTableReq) (err error) {
-	logutil.Infof("[precommit] alter table: %v txn: %s", req.String(), txn.String())
+	req *api.AlterTableReq,
+) (err error) {
+	var (
+		dbase handle.Database
+		tbl   handle.Relation
+	)
 
-	dbase, err := txn.GetDatabaseByID(req.DbId)
-	if err != nil {
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"PreCommit-AlterTBL",
+			zap.String("req", req.String()),
+			zap.String("txn", txn.String()),
+			zap.Error(err),
+		)
+	}()
+
+	if dbase, err = txn.GetDatabaseByID(req.DbId); err != nil {
 		return
 	}
 
-	tbl, err := dbase.GetRelationByID(req.TableId)
-	if err != nil {
+	if tbl, err = dbase.GetRelationByID(req.TableId); err != nil {
 		return
 	}
 
-	return tbl.AlterTable(ctx, req)
+	err = tbl.AlterTable(ctx, req)
+	return
 }
 
 //#endregion
