@@ -3611,9 +3611,10 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if totalTime < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statement:%s,statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d], info:[ScopePrepareDuration(%d)+CompilePreRunOnceDuration(%d)=PrepareRun(%d)]",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
+				h.stmt.Statement,
 				statsInfo.ParseStage.ParseDuration,
 				statsInfo.PlanStage.PlanDuration,
 				statsInfo.CompileStage.CompileDuration,
@@ -3623,7 +3624,24 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 				totalTime,
+				statsInfo.PrepareRunStage.ScopePrepareDuration,
+				statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 			)
+
+			//ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+			//	uuid.UUID(h.stmt.StatementID).String(),
+			//	h.stmt.StatementType,
+			//	statsInfo.ParseStage.ParseDuration,
+			//	statsInfo.PlanStage.PlanDuration,
+			//	statsInfo.CompileStage.CompileDuration,
+			//	operatorTimeConsumed,
+			//	statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+			//	statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+			//	statsInfo.IOAccessTimeConsumption,
+			//	statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
+			//	totalTime,
+			//)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
 			statsByte.WithTimeConsumed(float64(totalTime))

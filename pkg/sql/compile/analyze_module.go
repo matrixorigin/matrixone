@@ -205,14 +205,16 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statisti
 	}
 }
 
-// hasValidQueryPlan Check if SQL has a query plan
+// hasValidQueryPlan Check if SQL has a query plan or ddl plan
 func (c *Compile) hasValidQueryPlan() bool {
-	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-		if qry.Query.StmtType != plan.Query_REPLACE {
-			return true
-		}
+	switch planType := c.pn.Plan.(type) {
+	case *plan.Plan_Query:
+		return planType.Query.StmtType != plan.Query_REPLACE
+	case *plan.Plan_Ddl:
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {

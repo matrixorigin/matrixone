@@ -301,7 +301,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	if c.hasValidQueryPlan() && !isInExecutor {
-		c.handlePlanAnalyze(runC, queryResult, stats, isExplainPhyPlan, option)
+		c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
 	}
 
 	return queryResult, err
@@ -422,7 +422,28 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	}
 }
 
-func (c *Compile) handlePlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if qry.Query.StmtType != plan.Query_REPLACE {
+			c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
+		}
+	}
+	if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		handleDdlPlanAnalyze(runC, stats)
+	}
+}
+
+func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			if runC.scopes[i].ScopeAnalyzer != nil {
+				stats.AddScopePrepareDuration(runC.scopes[i].ScopeAnalyzer.TimeConsumed)
+			}
+		}
+	}
+}
+
+func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
 	c.GenPhyPlan(runC)
 	c.fillPlanNodeAnalyzeInfo(stats)
 

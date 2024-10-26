@@ -46,6 +46,11 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
 
@@ -53,6 +58,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	dbName := createDatabase.GetDatabase()
 	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if createDatabase.GetIfNotExists() {
+			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(ctx, dbName)
@@ -71,6 +77,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 	}
+	s.ScopeAnalyzer.Stop()
+
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -98,10 +106,17 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
@@ -110,6 +125,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err = lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
+	s.ScopeAnalyzer.Stop()
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -817,6 +833,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -848,6 +870,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 
@@ -883,6 +906,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
+	s.ScopeAnalyzer.Stop()
 
 	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
@@ -2195,6 +2219,12 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -2209,10 +2239,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	var isTemp bool
 
 	tblId := qry.GetTableId()
-
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
+			s.ScopeAnalyzer.Stop()
 			return nil
 		}
 		return err
@@ -2222,6 +2252,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if dbSource == nil && qry.GetIfExists() {
+			s.ScopeAnalyzer.Stop()
 			return nil
 		} else if e != nil {
 			return err
@@ -2229,17 +2260,13 @@ func (s *Scope) DropTable(c *Compile) error {
 		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if e != nil {
 			if qry.GetIfExists() {
+				s.ScopeAnalyzer.Stop()
 				return nil
 			} else {
 				return err
 			}
 		}
 		isTemp = true
-	}
-
-	// if dbSource is a pub, update tableList
-	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
-		return err
 	}
 
 	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
@@ -2262,6 +2289,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+	s.ScopeAnalyzer.Stop()
+
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
 	}
 
 	if len(qry.UpdateFkSqls) > 0 {
