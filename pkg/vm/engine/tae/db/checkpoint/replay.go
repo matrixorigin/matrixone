@@ -343,6 +343,21 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 }
 
 func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
+	start := time.Now()
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"open-tae",
+			zap.String("replay", "checkpoint-catalog"),
+			zap.Duration("cost", time.Since(start)),
+			zap.Error(err),
+		)
+	}()
+
 	if len(c.ckpEntries) == 0 {
 		return
 	}
