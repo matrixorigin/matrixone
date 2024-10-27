@@ -75,16 +75,18 @@ func NewBatchWithCapacity(cap int) *Batch {
 		Vecs:    make([]Vector, 0, cap),
 	}
 }
-
-func NewBatchWithVectors(vecs []Vector, attrs []string) *Batch {
+func NewBatchWithSchema(vecs []Vector, attrs []string) *Batch {
 	if len(vecs) != len(attrs) {
 		panic("length not match")
 	}
-	bat := NewBatch()
-	for i, vec := range vecs {
-		bat.AddVector(attrs[i], vec)
+	var bat Batch
+	bat.Vecs = vecs
+	bat.Attrs = attrs
+	bat.Nameidx = make(map[string]int, len(attrs))
+	for i := range attrs {
+		bat.Nameidx[attrs[i]] = i
 	}
-	return bat
+	return &bat
 }
 
 func (bat *Batch) AddVector(attr string, vec Vector) {

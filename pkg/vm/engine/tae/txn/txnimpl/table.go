@@ -1474,7 +1474,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 
 	// Don't close this batch in this function,
 	// the lifecycle of these two vectors is controlled by the upper layer that invokes them
-	deleteBatch := containers.NewBatchWithVectors(
+	deleteBatch := containers.NewBatchWithSchema(
 		[]containers.Vector{rowIDVec, pk},
 		[]string{objectio.TombstoneAttr_Rowid_Attr, objectio.TombstoneAttr_PK_Attr},
 	)
