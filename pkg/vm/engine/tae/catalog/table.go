@@ -100,7 +100,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
-	e.CreateWithTSLocked(types.SystemDBTS, &TableMVCCNode{Schema: schema})
+	e.CreateWithTSLocked(types.SystemDBTS,
+		&TableMVCCNode{
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema)})
 
 	if DefaultTableDataFactory != nil {
 		e.tableData = DefaultTableDataFactory(e)
@@ -681,7 +684,8 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	entry.InsertLocked(node)

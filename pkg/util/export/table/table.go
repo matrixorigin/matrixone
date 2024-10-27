@@ -234,11 +234,16 @@ func JsonColumn(name, comment string) Column {
 }
 
 func ValueColumn(name, comment string) Column {
+	return ValueColumnWithPrec(name, comment, -1)
+}
+
+func ValueColumnWithPrec(name, comment string, prec int) Column {
 	return Column{
 		Name:    name,
 		ColType: TFloat64,
 		Default: "0.0",
 		Comment: comment,
+		Scale:   prec,
 	}
 }
 
@@ -300,6 +305,9 @@ type Column struct {
 	Name    string
 	ColType ColType
 	// Scale default 0, usually for varchar
+	// cc ColType.String()
+	// ColType == varchar, means max length, cc ColType.String()
+	// ColType == float64, means value keep {Scale} prec. cc table.Float64FieldWithPrec()
 	Scale   int
 	Default string
 	Comment string
@@ -581,6 +589,9 @@ type ColumnField struct {
 func (cf *ColumnField) GetFloat64() float64 {
 	return math.Float64frombits(uint64(cf.Integer))
 }
+func (cf *ColumnField) GetFloat64Prec() int {
+	return cf.Interface.(int)
+}
 
 func (cf *ColumnField) GetTime() time.Time {
 	if cf.Interface != nil {
@@ -626,7 +637,11 @@ func Int64Field(val int64) ColumnField {
 }
 
 func Float64Field(val float64) ColumnField {
-	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val))}
+	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val)), Interface: int(-1)}
+}
+
+func Float64FieldWithPrec(val float64, prec int) ColumnField {
+	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val)), Interface: int(prec)}
 }
 
 // JsonField will have same effect as StringField
@@ -776,7 +791,7 @@ func (r *Row) ToStrings() []string {
 		case types.T_uint64:
 			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_float64:
-			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', -1, 64)
+			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', r.Columns[idx].GetFloat64Prec(), 64)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			switch r.Columns[idx].Type {
