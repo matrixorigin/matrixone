@@ -307,31 +307,30 @@ func (e *Engine) getOrCreateSnapPart(
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
 
-	response, err := requestSnapshotRead(ctx, tbl, &ts)
-	if err != nil {
-		return nil, err
-	}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	var checkpointEntries []*checkpoint.CheckpointEntry
-	if ok && resp.Succeed && len(resp.Entries) > 0 {
-		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-		entries := resp.Entries
-		for _, entry := range entries {
-			start := types.TimestampToTS(*entry.Start)
-			end := types.TimestampToTS(*entry.End)
-			entryType := entry.EntryType
-			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
-			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-			checkpointEntries = append(checkpointEntries, checkpointEntry)
+	//check whether the latest partition is available for reuse.
+	if ps, err := tbl.tryToSubscribe(ctx); err == nil {
+		if ps != nil && ps.CanServe(ts) {
+			logutil.Infof("getOrCreateSnapPart:reuse latest partition state:%p, table:%s, tid:%v, txn:%s",
+				ps,
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString())
+			return ps, nil
 		}
-	}
-	if len(checkpointEntries) == 0 {
-		//check whether the latest partition is available for reuse.
-		if _, err := tbl.tryToSubscribe(ctx); err == nil {
-			if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-				return p.Snapshot(), nil
-			}
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
 		}
+		logutil.Infof("getOrCreateSnapPart, "+
+			"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, table:%s, relKind:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
+			ts.ToString(),
+			tbl.tableName,
+			tbl.relKind,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
 	}
 
 	//subscribe failed : 1. network timeout,
@@ -352,13 +351,31 @@ func (e *Engine) getOrCreateSnapPart(
 	tblSnaps.Lock()
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
-		if snap.CanServe(ts) {
+		if snap.Snapshot().CanServe(ts) {
 			return snap.Snapshot(), nil
 		}
 	}
 
 	//new snapshot partition and apply checkpoints into it.
 	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
+	response, err := requestSnapshotRead(ctx, tbl, &ts)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	var checkpointEntries []*checkpoint.CheckpointEntry
+	if ok && resp.Succeed && len(resp.Entries) > 0 {
+		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+		entries := resp.Entries
+		for _, entry := range entries {
+			start := types.TimestampToTS(*entry.Start)
+			end := types.TimestampToTS(*entry.End)
+			entryType := entry.EntryType
+			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
+			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+			checkpointEntries = append(checkpointEntries, checkpointEntry)
+		}
+	}
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
 	ckps := checkpointEntries
@@ -407,22 +424,57 @@ func (e *Engine) getOrCreateSnapPart(
 		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
 		return nil, err
 	}
-	if snap.CanServe(ts) {
+	if snap.Snapshot().CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
 	}
 
-	start, end := snap.GetDuration()
+	start, end := snap.Snapshot().GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
-	if snap.IsEmpty() || ts.GT(&end) {
+	if snap.Snapshot().IsEmpty() || ts.GT(&end) {
+		logutil.Infof("getOrCreateSnapPart:Start to resue latest ps for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			snap.Snapshot().IsEmpty(),
+			end.ToString(),
+		)
 		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if ps == nil {
-			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		if ps != nil && ps.CanServe(ts) {
+			logutil.Infof("getOrCreateSnapPart: resue latest partiton state:%p, "+
+				"table:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
+				ps,
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString(),
+				snap.Snapshot().IsEmpty(),
+				end.ToString())
+			return ps, nil
 		}
-		return ps, nil
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
+		}
+		logutil.Infof("getOrCreateSnapPart: "+
+			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+		return nil, moerr.NewInternalErrorNoCtxf("Latest partition state can't serve for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
 	}
 	if ts.LT(&start) {
 		return nil, moerr.NewInternalErrorNoCtxf(

@@ -1720,10 +1720,14 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
 	data *logtail.CheckpointData,
 ) error {
-	_, err := c.mutation.snapshotMeta.Update(
-		c.ctx, c.fs.Service, data, ckp.GetStart(), ckp.GetEnd(),
+	return c.mutation.snapshotMeta.Update(
+		c.ctx,
+		c.fs.Service,
+		data,
+		ckp.GetStart(),
+		ckp.GetEnd(),
+		c.TaskNameLocked(),
 	)
-	return err
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {

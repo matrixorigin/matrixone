@@ -117,7 +117,14 @@ func (l *ObjectList) GetLastestNode(sortHint uint64) *ObjectEntry {
 	return objs[len(objs)-1]
 }
 
-func (l *ObjectList) DropObjectByID(objectID *objectio.ObjectId, txn txnif.TxnReader) (droppedObj *ObjectEntry, isNew bool, err error) {
+func (l *ObjectList) DropObjectByID(
+	objectID *objectio.ObjectId,
+	txn txnif.TxnReader,
+) (
+	droppedObj *ObjectEntry,
+	isNew bool,
+	err error,
+) {
 	obj, err := l.GetObjectByID(objectID)
 	if err != nil {
 		return
@@ -193,7 +200,11 @@ func (l *ObjectList) Delete(obj *ObjectEntry) {
 		panic("concurrent mutation")
 	}
 }
-func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, stats *objectio.ObjectStats) (isNew bool, err error) {
+func (l *ObjectList) UpdateObjectInfo(
+	obj *ObjectEntry,
+	txn txnif.TxnReader,
+	stats *objectio.ObjectStats,
+) (isNew bool, err error) {
 	needWait, txnToWait := obj.GetLastMVCCNode().NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		txnToWait.GetTxnState(true)

@@ -19,13 +19,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lni/vfs"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -171,4 +172,15 @@ func TestReplay2(t *testing.T) {
 	}
 
 	driver.Close()
+}
+
+func Test_RetryWithTimeout(t *testing.T) {
+	tryFunc := func() bool {
+		return false
+	}
+	err := RetryWithTimeout(time.Second*0, tryFunc)
+	assert.Error(t, err)
+
+	err = RetryWithTimeout(time.Millisecond*3, tryFunc)
+	assert.Error(t, err)
 }

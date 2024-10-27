@@ -1833,6 +1833,11 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			ps)
 		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
@@ -2023,12 +2028,17 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
+
+	//snap, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	return false, err
+	//}
 	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
-
 	snap := part.Snapshot()
+
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)
 	defer put.Put()

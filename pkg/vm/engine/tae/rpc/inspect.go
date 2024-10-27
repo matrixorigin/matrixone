@@ -1249,7 +1249,7 @@ func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
 }
 
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
 	defer cancel()
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()

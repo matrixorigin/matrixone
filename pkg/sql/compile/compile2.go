@@ -196,14 +196,22 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 
 	stats := statistic.StatsInfoFromContext(execTopContext)
-	stats.ExecutionStart()
+	isInExecutor := perfcounter.IsInternalExecutor(execTopContext)
+	if !isInExecutor {
+		stats.ExecutionStart()
+	}
 	crs := new(perfcounter.CounterSet)
 	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
 	defer func() {
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
-		stats.ExecutionEnd()
+		if !isInExecutor {
+			if err != nil {
+				resetStatsInfoPreRun(stats, isInExecutor)
+			}
+			stats.ExecutionEnd()
+		}
 
 		timeCost := time.Since(runStart)
 		v2.TxnStatementExecuteDurationHistogram.Observe(timeCost.Seconds())
@@ -227,17 +235,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	for {
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
-		// Before compile.runOnce, reset `StatsInfo` IO resources which in sql context
-		stats.ResetIOAccessTimeConsumption()
-		stats.ResetIOMergerTimeConsumption()
-		stats.ResetBuildReaderTimeConsumption()
-		stats.ResetCompilePreRunOnceDuration()
+		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
+		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
 			runC.MessageBoard.BeforeRunonce()
 			// Calculate time spent between the start and runOnce execution
-			stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
+			if !isInExecutor {
+				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
+			}
 
 			if err = runC.runOnce(); err == nil {
 				if runC.anal != nil {
@@ -296,8 +303,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	if c.hasValidQueryPlan() {
-		c.handlePlanAnalyze(runC, queryResult, stats, isExplainPhyPlan, option)
+	if !isInExecutor {
+		c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
 	}
 
 	return queryResult, err
@@ -418,7 +425,28 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 	}
 }
 
-func (c *Compile) handlePlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+	switch planType := c.pn.Plan.(type) {
+	case *plan.Plan_Query:
+		if planType.Query.StmtType != plan.Query_REPLACE {
+			c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
+		}
+	case *plan.Plan_Ddl:
+		handleDdlPlanAnalyze(runC, stats)
+	}
+}
+
+func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			if runC.scopes[i].ScopeAnalyzer != nil {
+				stats.AddScopePrepareDuration(runC.scopes[i].ScopeAnalyzer.TimeConsumed)
+			}
+		}
+	}
+}
+
+func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
 	c.GenPhyPlan(runC)
 	c.fillPlanNodeAnalyzeInfo(stats)
 
@@ -429,5 +457,17 @@ func (c *Compile) handlePlanAnalyze(runC *Compile, queryResult *util2.RunResult,
 		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, queryResult, statsInfo, c.anal, option)
 
 		runC.anal.explainPhyBuffer = scopeInfo
+	}
+}
+
+// Reset the 'StatsInfo' execution related resources in the SQL context before compiling. runOnce
+func resetStatsInfoPreRun(stats *statistic.StatsInfo, isInExecutor bool) {
+	if !isInExecutor {
+		stats.ResetIOAccessTimeConsumption()
+		stats.ResetIOMergerTimeConsumption()
+		stats.ResetBuildReaderTimeConsumption()
+		stats.ResetCompilePreRunOnceDuration()
+		stats.ResetCompilePreRunOnceWaitLock()
+		stats.ResetScopePrepareDuration()
 	}
 }
