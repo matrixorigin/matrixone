@@ -48,6 +48,9 @@ func (es EntryState) Repr() string {
 }
 
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
+	if !objectSchema.HasPKOrFakePK() {
+		return nil
+	}
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")
 	schema.Extra.BlockMaxRows = objectSchema.Extra.BlockMaxRows

@@ -563,7 +563,17 @@ func (tbl *txnTable) TransferDeleteRows(
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
+		oldErr := err
 		err = moerr.NewTxnRWConflictNoCtx()
+		logutil.Error(
+			"TRANSFER-ERR",
+			zap.Error(err),
+			zap.String("old-err", oldErr.Error()),
+			zap.String("id", id.String()),
+			zap.String("txn", tbl.store.txn.String()),
+			zap.String("phase", phase),
+		)
+
 		return
 	}
 	memo[id.BlockID] = pinned
@@ -645,8 +655,15 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		counter.TAE.Object.Create.Add(1)
 	})
 	sorted := isTombstone
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, sorted, false)
-	return tbl.createObject(&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone})
+	stats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectid(),
+		true,
+		sorted,
+		false,
+	)
+	return tbl.createObject(
+		&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone},
+	)
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -780,7 +797,10 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 	if !dedupType.SkipTargetOldCommitted() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
-			pk, false, isTombstone); err != nil {
+			pk,
+			false,
+			isTombstone,
+		); err != nil {
 			return
 		}
 	} else {
@@ -897,7 +917,16 @@ func (tbl *txnTable) GetValue(
 	}
 	block := meta.GetObjectData()
 	_, blkIdx := id.BlockID.Offsets()
-	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(false), blkIdx, int(row), int(col), skipCheckDelete, common.WorkspaceAllocator)
+	return block.GetValue(
+		ctx,
+		tbl.store.txn,
+		tbl.GetLocalSchema(false),
+		blkIdx,
+		int(row),
+		int(col),
+		skipCheckDelete,
+		common.WorkspaceAllocator,
+	)
 }
 func (tbl *txnTable) UpdateObjectStats(
 	id *common.ID, stats *objectio.ObjectStats, isTombstone bool,

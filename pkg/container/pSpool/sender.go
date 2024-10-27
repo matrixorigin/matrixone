@@ -32,22 +32,32 @@ type PipelineSpool struct {
 	shardRefs  []atomic.Int32
 	doRefCheck []bool
 
+	// rs record all receivers' input data queue.
+	// it supports push-index and pop-index methods.
 	rs []receiver
 
+	// cache manage all the reuse memories.
 	cache *cachedBatch
 	// free element index on shardPool.
-	freeShardPool chan int8
+	freeShardPool chan uint32
 
-	// each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
-	// and the data producer should wait all consumers done before its close or reset.
+	// once each cs done its work (after the readers get an End-Message from it, reader will put a value into this channel).
+	//
+	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
 type pipelineSpoolMessage struct {
-	content *batch.Batch
-	cacheID int8
-	err     error
+	// data or error information.
+	dataContent *batch.Batch
+	errContent  error
+
+	// use cache or not,
+	// and which cache pool does dataContent's memory allocated from.
+	// we should put this memory back after the use of dataContent.
+	useCache bool
+	cacheID  uint32
 }
 
 // SendBatch do copy for data, and send it to any or all data receiver.
@@ -59,42 +69,34 @@ func (ps *PipelineSpool) SendBatch(
 		panic("do not support SendToAnyLocal for pipeline spool now.")
 	}
 
-	dst, queryDone, err := ps.cache.GetCopiedBatch(ctx, data)
-	if err != nil || queryDone {
-		return queryDone, err
+	done, messageIdx := ps.getFreeIdFromSharedPool(ctx)
+	if done {
+		return true, nil
 	}
 
-	msg := pipelineSpoolMessage{
-		content: dst.pointer,
-		cacheID: dst.whichCacheToUse,
-		err:     info,
+	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
+	if err != nil {
+		return false, err
 	}
+	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
 
 	if receiverID == SendToAllLocal {
-		queryDone = ps.sendToAll(ctx, msg)
+		ps.sendToAll(messageIdx)
 	} else {
-		queryDone = ps.sendToIdx(ctx, receiverID, msg)
+		ps.sendToIdx(messageIdx, receiverID)
 	}
-
-	if queryDone {
-		ps.cache.CacheBatch(dst)
-	}
-	return queryDone, nil
+	return false, nil
 }
 
 // ReleaseCurrent force to release the last received one.
 func (ps *PipelineSpool) ReleaseCurrent(idx int) {
-	if last := ps.rs[idx].getLastPop(); last != noneLastPop {
+	if last, hasLast := ps.rs[idx].getLastPop(); hasLast {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(
-				freeBatchSignal{
-					pointer:         ps.shardPool[last].content,
-					whichCacheToUse: ps.shardPool[last].cacheID,
-				},
-			)
+				ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
 			ps.freeShardPool <- last
 		}
-		ps.rs[idx].lastPop = noneLastPop
+		ps.rs[idx].flagLastPopRelease()
 	}
 }
 
@@ -103,10 +105,10 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	ps.ReleaseCurrent(idx)
 
 	next := ps.rs[idx].popNextIndex()
-	if ps.shardPool[next].content == nil {
+	if ps.shardPool[next].dataContent == nil {
 		ps.csDoneSignal <- struct{}{}
 	}
-	return ps.shardPool[next].content, ps.shardPool[next].err
+	return ps.shardPool[next].dataContent, ps.shardPool[next].errContent
 }
 
 // Close the sender and receivers, and do memory clean.
@@ -119,39 +121,43 @@ func (ps *PipelineSpool) Close() {
 		<-ps.csDoneSignal
 	}
 
-	ps.cache.Free()
+	ps.cache.free()
 }
 
-func (ps *PipelineSpool) sendToAll(ctx context.Context, msg pipelineSpoolMessage) (queryDone bool) {
+func (ps *PipelineSpool) getFreeIdFromSharedPool(
+	ctx context.Context) (queryDone bool, id uint32) {
 	select {
 	case <-ctx.Done():
-		return true
-	case index := <-ps.freeShardPool:
-		ps.shardPool[index] = msg
-		if ps.shardRefs == nil {
-			ps.doRefCheck[index] = false
-		} else {
-			ps.shardRefs[index].Store(int32(len(ps.rs)))
-			ps.doRefCheck[index] = true
-		}
-
-		for i := 0; i < len(ps.rs); i++ {
-			ps.rs[i].pushNextIndex(index)
-		}
+		return true, 0
+	case id = <-ps.freeShardPool:
+		return false, id
 	}
-	return false
 }
 
-func (ps *PipelineSpool) sendToIdx(ctx context.Context, idx int, msg pipelineSpoolMessage) (queryDone bool) {
-	select {
-	case <-ctx.Done():
-		return true
-	case index := <-ps.freeShardPool:
-		ps.shardPool[index] = msg
-		// if send to only one, there is no need to do ref check.
-		ps.doRefCheck[index] = false
+func (ps *PipelineSpool) updateSpoolMessage(idx uint32, data *batch.Batch, err error, useCache bool, cacheID uint32) {
+	ps.shardPool[idx].dataContent = data
+	ps.shardPool[idx].errContent = err
 
-		ps.rs[idx].pushNextIndex(index)
+	ps.shardPool[idx].useCache = useCache
+	ps.shardPool[idx].cacheID = cacheID
+}
+
+func (ps *PipelineSpool) sendToAll(sharedPoolIndex uint32) {
+	if ps.shardRefs == nil {
+		ps.doRefCheck[sharedPoolIndex] = false
+	} else {
+		ps.shardRefs[sharedPoolIndex].Store(int32(len(ps.rs)))
+		ps.doRefCheck[sharedPoolIndex] = true
 	}
-	return false
+
+	for i := 0; i < len(ps.rs); i++ {
+		ps.rs[i].pushNextIndex(sharedPoolIndex)
+	}
+}
+
+func (ps *PipelineSpool) sendToIdx(sharedPoolIndex uint32, idx int) {
+	// if send to only one, there is no need to do ref check.
+	ps.doRefCheck[sharedPoolIndex] = false
+
+	ps.rs[idx].pushNextIndex(sharedPoolIndex)
 }

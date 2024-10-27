@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -513,15 +512,6 @@ func (r *shardingLocalReader) Read(
 		if err != nil || isEnd {
 			r.close()
 		}
-		//for test issue-19202
-		logutil.Infof("xxxx shardingLocalReader read, "+
-			"txn:%s, table:%s, isEnd:%v,err:%v, bat:%s, state:%v",
-			r.tblDelegate.origin.db.op.Txn().DebugString(),
-			r.tblDelegate.origin.tableName,
-			isEnd,
-			err,
-			common.MoBatchToString(bat, 10),
-			r.iteratePhase)
 	}()
 
 	for {
@@ -607,7 +597,7 @@ func (r *shardingLocalReader) close() error {
 			r.lrd.Close()
 		}
 		if r.remoteRelData != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseShardingLocalReader)
 			defer cancel()
 
 			err := r.tblDelegate.forwardRead(
@@ -620,7 +610,7 @@ func (r *shardingLocalReader) close() error {
 				},
 			)
 			if err != nil {
-				return err
+				return moerr.AttachCause(ctx, err)
 			}
 		}
 	}
@@ -667,8 +657,8 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		return nil, err
 	}
 	group := func(rd engine.RelData) (local engine.RelData, remote engine.RelData) {
-		local = rd.BuildEmptyRelData()
-		remote = rd.BuildEmptyRelData()
+		local = rd.BuildEmptyRelData(0)
+		remote = rd.BuildEmptyRelData(0)
 		engine.ForRangeBlockInfo(0, rd.DataCnt(), rd, func(bi *objectio.BlockInfo) (bool, error) {
 			if bi.IsMemBlk() {
 				local.AppendBlockInfo(bi)

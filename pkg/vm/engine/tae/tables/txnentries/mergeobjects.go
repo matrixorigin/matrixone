@@ -17,10 +17,13 @@ package txnentries
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"go.uber.org/zap"
 )
 
 type mergeObjectsEntry struct {
@@ -89,8 +91,7 @@ func NewMergeObjectsEntry(
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.collectTs = rt.Now()
-		_, _, ok := fault.TriggerFault("tae: slow transfer deletes")
-		if ok {
+		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}
 		var err error
@@ -184,7 +185,7 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	// for io task, dispatch by round robin, scope can be nil
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
 		// TODO: variable as timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CausePrepareRollback2)
 
 		defer cancel()
 		for _, obj := range entry.createdObjs {

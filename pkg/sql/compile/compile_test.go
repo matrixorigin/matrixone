@@ -16,22 +16,22 @@ package compile
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -311,30 +311,6 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 	putBlocksInCurrentCN(testCompile, reldata)
 }
 
-func TestPutBlocksInAverage(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
-	var ranges memoryengine.ShardIdSlice
-	id := make([]byte, 8)
-	binary.LittleEndian.PutUint64(id, 1)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	ranges.Append(id)
-	relData := &memoryengine.MemRelationData{
-		Shards: ranges,
-	}
-	n := &plan.Node{Stats: plan2.DefaultStats()}
-	putBlocksInAverage(testCompile, relData, n)
-}
-
 func TestShuffleBlocksToMultiCN(t *testing.T) {
 	testCompile := &Compile{
 		proc: testutil.NewProcess(),
@@ -352,4 +328,40 @@ func TestShuffleBlocksToMultiCN(t *testing.T) {
 	n := &plan.Node{Stats: plan2.DefaultStats()}
 	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
 	require.NoError(t, err)
+}
+
+var _ morpc.RPCClient = new(testRpcClient)
+
+type testRpcClient struct {
+}
+
+func (tRpcClient *testRpcClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) Ping(ctx context.Context, backend string) error {
+	time.Sleep(time.Second)
+	return moerr.NewInternalErrorNoCtx("return err")
+}
+
+func (tRpcClient *testRpcClient) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) CloseBackend() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_isAvailable(t *testing.T) {
+	rpcClient := &testRpcClient{}
+	ret := isAvailable(rpcClient, "127.0.0.1:6001")
+	assert.False(t, ret)
 }

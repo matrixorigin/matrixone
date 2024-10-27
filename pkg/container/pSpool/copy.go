@@ -15,12 +15,10 @@
 package pSpool
 
 import (
-	"context"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 )
 
 // cachedBatch is just like the cachedVectorPool in the original code,
@@ -28,28 +26,12 @@ import (
 // it will support
 // 1. GetCopiedBatch: generate a copied batch.
 // 2. CacheBatch: put the byte slices of batch's vectors into the cache.
-// 3. Reset: reset the cachedBatch for reuse.
-// 4. Free: free the cached byte slices.
+// 3. free: free the cached byte slices.
 type cachedBatch struct {
 	mp *mpool.MPool
 
-	// the channel to cache the batch pointers.
-	// the capacity of the channel is the max number of batch pointers that can be copied.
-	//
-	// only support copy batch once freeBatchPointer is not empty.
-	freeBatchPointer chan freeBatchSignal
-
-	// bytesCache stores the cached memory list for each batch.
-	bytesCache []oneBatchMemoryCache
-}
-
-const (
-	noNeedToCache int8 = -1
-)
-
-type freeBatchSignal struct {
-	pointer         *batch.Batch
-	whichCacheToUse int8
+	// buffer save all the memory using by this structure.
+	buffer *spoolBuffer
 }
 
 type oneBatchMemoryCache struct {
@@ -57,160 +39,105 @@ type oneBatchMemoryCache struct {
 	bs [][]byte
 }
 
-func initCachedBatch(mp *mpool.MPool, capacity int) *cachedBatch {
+func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
 	if capacity < 1 {
 		capacity = 1
 	}
 
 	cb := &cachedBatch{
-		mp:               mp,
-		freeBatchPointer: make(chan freeBatchSignal, capacity),
-		bytesCache:       make([]oneBatchMemoryCache, capacity),
-	}
-
-	for i := 0; i < capacity; i++ {
-		cb.freeBatchPointer <- freeBatchSignal{
-			pointer:         batch.NewWithSize(0),
-			whichCacheToUse: int8(i),
-		}
+		mp:     mp,
+		buffer: initSpoolBuffer(capacity),
 	}
 
 	return cb
 }
 
-func (cb *cachedBatch) CacheBatch(signal freeBatchSignal) {
-	if signal.whichCacheToUse == noNeedToCache {
+func (cb *cachedBatch) CacheBatch(useCache bool, whichCacheDoesThisDataUse uint32, data *batch.Batch) {
+	if !useCache {
 		return
 	}
-	cb.cacheVectorsInBatch(signal.pointer, signal.whichCacheToUse)
-	cb.freeBatchPointer <- signal
+	cb.buffer.putCacheID(cb.mp, whichCacheDoesThisDataUse, data)
 }
 
-func (cb *cachedBatch) cacheVectorsInBatch(bat *batch.Batch, whichCacheToUse int8) {
-	for i, vec := range bat.Vecs {
-		if vec == nil {
+// GetCopiedBatch copy the src from a ready memory cache.
+//
+// if this is a special batch which will never be released, just return it and do not using any cache.
+func (cb *cachedBatch) GetCopiedBatch(
+	src *batch.Batch) (dst *batch.Batch, useCache bool, cacheID uint32, err error) {
+
+	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
+		return src, false, 0, nil
+	}
+
+	cacheID, dst = cb.buffer.getCacheID()
+	dst.Recursive = src.Recursive
+	dst.ShuffleIDX = src.ShuffleIDX
+
+	if cap(dst.Vecs) >= len(src.Vecs) {
+		dst.Vecs = dst.Vecs[:len(src.Vecs)]
+		for i := range dst.Vecs {
+			dst.Vecs[i] = nil
+		}
+	} else {
+		dst.Vecs = make([]*vector.Vector, len(src.Vecs))
+	}
+
+	if cap(dst.Attrs) >= len(src.Attrs) {
+		dst.Attrs = dst.Attrs[:len(src.Attrs)]
+	} else {
+		dst.Attrs = make([]string, len(src.Attrs))
+	}
+	// copy attrs.
+	for i := range dst.Attrs {
+		dst.Attrs[i] = src.Attrs[i]
+	}
+
+	// copy vectors.
+	for i := range dst.Vecs {
+		vec := src.Vecs[i]
+		if vec == nil || dst.Vecs[i] != nil {
 			continue
 		}
 
-		// 1. const vector size was too small,
-		// 2. vector doesn't own its data and area,
-		// we don't need to cache it.
-		if vec.IsConst() || vec.NeedDup() {
-			vec.Free(cb.mp)
-		}
+		typ := *vec.GetType()
+		dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 
-		data := vector.GetAndClearVecData(vec)
-		area := vector.GetAndClearVecArea(vec)
-
-		if data != nil {
-			cb.bytesCache[whichCacheToUse].bs = append(cb.bytesCache[whichCacheToUse].bs, data)
-		}
-		if area != nil {
-			cb.bytesCache[whichCacheToUse].bs = append(cb.bytesCache[whichCacheToUse].bs, area)
-		}
-
-		bat.ReplaceVector(vec, nil, i)
-	}
-	bat.Vecs = bat.Vecs[:0]
-	bat.Attrs = bat.Attrs[:0]
-	bat.SetRowCount(0)
-
-	// todo: a hack here, because we won't reuse the aggs.
-	for i := range bat.Aggs {
-		bat.Aggs[i].Free()
-	}
-	bat.Aggs = nil
-}
-
-// GetCopiedBatch get a batch from the batchPointer channel
-// and copy the data and area of the src batch to the dst batch.
-func (cb *cachedBatch) GetCopiedBatch(
-	senderCtx context.Context, src *batch.Batch) (signal freeBatchSignal, senderDone bool, err error) {
-
-	var dst *batch.Batch
-
-	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
-		signal.whichCacheToUse = noNeedToCache
-		dst = src
-
-	} else {
-		select {
-		case signal = <-cb.freeBatchPointer:
-			dst = signal.pointer
-			dst.Recursive = src.Recursive
-			dst.ShuffleIDX = src.ShuffleIDX
-
-		case <-senderCtx.Done():
-			return signal, true, nil
-		}
-
-		if cap(dst.Vecs) >= len(src.Vecs) {
-			dst.Vecs = dst.Vecs[:len(src.Vecs)]
-			for i := range dst.Vecs {
-				dst.Vecs[i] = nil
+		if vec.IsConst() {
+			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
+				dst.Clean(cb.mp)
+				return nil, false, 0, err
 			}
+
 		} else {
-			dst.Vecs = make([]*vector.Vector, len(src.Vecs))
-		}
-
-		if cap(dst.Attrs) >= len(src.Attrs) {
-			dst.Attrs = dst.Attrs[:len(src.Attrs)]
-		} else {
-			dst.Attrs = make([]string, len(src.Attrs))
-		}
-		// copy attrs.
-		for i := range dst.Attrs {
-			dst.Attrs[i] = src.Attrs[i]
-		}
-
-		// copy vectors.
-		for i := range dst.Vecs {
-			vec := src.Vecs[i]
-			if vec == nil || dst.Vecs[i] != nil {
-				continue
+			cb.buffer.bytesCache[cacheID].setSuitableDataAreaToVector(
+				len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
+			dst.Vecs[i].Reset(typ)
+			if err = vector.GetUnionAllFunction(typ, cb.mp)(
+				dst.Vecs[i],
+				vec); err != nil {
+				dst.Clean(cb.mp)
+				return nil, false, 0, err
 			}
 
-			typ := *vec.GetType()
-			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+			dst.Vecs[i].SetSorted(vec.GetSorted())
+		}
+		dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
-			if vec.IsConst() {
-				if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-					dst.Clean(cb.mp)
-					return signal, false, err
-				}
-
-			} else {
-				cb.bytesCache[signal.whichCacheToUse].setSuitableDataAreaToVector(
-					len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
-				dst.Vecs[i].Reset(typ)
-				if err = vector.GetUnionAllFunction(typ, cb.mp)(
-					dst.Vecs[i],
-					vec); err != nil {
-					dst.Clean(cb.mp)
-					return signal, false, err
-				}
-
-				dst.Vecs[i].SetSorted(vec.GetSorted())
-			}
-			dst.Vecs[i].SetIsBin(vec.GetIsBin())
-
-			// range src and found the same vector.
-			for j := i + 1; j < len(src.Vecs); j++ {
-				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
-					dst.Vecs[j] = dst.Vecs[i]
-				}
+		// range src and found the same vector.
+		for j := i + 1; j < len(src.Vecs); j++ {
+			if dst.Vecs[j] == nil && src.Vecs[j] == vec {
+				dst.Vecs[j] = dst.Vecs[i]
 			}
 		}
-
-		dst.Aggs = src.Aggs
-		src.Aggs = nil
-
-		// set row count.
-		dst.SetRowCount(src.RowCount())
 	}
 
-	signal.pointer = dst
-	return signal, false, nil
+	dst.Aggs = src.Aggs
+	src.Aggs = nil
+
+	// set row count.
+	dst.SetRowCount(src.RowCount())
+
+	return dst, true, cacheID, nil
 }
 
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
@@ -298,16 +225,6 @@ func (mc *oneBatchMemoryCache) removeItemAndArrange(idx int) []byte {
 	return dst
 }
 
-func (cb *cachedBatch) Free() {
-	m := cap(cb.freeBatchPointer)
-	for i := 0; i < m; i++ {
-		b := <-cb.freeBatchPointer
-		b.pointer.Clean(cb.mp)
-	}
-
-	for i := range cb.bytesCache {
-		for j := range cb.bytesCache[i].bs {
-			cb.mp.Free(cb.bytesCache[i].bs[j])
-		}
-	}
+func (cb *cachedBatch) free() {
+	cb.buffer.clean(cb.mp)
 }

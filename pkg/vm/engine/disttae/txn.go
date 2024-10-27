@@ -941,9 +941,10 @@ func (txn *Transaction) deleteTableWrites(
 }
 
 func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseAllocateID)
 	defer cancel()
-	return txn.idGen.AllocateID(ctx)
+	id, err := txn.idGen.AllocateID(ctx)
+	return id, moerr.AttachCause(ctx, err)
 }
 
 func (txn *Transaction) genBlock() {
@@ -1087,14 +1088,6 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 	}
 	return nil
 }
-
-//func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-//	return !txn.deletedBlocks.isEmpty()
-//}
-
-//func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-//	return txn.deletedBlocks.hasDeletes(id)
-//}
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(

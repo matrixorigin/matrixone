@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -468,8 +467,6 @@ func (c *Compile) prePipelineInitializer() (err error) {
 // run once
 func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
-	var wg sync.WaitGroup
-
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -477,7 +474,6 @@ func (c *Compile) runOnce() (err error) {
 	} else {
 		errC := make(chan error, len(c.scopes))
 		for i := range c.scopes {
-			wg.Add(1)
 			scope := c.scopes[i]
 			errSubmit := ants.Submit(func() {
 				defer func() {
@@ -488,33 +484,40 @@ func (c *Compile) runOnce() (err error) {
 							zap.String("error", err.Error()))
 						errC <- err
 					}
-					wg.Done()
 				}()
 				errC <- c.run(scope)
 			})
 			if errSubmit != nil {
 				errC <- errSubmit
-				wg.Done()
 			}
 		}
-		wg.Wait()
-		close(errC)
 
-		errList := make([]error, 0, len(c.scopes))
-		for e := range errC {
-			if e != nil {
-				errList = append(errList, e)
-				if c.isRetryErr(e) {
-					return e
+		var errToThrowOut error
+		for i := 0; i < cap(errC); i++ {
+			e := <-errC
+
+			// cancel this query if the first error occurs.
+			if e != nil && errToThrowOut == nil {
+				errToThrowOut = e
+
+				// cancel all scope tree.
+				for j := range c.scopes {
+					if c.scopes[j].Proc != nil {
+						c.scopes[j].Proc.Cancel()
+					}
 				}
 			}
-		}
 
-		if len(errList) > 0 {
-			err = errList[0]
+			// if any error already return is retryable, we should throw this one
+			// to make sure query will retry.
+			if e != nil && c.isRetryErr(e) {
+				errToThrowOut = e
+			}
 		}
-		if err != nil {
-			return err
+		close(errC)
+
+		if errToThrowOut != nil {
+			return errToThrowOut
 		}
 	}
 
@@ -759,10 +762,11 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 		return false
 	}
 	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
 	defer cancel()
 	err = client.Ping(ctx, addr)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		// ping failed
 		logutil.Debugf("ping %s err %+v\n", addr, err)
 		return false
@@ -3770,6 +3774,12 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
 		return true //avoid bugs
 	}
+	if len(n.AggList) > 0 {
+		partialResult, _, _ := checkAggOptimize(n)
+		if partialResult != nil {
+			return true
+		}
+	}
 	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
@@ -4090,7 +4100,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		var columnMap map[int]int
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
-			newRelData := relData.BuildEmptyRelData()
+			newRelData := relData.BuildEmptyRelData(1)
 			blk := relData.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 
@@ -4152,18 +4162,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for an ordered scan, put all paylonds in current CN
+	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
-	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	// if not disttae engine, just put all payloads in current CN
+	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae {
 		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
 	}
-	// disttae engine
-	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
-		return nodes, partialResults, partialResultTypes, err
-	}
-	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
+	// only support disttae engine for now
+	nodes, err = shuffleBlocksToMultiCN(c, rel, relData, n)
+	return nodes, partialResults, partialResultTypes, err
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
@@ -4497,82 +4504,6 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
-	var nodes engine.Nodes
-	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < relData.DataCnt(); i += step {
-		j := i / step
-		if i+step >= relData.DataCnt() {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		} else {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		}
-	}
-	return nodes
-}
-
 func removeEmtpyNodes(
 	c *Compile,
 	n *plan.Node,
@@ -4625,7 +4556,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData()
+	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
 	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
@@ -4635,7 +4566,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
-				Data: relData.BuildEmptyRelData(),
+				Data: relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList)),
 			})
 		}
 	}

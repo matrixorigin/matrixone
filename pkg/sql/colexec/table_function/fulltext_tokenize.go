@@ -18,8 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/monlp/tokenizer"
-
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/monlp/tokenizer"
 )
 
 type FullTextEntry struct {
@@ -131,7 +131,22 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			if i > 1 {
 				c += "\n"
 			}
-			c += tf.ctr.argVecs[i].GetStringAt(nthRow)
+			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
+			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+				// datalink
+				dl, err := datalink.NewDatalink(data, proc)
+				if err != nil {
+					return err
+				}
+				b, err := dl.GetPlainText(proc)
+				if err != nil {
+					return err
+				}
+
+				c += string(b)
+			} else {
+				c += data
+			}
 		}
 
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))

@@ -20,16 +20,18 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"path"
 	"slices"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1481,7 +1483,7 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	return fpath
 }
 
-func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
+func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 
 	param.ScanType = tree.S3
 	param.S3Param = &tree.S3Parameter{}
@@ -1490,11 +1492,11 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 		return moerr.NewBadConfig(param.Ctx, "S3 URL Query does not support in ExternParam")
 	}
 
-	if s.Url.Scheme != function.S3_PROTOCOL {
+	if s.Url.Scheme != stage.S3_PROTOCOL {
 		return moerr.NewBadConfig(param.Ctx, "URL protocol is not S3")
 	}
 
-	bucket, prefix, _, err := function.ParseS3Url(s.Url)
+	bucket, prefix, _, err := stage.ParseS3Url(s.Url)
 	if err != nil {
 		return err
 	}
@@ -1504,28 +1506,28 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	param.Filepath = prefix
 
 	// mandatory
-	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
+	param.S3Param.APIKey, found = s.GetCredentials(stage.PARAMKEY_AWS_KEY_ID, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_KEY_ID)
 	}
-	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
+	param.S3Param.APISecret, found = s.GetCredentials(stage.PARAMKEY_AWS_SECRET_KEY, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
-	}
-
-	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
-	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_SECRET_KEY)
 	}
 
-	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
+	param.S3Param.Region, found = s.GetCredentials(stage.PARAMKEY_AWS_REGION, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_REGION)
+	}
+
+	param.S3Param.Endpoint, found = s.GetCredentials(stage.PARAMKEY_ENDPOINT, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_ENDPOINT)
 	}
 
 	// optional
-	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
-	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
+	param.S3Param.Provider, _ = s.GetCredentials(stage.PARAMKEY_PROVIDER, stage.S3_PROVIDER_AMAZON)
+	param.CompressType, _ = s.GetCredentials(stage.PARAMKEY_COMPRESSION, "auto")
 
 	for i := 0; i < len(param.Option); i += 2 {
 		switch strings.ToLower(param.Option[i]) {
@@ -1563,11 +1565,11 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 
 	fpath := GetFilePathFromParam(param)
 
-	if !strings.HasPrefix(fpath, function.STAGE_PROTOCOL+"://") {
+	if !strings.HasPrefix(fpath, stage.STAGE_PROTOCOL+"://") {
 		return InitInfileParam(param)
 	}
 
-	s, err := function.UrlToStageDef(fpath, proc)
+	s, err := stage.UrlToStageDef(fpath, proc)
 	if err != nil {
 		return err
 	}
@@ -1576,9 +1578,9 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return moerr.NewBadConfig(param.Ctx, "Invalid URL: query not supported in ExternParam")
 	}
 
-	if s.Url.Scheme == function.S3_PROTOCOL {
+	if s.Url.Scheme == stage.S3_PROTOCOL {
 		return InitStageS3Param(param, s)
-	} else if s.Url.Scheme == function.FILE_PROTOCOL {
+	} else if s.Url.Scheme == stage.FILE_PROTOCOL {
 
 		err := InitInfileParam(param)
 		if err != nil {
@@ -2157,6 +2159,31 @@ func MakeFalseExpr() *Expr {
 				Value:  &plan.Literal_Bval{Bval: false},
 			},
 		},
+	}
+}
+
+func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
+	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok {
+		panic("fail to convert runtime filter to composite primary key!")
+	}
+	col := expr.GetCol()
+	col.ColPos = cpkeyIdx
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: true,
+	}
+}
+
+func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        serialExpr,
+		MatchPrefix: matchPrefix,
 	}
 }
 

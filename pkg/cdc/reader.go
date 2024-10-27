@@ -33,15 +33,16 @@ import (
 var _ Reader = new(tableReader)
 
 type tableReader struct {
-	cnTxnClient  client.TxnClient
-	cnEngine     engine.Engine
-	mp           *mpool.MPool
-	packerPool   *fileservice.Pool[*types.Packer]
-	info         *DbTableInfo
-	sinker       Sinker
-	wMarkUpdater *WatermarkUpdater
-	tick         *time.Ticker
-	restartFunc  func(*DbTableInfo) error
+	cnTxnClient          client.TxnClient
+	cnEngine             engine.Engine
+	mp                   *mpool.MPool
+	packerPool           *fileservice.Pool[*types.Packer]
+	info                 *DbTableInfo
+	sinker               Sinker
+	wMarkUpdater         *WatermarkUpdater
+	tick                 *time.Ticker
+	restartFunc          func(*DbTableInfo) error
+	initSnapshotSplitTxn bool
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
@@ -58,18 +59,20 @@ func NewTableReader(
 	wMarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 	restartFunc func(*DbTableInfo) error,
+	initSnapshotSplitTxn bool,
 ) Reader {
 	reader := &tableReader{
-		cnTxnClient:  cnTxnClient,
-		cnEngine:     cnEngine,
-		mp:           mp,
-		packerPool:   packerPool,
-		info:         info,
-		sinker:       sinker,
-		wMarkUpdater: wMarkUpdater,
-		tick:         time.NewTicker(200 * time.Millisecond),
-		restartFunc:  restartFunc,
-		tableDef:     tableDef,
+		cnTxnClient:          cnTxnClient,
+		cnEngine:             cnEngine,
+		mp:                   mp,
+		packerPool:           packerPool,
+		info:                 info,
+		sinker:               sinker,
+		wMarkUpdater:         wMarkUpdater,
+		tick:                 time.NewTicker(200 * time.Millisecond),
+		restartFunc:          restartFunc,
+		initSnapshotSplitTxn: initSnapshotSplitTxn,
+		tableDef:             tableDef,
 	}
 
 	// batch columns layout:
@@ -242,6 +245,17 @@ func (reader *tableReader) readTableWithTxn(
 		v2.CdcSinkRecordCounter.Add(count)
 	}
 
+	hasBegin := false
+	defer func() {
+		if hasBegin {
+			if err == nil {
+				_ = reader.sinker.SendCommit(ctx)
+			} else {
+				_ = reader.sinker.SendRollback(ctx)
+			}
+		}
+	}()
+
 	var curHint engine.ChangesHandle_Hint
 	for {
 		select {
@@ -261,7 +275,7 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		// both nil denote no more data
+		// both nil denote no more data (end of this tail)
 		if insertData == nil && deleteData == nil {
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
@@ -276,6 +290,14 @@ func (reader *tableReader) readTableWithTxn(
 
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
+			// output sql in a txn
+			if !hasBegin && !reader.initSnapshotSplitTxn {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
+					return err
+				}
+				hasBegin = true
+			}
+
 			// transform into insert instantly
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:     OutputTypeSnapshot,
@@ -305,6 +327,14 @@ func (reader *tableReader) readTableWithTxn(
 			//		insertAtmBatch.DebugString(reader.tableDef, false),
 			//		deleteAtmBatch.DebugString(reader.tableDef, true))
 			//}
+
+			// output sql in a txn
+			if !hasBegin {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
+					return err
+				}
+				hasBegin = true
+			}
 
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:      OutputTypeTail,

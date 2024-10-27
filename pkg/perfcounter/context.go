@@ -98,6 +98,12 @@ func AttachInternalExecutorKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, InternalExecutorKey{}, struct{}{})
 }
 
+// IsInternalExecutor checks if the given context contains the InternalExecutorKey
+func IsInternalExecutor(ctx context.Context) bool {
+	_, ok := ctx.Value(InternalExecutorKey{}).(struct{})
+	return ok
+}
+
 // Generic executor context key
 type GenericExecutorKey struct{}
 

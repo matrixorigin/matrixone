@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -85,6 +86,8 @@ type ExpressionExecutor interface {
 
 	// IsColumnExpr returns true if the expression is a column expression.
 	IsColumnExpr() bool
+
+	TypeName() string
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -262,7 +265,7 @@ type ParamExpressionExecutor struct {
 	typ  types.Type
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -802,7 +805,7 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 				}
 				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_datalink {
-				_, _, err1 := function.ParseDatalink(sval, proc)
+				_, _, err1 := datalink.ParseDatalink(sval, proc)
 				if err1 != nil {
 					return nil, err1
 				}

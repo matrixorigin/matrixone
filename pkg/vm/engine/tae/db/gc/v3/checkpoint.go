@@ -49,7 +49,7 @@ type checkpointCleaner struct {
 	fs *objectio.ObjectFS
 
 	checkpointCli checkpoint.RunnerReader
-	delWorker     *GCWorker
+	deleter       *Deleter
 
 	watermarks struct {
 		// scanWaterMark is the watermark of the incremental checkpoint which has been
@@ -105,8 +105,9 @@ type checkpointCleaner struct {
 	mutation struct {
 		sync.Mutex
 		taskState struct {
-			id   uint64
-			name string
+			id        uint64
+			name      string
+			startTime time.Time
 		}
 		scanned      *GCWindow
 		metaFiles    map[string]GCMetaFile
@@ -178,7 +179,7 @@ func NewCheckpointCleaner(
 	for _, opt := range opts {
 		opt(cleaner)
 	}
-	cleaner.delWorker = NewGCWorker(fs, cleaner)
+	cleaner.deleter = NewDeleter(fs)
 	cleaner.options.gcEnabled.Store(true)
 	cleaner.mp = common.CheckpointAllocator
 	cleaner.checker.extras = make(map[string]func(item any) bool)
@@ -236,9 +237,19 @@ func (c *checkpointCleaner) StartMutationTask(name string) {
 	c.mutation.Lock()
 	c.mutation.taskState.id++
 	c.mutation.taskState.name = fmt.Sprintf("%s-%d", name, c.mutation.taskState.id)
+	c.mutation.taskState.startTime = time.Now()
+	logutil.Info(
+		"GC-Task-Started",
+		zap.String("task", c.TaskNameLocked()),
+	)
 }
 
 func (c *checkpointCleaner) StopMutationTask() {
+	logutil.Info(
+		"GC-Task-Done",
+		zap.String("task", c.TaskNameLocked()),
+		zap.Duration("duration", time.Since(c.mutation.taskState.startTime)),
+	)
 	c.mutation.taskState.name = ""
 	c.mutation.Unlock()
 }
@@ -361,8 +372,54 @@ func (c *checkpointCleaner) Replay() (err error) {
 	c.updateScanWaterMark(ckp)
 	compacted := c.checkpointCli.GetCompacted()
 	if compacted != nil {
+		start := time.Now()
 		end := compacted.GetEnd()
 		c.updateCheckpointGCWaterMark(&end)
+
+		var ckpData *logtail.CheckpointData
+		if ckpData, err = c.collectCkpData(compacted); err != nil {
+			logutil.Error(
+				"GC-REPLAY-COLLECT-ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.String("checkpoint", compacted.String()),
+			)
+			return
+		}
+		defer ckpData.Close()
+		var snapshots map[uint32]containers.Vector
+		var pitrs *logtail.PitrInfo
+		pitrs, err = c.GetPITRsLocked()
+		if err != nil {
+			logutil.Error("GC-REPLAY-GET-PITRS_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.Duration("duration", time.Since(start)),
+			)
+			return
+		}
+		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mp)
+		if err != nil {
+			logutil.Error("GC-REPLAY-GET-SNAPSHOT_ERROR",
+				zap.String("task", c.TaskNameLocked()),
+				zap.Error(err),
+				zap.Duration("duration", time.Since(start)),
+			)
+			return
+		}
+		accountSnapshots := TransformToTSList(snapshots)
+		logtail.CloseSnapshotList(snapshots)
+		logtail.FillUsageBatOfCompacted(
+			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
+			ckpData,
+			c.mutation.snapshotMeta,
+			accountSnapshots,
+			pitrs)
+		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
+			zap.String("task", c.TaskNameLocked()),
+			zap.Int("size", len(accountSnapshots)),
+			zap.Duration("duration", time.Since(start)),
+		)
 	}
 	if acctFile == "" {
 		//No account table information, it may be a new cluster or an upgraded cluster,
@@ -404,6 +461,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 				isConsumedGCkp = true
 			}
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
+			ckpData.Close()
 		}
 		if !isConsumedGCkp {
 			// The global checkpoint that Specified checkpoint depends on may have been GC,
@@ -433,7 +491,9 @@ func (c *checkpointCleaner) Replay() (err error) {
 				return
 			}
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
+			ckpData.Close()
 		}
+
 		logutil.Info(
 			"GC-REPLAY-TRACE-INIT-TABLE-INFO",
 			zap.String("task", c.TaskNameLocked()),
@@ -728,6 +788,8 @@ func (c *checkpointCleaner) filterCheckpoints(
 func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	checkpointLowWaterMark *types.TS,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	accountSnapshots map[uint32][]types.TS,
+	pitrs *logtail.PitrInfo,
 ) (err error) {
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
@@ -742,16 +804,20 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	now := time.Now()
 
 	var (
-		tmpDelFiles      []string
-		deleteFiles      []string
-		tmpNewFiles      []string
-		newCheckpoint    *checkpoint.CheckpointEntry
-		checkpointMaxEnd types.TS
-		toMergeEntries   []*checkpoint.CheckpointEntry
-		extraErrMsg      string
+		tmpDelFiles       []string
+		deleteFiles       []string
+		tmpNewFiles       []string
+		newCheckpoint     *checkpoint.CheckpointEntry
+		checkpointMaxEnd  types.TS
+		toMergeEntries    []*checkpoint.CheckpointEntry
+		extraErrMsg       string
+		newCheckpointData *logtail.CheckpointData
 	)
 
 	defer func() {
+		if newCheckpointData != nil {
+			newCheckpointData.Close()
+		}
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
@@ -805,7 +871,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		c.mp,
 	)
 
-	if tmpDelFiles, tmpNewFiles, newCheckpoint, err = MergeCheckpoint(
+	if tmpDelFiles, tmpNewFiles, newCheckpoint, newCheckpointData, err = MergeCheckpoint(
 		c.ctx,
 		c.sid,
 		c.fs.Service,
@@ -817,6 +883,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+	logtail.FillUsageBatOfCompacted(
+		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
+		newCheckpointData,
+		c.mutation.snapshotMeta,
+		accountSnapshots,
+		pitrs)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
@@ -987,16 +1059,9 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
 	now := time.Now()
-	// TODO: no error here???
-	if !c.delWorker.Start() {
-		return
-	}
 	var snapshots map[uint32]containers.Vector
 	var extraErrMsg string
 	defer func() {
-		if err != nil {
-			c.delWorker.Idle()
-		}
 		logtail.CloseSnapshotList(snapshots)
 		logutil.Info(
 			"GC-TRACE-TRY-GC-AGAINST-GCKP",
@@ -1027,7 +1092,11 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	}
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
-	if err = c.delWorker.ExecDelete(c.ctx, filesToGC); err != nil {
+	if err = c.deleter.DeleteMany(
+		c.ctx,
+		c.TaskNameLocked(),
+		filesToGC,
+	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
 		return
 	}
@@ -1049,7 +1118,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	if waterMark.GT(&scanMark) {
 		waterMark = scanMark
 	}
-	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer)
+	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer, accountSnapshots, pitrs)
 	if err != nil {
 		extraErrMsg = fmt.Sprintf("mergeCheckpointFilesLocked %v failed", waterMark.ToString())
 	}
@@ -1365,7 +1434,7 @@ func (c *checkpointCleaner) DoCheck() error {
 		if cptCkpObjects[name] != nil {
 			continue
 		}
-		if isSnapshotRefers(
+		if logtail.ObjectIsSnapshotRefers(
 			entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 		) {
 			logutil.Error(
@@ -1650,10 +1719,14 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
 	data *logtail.CheckpointData,
 ) error {
-	_, err := c.mutation.snapshotMeta.Update(
-		c.ctx, c.fs.Service, data, ckp.GetStart(), ckp.GetEnd(),
+	return c.mutation.snapshotMeta.Update(
+		c.ctx,
+		c.fs.Service,
+		data,
+		ckp.GetStart(),
+		ckp.GetEnd(),
+		c.TaskNameLocked(),
 	)
-	return err
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {

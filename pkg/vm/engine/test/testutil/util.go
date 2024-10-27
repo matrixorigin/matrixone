@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/stretchr/testify/assert"
@@ -247,7 +248,7 @@ func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
 	pack := &EnginePack{
 		Ctx:     ctx,
 		t:       t,
