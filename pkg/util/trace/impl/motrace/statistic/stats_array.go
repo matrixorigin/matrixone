@@ -304,10 +304,13 @@ type StatsInfo struct {
 
 	// Prepare execution phase statistics
 	PrepareRunStage struct {
+		CompilePreRunOnceDuration int64 `json:"CompilePreRunOnceDuration"` // unit: ns
+		// During Compile PreRun, wait for the lock time when executing `locktable` and `lockMetaTables`
+		CompilePreRunOnceWaitLock int64 `json:"CompilePreRunOnceWaitLock"` // unit: ns
+
 		// ScopePrepareDuration belongs to concurrent merge time
-		ScopePrepareDuration      int64     `json:"ScopePrepareDuration"`      // unit: ns
-		CompilePreRunOnceDuration int64     `json:"CompilePreRunOnceDuration"` // unit: ns
-		ScopePrepareS3Request     S3Request `json:"ScopePrepareS3Request"`
+		ScopePrepareDuration  int64     `json:"ScopePrepareDuration"` // unit: ns
+		ScopePrepareS3Request S3Request `json:"ScopePrepareS3Request"`
 		// It belongs to independent statistics, which occurs during the `PrepareRun` stage, only for analysis reference.
 		BuildReaderDuration int64 `json:"BuildReaderDuration"` // unit: ns
 	}
@@ -474,6 +477,20 @@ func (stats *StatsInfo) ResetCompilePreRunOnceDuration() {
 	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceDuration, 0)
 }
 
+func (stats *StatsInfo) ResetCompilePreRunOnceWaitLock() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceWaitLock, 0)
+}
+
+func (stats *StatsInfo) ResetScopePrepareDuration() {
+	if stats == nil {
+		return
+	}
+	atomic.StoreInt64(&stats.PrepareRunStage.ScopePrepareDuration, 0)
+}
+
 func (stats *StatsInfo) IOMergerTimeConsumption() int64 {
 	if stats == nil {
 		return 0
@@ -590,6 +607,13 @@ func (stats *StatsInfo) StoreCompilePreRunOnceDuration(d time.Duration) {
 		return
 	}
 	atomic.StoreInt64(&stats.PrepareRunStage.CompilePreRunOnceDuration, int64(d))
+}
+
+func (stats *StatsInfo) AddPreRunOnceWaitLockDuration(d int64) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PrepareRunStage.CompilePreRunOnceWaitLock, d)
 }
 
 //--------------------------------------------------------------------------------------------------------------
