@@ -14,7 +14,11 @@
 
 package objectio
 
-import "github.com/matrixorigin/matrixone/pkg/util/fault"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+)
 
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
@@ -29,7 +33,7 @@ const (
 )
 
 func Debug19524Injected() bool {
-	_, _, injected := fault.TriggerFault(FJ_TraceRanges)
+	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected
 }
 
@@ -39,6 +43,27 @@ func RangesInjected(name string) bool {
 		return false
 	}
 	return sarg == name
+}
+
+func InjectRanges(
+	ctx context.Context,
+	name string,
+) (rmFault func(), err error) {
+	rmFault = func() {}
+	if err = fault.AddFaultPoint(
+		ctx,
+		FJ_TraceRanges,
+		":::",
+		"echo",
+		0,
+		name,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(ctx, FJ_TraceRanges)
+	}
+	return
 }
 
 func PartitionStateInjected(name string) bool {

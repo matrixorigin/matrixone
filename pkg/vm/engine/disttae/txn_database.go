@@ -36,7 +36,6 @@ import (
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -229,19 +228,13 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
 
 	rmFault := func() {}
+
 	if objectio.Debug19524Injected() {
-		if err := fault.AddFaultPoint(
+		if rmFault, err = objectio.InjectRanges(
 			ctx,
-			objectio.FJ_TraceRanges,
-			":::",
-			"echo",
-			1,
-			name,
+			catalog.MO_TABLES,
 		); err != nil {
 			return nil, err
-		}
-		rmFault = func() {
-			fault.RemoveFaultPoint(ctx, objectio.FJ_TraceRanges)
 		}
 	}
 	res, err := execReadSql(ctx, db.op, sql, true)
