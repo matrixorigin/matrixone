@@ -881,7 +881,7 @@ func TestRewriteError(t *testing.T) {
 			},
 			want:  moerr.ER_BAD_DB_ERROR,
 			want1: "HY000",
-			want2: "invalid database yyy",
+			want2: "Unknown database yyy",
 		},
 	}
 	for _, tt := range tests {

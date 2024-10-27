@@ -445,7 +445,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+Unknown database test01
 restore account acc01 from snapshot sp06 to account acc02;
 select * from test01.EmployeeSalaryRanking;
 employeeid    employeename    salary    salaryrank
@@ -680,23 +680,23 @@ drop snapshot if exists sp100;
 create snapshot sp100 for cluster;
 drop database test04;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
 department_id    department_name
 1    HR
 2    Engineering
 select * from test05.employee_with_department_view;
-invalid database test04
+Unknown database test04
 drop snapshot if exists sp101;
 create snapshot sp101 for cluster;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
-invalid database test03
+Unknown database test03
 select * from test05.employee_with_department_view;
-invalid database test05
+Unknown database test05
 restore account acc01 from snapshot sp100 to account acc02;
 select * from test04.employee_view;
 employee_id    first_name    last_name    department_id
