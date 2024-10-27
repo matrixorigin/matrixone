@@ -1,5 +1,8 @@
 set global enable_privilege_cache = off;
 --env prepare statement
+select enable_fault_injection();
+select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
 drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
@@ -166,4 +169,5 @@ drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
 drop account if exists ccc;
+select disable_fault_injection();
 set global enable_privilege_cache = on;
