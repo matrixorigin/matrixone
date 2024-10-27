@@ -443,7 +443,7 @@ func (kv *KVTxnStorage) getWriteKeysLocked(txnMeta txn.TxnMeta) [][]byte {
 }
 
 func (kv *KVTxnStorage) saveLog(log *KVLog) (logservice.Lsn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseSaveLog)
 	defer cancel()
 	data := log.MustMarshal()
 	record := kv.logClient.GetLogRecord(len(data))
@@ -452,7 +452,11 @@ func (kv *KVTxnStorage) saveLog(log *KVLog) (logservice.Lsn, error) {
 	} else {
 		copy(record.Data[len(record.Data)-len(data):], data)
 	}
-	return kv.logClient.Append(ctx, record)
+	lsn, err := kv.logClient.Append(ctx, record)
+	if err != nil {
+		return 0, moerr.AttachCause(ctx, err)
+	}
+	return lsn, nil
 }
 
 func (kv *KVTxnStorage) commitWithKVLogLocked(klog *KVLog) {

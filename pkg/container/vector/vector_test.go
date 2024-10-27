@@ -3226,3 +3226,17 @@ func TestUnion2VectorVarlen(t *testing.T) {
 		}
 	}
 }
+
+func TestProtoVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_char.ToType())
+	defer vec.Free(mp)
+	ss := "xxxxxx"
+	err := AppendBytes(vec, []byte(ss), false, mp)
+	require.NoError(t, err)
+	vec.ResetWithSameType()
+	vec2, err := VectorToProtoVector(vec)
+	require.NoError(t, err)
+	_, err = ProtoVectorToVector(vec2)
+	require.NoError(t, err)
+}

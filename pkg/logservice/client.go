@@ -22,6 +22,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -29,7 +31,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -148,10 +149,11 @@ func NewStandbyClientWithRetry(
 ) StandbyClient {
 	var c StandbyClient
 	createFn := func() error {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewStandbyClientWithRetry)
 		defer cancel()
 		lc, err := NewStandbyClient(ctx, sid, cfg)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create logservice client: %v", err)
 			return err
 		}
