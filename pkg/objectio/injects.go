@@ -14,9 +14,22 @@
 
 package objectio
 
+import "github.com/matrixorigin/matrixone/pkg/util/fault"
+
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
+
+	FJ_TraceRanges         = "fj/trace/ranges"
+	FJ_TracePartitionState = "fj/trace/partitionstate"
 )
+
+func RangesInjected(name string) bool {
+	_, sarg, injected := fault.TriggerFault(FJ_TraceRanges)
+	if !injected {
+		return false
+	}
+	return sarg == name
+}

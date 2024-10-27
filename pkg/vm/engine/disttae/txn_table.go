@@ -635,6 +635,17 @@ func (tbl *txnTable) doRanges(
 			)
 		}
 
+		if objectio.RangesInjected(tbl.tableDef.Name) {
+			logutil.Info(
+				"INJECT-TRACE-RANGES",
+				zap.String("name", tbl.tableDef.Name),
+				zap.String("exprs", plan2.FormatExprs(exprs)),
+				zap.Uint64("tbl-id", tbl.tableId),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.String("blocks", blocks.String()),
+			)
+		}
+
 		trace.GetService(sid).AddTxnAction(
 			tbl.db.op,
 			client.RangesEvent,
