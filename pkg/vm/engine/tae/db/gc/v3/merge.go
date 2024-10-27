@@ -205,7 +205,7 @@ func MergeCheckpoint(
 		return
 	}
 	info := strings.Split(name, checkpoint.CheckpointDir+"/")
-	client.RemoveCheckpointMetaFile(info[1])
+	client.AddCheckpointMetaFile(info[1])
 	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
