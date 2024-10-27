@@ -24,7 +24,14 @@ const (
 
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
+
+	FJ_Debug19524 = "fj/debug/19524"
 )
+
+func Debug19524Injected() bool {
+	_, _, injected := fault.TriggerFault(FJ_TraceRanges)
+	return injected
+}
 
 func RangesInjected(name string) bool {
 	_, sarg, injected := fault.TriggerFault(FJ_TraceRanges)

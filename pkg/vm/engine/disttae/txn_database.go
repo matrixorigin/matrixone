@@ -31,10 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -225,7 +227,25 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+
+	rmFault := func() {}
+	if objectio.Debug19524Injected() {
+		if err := fault.AddFaultPoint(
+			ctx,
+			objectio.FJ_TraceRanges,
+			":::",
+			"echo",
+			1,
+			name,
+		); err != nil {
+			return nil, err
+		}
+		rmFault = func() {
+			fault.RemoveFaultPoint(ctx, objectio.FJ_TraceRanges)
+		}
+	}
 	res, err := execReadSql(ctx, db.op, sql, true)
+	rmFault()
 	if err != nil {
 		return nil, err
 	}
