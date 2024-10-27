@@ -408,7 +408,10 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
-		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, false)
+		err = datas[i].ApplyReplayTo(
+			r.catalog,
+			dataFactory,
+			false)
 		if err != nil {
 			return
 		}
