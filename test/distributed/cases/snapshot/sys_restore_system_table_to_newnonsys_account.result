@@ -149,9 +149,9 @@ id    val
 2    b
 3    c
 drop procedure test_if_hit_elseif_first_elseif;
-not connect to a database
+No database selected
 drop procedure test_if_hit_if;
-not connect to a database
+No database selected
 drop database procedure_test;
 drop database procedure_test;
 drop snapshot sp_sp05;
