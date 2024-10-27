@@ -373,6 +373,65 @@ func Test_HandleClusterUpgrade_upg_system_metrics_schema(t *testing.T) {
 		},
 	)
 
+	// test upg_system_stmt_info_add_column_conn_id, case NotExist
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableColumn_NotExist(txnOperator)
+			got := upg_system_stmt_info_add_column_conn_id.Upgrade(executor, uint32(0))
+			require.Equal(t, nil, got)
+		},
+	)
+	// test upg_system_stmt_info_add_column_conn_id, case Exist
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableColumn_Exist(txnOperator)
+			got := upg_system_stmt_info_add_column_conn_id.Upgrade(executor, uint32(0))
+			require.Equal(t, nil, got)
+		},
+	)
+	// test upg_system_stmt_info_add_column_conn_id, case Error
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			err := moerr.GetOkExpectedEOF()
+			executor := MockExecutor_CheckTableColumn_Error(txnOperator, err)
+			got := upg_system_stmt_info_add_column_conn_id.Upgrade(executor, uint32(0))
+			require.Equal(t, err, got)
+		},
+	)
+
+	// test upg_system_stmt_info_add_column_cu, case NotExist
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			executor := MockExecutor_CheckTableColumn_NotExist(txnOperator)
+			got := upg_system_stmt_info_add_column_cu.Upgrade(executor, uint32(0))
+			require.Equal(t, nil, got)
+		},
+	)
+	// test upg_system_stmt_info_add_column_cu, case Error
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			err := moerr.GetOkExpectedEOF()
+			executor := MockExecutor_CheckTableColumn_Error(txnOperator, err)
+			got := upg_system_stmt_info_add_column_cu.Upgrade(executor, uint32(0))
+			require.Equal(t, err, got)
+		},
+	)
+
 }
 
 func MockExecutor_CheckTableDefinitionExist(txnOperator *mock_frontend.MockTxnOperator) executor.TxnExecutor {
@@ -446,6 +505,56 @@ func MockExecutor_CheckTableComment_Error(txnOperator *mock_frontend.MockTxnOper
 			executor.AppendFixedRows(memRes, 2, []uint64{0})
 			executor.AppendStringRows(memRes, 3, []string{comment})
 			return memRes.GetResult(), err
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
+}
+
+func MockExecutor_CheckTableColumn_NotExist(txnOperator *mock_frontend.MockTxnOperator) executor.TxnExecutor {
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}, txnOperator)
+}
+
+func MockExecutor_CheckTableColumn_Error(txnOperator *mock_frontend.MockTxnOperator, err error) executor.TxnExecutor {
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, err
+	}, txnOperator)
+}
+
+func MockExecutor_CheckTableColumn_Exist(txnOperator *mock_frontend.MockTxnOperator) executor.TxnExecutor {
+	const checkTableColumnKeySql = `att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns'`
+
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if strings.Contains(strings.ToLower(sql), strings.ToLower(checkTableColumnKeySql)) {
+			typs := []types.Type{
+				types.New(types.T_varchar, 64, 0),   // DATA_TYPE
+				types.New(types.T_varchar, 64, 0),   // IS_NULLABLE
+				types.New(types.T_uint64, 0, 0),     // CHARACTER_MAXIMUM_LENGTH
+				types.New(types.T_uint64, 0, 0),     // NUMERIC_PRECISION
+				types.New(types.T_uint64, 0, 0),     // NUMERIC_SCALE
+				types.New(types.T_uint64, 0, 0),     // NUMERIC_SCALE
+				types.New(types.T_uint32, 0, 0),     // ORDINAL_POSITION
+				types.New(types.T_varchar, 1024, 0), // COLUMN_DEFAULT
+				types.New(types.T_varchar, 1024, 0), // EXTRA
+				types.New(types.T_varchar, 1024, 0), // COLUMN_COMMENT
+			}
+
+			memRes := executor.NewMemResult(
+				typs,
+				mpool.MustNewZero())
+			memRes.NewBatch()
+			executor.AppendStringRows(memRes, 0, []string{"DATA_TYPE_str"})
+			executor.AppendStringRows(memRes, 1, []string{"YES"}) // or "NO"
+			executor.AppendFixedRows(memRes, 2, []uint64{0})
+			executor.AppendFixedRows(memRes, 3, []uint64{0})
+			executor.AppendFixedRows(memRes, 4, []uint64{0})
+			executor.AppendFixedRows(memRes, 5, []uint64{0})
+			executor.AppendFixedRows(memRes, 6, []uint64{0})
+			executor.AppendStringRows(memRes, 7, []string{"COLUMN_DEFAULT"})
+			executor.AppendStringRows(memRes, 8, []string{"EXTRA"}) // '' or 'auto_increment'
+			executor.AppendStringRows(memRes, 9, []string{"COLUMN_COMMENT"})
+			return memRes.GetResult(), nil
 		}
 		return executor.Result{}, nil
 	}, txnOperator)

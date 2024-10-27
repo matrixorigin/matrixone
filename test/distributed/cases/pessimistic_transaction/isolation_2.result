@@ -115,10 +115,10 @@ drop database dis_db_01;
 delete from dis_table_04 where a=4;
 no such table dis_db_01.dis_table_04
 select * from dis_table_04;
-not connect to a database
+No database selected
 rollback ;
 select * from dis_db_01.dis_table_04;
-invalid database dis_db_01
+Unknown database dis_db_01
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;
@@ -271,7 +271,7 @@ vvv    2000-09-08 00:00:00
 aaaa    2000-09-02 00:00:00
 oppo    1009-11-11 00:00:00
 use dis_db_02;
-invalid database dis_db_02
+Unknown database dis_db_02
 select b,c from dis_table_02;
 b    c
 aaaa    2020-09-08 00:00:00
@@ -451,13 +451,13 @@ create table iso_table_0001(a int);
 drop database iso_db_02;
 
 commit;
-invalid database iso_db_02
+Unknown database iso_db_02
 create table iso_table_0001(a int);
-not connect to a database
+No database selected
 commit;
 
 use iso_db_02;
-invalid database iso_db_02
+Unknown database iso_db_02
 select * from iso_table_0001;
 SQL parser error: table "iso_table_0001" does not exist
 use isolation_2;

@@ -286,7 +286,7 @@ mysql
 system
 system_metrics
 use sub04;
-invalid database sub04
+Unknown database sub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub04    db01    *    acc01        2024-08-03 15:32:20    null    create pub04
@@ -708,9 +708,9 @@ mysql
 system
 system_metrics
 use sub09;
-invalid database sub09
+Unknown database sub09
 select * from t1;
-not connect to a database
+No database selected
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 drop database sub09;

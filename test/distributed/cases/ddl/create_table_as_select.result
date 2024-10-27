@@ -1665,7 +1665,7 @@ internal error: do not have privilege to execute the statement
 create table t3 as select * from t2;
 internal error: do not have privilege to execute the statement
 select * from t3;
-not connect to a database
+No database selected
 grant create database, drop database on account * to role_r2;
 grant show databases on account * to role_r2;
 grant connect on account * to role_r2;
@@ -1788,14 +1788,14 @@ grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 create table t2 as select * from t1;
-not connect to a database
+No database selected
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
 drop table if exists t2;
 create table t2 as select * from t1;
-not connect to a database
+No database selected
 select * from t2;
-not connect to a database
+No database selected
 drop table t1;
 drop table t2;
 no such table db7.t2

@@ -42,6 +42,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_rename_system_metrics_metric_120,
 	upg_create_system_metrics_metric_130,
 	upg_system_metrics_sql_stmt_cu_comment,
+	upg_system_stmt_info_add_column_conn_id,
+	upg_system_stmt_info_add_column_cu,
 }
 
 var needUpgradePubSub = false
@@ -279,5 +281,33 @@ var upg_system_metrics_sql_stmt_cu_comment = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
+	},
+}
+
+var upg_system_stmt_info_add_column_conn_id = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM,
+	TableName: catalog.MO_STATEMENT,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    `alter table system.statement_info ADD COLUMN connection_id BIGINT DEFAULT '0' comment "connection id", ADD COLUMN cu DOUBLE DEFAULT '0.0' COMMENT 'cu cost';`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT, "connection_id")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
+	},
+}
+
+var upg_system_stmt_info_add_column_cu = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM,
+	TableName: catalog.MO_STATEMENT,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    `alter table system.statement_info add column cu DOUBLE DEFAULT '0.0' comment "cu cost"`,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_SYSTEM, catalog.MO_STATEMENT, "cu")
+		if err != nil {
+			return false, err
+		}
+		return colInfo.IsExits, nil
 	},
 }
