@@ -172,6 +172,7 @@ type StatementInfo struct {
 	StatementID          [16]byte `json:"statement_id"`
 	TransactionID        [16]byte `json:"transaction_id"`
 	SessionID            [16]byte `jons:"session_id"`
+	ConnectionId         uint32   `json:"connection_id"`
 	Account              string   `json:"account"`
 	User                 string   `json:"user"`
 	Host                 string   `json:"host"`
@@ -348,6 +349,7 @@ func (s *StatementInfo) free() {
 	s.StatementID = NilStmtID
 	s.TransactionID = NilTxnID
 	s.SessionID = NilSesID
+	s.ConnectionId = 0
 	s.Account = ""
 	s.User = ""
 	s.Host = ""
@@ -388,8 +390,9 @@ func (s *StatementInfo) free() {
 func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt := NewStatementInfo() // Get a new statement from the pool
 	stmt.StatementID = s.StatementID
-	stmt.SessionID = s.SessionID
 	stmt.TransactionID = s.TransactionID
+	stmt.SessionID = s.SessionID
+	stmt.ConnectionId = s.ConnectionId
 	stmt.Account = s.Account
 	stmt.User = s.User
 	stmt.Host = s.Host
@@ -446,9 +449,13 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
-	if s.AggrCount > 1 && GetTracerProvider().enableStmtMerge {
-		s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
-		s.StmtBuilder.Reset()
+	if s.AggrCount > 1 {
+		if GetTracerProvider().enableStmtMerge {
+			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
+			s.StmtBuilder.Reset()
+		} else {
+			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.Statement
+		}
 	}
 	row.SetColumnVal(stmtCol, table.StringField(s.Statement))
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
@@ -476,6 +483,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	}
 	// stats := s.ExecPlan2Stats(ctx) // deprecated
 	stats := s.GetStatsArrayBytes()
+	row.SetColumnVal(cuCol, table.Float64FieldWithPrec(s.statsArray.GetCU(), cuCol.Scale))
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -490,6 +498,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
 	row.SetColumnVal(aggrCntCol, table.Int64Field(s.AggrCount))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
+	row.SetColumnVal(connIdCol, table.Int64Field(int64(s.ConnectionId)))
 }
 
 // calculateAggrMemoryBytes return scale = statistic.Decimal128ToFloat64Scale float64 val
