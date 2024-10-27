@@ -111,7 +111,7 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 	return nil
 }
 
-func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) (err error) {
+func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error {
 	if ignoreRow.Count() == 0 {
 		return nil
 	}
@@ -152,7 +152,7 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) (err 
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
 
-	return
+	return nil
 }
 
 func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int, proc *process.Process) (int, error) {

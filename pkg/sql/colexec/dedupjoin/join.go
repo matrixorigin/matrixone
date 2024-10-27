@@ -117,7 +117,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendResult:
 			if dedupJoin.ctr.buf == nil {
 				dedupJoin.ctr.lastPos = 0
-				err := ctr.sendResult(dedupJoin, proc, analyzer)
+				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
 					return result, err
 				}
@@ -130,7 +130,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 			dedupJoin.ctr.lastPos++
-			result.Status = vm.ExecNext
+			result.Status = vm.ExecHasMore
 			analyzer.Output(result.Batch)
 			return result, nil
 
@@ -162,7 +162,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	return
 }
 
-func (ctr *container) sendResult(ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {

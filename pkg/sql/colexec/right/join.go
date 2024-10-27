@@ -126,7 +126,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case SendLast:
-			err := ctr.sendLast(rightJoin, proc, analyzer, &result)
+			err := ctr.finalize(rightJoin, proc, &result)
 			if err != nil {
 				return result, err
 			}
@@ -168,7 +168,7 @@ func (rightJoin *RightJoin) build(analyzer process.Analyzer, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
+func (ctr *container) finalize(ap *RightJoin, proc *process.Process, result *vm.CallResult) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {

@@ -119,7 +119,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendLast:
 			if ctr.buf == nil {
 				ctr.lastpos = 0
-				err := ctr.sendLast(rightAnti, proc, analyzer)
+				err := ctr.finalize(rightAnti, proc)
 				if err != nil {
 					return result, err
 				}
@@ -132,7 +132,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 			result.Batch = ctr.buf[ctr.lastpos]
 			ctr.lastpos++
-			result.Status = vm.ExecNext
+			result.Status = vm.ExecHasMore
 			analyzer.Output(result.Batch)
 			return result, nil
 
@@ -164,7 +164,7 @@ func (rightAnti *RightAnti) build(analyzer process.Analyzer, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) finalize(ap *RightAnti, proc *process.Process) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
