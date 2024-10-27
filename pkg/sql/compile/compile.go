@@ -3295,7 +3295,7 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
-		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
+		/*if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
 			mcpu := c.getParallelSizeForTableFunc(n, ncpu)
 			if mcpu > 1 {
 				oldScope := ss[0]
@@ -3316,7 +3316,7 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 
 				ss[0].PreScopes = append(ss[0].PreScopes, oldScope)
 			}
-		}
+		}*/
 
 		for i := range ss {
 			multiUpdateArg := constructMultiUpdate(n, c.e)
@@ -3325,10 +3325,10 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
-		rs := ss[0]
-		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
-			rs = c.newMergeScope(ss)
-		}
+		//rs := ss[0]
+		//if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
+		rs := c.newMergeScope(ss)
+		//}
 
 		multiUpdateArg := constructMultiUpdate(n, c.e)
 		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
