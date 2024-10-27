@@ -583,6 +583,7 @@ func (tbl *txnTable) doRanges(
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
+	var part *logtailreplay.PartitionState
 	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
@@ -643,6 +644,8 @@ func (tbl *txnTable) doRanges(
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.String("blocks", blocks.String()),
+				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Error(err),
 			)
 		}
 
@@ -670,7 +673,6 @@ func (tbl *txnTable) doRanges(
 	}()
 
 	// get the table's snapshot
-	var part *logtailreplay.PartitionState
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}

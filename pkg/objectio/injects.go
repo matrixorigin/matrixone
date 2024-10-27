@@ -33,3 +33,11 @@ func RangesInjected(name string) bool {
 	}
 	return sarg == name
 }
+
+func PartitionStateInjected(name string) bool {
+	_, sarg, injected := fault.TriggerFault(FJ_TracePartitionState)
+	if !injected {
+		return false
+	}
+	return sarg == name
+}
