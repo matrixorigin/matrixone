@@ -18,12 +18,11 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -198,8 +197,7 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 
 func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
-	collectDeleted bool,
-) (stats []objectio.ObjectStats) {
+) (insertList, deletedList []objectio.ObjectStats) {
 
 	iter := p.dataObjectTSIndex.Copy().Iter()
 	defer iter.Release()
@@ -215,6 +213,10 @@ func (p *PartitionState) CollectObjectsBetween(
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
 
+		if entry.Time.GT(&end) {
+			break
+		}
+
 		var ss objectio.ObjectStats
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
 
@@ -228,25 +230,24 @@ func (p *PartitionState) CollectObjectsBetween(
 			continue
 		}
 
-		if !collectDeleted {
-			// if deleted before end
-			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
-				continue
-			}
+		// case1: no soft delete
+		if val.DeleteTime.IsEmpty() {
+			insertList = append(insertList, val.ObjectStats)
 		} else {
-			// only collect deletes
-			// if not delete or delete after end
-			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
-				continue
+			if val.CreateTime.LT(&start) {
+				// create --------- delete
+				//          start -------- end
+				if val.DeleteTime.LE(&end) {
+					deletedList = append(deletedList, val.ObjectStats)
+				}
+			} else {
+				//        create ---------- delete
+				// start ------------ end
+				if val.DeleteTime.GT(&end) {
+					insertList = append(insertList, val.ObjectStats)
+				}
 			}
 		}
-
-		// if created not in [start, end]
-		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
-			continue
-		}
-
-		stats = append(stats, val.ObjectStats)
 	}
 
 	return
