@@ -507,16 +507,11 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 		return ret1
 	}
 
-	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
-	if ret3 >= maxret {
-		return ret2
-	}
-
-	if ret3 <= ncpu {
+	if ret2 <= ncpu {
 		return ncpu
 	}
 
-	return (ret3/ncpu + 1) * ncpu
+	return (ret2/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash
