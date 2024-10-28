@@ -102,14 +102,14 @@ func New[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) Set(key K, value V, size int64) {
+func (c *Cache[K, V]) set(key K, value V, size int64) *_CacheItem[K, V] {
 	shard := &c.shards[c.keyShardFunc(key)]
 	shard.Lock()
+	defer shard.Unlock()
 	_, ok := shard.values[key]
 	if ok {
 		// existed
-		shard.Unlock()
-		return
+		return nil
 	}
 
 	item := &_CacheItem[K, V]{
@@ -121,14 +121,19 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) {
 	if c.postSet != nil {
 		c.postSet(key, value)
 	}
-	shard.Unlock()
 
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
-	c.queue1.enqueue(item)
-	c.used1 += size
-	if c.used1+c.used2 > c.capacity() {
-		c.evict(nil, 0)
+	return item
+}
+
+func (c *Cache[K, V]) Set(key K, value V, size int64) {
+	if item := c.set(key, value, size); item != nil {
+		c.queueLock.Lock()
+		defer c.queueLock.Unlock()
+		c.queue1.enqueue(item)
+		c.used1 += size
+		if c.used1+c.used2 > c.capacity() {
+			c.evict(nil, 0)
+		}
 	}
 }
 
@@ -205,16 +210,20 @@ func (c *Cache[K, V]) evict1() {
 			c.used2 += item.size
 		} else {
 			// evict
-			shard := &c.shards[c.keyShardFunc(item.key)]
-			shard.Lock()
-			delete(shard.values, item.key)
-			if c.postEvict != nil {
-				c.postEvict(item.key, item.value)
-			}
-			shard.Unlock()
+			c.deleteItem(item)
 			c.used1 -= item.size
 			return
 		}
+	}
+}
+
+func (c *Cache[K, V]) deleteItem(item *_CacheItem[K, V]) {
+	shard := &c.shards[c.keyShardFunc(item.key)]
+	shard.Lock()
+	defer shard.Unlock()
+	delete(shard.values, item.key)
+	if c.postEvict != nil {
+		c.postEvict(item.key, item.value)
 	}
 }
 
@@ -232,13 +241,7 @@ func (c *Cache[K, V]) evict2() {
 			item.dec()
 		} else {
 			// evict
-			shard := &c.shards[c.keyShardFunc(item.key)]
-			shard.Lock()
-			delete(shard.values, item.key)
-			if c.postEvict != nil {
-				c.postEvict(item.key, item.value)
-			}
-			shard.Unlock()
+			c.deleteItem(item)
 			c.used2 -= item.size
 			return
 		}
