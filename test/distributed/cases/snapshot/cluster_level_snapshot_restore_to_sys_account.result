@@ -438,7 +438,7 @@ system
 system_metrics
 test03
 select * from test01.t1;
-invalid database test01
+Unknown database test01
 select count(*) from test03.t3;
 count(*)
 3
