@@ -129,9 +129,10 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		Alg:        plan.CompressType_Lz4,
 	}
 
-	hasDefaultValue := false
-	hasNullFlag := false
+	// If the column null property is not specified, it defaults to allowing null
+	nullFlag := true
 	auto_incr := false
+	hasDefaultValue := false
 	for _, attr := range specNewColumn.Attributes {
 		switch attribute := attr.(type) {
 		case *tree.AttributePrimaryKey, *tree.AttributeKey:
@@ -203,7 +204,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 				return nil, err
 			}
 			newCol.Default = defaultValue
-			hasNullFlag = true
+			nullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
 			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
@@ -256,7 +257,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		}
 	}
 
-	if err = checkPriKeyConstraint(ctx.GetContext(), newCol, hasDefaultValue, hasNullFlag, alterPlan.CopyTableDef.Pkey); err != nil {
+	if err = checkPriKeyConstraint(ctx.GetContext(), newCol, hasDefaultValue, nullFlag, alterPlan.CopyTableDef.Pkey); err != nil {
 		return nil, err
 	}
 
