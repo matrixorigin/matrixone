@@ -2281,13 +2281,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 
 	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
 
-	c.hasMergeOp = true
-	for i := range shuffleJoins {
-		mergeOp := merge.NewArgument()
-		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		shuffleJoins[i].setRootOperator(mergeOp)
-	}
-
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
 	case plan.Node_INNER:
@@ -3777,6 +3770,16 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		fmt.Println("shuffle reuse!!!!!!!!!")
 		fmt.Println(DebugShowScopes(shuffleJoins, OldLevel))
 	}
+
+	c.hasMergeOp = true
+	if !reuse {
+		for i := range shuffleJoins {
+			mergeOp := merge.NewArgument()
+			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			shuffleJoins[i].setRootOperator(mergeOp)
+		}
+	}
+
 	return shuffleJoins
 }
 
