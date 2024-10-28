@@ -331,7 +331,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if join children is agg or filter, do not allow shuffle
+	// for now, if join children is merge group or filter, do not allow shuffle
 	if dontShuffle(builder.qry.Nodes[n.Children[0]], builder) || dontShuffle(builder.qry.Nodes[n.Children[1]], builder) {
 		return
 	}

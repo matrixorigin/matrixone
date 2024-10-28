@@ -3671,7 +3671,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 
 	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
-	logutil.Infof("join shuffle dop %v, ncpu &v, hashsmapsize %v", dop, ncpu, n.Stats.HashmapStats.HashmapSize)
+	logutil.Infof("join shuffle dop %v, ncpu %v, hashmapsize %v", dop, ncpu, n.Stats.HashmapStats.HashmapSize)
 
 	bucketNum := len(c.cnList) * dop
 	shuffleJoins := make([]*Scope, 0, bucketNum)
