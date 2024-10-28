@@ -268,6 +268,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			}
 			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
 			n.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
 			n.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
 			n.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
@@ -491,7 +492,6 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 }
 
 func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-
 	maxret := ncpu * 4
 	if maxret > 64 {
 		maxret = 64 // to avoid a hang bug, fix this in the future
@@ -499,28 +499,19 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
 	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
 	if ret1 >= maxret {
-		dop = maxret
-		return
+		return maxret
 	}
 
 	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
 	if ret2 >= maxret {
-		dop = ret1
-		return
+		return ret1
 	}
 
-	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
-	if ret3 >= maxret {
-		dop = ret2
-		return
+	if ret2 <= ncpu {
+		return ncpu
 	}
 
-	if ret3 <= ncpu {
-		dop = ncpu
-		return
-	}
-
-	dop = (ret3/ncpu + 1) * ncpu
+	dop = (ret2/ncpu + 1) * ncpu
 	return
 }
 
