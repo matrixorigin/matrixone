@@ -59,17 +59,21 @@ func (d *DataCache) Capacity() int64 {
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	for _, path := range paths {
 		for i := 0; i < len(d.fifo.shards); i++ {
-			shard := &d.fifo.shards[i]
-			shard.Lock()
-			for key, item := range shard.values {
-				if key.Path == path {
-					delete(shard.values, key)
-					if d.fifo.postEvict != nil {
-						d.fifo.postEvict(item.key, item.value)
-					}
-				}
+			d.deletePath(i, path)
+		}
+	}
+}
+
+func (d *DataCache) deletePath(shardIndex int, path string) {
+	shard := &d.fifo.shards[shardIndex]
+	shard.Lock()
+	defer shard.Unlock()
+	for key, item := range shard.values {
+		if key.Path == path {
+			delete(shard.values, key)
+			if d.fifo.postEvict != nil {
+				d.fifo.postEvict(item.key, item.value)
 			}
-			shard.Unlock()
 		}
 	}
 }
