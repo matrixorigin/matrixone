@@ -22,11 +22,12 @@ import (
 
 	goSort "sort"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -737,15 +738,15 @@ func NewChangesHandler(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
-	if state.minTS.GT(&start) {
-		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
+	if state.start.GT(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
 		start:        start,
 		end:          end,
 		fs:           fs,
-		minTS:        state.minTS,
+		minTS:        state.start,
 		LogThreshold: LogThreshold,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}

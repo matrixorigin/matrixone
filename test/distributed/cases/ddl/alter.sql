@@ -347,3 +347,50 @@ alter table t8 add key pk(col1) comment 'primary key';
 select * from t8;
 drop table t8;
 drop database `drop`;
+
+
+
+
+-- set lower_case_table_names = 0, alter table then show create table
+-- the result of show create table is case sensitive
+set global lower_case_table_names = 0;
+drop database if exists test;
+create database test;
+use test;
+drop table if exists test01;
+create table test01 (col1 int, col2 decimal, col3 varchar(50));
+insert into test01 values (1, 3242434.423, '3224332r32r');
+insert into test01 values (2, 39304.3424, '343234343213124');
+insert into test01 values (3, 372.324, '00');
+
+alter table test01 rename column col1 to newCol;
+show create table test01;
+drop database test;
+set global lower_case_table_names = 1;
+
+
+
+
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+alter table s3t modify column b bigint;
+show create table s3t;
+drop database test01;
+
+
+
+
+drop database if exists test;
+create database test;
+use test;
+begin;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+delete from s3t where a < 1000;
+commit;
+drop database test;
