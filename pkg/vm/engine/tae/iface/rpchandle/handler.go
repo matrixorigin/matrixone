@@ -132,6 +132,13 @@ type Handler interface {
 		resp *cmd_util.StorageUsageResp_V3,
 	) (func(), error)
 
+	HandleSnapshotRead(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.SnapshotReadReq,
+		resp *cmd_util.SnapshotReadResp,
+	) (func(), error)
+
 	HandleInterceptCommit(
 		ctx context.Context,
 		meta txn.TxnMeta,
