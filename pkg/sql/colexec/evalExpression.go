@@ -662,6 +662,10 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 
 func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	relIndex := expr.relIndex
+	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
+	if len(batches) == 1 {
+		relIndex = 0
+	}
 
 	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
 	if batches[relIndex] == batch.EmptyForConstFoldBatch {
