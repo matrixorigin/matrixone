@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -44,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 var (
@@ -435,11 +436,11 @@ func (s *store) initHAKeeperClient() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration, moerr.CauseInitHAKeeperClient)
 	defer cancel()
 	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	s.hakeeperClient = client
 	s.initClusterService()

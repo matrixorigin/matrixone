@@ -35,9 +35,6 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
-const S3IOInputCount = "S3 IO Input Count"
-const S3IOOutputCount = "S3 IO Output Count"
-
 const S3List = "S3 List Count"
 const S3Head = "S3 Head Count"
 const S3Put = "S3 Put Count"
@@ -247,8 +244,6 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
 		gS3IOByte := NewStatisticValue(ScanBytes, "byte")
-		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
-		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
 
 		gS3ListCount := NewStatisticValue(S3List, "count")
 		gS3HeadCount := NewStatisticValue(S3Head, "count")
@@ -277,16 +272,14 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 			}
 
 			for _, throughputValue := range node.Statistics.Throughput {
-				if throughputValue.Name == InputRows {
+				switch throughputValue.Name {
+				case InputRows:
 					ginputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputRows {
+				case OutputRows:
 					goutputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == InputSize {
+				case InputSize:
 					ginputSize.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputSize {
+				case OutputSize:
 					goutputSize.Value += throughputValue.Value
 				}
 			}
@@ -330,8 +323,14 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
 		mems := []StatisticValue{*gMemorySize}
 		io := []StatisticValue{
-			*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount,
-			*gS3ListCount, *gS3HeadCount, *gS3PutCount, *gS3GetCount, *gS3DeleteCount, *gS3DeleteMulCount,
+			*gDiskIO,
+			*gS3IOByte,
+			*gS3ListCount,
+			*gS3HeadCount,
+			*gS3PutCount,
+			*gS3GetCount,
+			*gS3DeleteCount,
+			*gS3DeleteMulCount,
 		}
 		nw := []StatisticValue{*gNetwork}
 

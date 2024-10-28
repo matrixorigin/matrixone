@@ -20,11 +20,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	"go.uber.org/zap"
 )
 
 const SlowAppendThreshold = 1 * time.Second
@@ -67,7 +69,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
 	defer logSlowAppend(size, a.appendlsn)()
-	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender1)
 
 	var timeoutSpan trace.Span
 	// Before issue#10467 is resolved, we skip this span,
@@ -82,6 +84,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.Error(
 			"WAL-Append-Error",
 			zap.Error(err),
@@ -95,13 +98,14 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		retryTimes := 0
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
 			retryTimes++
-			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender2)
 			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
 				trace.WithProfileGoroutine(),
 				trace.WithProfileHeap(),
 				trace.WithProfileCpuSecs(time.Second*10))
 			defer timeoutSpan.End()
 			lsn, err = a.client.c.Append(ctx, record)
+			err = moerr.AttachCause(ctx, err)
 			cancel()
 			if err != nil {
 				logutil.Error(

@@ -21,18 +21,20 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 func (s *service) writeToMO(
 	e loadAction,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseWriteToMO)
 	defer cancel()
-	return s.executor.ExecTxn(
+	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			res, err := txn.Exec(e.sql, executor.StatementOption{})
@@ -45,6 +47,7 @@ func (s *service) writeToMO(
 		executor.Options{}.
 			WithDatabase(DebugDB).
 			WithDisableTrace())
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) writeToS3(
@@ -72,7 +75,7 @@ func (s *service) writeToS3(
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute, moerr.CauseWriteToS3)
 	defer cancel()
 
 	s.logger.Info("write trace to s3",
@@ -80,7 +83,8 @@ func (s *service) writeToS3(
 		zap.String("s3", s3),
 		zap.String("size", getFileSize(stat.Size())),
 	)
-	return s.options.fs.Write(ctx, writeVec)
+	err = s.options.fs.Write(ctx, writeVec)
+	return moerr.AttachCause(ctx, err)
 }
 
 func getFileSize(value int64) string {

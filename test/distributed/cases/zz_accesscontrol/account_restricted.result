@@ -296,7 +296,7 @@ show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
 show full tables from account_res;
-invalid database account_res
+Unknown database account_res
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 privilege_name    obj_type    privilege_level
 values    table    *.*

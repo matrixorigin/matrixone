@@ -403,6 +403,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if len(dbName) > 0 && needSkipDb(dbName) {
 		return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
 	}
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && (len(dbName) != 0 || len(tblName) != 0) {
+		return moerr.NewInternalError(ctx, "can't restore db or table from cluster level snapshot")
+	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		var srcAccountId uint32

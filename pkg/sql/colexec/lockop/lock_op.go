@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -251,6 +252,8 @@ func LockTable(
 	stats := statistic.StatsInfoFromContext(proc.Ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      analyzer.GetOpStats().S3List,
 			Head:      analyzer.GetOpStats().S3Head,
@@ -311,6 +314,8 @@ func LockRows(
 	stats := statistic.StatsInfoFromContext(proc.Ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      analyzer.GetOpStats().S3List,
 			Head:      analyzer.GetOpStats().S3Head,
@@ -449,19 +454,19 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
-	var err error
-	var result lock.Result
-	for {
-		result, err = lockService.Lock(
-			ctx,
-			tableID,
-			rows,
-			txn.ID,
-			options)
-		if !canRetryLock(table, txnOp, err) {
-			break
-		}
-	}
+	result, err := lockWithRetry(
+		ctx,
+		lockService,
+		table,
+		rows,
+		txn.ID,
+		options,
+		txnOp,
+		fetchFunc,
+		vec,
+		opts,
+		pkType,
+	)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -517,7 +522,7 @@ func doLock(
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		// wait last committed logtail applied
+		// wait last committed logtail applied, (IO wait not related to FileService)
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
@@ -587,6 +592,70 @@ func doLock(
 }
 
 const defaultWaitTimeOnRetryLock = time.Second
+
+func lockWithRetry(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	txnOp client.TxnOperator,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	var result lock.Result
+	var err error
+
+	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
+	if !canRetryLock(tableID, txnOp, err) {
+		return result, err
+	}
+
+	for {
+		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
+		if !canRetryLock(tableID, txnOp, err) {
+			break
+		}
+	}
+
+	return result, err
+}
+
+func LockWithMayUpgrade(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+
+	// if return ErrLockNeedUpgrade, manually upgrade the lock and retry
+	logutil.Infof("Trying to upgrade lock level due to too many row level locks for txn %s", txnID)
+	opts = opts.WithLockTable(true, false)
+	_, nrows, ng := fetchFunc(
+		vec,
+		opts.parker,
+		pkType,
+		opts.maxCountPerLock,
+		opts.lockTable,
+		opts.filter,
+		opts.filterCols,
+	)
+	options.Granularity = ng
+	return lockService.Lock(ctx, tableID, nrows, txnID, options)
+}
 
 func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
@@ -899,5 +968,6 @@ func hasNewVersionInRange(
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
 		analyzer.WaitStop(start)
+		analyzer.AddWaitLockTime(start)
 	}
 }

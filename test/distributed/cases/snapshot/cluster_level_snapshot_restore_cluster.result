@@ -501,10 +501,10 @@ function_id    name    owner    args    rettype    body    language    db    def
 drop database test01;
 use test02;
 select * from v01;
-invalid database test01
+Unknown database test01
 use test03;
 select * from v02;
-invalid database test01
+Unknown database test01
 use udf_db;
 drop function `addab`(x int, y int);
 use udf_db2;
