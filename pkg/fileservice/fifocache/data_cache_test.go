@@ -35,7 +35,7 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 }
 
 func TestShardCacheKey(t *testing.T) {
-	var shards [256]int
+	var shards [numShards]int
 	for offset := range int64(128) {
 		for size := range int64(128) {
 			sum := shardCacheKey(fscache.CacheKey{
@@ -43,7 +43,7 @@ func TestShardCacheKey(t *testing.T) {
 				Offset: offset,
 				Sz:     size,
 			})
-			shards[sum]++
+			shards[sum%numShards]++
 		}
 	}
 	for _, n := range shards {

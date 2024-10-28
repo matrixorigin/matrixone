@@ -23,18 +23,20 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
+const numShards = 256
+
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
 type Cache[K comparable, V any] struct {
 	capacity     fscache.CapacityFunc
 	capacity1    fscache.CapacityFunc
-	keyShardFunc func(K) uint8
+	keyShardFunc func(K) uint64
 
 	postSet   func(key K, value V)
 	postGet   func(key K, value V)
 	postEvict func(key K, value V)
 
-	shards [256]struct {
+	shards [numShards]struct {
 		sync.Mutex
 		values map[K]*_CacheItem[K, V]
 		_      cpu.CacheLinePad
@@ -84,7 +86,7 @@ func (c *_CacheItem[K, V]) dec() {
 
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
-	keyShardFunc func(K) uint8,
+	keyShardFunc func(K) uint64,
 	postSet func(key K, value V),
 	postGet func(key K, value V),
 	postEvict func(key K, value V),
@@ -109,7 +111,7 @@ func New[K comparable, V any](
 }
 
 func (c *Cache[K, V]) set(key K, value V, size int64) *_CacheItem[K, V] {
-	shard := &c.shards[c.keyShardFunc(key)]
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
 	_, ok := shard.values[key]
@@ -171,7 +173,7 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 }
 
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	shard := &c.shards[c.keyShardFunc(key)]
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	var item *_CacheItem[K, V]
 	item, ok = shard.values[key]
@@ -188,7 +190,7 @@ func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) Delete(key K) {
-	shard := &c.shards[c.keyShardFunc(key)]
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
 	item, ok := shard.values[key]
@@ -267,7 +269,7 @@ func (c *Cache[K, V]) evict1() {
 }
 
 func (c *Cache[K, V]) deleteItem(item *_CacheItem[K, V]) {
-	shard := &c.shards[c.keyShardFunc(item.key)]
+	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
 	delete(shard.values, item.key)

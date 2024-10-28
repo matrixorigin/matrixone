@@ -87,8 +87,8 @@ func NewDiskCache(
 				return capacity()
 			},
 
-			func(key string) uint8 {
-				return uint8(maphash.String(seed, key))
+			func(key string) uint64 {
+				return maphash.String(seed, key)
 			},
 
 			nil,

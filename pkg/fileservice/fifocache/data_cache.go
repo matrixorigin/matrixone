@@ -18,6 +18,7 @@ import (
 	"context"
 	"hash/maphash"
 	"math"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -40,8 +41,11 @@ func NewDataCache(
 
 var seed = maphash.MakeSeed()
 
-func shardCacheKey(key fscache.CacheKey) uint8 {
-	return uint8(uint64(key.Offset) ^ uint64(key.Sz) ^ maphash.String(seed, key.Path))
+func shardCacheKey(key fscache.CacheKey) uint64 {
+	return maphash.Bytes(seed, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&key)),
+		unsafe.Sizeof(key),
+	))
 }
 
 var _ fscache.DataCache = new(DataCache)
