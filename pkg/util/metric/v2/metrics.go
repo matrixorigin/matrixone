@@ -213,6 +213,7 @@ func initLogServiceMetrics() {
 	registry.MustRegister(LogServiceAppendDurationHistogram)
 	registry.MustRegister(LogServiceAppendCounter)
 	registry.MustRegister(LogServiceAppendBytesHistogram)
+	registry.MustRegister(LogServiceReplicaHealthGauge)
 }
 
 func initShardingMetrics() {
