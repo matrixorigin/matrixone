@@ -536,7 +536,7 @@ var openDbConn = func(
 	user, password string,
 	ip string,
 	port int) (db *sql.DB, err error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?multiStatements=true",
 		user,
 		password,
 		ip,

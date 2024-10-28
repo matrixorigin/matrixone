@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -158,6 +159,8 @@ type mysqlSinker struct {
 
 	// insert or delete of last record, used for combine inserts and deletes
 	preRowType RowType
+	// the length of all completed sql statement in sqlBuf
+	preSqlBufLen int
 }
 
 var NewMysqlSinker = func(
@@ -211,7 +214,10 @@ var NewMysqlSinker = func(
 	// rows
 	s.insertRow = make([]any, len(s.insertTypes))
 	s.deleteRow = make([]any, 1)
+
+	// pre
 	s.preRowType = NoOp
+	s.preSqlBufLen = 0
 	return s
 }
 
@@ -224,22 +230,27 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 	}
 
 	if data.noMoreData {
+		// complete sql statement
+		if s.isNonEmptyInsertStmt() {
+			s.sqlBuf = appendString(s.sqlBuf, ";")
+			s.preSqlBufLen = len(s.sqlBuf)
+		}
+		if s.isNonEmptyDeleteStmt() {
+			s.sqlBuf = appendString(s.sqlBuf, ");")
+			s.preSqlBufLen = len(s.sqlBuf)
+		}
+
 		// output the left sql
-		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
-			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-				return
-			}
-		} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
-			s.sqlBuf = appendByte(s.sqlBuf, ')')
-			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+		if s.preSqlBufLen != 0 {
+			if err = s.mysql.Send(ctx, s.ar, util.UnsafeBytesToString(s.sqlBuf)); err != nil {
 				return
 			}
 		}
-		// reset status
-		s.sqlBuf = s.sqlBuf[:0]
-		s.preRowType = NoOp
 
-		s.watermarkUpdater.UpdateMem(s.dbTblInfo.SourceTblIdStr, data.toTs)
+		// reset status
+		s.preSqlBufLen = 0
+		s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
+		s.preRowType = NoOp
 		return
 	}
 
@@ -349,35 +360,17 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-
-	// output the last sql
-	if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	} else if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
-		s.sqlBuf = appendByte(s.sqlBuf, ')')
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-			return
-		}
-	}
-
-	// reset status
-	s.sqlBuf = s.sqlBuf[:0]
-	s.preRowType = NoOp
 	return
 }
 
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
-	// if last row is not insert row, need output sql first
+	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != InsertRow {
-		if s.preRowType == DeleteRow && len(s.sqlBuf) != len(s.tsDeletePrefix) {
-			s.sqlBuf = appendByte(s.sqlBuf, ')')
-			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-				return
-			}
+		if s.isNonEmptyDeleteStmt() {
+			s.sqlBuf = appendString(s.sqlBuf, ");")
+			s.preSqlBufLen = len(s.sqlBuf)
 		}
-		s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+		s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.tsInsertPrefix...)
 		s.preRowType = InsertRow
 	}
 
@@ -400,14 +393,13 @@ func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRow
 }
 
 func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
-	// if last row is not delete row, need output sql first
+	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != DeleteRow {
-		if s.preRowType == InsertRow && len(s.sqlBuf) != len(s.tsInsertPrefix) {
-			if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
-				return
-			}
+		if s.isNonEmptyInsertStmt() {
+			s.sqlBuf = appendString(s.sqlBuf, ";")
+			s.preSqlBufLen = len(s.sqlBuf)
 		}
-		s.sqlBuf = append(s.sqlBuf[:0], s.tsDeletePrefix...)
+		s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.tsDeletePrefix...)
 		s.preRowType = DeleteRow
 	}
 
@@ -432,31 +424,43 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRow
 // appendSqlBuf appends rowBuf to sqlBuf if not exceed its cap
 // otherwise, send sql to downstream first, then reset sqlBuf and append
 func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err error) {
-	prefixLen := len(s.tsInsertPrefix)
-	if rowType == DeleteRow {
-		prefixLen = len(s.tsDeletePrefix)
-	}
-
+	// if s.sqlBuf has no enough space
 	if len(s.sqlBuf)+len(s.rowBuf)+SqlBufReserved > cap(s.sqlBuf) {
-		if rowType == DeleteRow {
-			s.sqlBuf = appendByte(s.sqlBuf, ')')
+		// complete sql statement
+		if rowType == InsertRow {
+			s.sqlBuf = appendString(s.sqlBuf, ";")
+		} else {
+			s.sqlBuf = appendString(s.sqlBuf, ");")
 		}
 
-		// if s.sqlBuf has no enough space, send it to downstream
-		if err = s.mysql.Send(ctx, s.ar, string(s.sqlBuf)); err != nil {
+		// send it to downstream
+		if err = s.mysql.Send(ctx, s.ar, util.UnsafeBytesToString(s.sqlBuf)); err != nil {
 			return
 		}
 
 		// reset s.sqlBuf
-		s.sqlBuf = s.sqlBuf[:prefixLen]
+		s.preSqlBufLen = 0
+		if rowType == InsertRow {
+			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.tsInsertPrefix...)
+		} else {
+			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.tsDeletePrefix...)
+		}
 	}
 
 	// append bytes
-	if len(s.sqlBuf) != prefixLen {
+	if s.isNonEmptyDeleteStmt() || s.isNonEmptyInsertStmt() {
 		s.sqlBuf = appendByte(s.sqlBuf, ',')
 	}
 	s.sqlBuf = append(s.sqlBuf, s.rowBuf...)
 	return
+}
+
+func (s *mysqlSinker) isNonEmptyDeleteStmt() bool {
+	return s.preRowType == DeleteRow && len(s.sqlBuf)-s.preSqlBufLen != len(s.tsDeletePrefix)
+}
+
+func (s *mysqlSinker) isNonEmptyInsertStmt() bool {
+	return s.preRowType == InsertRow && len(s.sqlBuf)-s.preSqlBufLen != len(s.tsInsertPrefix)
 }
 
 // getInsertRowBuf convert insert row to string
