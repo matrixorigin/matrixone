@@ -369,12 +369,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	//find the highest ndv
-	highestNDV := n.OnList[idx].Ndv
-	if highestNDV < ShuffleThreshHoldOfNDV {
-		return
-	}
-
 	// get the column of left child
 	var expr0, expr1 *plan.Expr
 	cond := n.OnList[idx]
