@@ -32,6 +32,9 @@ const (
 	ValidatePasswordNumberCount             = "validate_password.number_count"
 	ValidatePasswordSpecialCharCount        = "validate_password.special_char_count"
 	ValidatePasswordMixedCount              = "validate_password.mixed_case_count"
+
+	// password expiration management
+	DefaultPasswordLifetime = "default_password_lifetime"
 )
 
 func needValidatePassword(session *Session) (bool, error) {

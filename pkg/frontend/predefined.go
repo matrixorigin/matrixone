@@ -31,6 +31,7 @@ var (
 				status   varchar(8),
 				created_time  timestamp,
 				expired_time timestamp,
+				password_last_changed timestamp default utc_timestamp,
 				login_type  varchar(16),
 				creator int signed,
 				owner int signed,
