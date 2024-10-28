@@ -16,9 +16,11 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -289,6 +291,11 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 	)
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	sleep, sarg, exist := fault.TriggerFault("snapshot_read_timeout")
+	if exist {
+		time.Sleep(time.Duration(sleep) * time.Second)
+		return nil, moerr.NewInternalError(ctx, sarg)
+	}
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		// try the previous RPC method
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
@@ -324,7 +331,25 @@ func (e *Engine) getOrCreateSnapPart(
 			checkpointEntries = append(checkpointEntries, checkpointEntry)
 		}
 	}
-	if len(checkpointEntries) == 0 {
+
+	ckpsCanServe := func() bool {
+		// The checkpoint entry required by SnapshotRead must meet two or more checkpoints,
+		// otherwise the latest partition can meet this SnapshotRead request
+		if len(checkpointEntries) < 2 {
+			return false
+		}
+
+		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
+		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
+		end := checkpointEntries[len(checkpointEntries)-2].GetEnd()
+		if end.LT(&ts) {
+			return false
+		}
+
+		return true
+	}
+
+	if !ckpsCanServe() {
 		//check whether the latest partition is available for reuse.
 		if ps, err := tbl.tryToSubscribe(ctx); err == nil {
 			if ps != nil && ps.CanServe(ts) {
