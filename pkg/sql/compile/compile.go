@@ -3769,11 +3769,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 	c.anal.isFirst = false
-	if reuse {
-		fmt.Println("shuffle reuse!!!!!!!!!")
-		fmt.Println(DebugShowScopes(shuffleJoins, OldLevel))
-	}
-
 	c.hasMergeOp = true
 	if !reuse {
 		for i := range shuffleJoins {
