@@ -430,6 +430,7 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
+/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -438,6 +439,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
+*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -464,7 +466,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	c.printPipeline()
+	//c.printPipeline()
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -3071,7 +3073,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
 	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
-	logutil.Infof("debug1: dop %v hashmapsize %v ncpu %v", dop, n.Stats.HashmapStats.HashmapSize, ncpu)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3669,7 +3670,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 
 	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
-	logutil.Infof("debug1: dop %v hashmapsize %v ncpu %v", dop, n.Stats.HashmapStats.HashmapSize, ncpu)
 
 	bucketNum := len(c.cnList) * dop
 	shuffleJoins := make([]*Scope, 0, bucketNum)
@@ -3748,9 +3748,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
 		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
-		if reuse {
-			logutil.Infof("debug1: idx %v min %v max %v type %v,  range %v %v", shuffleBuildOp.ShuffleColIdx, shuffleBuildOp.ShuffleColMin, shuffleBuildOp.ShuffleColMax, shuffleBuildOp.ShuffleType, shuffleBuildOp.ShuffleRangeInt64, shuffleBuildOp.ShuffleRangeUint64)
-		}
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
