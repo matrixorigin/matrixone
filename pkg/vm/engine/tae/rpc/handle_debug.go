@@ -74,6 +74,53 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
+func (h *Handle) HandleSnapshotRead(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.SnapshotReadReq,
+	resp *cmd_util.SnapshotReadResp,
+) (func(), error) {
+	now := time.Now()
+	defer func() {
+		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
+	}()
+	maxEnd := types.TS{}
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	if maxCheckpoint != nil {
+		maxEnd = maxCheckpoint.GetEnd()
+	}
+	snapshot := types.TimestampToTS(*req.Snapshot)
+	if snapshot.GT(&maxEnd) {
+		resp.Succeed = false
+		return nil, nil
+	}
+	checkpoints, err := checkpoint.ListSnapshotCheckpoint(
+		ctx,
+		"",
+		h.db.Runtime.Fs.Service,
+		snapshot,
+		h.db.BGCheckpointRunner.GetCheckpointMetaFiles())
+	if err != nil {
+		resp.Succeed = false
+		return nil, err
+	}
+	resp.Succeed = true
+	resp.Entries = make([]*cmd_util.CheckpointEntryResp, 0, len(checkpoints))
+	for _, ckp := range checkpoints {
+		start := ckp.GetStart().ToTimestamp()
+		end := ckp.GetEnd().ToTimestamp()
+		resp.Entries = append(resp.Entries, &cmd_util.CheckpointEntryResp{
+			Start:     &start,
+			End:       &end,
+			Location1: ckp.GetLocation(),
+			Location2: ckp.GetTNLocation(),
+			EntryType: int32(ckp.GetType()),
+			Version:   ckp.GetVersion(),
+		})
+	}
+	return nil, nil
+}
+
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *cmd_util.StorageUsageReq, resp *cmd_util.StorageUsageResp_V3) (func(), error) {
 	memo := h.db.GetUsageMemo()
