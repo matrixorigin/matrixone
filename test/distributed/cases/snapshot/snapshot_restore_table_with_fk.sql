@@ -107,7 +107,6 @@ select * from t3;
 select * from t4;
 
 
-select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop snapshot sn1;
 drop table fk_test1.t2;
 drop table fk_test2.t3;
@@ -115,6 +114,7 @@ drop database fk_test1;
 drop database fk_test2;
 -- @session
 
+select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop account acc1;
 -- @ignore:1
 show snapshots;

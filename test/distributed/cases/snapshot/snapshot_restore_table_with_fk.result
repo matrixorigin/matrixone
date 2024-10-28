@@ -211,14 +211,14 @@ a    b
 select * from t4;
 a
 1
-select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
-add_fault_point(fj/debug/19524, :::, echo, 0, )
-true
 drop snapshot sn1;
 drop table fk_test1.t2;
 drop table fk_test2.t3;
 drop database fk_test1;
 drop database fk_test2;
+select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
+add_fault_point(fj/debug/19524, :::, echo, 0, )
+true
 drop account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
