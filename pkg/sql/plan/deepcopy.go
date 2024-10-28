@@ -1098,6 +1098,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		NetworkIO:              analyzeinfo.GetNetworkIO(),
 		ScanTime:               analyzeinfo.GetScanTime(),
 		InsertTime:             analyzeinfo.GetInsertTime(),
+		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
 	}
 }
 
