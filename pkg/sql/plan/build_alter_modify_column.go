@@ -243,8 +243,6 @@ func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, ha
 	return nil
 }
 
-// checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL
-
 func DefaultValueIsNull(Default *plan.Default) bool {
 	if Default != nil {
 		if constExpr, ok := Default.GetExpr().Expr.(*plan.Expr_Lit); ok {
