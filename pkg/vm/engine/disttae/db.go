@@ -342,11 +342,7 @@ func (e *Engine) getOrCreateSnapPart(
 		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
 		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
 		end := checkpointEntries[len(checkpointEntries)-2].GetEnd()
-		if end.LT(&ts) {
-			return false
-		}
-
-		return true
+		return !end.LT(&ts)
 	}
 
 	if !ckpsCanServe() {
