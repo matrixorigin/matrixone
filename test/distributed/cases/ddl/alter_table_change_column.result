@@ -1306,23 +1306,21 @@ create table primary08(col1 int ,col2 float, col3 decimal, primary key (col1, co
 insert into primary08 values (1, 213412.32143, 3214312.34243214242);
 insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
-All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary08 change col2 col2New decimal(28,10);
 show create table primary08;
 Table    Create Table
-primary08    CREATE TABLE `primary08` (\n  `col1` INT NOT NULL,\n  `col2new` DECIMAL(28,10) NOT NULL,\n  `col3` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2new`)\n)
+primary08    CREATE TABLE `primary08` (\n  `col1new` DOUBLE NOT NULL,\n  `col2new` DECIMAL(28,10) NOT NULL,\n  `col3` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1new`,`col2new`)\n)
 insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
 internal error: column 'col2' not found in table 
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
-invalid input: column col1New does not exist
 delete from primary08 where col1 = 1;
+invalid input: column col1 does not exist
 delete from primary08 where col1New = 2;
-invalid input: column col1New does not exist
 select * from primary08;
-col1    col2new    col3
-2    -324.2342529297    -1243
-3    73829.2738972984    38298390
+col1new    col2new    col3
+3.0    73829.2738972984    38298390
+1.0    32432.3242424242    3214312
 drop table primary08;
 drop table if exists primary09;
 create table primary09 (col1 int primary key, col2 decimal);
@@ -1332,7 +1330,7 @@ primary09    CREATE TABLE `primary09` (\n  `col1` INT NOT NULL,\n  `col2` DECIMA
 insert into primary09 values(1, 3412.324);
 insert into primary09 values (-10, 323943.2343);
 alter table primary09 change col1 col1New float default null;
-Invalid default value for 'col1new'
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 drop table primary09
 drop table if exists index01;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
@@ -2164,4 +2162,48 @@ Field    Type    Null    Key    Default    Extra    Comment
 name    ENUM('A','B','C','D')    YES        null        
 age    INT(32)    YES        null        
 drop table t1;
+drop table if exists tb_3;
+create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(25)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(30) not null;
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(30)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(30);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(30)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(40);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c4 VARCHAR(40);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    VARCHAR(40)    YES        null        
+alter table tb_3 modify c4 VARCHAR(40) NOT null;
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    VARCHAR(40)    NO        null        
+drop table tb_3;
 drop database db2;

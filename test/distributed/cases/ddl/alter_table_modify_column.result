@@ -927,11 +927,10 @@ create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, co
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double not null;
-All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary07 modify col2 decimal(28,10);
 show create table primary07;
 Table    Create Table
-primary07    CREATE TABLE `primary07` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(28,10) NOT NULL,\n  `col3` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+primary07    CREATE TABLE `primary07` (\n  `col1` DOUBLE NOT NULL,\n  `col2` DECIMAL(28,10) NOT NULL,\n  `col3` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 drop table primary07;
 drop table if exists index01;
 CREATE TABLE index01(a INTEGER not null , b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
