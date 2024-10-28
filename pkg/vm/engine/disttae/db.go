@@ -333,13 +333,10 @@ func (e *Engine) getOrCreateSnapPart(
 	}
 
 	ckpsCanServe := func() bool {
-		if len(checkpointEntries) == 0 {
+		// The checkpoint entry required by SnapshotRead must meet two or more checkpoints,
+		// otherwise the latest partition can meet this SnapshotRead request
+		if len(checkpointEntries) < 2 {
 			return false
-		}
-
-		if len(checkpointEntries) == 1 {
-			// It represents the cpt checkpoint, so return true directly
-			return true
 		}
 
 		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
