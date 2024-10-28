@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -179,12 +180,12 @@ func (s *sqlStore) Allocate(
 				} else if ctxDone() {
 					return ctx.Err()
 				} else {
-					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					ctx2, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseAllocate)
 					defer cancel()
 					ok, err := s.ls.IsOrphanTxn(ctx2, txnOp.Txn().ID)
 					if ok || err != nil {
 						retry = true
-						return moerr.NewTxnNeedRetryNoCtx()
+						return moerr.AttachCause(ctx2, moerr.NewTxnNeedRetryNoCtx())
 					}
 
 					accountID, err := defines.GetAccountId(ctx)

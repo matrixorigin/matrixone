@@ -48,6 +48,9 @@ func (es EntryState) Repr() string {
 }
 
 func GetTombstoneSchema(objectSchema *Schema) *Schema {
+	if !objectSchema.HasPKOrFakePK() {
+		return nil
+	}
 	pkType := objectSchema.GetPrimaryKey().GetType()
 	schema := NewEmptySchema("tombstone")
 	schema.Extra.BlockMaxRows = objectSchema.Extra.BlockMaxRows
@@ -69,15 +72,6 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 	}
 	schema.Finalize(false)
 	return schema
-}
-
-// rowid, pk
-// used in range delete
-func NewTombstoneBatchWithPKVector(pkVec, rowIDVec containers.Vector, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatchWithCapacity(2)
-	bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
-	bat.AddVector(objectio.TombstoneAttr_PK_Attr, pkVec)
-	return bat
 }
 
 // rowid, pk, commitTS

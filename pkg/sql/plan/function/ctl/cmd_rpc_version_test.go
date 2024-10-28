@@ -17,17 +17,22 @@ package ctl
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestHandleGetProtocolVersion(t *testing.T) {
@@ -131,4 +136,30 @@ func requireVersionValue(t *testing.T, version int64) {
 	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.MOProtocolVersion)
 	require.True(t, ok)
 	require.EqualValues(t, version, v)
+}
+
+func Test_transferToTN(t *testing.T) {
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	mc := clusterservice.NewMOCluster(
+		"",
+		nil,
+		3*time.Second,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			nil,
+			[]metadata.TNService{
+				{
+					QueryAddress: "wrong address",
+				},
+			},
+		),
+	)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+
+	qcli := &testQClient{}
+	_, err := transferToTN(qcli, 0)
+	assert.Error(t, err)
 }

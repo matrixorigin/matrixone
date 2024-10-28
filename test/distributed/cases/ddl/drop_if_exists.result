@@ -1,10 +1,10 @@
 create account acc101 admin_name='root' identified by '123456';
 drop table if exists t1;
-not connect to a database
+No database selected
 drop index if exists idx1 on t1;
-not connect to a database
+No database selected
 drop view if exists v1;
-not connect to a database
+No database selected
 create database db1;
 use db1;
 create table t1(
@@ -29,11 +29,11 @@ Tables_in_db1
 t1
 v1
 drop index if exists idx1 on t1;
-not connect to a database
+No database selected
 drop table if exists t1;
-not connect to a database
+No database selected
 drop view if exists v1;
-not connect to a database
+No database selected
 use db1;
 drop index if exists idx1 on t1;
 show index from t1;

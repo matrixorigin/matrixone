@@ -88,6 +88,7 @@ const (
 	testConnModSetReadDeadlineReturnErr
 	testConnModReadReturnErr
 	testConnModReadPanic
+	testConnModReadBuffer
 )
 
 type testConn struct {
@@ -95,6 +96,7 @@ type testConn struct {
 	data   []byte
 	local  testAddr
 	remote testAddr
+	rbuf   []byte
 }
 
 func (tc *testConn) Read(b []byte) (n int, err error) {
@@ -102,6 +104,19 @@ func (tc *testConn) Read(b []byte) (n int, err error) {
 		return 0, moerr.NewInternalErrorNoCtx("test conn read returns error")
 	} else if tc.mod == testConnModReadPanic {
 		panic("test conn read panic")
+	} else if tc.mod == testConnModReadBuffer {
+		blen := len(b)
+		if blen == 0 {
+			return 0, nil
+		}
+		rlen := len(tc.rbuf)
+		readLen := min(rlen, blen)
+		if readLen == 0 {
+			return 0, io.EOF
+		}
+		copy(b, tc.rbuf[0:readLen])
+		tc.rbuf = tc.rbuf[readLen:]
+		return readLen, nil
 	}
 	blen := len(b)
 	if blen == 0 {

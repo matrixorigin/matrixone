@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"go.uber.org/zap"
 )
 
 const (
@@ -341,19 +342,40 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist() (
 	return
 }
 
-func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) {
+func (c *CkpReplayer) ReplayCatalog(readTxn txnif.AsyncTxn) (err error) {
+	start := time.Now()
+
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"open-tae",
+			zap.String("replay", "checkpoint-catalog"),
+			zap.Duration("cost", time.Since(start)),
+			zap.Error(err),
+		)
+	}()
+
 	if len(c.ckpEntries) == 0 {
 		return
 	}
 
-	logutil.Info(c.r.catalog.SimplePPString(common.PPL3))
-	sortFunc := func(cols []containers.Vector, pkidx int) error {
-		_, err := mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
-		return err
+	// logutil.Info(c.r.catalog.SimplePPString(common.PPL3))
+	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
+		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
+		return
 	}
-	// logutil.Infof(c.r.catalog.SimplePPString(common.PPL3))
-	c.r.catalog.RelayFromSysTableObjects(c.r.ctx, readTxn, c.dataF, tables.ReadSysTableBatch, sortFunc)
-	logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
+	c.r.catalog.RelayFromSysTableObjects(
+		c.r.ctx,
+		readTxn,
+		c.dataF,
+		tables.ReadSysTableBatch,
+		sortFunc,
+	)
+	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
+	return
 }
 
 // ReplayObjectlist replays the data part of the checkpoint.
@@ -386,7 +408,10 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 		if checkpointEntry.end.LE(&maxTs) {
 			continue
 		}
-		err = datas[i].ApplyReplayTo(r.catalog, dataFactory, false)
+		err = datas[i].ApplyReplayTo(
+			r.catalog,
+			dataFactory,
+			false)
 		if err != nil {
 			return
 		}
@@ -399,13 +424,15 @@ func (c *CkpReplayer) ReplayObjectlist() (err error) {
 	c.applyDuration += time.Since(t0)
 	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 	r.source.Init(maxTs)
-	logutil.Info("open-tae", common.OperationField("replay"),
-		common.OperandField("checkpoint"),
-		common.AnyField("apply cost", c.applyDuration),
-		common.AnyField("read cost", c.readDuration),
-		common.AnyField("total entry count", c.totalCount),
-		common.AnyField("read entry count", c.readCount),
-		common.AnyField("apply entry count", c.applyCount))
+	logutil.Info(
+		"open-tae",
+		zap.String("replay", "checkpoint-objectlist"),
+		zap.Duration("apply-cost", c.applyDuration),
+		zap.Duration("read-cost", c.readDuration),
+		zap.Int("apply-count", c.applyCount),
+		zap.Int("total-count", c.totalCount),
+		zap.Int("read-count", c.readCount),
+	)
 	return
 }
 
