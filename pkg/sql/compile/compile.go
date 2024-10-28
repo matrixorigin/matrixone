@@ -3773,6 +3773,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 	c.anal.isFirst = false
+	if reuse {
+		fmt.Println("shuffle reuse!!!!!!!!!")
+		fmt.Println(DebugShowScopes(shuffleJoins, OldLevel))
+	}
 	return shuffleJoins
 }
 
