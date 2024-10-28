@@ -130,8 +130,6 @@ func testS3FS(
 			switch storage := fs.storage.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
-			case *AwsSDKv1:
-				storage.listMaxKeys = 5
 			}
 
 			return fs
@@ -170,7 +168,7 @@ func testS3FS(
 		})
 		assert.Nil(t, err)
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 
 		assert.True(t, len(entries) > 0)
