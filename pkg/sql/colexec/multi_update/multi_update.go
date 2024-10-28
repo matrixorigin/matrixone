@@ -44,11 +44,13 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.OpAnalyzer.Reset()
 	}
 
-	for _, updateCtx := range update.MultiUpdateCtx {
-		if len(updateCtx.insertAttrs) == 0 {
+	if update.ctr.updateCtxInfos == nil {
+		update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo)
+		for _, updateCtx := range update.MultiUpdateCtx {
+			info := new(updateCtxInfo)
 			for _, col := range updateCtx.TableDef.Cols {
 				if col.Name != catalog.Row_ID {
-					updateCtx.insertAttrs = append(updateCtx.insertAttrs, col.Name)
+					info.insertAttrs = append(info.insertAttrs, col.Name)
 				}
 			}
 
@@ -58,7 +60,24 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
 				tableType = UpdateSecondaryIndexTable
 			}
-			updateCtx.tableType = tableType
+			info.tableType = tableType
+			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+		}
+	}
+
+	for _, updateCtx := range update.MultiUpdateCtx {
+		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info.Sources = nil
+		if update.Action != UpdateWriteS3 {
+			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef, updateCtx.PartitionTableNames)
+			if err != nil {
+				return err
+			}
+			if len(updateCtx.PartitionTableNames) > 0 {
+				info.Sources = append(info.Sources, partitionRels...)
+			} else {
+				info.Sources = append(info.Sources, rel)
+			}
 		}
 	}
 
@@ -69,8 +88,6 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
 	}
 	update.ctr.affectedRows = 0
-
-	eng := update.Engine
 
 	switch update.Action {
 	case UpdateWriteS3:
@@ -97,28 +114,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		}
 		writer.updateCtxs = nil
 
-		for _, updateCtx := range update.MultiUpdateCtx {
-			ref := updateCtx.ObjRef
-			partitionNames := updateCtx.PartitionTableNames
-			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-			if err != nil {
-				return err
-			}
-			updateCtx.Source = rel
-			updateCtx.PartitionSources = partitionRels
-		}
-
 	case UpdateWriteTable:
-		for _, updateCtx := range update.MultiUpdateCtx {
-			ref := updateCtx.ObjRef
-			partitionNames := updateCtx.PartitionTableNames
-			rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
-			if err != nil {
-				return err
-			}
-			updateCtx.Source = rel
-			updateCtx.PartitionSources = partitionRels
-		}
+		//do nothing
 	}
 
 	mainCtx := update.MultiUpdateCtx[0]
@@ -254,7 +251,6 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 	for i, action := range actions {
 		updateCtx := update.MultiUpdateCtx[updateCtxIdx[i]]
-		isPartition := len(updateCtx.PartitionTableIDs) > 0
 
 		switch actionType(action) {
 		case actionDelete:
@@ -266,13 +262,12 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
 				return input, err
 			}
-			update.addDeleteAffectRows(updateCtx.tableType, rowCounts[i])
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addDeleteAffectRows(tableType, rowCounts[i])
 			name := nameData[i].UnsafeGetString(nameArea)
-			if isPartition {
-				err = updateCtx.PartitionSources[partitionIdx[i]].Delete(ctx, batBufs[actionDelete], name)
-			} else {
-				err = updateCtx.Source.Delete(ctx, batBufs[actionDelete], name)
-			}
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
+			err = source.Delete(ctx, batBufs[actionDelete], name)
+
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
 				batBufs[actionInsert] = batch.NewOffHeapEmpty()
@@ -283,12 +278,11 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			update.addInsertAffectRows(updateCtx.tableType, rowCounts[i])
-			if isPartition {
-				err = updateCtx.PartitionSources[partitionIdx[i]].Write(ctx, batBufs[actionInsert])
-			} else {
-				err = updateCtx.Source.Write(ctx, batBufs[actionInsert])
-			}
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addInsertAffectRows(tableType, rowCounts[i])
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
+			err = source.Write(ctx, batBufs[actionInsert])
+
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {
 				batBufs[actionUpdate] = batch.NewOffHeapEmpty()
@@ -324,7 +318,8 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 
 		// insert rows
 		if len(updateCtx.InsertCols) > 0 {
-			switch updateCtx.tableType {
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			switch tableType {
 			case UpdateMainTable:
 				err = update.insert_main_table(proc, i, bat)
 			case UpdateUniqueIndexTable:

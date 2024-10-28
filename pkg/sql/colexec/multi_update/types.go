@@ -78,12 +78,19 @@ type MultiUpdate struct {
 	vm.OperatorBase
 }
 
+type updateCtxInfo struct {
+	Sources     []engine.Relation
+	tableType   UpdateTableType
+	insertAttrs []string
+}
+
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
 	action       actionType
 
-	s3Writer *s3Writer
+	s3Writer       *s3Writer
+	updateCtxInfos map[string]*updateCtxInfo
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
@@ -101,11 +108,8 @@ type MultiUpdateCtx struct {
 	OldPartitionIdx     int      // The array index position of the partition expression column for delete
 	NewPartitionIdx     int      // The array index position of the partition expression column for insert
 
-	Source           engine.Relation
-	PartitionSources []engine.Relation // Align array index with the partition number
-
-	tableType   UpdateTableType
-	insertAttrs []string
+	// Source           engine.Relation
+	// PartitionSources []engine.Relation // Align array index with the partition number
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -141,6 +145,9 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
+	for _, info := range update.ctr.updateCtxInfos {
+		info.Sources = nil
+	}
 	update.ctr.state = vm.Build
 }
 
@@ -164,6 +171,8 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+
+	update.ctr.updateCtxInfos = nil
 }
 
 func (update *MultiUpdate) GetAffectedRows() uint64 {
