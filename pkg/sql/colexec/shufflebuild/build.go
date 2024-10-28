@@ -16,7 +16,7 @@ package shufflebuild
 
 import (
 	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -127,6 +127,7 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 			return err
 		}
 	}
+	logutil.Infof("debug1: shuffle build batch cnt %v", ctr.hashmapBuilder.InputBatchRowCount)
 	return nil
 }
 
