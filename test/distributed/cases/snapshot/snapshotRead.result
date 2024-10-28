@@ -359,7 +359,7 @@ use test01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 select count(*) from acc01_snap{snapshot = 'snap01'};
-not connect to a database
+No database selected
 select count(*) from mo_catalog.mo_tables{snapshot = 'snap01'} where reldatabase = 'test01';
 count(*)
 1
