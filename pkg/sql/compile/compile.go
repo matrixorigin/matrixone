@@ -3745,6 +3745,9 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
 		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
+		if reuse {
+			logutil.Infof("debug1: idx %v min %v max %v range %v %v", shuffleBuildOp.ShuffleColIdx, shuffleBuildOp.ShuffleColMin, shuffleBuildOp.ShuffleColMax, shuffleBuildOp.ShuffleType, shuffleBuildOp.ShuffleRangeInt64, shuffleBuildOp.ShuffleRangeUint64)
+		}
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
