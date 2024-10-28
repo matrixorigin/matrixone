@@ -145,8 +145,10 @@ func (update *MultiUpdate) insert_table(
 			rowCount := insertBatch.Vecs[0].Length()
 			if rowCount > 0 {
 				insertBatch.SetRowCount(rowCount)
-				update.addInsertAffectRows(updateCtx.tableType, uint64(rowCount))
-				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
+				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+				update.addInsertAffectRows(tableType, uint64(rowCount))
+				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
+				err = source.Write(proc.Ctx, insertBatch)
 				if err != nil {
 					return err
 				}
@@ -163,8 +165,10 @@ func (update *MultiUpdate) insert_table(
 		rowCount := insertBatch.Vecs[0].Length()
 		if rowCount > 0 {
 			insertBatch.SetRowCount(rowCount)
-			update.addInsertAffectRows(updateCtx.tableType, uint64(rowCount))
-			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addInsertAffectRows(tableType, uint64(rowCount))
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+			err = source.Write(proc.Ctx, insertBatch)
 		}
 	}
 	return
@@ -213,8 +217,10 @@ func (update *MultiUpdate) check_null_and_insert_table(
 			newRowCount := insertBatch.Vecs[0].Length()
 			if newRowCount > 0 {
 				insertBatch.SetRowCount(newRowCount)
-				update.addInsertAffectRows(updateCtx.tableType, uint64(newRowCount))
-				err = updateCtx.PartitionSources[partIdx].Write(proc.Ctx, insertBatch)
+				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+				update.addInsertAffectRows(tableType, uint64(newRowCount))
+				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
+				err = source.Write(proc.Ctx, insertBatch)
 				if err != nil {
 					return err
 				}
@@ -240,8 +246,10 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		newRowCount := insertBatch.Vecs[0].Length()
 		if newRowCount > 0 {
 			insertBatch.SetRowCount(newRowCount)
-			update.addInsertAffectRows(updateCtx.tableType, uint64(newRowCount))
-			err = updateCtx.Source.Write(proc.Ctx, insertBatch)
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addInsertAffectRows(tableType, uint64(newRowCount))
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+			err = source.Write(proc.Ctx, insertBatch)
 		}
 	}
 	return
