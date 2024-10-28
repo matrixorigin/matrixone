@@ -499,24 +499,29 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
 	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
 	if ret1 >= maxret {
-		return maxret
+		dop = maxret
+		return
 	}
 
 	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
 	if ret2 >= maxret {
-		return ret1
+		dop = ret1
+		return
 	}
 
 	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
 	if ret3 >= maxret {
-		return ret2
+		dop = ret2
+		return
 	}
 
 	if ret3 <= ncpu {
-		return ncpu
+		dop = ncpu
+		return
 	}
 
-	return (ret3/ncpu + 1) * ncpu
+	dop = (ret3/ncpu + 1) * ncpu
+	return
 }
 
 // default shuffle type for scan is hash
