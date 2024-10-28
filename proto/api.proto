@@ -44,6 +44,7 @@ enum OpCode {
     OpDiskDiskCleaner   = 2012;
     OpReader = 2013;
     OpGetLatestCheckpoint = 2014;
+    OpSnapshotRead = 2015;
 }
 
 // TNPingRequest ping request
