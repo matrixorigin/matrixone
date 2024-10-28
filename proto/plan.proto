@@ -659,15 +659,16 @@ message AnalyzeInfo {
 	int64 networkIO = 10;
 	int64 scanTime = 11;
 	int64 insertTime = 12;
-	repeated int64 time_consumed_array_major = 13;
-	repeated int64 time_consumed_array_minor = 14;
-	int64 input_blocks = 15;
-	int64 s3_list = 16;
-	int64 s3_head = 17;
-	int64 s3_put = 18;
-	int64 s3_get = 19;
-	int64 s3_delete = 20;
-	int64 s3_delete_mul = 21;
+	int64 wait_lock_time = 13;
+	repeated int64 time_consumed_array_major = 14;
+	repeated int64 time_consumed_array_minor = 15;
+	int64 input_blocks = 16;
+	int64 s3_list = 17;
+	int64 s3_head = 18;
+	int64 s3_put = 19;
+	int64 s3_get = 20;
+	int64 s3_delete = 21;
+	int64 s3_delete_mul = 22;
 }
 
 message PartitionPrune {

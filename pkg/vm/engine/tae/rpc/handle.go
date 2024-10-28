@@ -166,10 +166,24 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 
 // TODO: vast items within h.mu.txnCtxs would incur performance penality.
 func (h *Handle) GCCache(now time.Time) error {
-	logutil.Infof("GC rpc handle txn cache")
+
+	var (
+		cnt, deleteCnt int
+	)
+
 	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
-		return v.deadline.Before(now)
+		cnt++
+		ok := v.deadline.Before(now)
+		if ok {
+			deleteCnt++
+		}
+		return ok
 	})
+	logutil.Info(
+		"GC-RPC-Cache",
+		zap.Int("total", cnt),
+		zap.Int("deleted", deleteCnt),
+	)
 	return nil
 }
 
@@ -555,9 +569,11 @@ func (h *Handle) HandleCreateDatabase(
 	// modify memory structure
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] create database: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-CreateDB",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
@@ -573,7 +589,6 @@ func (h *Handle) HandleCreateDatabase(
 	}
 
 	// Write to mo_database table
-	// logutil.Infof("yyyy create db %v", common.MoBatchToString(req.Bat, 5))
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
 	err = AppendDataToTable(ctx, databaseTbl, req.Bat)
@@ -592,9 +607,11 @@ func (h *Handle) HandleDropDatabase(
 	}()
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] drop database: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-DropDB",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		if _, err = txn.DropDatabaseByID(c.Id); err != nil {
@@ -603,7 +620,6 @@ func (h *Handle) HandleDropDatabase(
 	}
 
 	// Delete in mo_database table
-	// logutil.Infof("yyyy drop db %v", common.MoBatchToString(req.Bat, 5))
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
 	rowIDVec := containers.ToTNVector(req.Bat.GetVector(0), common.WorkspaceAllocator)
@@ -627,9 +643,11 @@ func (h *Handle) HandleCreateRelation(
 
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] create table: %v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-CreateTBL",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
@@ -643,21 +661,11 @@ func (h *Handle) HandleCreateRelation(
 		}
 	}
 
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy create table %v", common.MoBatchToString(req.TableBat, 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] insert table %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
 	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat); err != nil {
 		return err
 	}
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy create table cols %v", common.MoBatchToString(req.ColumnBat[0], 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] insert columns %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
 		if err := AppendDataToTable(ctx, columnsTbl, bat); err != nil {
@@ -680,9 +688,11 @@ func (h *Handle) HandleDropRelation(
 
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] drop/truncate table: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-DropTBL",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		db, err := txn.GetDatabaseByID(c.DatabaseId)
@@ -698,11 +708,6 @@ func (h *Handle) HandleDropRelation(
 		}
 	}
 
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy drop table %v", common.MoBatchToString(req.TableBat, 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] delete table%v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
 	rowIDVec := containers.ToTNVector(req.TableBat.GetVector(0), common.WorkspaceAllocator)
@@ -712,11 +717,6 @@ func (h *Handle) HandleDropRelation(
 	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 		return err
 	}
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy drop table cols %v", common.MoBatchToString(req.ColumnBat[0], 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] delete columns %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
 		rowIDVec := containers.ToTNVector(bat.GetVector(0), common.WorkspaceAllocator)
@@ -827,15 +827,6 @@ func (h *Handle) HandleWrite(
 				)
 			}
 		}
-		//TODO::debug for #19202, romove it later.
-		//testinsertintowithremotepartition
-		if regexp.MustCompile(`.*testinsertintowithremotepartition.*`).MatchString(req.TableName) {
-			logutil.Infof("xxxx HandleWrite, txn:%s,name:%s, tid:%v, bat:%s",
-				txn.String(),
-				req.TableName,
-				req.TableID,
-				common.MoBatchToString(req.Batch, 10))
-		}
 
 		// TODO: debug for #13342, remove me later
 		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
@@ -875,7 +866,7 @@ func (h *Handle) HandleWrite(
 		//wait for loading deleted row-id done.
 		nctx := context.Background()
 		if deadline, ok := ctx.Deadline(); ok {
-			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+			_, req.Cancel = context.WithTimeoutCause(nctx, time.Until(deadline), moerr.CauseHandleWrite)
 		}
 		rowidIdx := 0
 		pkIdx := 1
@@ -971,20 +962,36 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *api.AlterTableReq) (err error) {
-	logutil.Infof("[precommit] alter table: %v txn: %s", req.String(), txn.String())
+	req *api.AlterTableReq,
+) (err error) {
+	var (
+		dbase handle.Database
+		tbl   handle.Relation
+	)
 
-	dbase, err := txn.GetDatabaseByID(req.DbId)
-	if err != nil {
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"PreCommit-AlterTBL",
+			zap.String("req", req.String()),
+			zap.String("txn", txn.String()),
+			zap.Error(err),
+		)
+	}()
+
+	if dbase, err = txn.GetDatabaseByID(req.DbId); err != nil {
 		return
 	}
 
-	tbl, err := dbase.GetRelationByID(req.TableId)
-	if err != nil {
+	if tbl, err = dbase.GetRelationByID(req.TableId); err != nil {
 		return
 	}
 
-	return tbl.AlterTable(ctx, req)
+	err = tbl.AlterTable(ctx, req)
+	return
 }
 
 //#endregion

@@ -397,7 +397,7 @@ system
 system_metrics
 test03
 select * from test01.t1;
-invalid database test01
+Unknown database test01
 select count(*) from test03.t3;
 count(*)
 3
@@ -925,7 +925,7 @@ drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
 insert into db08 (col1) values (3000);
 restore account acc01 database db from snapshot sp15;
-invalid database db
+Unknown database db
 drop snapshot sp15;
 drop database db08;
 drop database if exists db09;

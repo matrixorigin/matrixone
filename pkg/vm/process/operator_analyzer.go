@@ -28,6 +28,7 @@ const (
 	OpScanTime      MetricType = 0
 	OpInsertTime    MetricType = 1
 	OpIncrementTime MetricType = 2
+	OpWaitLockTime  MetricType = 3
 )
 
 // Analyze analyzes information for operator
@@ -43,6 +44,7 @@ type Analyzer interface {
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
 	AddIncrementTime(t time.Time)
+	AddWaitLockTime(t time.Time)
 	AddS3RequestCount(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
 	GetOpStats() *OperatorStats
@@ -207,10 +209,18 @@ func (opAlyzr *operatorAnalyzer) AddInsertTime(t time.Time) {
 
 func (opAlyzr *operatorAnalyzer) AddIncrementTime(t time.Time) {
 	if opAlyzr.opStats == nil {
-		panic("operatorAnalyzer.ServiceInvokeTime: operatorAnalyzer.opStats is nil")
+		panic("operatorAnalyzer.AddIncrementTime: operatorAnalyzer.opStats is nil")
 	}
 	duration := time.Since(t)
 	opAlyzr.opStats.AddOpMetric(OpIncrementTime, duration.Nanoseconds())
+}
+
+func (opAlyzr *operatorAnalyzer) AddWaitLockTime(t time.Time) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddWaitLockTime: operatorAnalyzer.opStats is nil")
+	}
+	duration := time.Since(t)
+	opAlyzr.opStats.AddOpMetric(OpWaitLockTime, duration.Nanoseconds())
 }
 
 func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterSet) {
@@ -263,7 +273,7 @@ type OperatorStats struct {
 	S3DeleteMul      int64                `json:"S3DeleteMul,omitempty"`
 	InputBlocks      int64                `json:"-"`
 	ScanBytes        int64                `json:"-"`
-	DiskIO           int64                `json:"-"`
+	DiskIO           int64                `json:"DiskIO,omitempty"`
 	OperatorMetrics  map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
@@ -305,8 +315,10 @@ func (ps *OperatorStats) String() string {
 				metricName = "InsertTime"
 			case OpIncrementTime:
 				metricName = "IncrementTime"
+			case OpWaitLockTime:
+				metricName = "WaitLockTime"
 			}
-			metricsStr += fmt.Sprintf("%s: %dns", metricName, v)
+			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
 		}
 	}
 

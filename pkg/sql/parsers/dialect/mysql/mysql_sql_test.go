@@ -742,6 +742,17 @@ var (
 			input:  "select @@session.tx_isolation",
 			output: "select @@tx_isolation",
 		}, {
+			input: "select @@tx_isolation",
+		}, {
+			input:  "select @@SESSION.tx_isolation",
+			output: "select @@tx_isolation",
+		}, {
+			input:  "select @@global.tx_isolation",
+			output: "select @@tx_isolation",
+		}, {
+			input:  "select @@GLOBAL.tx_isolation",
+			output: "select @@tx_isolation",
+		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",
 		}, {
@@ -1336,7 +1347,13 @@ var (
 			input:  "set @@session.a = 1",
 			output: "set a = 1",
 		}, {
+			input:  "set @@SESSION.a = 1",
+			output: "set a = 1",
+		}, {
 			input:  "set @@global.a = 1",
+			output: "set global a = 1",
+		}, {
+			input:  "set @@GLOBAL.a = 1",
 			output: "set global a = 1",
 		}, {
 			input: "set global a = 1",
@@ -2734,25 +2751,25 @@ var (
 			output: "create table if not exists t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
-			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@character_set_client",
 		}, {
 			input:  "SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275'",
-			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
+			output: "set global gtid_purged = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
 		}, {
 			input:  " /*!40103 SET TIME_ZONE='+00:00' */",
 			output: "set time_zone = +00:00",
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
-			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@character_set_client",
 		}, {
 			input:  "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */",
-			output: "set OLD_TIME_ZONE = @@TIME_ZONE",
+			output: "set OLD_TIME_ZONE = @@time_zone",
 		}, {
 			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
-			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = NO_AUTO_VALUE_ON_ZERO",
+			output: "set OLD_SQL_MODE = @@sql_mode, sql_mode = NO_AUTO_VALUE_ON_ZERO",
 		}, {
 			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
-			output: "set OLD_SQL_NOTES = @@SQL_NOTES, sql_notes = 0",
+			output: "set OLD_SQL_NOTES = @@sql_notes, sql_notes = 0",
 		}, {
 			input:  "SELECT /*+ RESOURCE_GROUP(resouce_group_name) */ * from table_name;",
 			output: "select * from table_name",

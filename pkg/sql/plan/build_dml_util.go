@@ -3877,6 +3877,9 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 	updatePkCol := true
 	ifExistAutoPkCol := false
 	needCheckPkDupForHiddenTable = true
+	if builder.isRestore {
+		needCheckPkDupForHiddenTable = false
+	}
 	var partitionExpr *Expr
 	err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 		updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,

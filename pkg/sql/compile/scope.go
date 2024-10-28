@@ -309,9 +309,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
 		for len(notifyMessageResultReceiveChan) > 0 {
 			result := <-notifyMessageResultReceiveChan
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 		}
 	}()
 
@@ -559,8 +557,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
 			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
 		}
 	}
@@ -705,6 +703,16 @@ type notifyMessageResult struct {
 	err    error
 }
 
+// clean do final work for a notifyMessageResult.
+func (r *notifyMessageResult) clean(proc *process.Process) {
+	if r.sender != nil {
+		r.sender.close()
+	}
+	if r.err != nil {
+		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
+	}
+}
+
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
@@ -786,13 +794,14 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 }
 
 func (s *Scope) replace(c *Compile) error {
+	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
 	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}

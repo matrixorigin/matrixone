@@ -81,7 +81,7 @@ func (t *typedSlice) reset() {
 func (t *typedSlice) setFromVector(v *Vector) {
 	sz := v.typ.TypeSize()
 	if cap(v.data) >= sz {
-		t.Ptr = unsafe.Pointer(&v.data[0])
+		t.Ptr = (unsafe.Pointer)(unsafe.SliceData(v.data))
 		t.Cap = cap(v.data) / sz
 	}
 }

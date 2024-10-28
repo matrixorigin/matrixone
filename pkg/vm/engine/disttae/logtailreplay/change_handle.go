@@ -233,13 +233,9 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
-				logutil.Info("ChangesHandle-CheckGCTS",
-					zap.String("err", err2.Error()),
-					zap.String("origin err", err.Error()))
-				if err2 != nil {
-					err = err2
-				}
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", err.Error()))
+				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.base.changesHandle.start.ToString())
 			}
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
@@ -370,13 +366,9 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
-				logutil.Info("ChangesHandle-CheckGCTS",
-					zap.String("err", err2.Error()),
-					zap.String("origin err", err.Error()))
-				if err2 != nil {
-					err = err2
-				}
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", err.Error()))
+				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.p.changesHandle.start.ToString())
 			}
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
@@ -716,6 +708,9 @@ type ChangeHandler struct {
 
 	start, end types.TS
 	fs         fileservice.FileService
+	minTS      types.TS
+
+	LogThreshold time.Duration
 }
 
 func NewChangesHandler(
@@ -726,14 +721,16 @@ func NewChangesHandler(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
-	if state.minTS.GT(&start) {
-		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
+	if state.start.GT(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
 		start:        start,
 		end:          end,
 		fs:           fs,
+		minTS:        state.start,
+		LogThreshold: LogThreshold,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -798,11 +795,15 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	if time.Since(p.lastPrint) > LogThreshold {
+	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
-			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v",
-				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration)
+			gcTS, err := getGCTS(ctx, p.fs)
+			if err != nil {
+				logutil.Warnf("ChangesHandle-Slow, get GC TS failed: %v", err)
+			}
+			logutil.Infof("ChangesHandle-Slow, %d/%d, read %v, copy %v, update %v, total %v, start %v, minTS %v, gcTS %v",
+				p.dataLength, p.tombstoneLength, p.readDuration, p.copyDuration, p.updateDuration, p.totalDuration, p.start.ToString(), p.minTS.ToString(), gcTS.ToString())
 		}
 	}
 	hint = engine.ChangesHandle_Tail_done
@@ -1119,12 +1120,11 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 	bat.Vecs = append(bat.Vecs, commitTSVec)
 }
 
-func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
+func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
 	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
 	if err != nil {
 		return
 	}
-	maxGCTS := types.TS{}
 	for _, dir := range dirs {
 		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		if ext == blockio.CompactedExt {
@@ -1133,8 +1133,5 @@ func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (er
 			}
 		}
 	}
-	if ts.LT(&maxGCTS) {
-		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
-	}
-	return nil
+	return
 }

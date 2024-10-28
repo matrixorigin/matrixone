@@ -261,6 +261,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) (err error) {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetAlterTable()
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		err = s.AlterTableCopy(c)
@@ -285,8 +291,13 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {
-	qry := s.Plan.GetDdl().GetRenameTable()
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
+	qry := s.Plan.GetDdl().GetRenameTable()
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{

@@ -50,7 +50,7 @@ func NewDiskCleaner(
 }
 
 func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
-	logutil.Info("JobFactory is start")
+	logutil.Info("GC-Send-Intents")
 	return cleaner.tryClean(ctx)
 }
 
