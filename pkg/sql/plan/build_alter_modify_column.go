@@ -214,9 +214,9 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 }
 
 // checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL
-func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, hasNullFlag bool, priKeyDef *plan.PrimaryKeyDef) error {
+func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, nullFlag bool, priKeyDef *plan.PrimaryKeyDef) error {
 	if hasDefaultValue {
-		hasNullFlag = DefaultValueIsNull(col.Default) || hasNullFlag
+		nullFlag = DefaultValueIsNull(col.Default) || nullFlag
 	}
 	// Primary key should not be null.
 	if col.Primary && hasDefaultValue && DefaultValueIsNull(col.Default) {
@@ -228,7 +228,7 @@ func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, ha
 		for _, key := range priKeyDef.Names {
 			if key == col.Name {
 				// Primary key should not be null.
-				if hasNullFlag {
+				if nullFlag {
 					return moerr.NewErrPrimaryCantHaveNull(ctx)
 				}
 				break
