@@ -46,6 +46,11 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
 
@@ -71,6 +76,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 			return err
 		}
 	}
+
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
 	err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -98,6 +104,12 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
@@ -817,6 +829,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -1361,6 +1379,12 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 }
 
 func (s *Scope) CreateView(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateView()
 
 	// convert the plan's cols to the execution's cols
@@ -1559,8 +1583,13 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
-	qry := s.Plan.GetDdl().GetCreateIndex()
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
+	qry := s.Plan.GetDdl().GetCreateIndex()
 	{
 		// lockMoTable will lock Table  mo_catalog.mo_tables
 		// for the row with db_name=dbName & table_name = tblName。
@@ -1743,6 +1772,12 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
@@ -1978,6 +2013,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	var isTemp bool
 	var newId uint64
 
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
@@ -2162,6 +2203,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 }
 
 func (s *Scope) DropSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropSequence()
 	dbName := qry.GetDatabase()
 	var dbSource engine.Database
@@ -2195,6 +2242,12 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -2209,7 +2262,6 @@ func (s *Scope) DropTable(c *Compile) error {
 	var isTemp bool
 
 	tblId := qry.GetTableId()
-
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -2237,11 +2289,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	// if dbSource is a pub, update tableList
-	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
-		return err
-	}
-
 	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
@@ -2262,6 +2309,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// if dbSource is a pub, update tableList
+	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+		return err
 	}
 
 	if len(qry.UpdateFkSqls) > 0 {
@@ -2551,6 +2603,12 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetCreateSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2615,6 +2673,12 @@ func (s *Scope) CreateSequence(c *Compile) error {
 }
 
 func (s *Scope) AlterSequence(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	var values []interface{}
 	var curval string
 	qry := s.Plan.GetDdl().GetAlterSequence()

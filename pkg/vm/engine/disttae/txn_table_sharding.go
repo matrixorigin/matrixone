@@ -597,7 +597,7 @@ func (r *shardingLocalReader) close() error {
 			r.lrd.Close()
 		}
 		if r.remoteRelData != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseShardingLocalReader)
 			defer cancel()
 
 			err := r.tblDelegate.forwardRead(
@@ -610,7 +610,7 @@ func (r *shardingLocalReader) close() error {
 				},
 			)
 			if err != nil {
-				return err
+				return moerr.AttachCause(ctx, err)
 			}
 		}
 	}

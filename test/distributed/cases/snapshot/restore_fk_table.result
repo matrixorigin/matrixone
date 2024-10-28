@@ -348,7 +348,7 @@ insert into f1 values (3,20);
 insert into f1 values (4,600);
 restore account acc01 database test05 table f1 from snapshot sp05;
 use test04;
-invalid database test04
+Unknown database test04
 show tables;
 Tables_in_test05
 c1
@@ -386,7 +386,7 @@ insert into f1 values (4,600);
 use test07;
 insert into c1 values (2,9);
 restore account acc01 database test06 table f1 from snapshot sp06;
-invalid database test06
+Unknown database test06
 use test06;
 show tables;
 Tables_in_test06

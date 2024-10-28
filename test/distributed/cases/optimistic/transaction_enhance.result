@@ -267,7 +267,7 @@ c1    c2
 start transaction ;
 create database tdb;
 use tdb;
-invalid database tdb
+Unknown database tdb
 drop database tdb;
 commit;
 begin;

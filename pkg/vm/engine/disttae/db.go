@@ -16,9 +16,11 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
@@ -27,12 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // tryAdjustThreeTablesCreatedTime analyzes the mo_tables batch and tries to adjust the created time of the three tables.
@@ -259,15 +265,111 @@ func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog
 }
 
+func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+	whichTN := func(string) ([]uint64, error) { return nil, nil }
+	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		req := cmd_util.SnapshotReadReq{}
+		ts := snapshot.ToTimestamp()
+		req.Snapshot = &ts
+
+		return req.MarshalBinary()
+	}
+
+	responseUnmarshaler := func(payload []byte) (any, error) {
+		checkpoints := &cmd_util.SnapshotReadResp{}
+		if err = checkpoints.UnmarshalBinary(payload); err != nil {
+			return nil, err
+		}
+		return checkpoints, nil
+	}
+	tableProc := tbl.proc.Load()
+	proc := process.NewTopProcess(ctx, tableProc.GetMPool(),
+		tableProc.Base.TxnClient, tableProc.GetTxnOperator(),
+		tableProc.Base.FileService, tableProc.Base.LockService,
+		tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
+		tableProc.Base.UdfService, tableProc.Base.Aicm,
+	)
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
+	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+	sleep, sarg, exist := fault.TriggerFault("snapshot_read_timeout")
+	if exist {
+		time.Sleep(time.Duration(sleep) * time.Second)
+		return nil, moerr.NewInternalError(ctx, sarg)
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// try the previous RPC method
+		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `snapshot read`")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Data.([]any)) == 0 {
+		return cmd_util.SnapshotReadResp{Succeed: false}, nil
+	}
+	return result.Data.([]any)[0], nil
+}
+
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
+	response, err := requestSnapshotRead(ctx, tbl, &ts)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	var checkpointEntries []*checkpoint.CheckpointEntry
+	if ok && resp.Succeed && len(resp.Entries) > 0 {
+		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+		entries := resp.Entries
+		for _, entry := range entries {
+			start := types.TimestampToTS(*entry.Start)
+			end := types.TimestampToTS(*entry.End)
+			entryType := entry.EntryType
+			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
+			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+			checkpointEntries = append(checkpointEntries, checkpointEntry)
+		}
+	}
 
-	//check whether the latest partition is available for reuse.
-	if _, err := tbl.tryToSubscribe(ctx); err == nil {
-		if p := tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-			return p.Snapshot(), nil
+	ckpsCanServe := func() bool {
+		// The checkpoint entry required by SnapshotRead must meet two or more checkpoints,
+		// otherwise the latest partition can meet this SnapshotRead request
+		if len(checkpointEntries) < 2 {
+			return false
+		}
+
+		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
+		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
+		end := checkpointEntries[len(checkpointEntries)-2].GetEnd()
+		return !end.LT(&ts)
+	}
+
+	if !ckpsCanServe() {
+		//check whether the latest partition is available for reuse.
+		if ps, err := tbl.tryToSubscribe(ctx); err == nil {
+			if ps != nil && ps.CanServe(ts) {
+				logutil.Infof("getOrCreateSnapPart:reuse latest partition state:%p, table:%s, tid:%v, txn:%s",
+					ps,
+					tbl.tableName,
+					tbl.tableId,
+					tbl.db.op.Txn().DebugString())
+				return ps, nil
+			}
+			var start, end types.TS
+			if ps != nil {
+				start, end = ps.GetDuration()
+			}
+			logutil.Infof("getOrCreateSnapPart, "+
+				"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, table:%s, relKind:%s, tid:%v, txn:%s",
+				ps,
+				start.ToString(),
+				end.ToString(),
+				ts.ToString(),
+				tbl.tableName,
+				tbl.relKind,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString())
 		}
 	}
 
@@ -289,7 +391,7 @@ func (e *Engine) getOrCreateSnapPart(
 	tblSnaps.Lock()
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
-		if snap.CanServe(ts) {
+		if snap.Snapshot().CanServe(ts) {
 			return snap.Snapshot(), nil
 		}
 	}
@@ -298,10 +400,7 @@ func (e *Engine) getOrCreateSnapPart(
 	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId)
-	if err != nil {
-		return nil, err
-	}
+	ckps := checkpointEntries
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
@@ -347,22 +446,57 @@ func (e *Engine) getOrCreateSnapPart(
 		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
 		return nil, err
 	}
-	if snap.CanServe(ts) {
+	if snap.Snapshot().CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
 	}
 
-	start, end := snap.GetDuration()
+	start, end := snap.Snapshot().GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
-	if snap.IsEmpty() || ts.GT(&end) {
+	if snap.Snapshot().IsEmpty() || ts.GT(&end) {
+		logutil.Infof("getOrCreateSnapPart:Start to resue latest ps for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			snap.Snapshot().IsEmpty(),
+			end.ToString(),
+		)
 		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if ps == nil {
-			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		if ps != nil && ps.CanServe(ts) {
+			logutil.Infof("getOrCreateSnapPart: resue latest partiton state:%p, "+
+				"table:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
+				ps,
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString(),
+				snap.Snapshot().IsEmpty(),
+				end.ToString())
+			return ps, nil
 		}
-		return ps, nil
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
+		}
+		logutil.Infof("getOrCreateSnapPart: "+
+			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+		return nil, moerr.NewInternalErrorNoCtxf("Latest partition state can't serve for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
 	}
 	if ts.LT(&start) {
 		return nil, moerr.NewInternalErrorNoCtxf(

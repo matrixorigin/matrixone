@@ -57,6 +57,7 @@ func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 
 func TestTruncate(t *testing.T) {
 	partition := NewPartitionState("", true, 42)
+	partition.UpdateDuration(types.BuildTS(0, 0), types.MaxTs())
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(2, 0))
 	addObject(partition, types.BuildTS(1, 0), types.BuildTS(3, 0))
 	addObject(partition, types.BuildTS(1, 0), types.TS{})

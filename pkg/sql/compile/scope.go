@@ -162,7 +162,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource == nil {
 		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
-		_, err = p.MergeRun(s.Proc)
+		_, err = p.Run(s.Proc)
 	} else {
 		id := uint64(0)
 		if s.DataSource.TableDef != nil {
@@ -171,7 +171,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
-			_, err = p.ConstRun(s.Proc)
+			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
@@ -194,7 +194,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			}
 
 			s.ScopeAnalyzer.Stop()
-			_, err = p.Run(s.DataSource.R, tag, s.Proc)
+			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	select {
@@ -309,9 +309,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
 		for len(notifyMessageResultReceiveChan) > 0 {
 			result := <-notifyMessageResultReceiveChan
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 		}
 	}()
 
@@ -343,9 +341,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 			if result.err != nil {
 				return result.err
 			}
@@ -703,6 +699,16 @@ func (s *Scope) setRootOperator(op vm.Operator) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
+}
+
+// clean do final work for a notifyMessageResult.
+func (r *notifyMessageResult) clean(proc *process.Process) {
+	if r.sender != nil {
+		r.sender.close()
+	}
+	if r.err != nil {
+		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
+	}
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.

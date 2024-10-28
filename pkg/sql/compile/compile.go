@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -468,7 +467,6 @@ func (c *Compile) prePipelineInitializer() (err error) {
 // run once
 func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
-	var wg sync.WaitGroup
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
@@ -484,7 +482,6 @@ func (c *Compile) runOnce() (err error) {
 	} else {
 		errC := make(chan error, len(c.scopes))
 		for i := range c.scopes {
-			wg.Add(1)
 			scope := c.scopes[i]
 			errSubmit := ants.Submit(func() {
 				defer func() {
@@ -495,33 +492,40 @@ func (c *Compile) runOnce() (err error) {
 							zap.String("error", err.Error()))
 						errC <- err
 					}
-					wg.Done()
 				}()
 				errC <- c.run(scope)
 			})
 			if errSubmit != nil {
 				errC <- errSubmit
-				wg.Done()
 			}
 		}
-		wg.Wait()
-		close(errC)
 
-		errList := make([]error, 0, len(c.scopes))
-		for e := range errC {
-			if e != nil {
-				errList = append(errList, e)
-				if c.isRetryErr(e) {
-					return e
+		var errToThrowOut error
+		for i := 0; i < cap(errC); i++ {
+			e := <-errC
+
+			// cancel this query if the first error occurs.
+			if e != nil && errToThrowOut == nil {
+				errToThrowOut = e
+
+				// cancel all scope tree.
+				for j := range c.scopes {
+					if c.scopes[j].Proc != nil {
+						c.scopes[j].Proc.Cancel()
+					}
 				}
 			}
-		}
 
-		if len(errList) > 0 {
-			err = errList[0]
+			// if any error already return is retryable, we should throw this one
+			// to make sure query will retry.
+			if e != nil && c.isRetryErr(e) {
+				errToThrowOut = e
+			}
 		}
-		if err != nil {
-			return err
+		close(errC)
+
+		if errToThrowOut != nil {
+			return errToThrowOut
 		}
 	}
 
@@ -762,10 +766,11 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 		return false
 	}
 	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
 	defer cancel()
 	err = client.Ping(ctx, addr)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		// ping failed
 		logutil.Debugf("ping %s err %+v\n", addr, err)
 		return false
@@ -3770,7 +3775,8 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if n.ObjRef.SchemaName == catalog.MO_CATALOG {
+	// Each time the three tables are opened, a new txnTable is created, which can result in Compile and Run holding different partition states. To avoid this, delay opening the three tables until the Run phase
+	if n.ObjRef.SchemaName == catalog.MO_CATALOG && n.TableDef.Name != catalog.MO_TABLES && n.TableDef.Name != catalog.MO_COLUMNS && n.TableDef.Name != catalog.MO_DATABASE {
 		return true //avoid bugs
 	}
 	if len(n.AggList) > 0 {

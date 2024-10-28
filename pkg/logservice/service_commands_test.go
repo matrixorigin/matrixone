@@ -473,6 +473,17 @@ func TestServiceBootstrapShard(t *testing.T) {
 	}
 }
 
+func Test_heartbeat(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	srv := &Service{
+		runtime: runtime.DefaultRuntime(),
+	}
+	srv.cfg.HAKeeperClientConfig.ServiceAddresses = []string{"wrong address"}
+	srv.heartbeat(ctx)
+}
+
 func TestCheckReplicaHealth(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)

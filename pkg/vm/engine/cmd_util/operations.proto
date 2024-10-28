@@ -18,6 +18,7 @@ syntax = "proto3";
 package cmd_util;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
 
 option (gogoproto.sizer_all)                = false;
 option (gogoproto.protosizer_all)           = true;
@@ -146,4 +147,25 @@ message StorageUsageResp_V3 {
     repeated uint64 BlkCnts      = 6;
     repeated uint64 RowCnts      = 7;
     repeated uint64 SnapshotSizes    = 8;
+}
+
+message SnapshotReadReq {
+    option (gogoproto.typedecl)         = false;
+    timestamp.Timestamp  Snapshot       = 1;
+}
+
+message SnapshotReadResp {
+    option (gogoproto.typedecl)             = false;
+    bool Succeed                            = 1;
+    repeated CheckpointEntryResp Entries    = 2;
+}
+
+message CheckpointEntryResp {
+    option (gogoproto.typedecl)     = false;
+    timestamp.Timestamp  Start      = 1;
+    timestamp.Timestamp  End        = 2;
+    bytes  Location1                = 3;
+    bytes  Location2                = 4;
+    int32 EntryType                 = 5;
+    uint32 Version                  = 6;
 }

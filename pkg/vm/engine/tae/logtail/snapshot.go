@@ -426,10 +426,12 @@ func (sm *SnapshotMeta) updateTableInfo(
 			pk := tuple.ErrString(nil)
 			if name == catalog2.MO_SNAPSHOTS {
 				sm.snapshotTableIDs[tid] = struct{}{}
-				logutil.Info("[UpdateSnapTable]",
+				logutil.Info(
+					"UpdateSnapTable-P1",
 					zap.Uint64("tid", tid),
-					zap.Uint32("account id", account),
-					zap.String("create at", createAt.ToString()))
+					zap.Uint32("account", account),
+					zap.String("create-at", createAt.ToString()),
+				)
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
@@ -586,21 +588,41 @@ func collectObjects(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData, startts, endts types.TS,
-) (*SnapshotMeta, error) {
+	data *CheckpointData,
+	startts, endts types.TS,
+	taskName string,
+) (err error) {
 	sm.Lock()
 	defer sm.Unlock()
+
 	now := time.Now()
 	defer func() {
-		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"GC-SnapshotMeta-Update",
+			zap.Error(err),
+			zap.Duration("cost", time.Since(now)),
+			zap.String("start-ts", startts.ToString()),
+			zap.String("end-ts", endts.ToString()),
+			zap.String("task", taskName),
+		)
 	}()
-	err := sm.updateTableInfo(ctx, fs, data, startts, endts)
-	if err != nil {
-		logutil.Errorf("[UpdateSnapshot] updateTableInfo failed %v", err)
-		return sm, err
+
+	if err = sm.updateTableInfo(
+		ctx,
+		fs,
+		data,
+		startts,
+		endts,
+	); err != nil {
+		return
 	}
+
 	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
-		return sm, nil
+		return
 	}
 
 	collector := func(
@@ -625,20 +647,25 @@ func (sm *SnapshotMeta) Update(
 					stats:    stats,
 					createAt: createTS,
 				}
-				logutil.Info("[UpdateSnapshot] Add object",
-					zap.Uint64("table id", tid),
-					zap.String("object name", id.String()),
-					zap.String("create at", createTS.ToString()))
+				logutil.Info(
+					"GC-SnapshotMeta-Update-Collector",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", id.String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+				)
 
 				return
 			}
 			if deleteTS.IsEmpty() {
 				panic(any("deleteTS is empty"))
 			}
-			logutil.Info("[UpdateSnapshot] Delete object",
-				zap.Uint64("table id", tid),
-				zap.String("object name", id.String()),
-				zap.String("delete at", deleteTS.ToString()))
+			logutil.Info(
+				"GC-SnapshotMeta-Update-Collector",
+				zap.Uint64("table-id", tid),
+				zap.String("object-name", id.String()),
+				zap.String("delete-at", deleteTS.ToString()),
+			)
 
 			delete(objects, id)
 		}
@@ -653,9 +680,19 @@ func (sm *SnapshotMeta) Update(
 		}
 		mapFun((*objects)[tid])
 	}
-	collectObjects(&sm.objects, &sm.pitr.objects, data.GetObjectBatchs(), collector)
-	collectObjects(&sm.tombstones, &sm.pitr.tombstones, data.GetTombstoneObjectBatchs(), collector)
-	return nil, nil
+	collectObjects(
+		&sm.objects,
+		&sm.pitr.objects,
+		data.GetObjectBatchs(),
+		collector,
+	)
+	collectObjects(
+		&sm.tombstones,
+		&sm.pitr.tombstones,
+		data.GetTombstoneObjectBatchs(),
+		collector,
+	)
+	return
 }
 
 func NewSnapshotDataSource(
@@ -681,10 +718,21 @@ func (sm *SnapshotMeta) GetSnapshot(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (map[uint32]containers.Vector, error) {
+	var err error
+
 	now := time.Now()
 	defer func() {
-		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"GetSnapshot",
+			zap.Error(err),
+			zap.Duration("cost", time.Since(now)),
+		)
 	}()
+
 	sm.RLock()
 	objects := copyObjectsLocked(sm.objects)
 	tombstones := copyObjectsLocked(sm.tombstones)
@@ -723,8 +771,9 @@ func (sm *SnapshotMeta) GetSnapshot(
 
 				bat := buildBatch()
 				defer bat.Clean(mp)
-				bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
-				if err != nil {
+				if bat, _, err = blockio.BlockDataReadBackup(
+					ctx, &blk, ds, idxes, types.TS{}, fs,
+				); err != nil {
 					return nil, err
 				}
 				tsList := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
@@ -740,13 +789,17 @@ func (sm *SnapshotMeta) GetSnapshot(
 							if snapshotList[account] == nil {
 								snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 							}
-							err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
-							if err != nil {
+							if err = vector.AppendFixed[types.TS](
+								snapshotList[account].GetDownstreamVector(), snapTs, false, mp,
+							); err != nil {
 								return nil, err
 							}
 							// TODO: info to debug
-							logutil.Info("[GetSnapshot] cluster snapshot",
-								common.OperationField(snapTs.ToString()))
+							logutil.Info(
+								"GetSnapshot-P1",
+								zap.String("ts", snapTs.ToString()),
+								zap.Uint32("account", account),
+							)
 						}
 						continue
 					}
@@ -755,11 +808,15 @@ func (sm *SnapshotMeta) GetSnapshot(
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
 					// TODO: info to debug
-					logutil.Info("[GetSnapshot] snapshot",
+					logutil.Info(
+						"GetSnapshot-P2",
+						zap.String("ts", snapTs.ToString()),
 						zap.Uint32("account", id),
-						zap.String("snap ts", snapTs.ToString()))
-					err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
-					if err != nil {
+					)
+
+					if err = vector.AppendFixed[types.TS](
+						snapshotList[id].GetDownstreamVector(), snapTs, false, mp,
+					); err != nil {
 						return nil, err
 					}
 				}
@@ -867,10 +924,12 @@ func (sm *SnapshotMeta) GetPITR(
 					pitr.tables[id] = pitrTs
 				}
 				// TODO: info to debug
-				logutil.Info("[GetPITR] pitr",
+				logutil.Info(
+					"GC-GetPITR",
 					zap.String("level", level),
 					zap.Uint64("id", account),
-					zap.String("snap ts", pitrTs.ToString()))
+					zap.String("ts", pitrTs.ToString()),
+				)
 			}
 		}
 	}
@@ -1155,15 +1214,20 @@ func (sm *SnapshotMeta) Rebuild(
 					stats:    objectStats,
 					createAt: createTS,
 				}
-				logutil.Info("[RebuildPITR] Add object2",
-					zap.String("object name", objectStats.ObjectName().String()),
-					zap.String("create at", createTS.ToString()))
+				logutil.Info(
+					"GC-Rebuild-P1",
+					zap.String("object-name", objectStats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+				)
 			}
 			continue
 		}
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			sm.snapshotTableIDs[tid] = struct{}{}
-			logutil.Info("[RebuildSnapTable]", zap.Uint64("tid", tid))
+			logutil.Info(
+				"GC-RebuildT-P2",
+				zap.Uint64("tid", tid),
+			)
 		}
 		if (*objects)[tid] == nil {
 			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
@@ -1174,10 +1238,12 @@ func (sm *SnapshotMeta) Rebuild(
 				stats:    objectStats,
 				createAt: createTS,
 			}
-			logutil.Info("[RebuildSnapshot] Add object",
-				zap.Uint64("table id", tid),
-				zap.String("object name", objectStats.ObjectName().String()),
-				zap.String("create at", createTS.ToString()))
+			logutil.Info(
+				"GC-Rebuild-P3",
+				zap.Uint64("table-id", tid),
+				zap.String("object-name", objectStats.ObjectName().String()),
+				zap.String("create-at", createTS.ToString()),
+			)
 			continue
 		}
 	}
@@ -1503,8 +1569,13 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
-				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
+			logutil.Info(
+				"isSnapshotRefers",
+				zap.String("snap-ts", snapTS.ToString()),
+				zap.String("create-ts", table.createAt.ToString()),
+				zap.String("drop-ts", table.deleteAt.ToString()),
+				zap.Uint64("tid", table.tid),
+			)
 			return true
 		} else if snapTS.LT(&table.createAt) {
 			left = mid + 1
