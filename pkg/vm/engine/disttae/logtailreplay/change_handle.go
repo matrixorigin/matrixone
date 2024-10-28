@@ -1121,11 +1121,11 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 }
 
 func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
-	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
-	if err != nil {
-		return
-	}
-	for _, dir := range dirs {
+	var dir *fileservice.DirEntry
+	for dir, err = range fs.List(ctx, checkpoint.CheckpointDir) {
+		if err != nil {
+			return
+		}
 		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		if ext == blockio.CompactedExt {
 			if end.GT(&maxGCTS) {
