@@ -652,7 +652,13 @@ func (m *TNUsageMemo) applyDeletes(
 				special: unknown}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
-				m.Delete(usage)
+				if usage.SnapshotSize > 0 {
+					usage.Size = 0
+					usage.ObjectAbstract = ObjectAbstract{}
+					m.cache.SetOrReplace(usage)
+				} else {
+					m.Delete(usage)
+				}
 				buf.WriteString(fmt.Sprintf("[d-tbl]%s_%d_%d_%d_%d; ",
 					e.GetFullName(), usage.AccId, usage.DbId, usage.TblId, usage.Size))
 			}
@@ -688,7 +694,13 @@ func (m *TNUsageMemo) applyDeletes(
 
 		totalSize := uint64(0)
 		for idx := 0; idx < len(usages); idx++ {
-			m.cache.Delete(usages[idx])
+			if usages[idx].SnapshotSize > 0 {
+				usages[idx].Size = 0
+				usages[idx].ObjectAbstract = ObjectAbstract{}
+				m.cache.SetOrReplace(usages[idx])
+			} else {
+				m.cache.Delete(usages[idx])
+			}
 			appendToStorageUsageBat(ckpData, usages[idx], true, mp)
 			totalSize += usages[idx].Size
 		}
