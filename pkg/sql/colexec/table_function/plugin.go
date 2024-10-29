@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -119,12 +118,10 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		if err != nil {
 			return err
 		}
-		bytes, err := dl.GetBytes(proc)
+		bytes, err = dl.GetBytes(proc)
 		if err != nil {
 			return err
 		}
-
-		logutil.Infof("%s", string(bytes))
 	case types.T_varchar, types.T_text, types.T_char:
 		bytes = []byte(src)
 	default:
