@@ -173,12 +173,15 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 
 			ts := typ.String()
+			ret := ""
 			// after decimal fix, remove this
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
+				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			} else {
+				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
 
-			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
