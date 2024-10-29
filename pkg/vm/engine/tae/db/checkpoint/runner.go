@@ -339,9 +339,20 @@ func (r *runner) DebugUpdateOptions(opts ...Option) {
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
+	maxEnd := types.TS{}
 	for _, item := range items {
 		ctx := item.(*globalCheckpointContext)
 		doCheckpoint := false
+		maxCkp := r.MaxGlobalCheckpoint()
+		if maxCkp != nil {
+			maxEnd = maxCkp.end
+		}
+		if ctx.end.LE(&maxEnd) {
+			logutil.Warn(
+				"skip global checkpoint",
+				zap.String("checkpoint", ctx.end.ToString()))
+			continue
+		}
 		if ctx.force {
 			doCheckpoint = true
 		} else {

@@ -99,15 +99,31 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 		})
 		return nil
 	}
+	retryTime := 0
 	timeout := time.After(versionInterval)
+	var err error
+	defer func() {
+		if err != nil {
+			logutil.Error("force global checkpoint failed",
+				zap.Error(err),
+				zap.Uint64("retryTime", uint64(retryTime)))
+			return
+		}
+
+		if retryTime > 0 {
+			logutil.Info("force global checkpoint success",
+				zap.Uint64("retryTime", uint64(retryTime)))
+		}
+	}()
 	for {
 		select {
 		case <-timeout:
 			return moerr.NewInternalError(r.ctx, "timeout")
 		default:
-			err := r.ForceIncrementalCheckpoint(end, false)
+			err = r.ForceIncrementalCheckpoint(end, false)
 			if err != nil {
 				if dbutils.IsRetrieableCheckpoint(err) {
+					retryTime++
 					interval := versionInterval.Milliseconds() / 400
 					time.Sleep(time.Duration(interval))
 					break
