@@ -107,7 +107,9 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 }
 
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	runtimeSucced := fuzzyFilter.ctr.state > HandleRuntimeFilter
+
+	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, runtimeSucced, proc.GetMessageBoard())
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
 	ctr.collisionCnt = 0

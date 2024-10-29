@@ -84,7 +84,10 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if hashBuild.ctr.state != SendSucceed {
+	runtimeSucced := hashBuild.ctr.state > HandleRuntimeFilter
+	mapSucceed := hashBuild.ctr.state == SendSucceed
+
+	if !mapSucceed && hashBuild.ctr.hashmapBuilder.InputBatchRowCount > 0{
 		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
 	} else {
 		hashBuild.ctr.hashmapBuilder.Reset(proc)
@@ -92,8 +95,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucced, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, mapSucceed)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.hashmapBuilder.Free(proc)

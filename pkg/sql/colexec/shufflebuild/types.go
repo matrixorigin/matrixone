@@ -82,15 +82,18 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffleBuild.ctr.state != SendSucceed {
+	runtimeSucced := shuffleBuild.ctr.state > ReceiveBatch
+	mapSucceed := shuffleBuild.ctr.state == SendSucceed
+
+	if !mapSucceed && shuffleBuild.ctr.hashmapBuilder.InputBatchRowCount > 0 {
 		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
 	} else {
 		shuffleBuild.ctr.hashmapBuilder.Reset(proc)
 	}
 
 	shuffleBuild.ctr.state = ReceiveBatch
-	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, runtimeSucced, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, mapSucceed)
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
