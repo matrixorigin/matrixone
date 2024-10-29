@@ -236,6 +236,9 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 	// common case.
 	chosen, value, ok := reflect.Select(receiver.regs)
 	if !ok {
+		if chosen == 0 {
+			return 0, PipelineSignal{}
+		}
 		panic("unexpected sender close during GetNextBatch")
 	}
 	return chosen, value.Interface().(PipelineSignal)
