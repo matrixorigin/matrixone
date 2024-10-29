@@ -98,7 +98,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			bat := result.Batch
 			if bat == nil {
-				ctr.state = SendResult
+				ctr.state = Finalize
 				dedupJoin.ctr.buf = nil
 				continue
 			}
@@ -114,7 +114,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-		case SendResult:
+		case Finalize:
 			if dedupJoin.ctr.buf == nil {
 				dedupJoin.ctr.lastPos = 0
 				err := ctr.finalize(dedupJoin, proc)

@@ -99,7 +99,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := result.Batch
 
 			if bat == nil {
-				ctr.state = SendLast
+				ctr.state = Finalize
 				continue
 			}
 			if bat.IsEmpty() {
@@ -115,22 +115,22 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			continue
 
-		case SendLast:
+		case Finalize:
 			if ctr.buf == nil {
-				ctr.lastpos = 0
+				ctr.lastPos = 0
 				err := ctr.finalize(rightSemi, proc)
 				if err != nil {
 					return result, err
 				}
 			}
 
-			if ctr.lastpos >= len(ctr.buf) {
+			if ctr.lastPos >= len(ctr.buf) {
 				ctr.state = End
 				continue
 			}
 
-			result.Batch = ctr.buf[ctr.lastpos]
-			ctr.lastpos++
+			result.Batch = ctr.buf[ctr.lastPos]
+			ctr.lastPos++
 			result.Status = vm.ExecHasMore
 			analyzer.Output(result.Batch)
 			return result, nil

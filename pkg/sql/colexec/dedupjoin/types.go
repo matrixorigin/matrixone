@@ -32,7 +32,7 @@ var _ vm.Operator = new(DedupJoin)
 const (
 	Build = iota
 	Probe
-	SendResult
+	Finalize
 	End
 )
 

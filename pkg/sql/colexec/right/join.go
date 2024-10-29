@@ -100,7 +100,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				bat := result.Batch
 
 				if bat == nil {
-					ctr.state = SendLast
+					ctr.state = Finalize
 					continue
 				}
 				if bat.IsEmpty() {
@@ -109,23 +109,23 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.mp == nil {
 					continue
 				}
-				rightJoin.ctr.buf = bat
-				rightJoin.ctr.lastpos = 0
+				ctr.buf = bat
+				ctr.lastPos = 0
 			}
 
-			startrow := rightJoin.ctr.lastpos
+			startRow := ctr.lastPos
 			if err := ctr.probe(rightJoin, proc, analyzer, &result); err != nil {
 				return result, err
 			}
-			if rightJoin.ctr.lastpos == 0 {
-				rightJoin.ctr.buf = nil
-			} else if rightJoin.ctr.lastpos == startrow {
+			if ctr.lastPos == 0 {
+				ctr.buf = nil
+			} else if ctr.lastPos == startRow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
 			analyzer.Output(result.Batch)
 			return result, nil
 
-		case SendLast:
+		case Finalize:
 			err := ctr.finalize(rightJoin, proc, &result)
 			if err != nil {
 				return result, err
@@ -248,11 +248,11 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 	itr := ctr.itr
 
 	rowCountIncrese := 0
-	for i := ap.ctr.lastpos; i < count; i += hashmap.UnitLimit {
+	for i := ap.ctr.lastPos; i < count; i += hashmap.UnitLimit {
 		if rowCountIncrese >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCountIncrese)
 			result.Batch = ctr.rbat
-			ap.ctr.lastpos = i
+			ap.ctr.lastPos = i
 			return nil
 		}
 		n := count - i
@@ -379,7 +379,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 	ctr.rbat.AddRowCount(rowCountIncrese)
 	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.ctr.lastpos = 0
+	ap.ctr.lastPos = 0
 	return nil
 }
 
