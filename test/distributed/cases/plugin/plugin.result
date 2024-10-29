@@ -1,51 +1,55 @@
 select * from plugin_exec('cat', '[1,2,3]') as f;
+internal error: command is empty
+select * from plugin_exec(cast('"cat"' as json), '[1,2,3]') as f;
+internal error: command is a JSON array
+select * from plugin_exec('["cat"]', '[1,2,3]') as f;
 result
 1
 2
 3
-select * from plugin_exec('cat', '["1","2","3"]') as f;
+select * from plugin_exec('["cat"]', '["1","2","3"]') as f;
 result
 "1"
 "2"
 "3"
-select * from plugin_exec('cat', '["a","b","c"]') as f;
+select * from plugin_exec(cast('["cat"]' as json), '["a","b","c"]') as f;
 result
 "a"
 "b"
 "c"
-select * from plugin_exec('cat', '["a","b",null]') as f;
+select * from plugin_exec(cast('["cat"]' as json), '["a","b",null]') as f;
 result
 "a"
 "b"
 null
-select * from plugin_exec('cat', '[false,true,null]') as f;
+select * from plugin_exec('["cat"]', '[false,true,null]') as f;
 result
 false
 true
 null
-select json_extract(result, "$.id") from plugin_exec('cat', '[{"id":1},{"id":2},{"id":3}]') as f;
+select json_extract(result, "$.id") from plugin_exec('["cat"]', '[{"id":1},{"id":2},{"id":3}]') as f;
 json_extract(result, $.id)
 1
 2
 3
-select * from plugin_exec('cat', cast('file:///$resources/plugin/result.json' as datalink)) as f;
+select * from plugin_exec('["cat"]', cast('file:///$resources/plugin/result.json' as datalink)) as f;
 result
 {"chunk": 0, "e": "[1.1, 2.2, 3.3]"}
 {"chunk": "1", "e": "[2.5, 3.5, 4.5]"}
 {"chunk": "2", "e": "[9.1, 8.2, 7.3]"}
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 0    "[1.1, 2.2, 3.3]"
 "1"    "[2.5, 3.5, 4.5]"
 "2"    "[9.1, 8.2, 7.3]"
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 3    "[10.1, 20.2, 30.3]"
 "4"    "[20.5, 30.5, 40.5]"
 "5"    "[90.1, 80.2, 70.3]"
 create table t1 (chunk int, e vecf32(3));
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('cat', cast('file:///$resources/plugin/result.json' as datalink)) as f;
+from plugin_exec('["cat"]', cast('file:///$resources/plugin/result.json' as datalink)) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
@@ -53,14 +57,14 @@ chunk    e
 2    [9.1, 8.2, 7.3]
 truncate t1;
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
+from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
 1    [2.5, 3.5, 4.5]
 2    [9.1, 8.2, 7.3]
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
+from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]

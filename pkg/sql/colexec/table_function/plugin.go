@@ -96,12 +96,57 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	}
 
 	// command
+	var cmdbytes []byte
 	cmdVec := tf.ctr.argVecs[0]
-	if cmdVec.IsNull(uint64(nthRow)) {
-		u.batch.SetRowCount(0)
-		return nil
+	switch cmdVec.GetType().Oid {
+	case types.T_json:
+
+		if cmdVec.IsNull(uint64(nthRow)) {
+			u.batch.SetRowCount(0)
+			return nil
+		}
+		cmd := cmdVec.GetBytesAt(nthRow)
+		cmdjs := bytejson.ByteJson{}
+		cmdjs.Unmarshal(cmd)
+
+		if cmdjs.Type != bytejson.TpCodeArray {
+			return moerr.NewInternalError(proc.Ctx, "command is a JSON array")
+		}
+
+		cmdbytes, _ = cmdjs.MarshalJSON()
+	case types.T_varchar, types.T_text, types.T_char:
+		cmdbytes = cmdVec.GetBytesAt(nthRow)
+	default:
+		return moerr.NewInternalError(proc.Ctx, "command is a JSON or string")
 	}
-	cmd := cmdVec.GetStringAt(nthRow)
+
+	//logutil.Infof("COMMAND %s", string(cmdbytes))
+	var args []string
+	var cmderr error
+	jsonparser.ArrayEach(cmdbytes, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+
+		if err != nil {
+			cmderr = errors.Join(cmderr, err)
+			return
+		}
+
+		if dataType != jsonparser.String {
+			cmderr = errors.Join(cmderr, moerr.NewInternalError(proc.Ctx, "command argument is not string"))
+			return
+		}
+
+		args = append(args, string(value))
+	})
+
+	if cmderr != nil {
+		return cmderr
+	}
+
+	if len(args) == 0 {
+		return moerr.NewInternalError(proc.Ctx, "command is empty")
+	}
+
+	//logutil.Infof("ARGS %v", args)
 
 	// datalink
 	dlVec := tf.ctr.argVecs[1]
@@ -129,7 +174,12 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	}
 
 	// run command
-	plexec := exec.Command(cmd)
+	var plexec *exec.Cmd
+	if len(args) == 1 {
+		plexec = exec.CommandContext(proc.Ctx, args[0])
+	} else {
+		plexec = exec.CommandContext(proc.Ctx, args[0], args[1:]...)
+	}
 	stdin, err := plexec.StdinPipe()
 	if err != nil {
 		return err
