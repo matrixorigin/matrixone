@@ -276,7 +276,8 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			delete(blockId_rowIdBatch, blkid)
 		}
 
-		crs := new(perfcounter.CounterSet)
+		//crs := new(perfcounter.CounterSet)
+		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		_, stats, err := s3writer.SortAndSync(newCtx, proc)
 		if err != nil {
