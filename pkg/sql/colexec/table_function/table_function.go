@@ -151,6 +151,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
+	case "plugin_exec":
+		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
