@@ -69,7 +69,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step1. read checkpoint meta data, output is the ckpEntries
 	t0 := time.Now()
-	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
+	dirs, err := fileservice.SortedList(r.rt.Fs.ListDir(CheckpointDir))
 	if err != nil {
 		return
 	}
@@ -450,7 +450,7 @@ func MergeCkpMeta(
 	cnLocation, tnLocation objectio.Location,
 	startTs, ts types.TS,
 ) (string, error) {
-	dirs, err := fs.List(ctx, CheckpointDir)
+	dirs, err := fileservice.SortedList(fs.List(ctx, CheckpointDir))
 	if err != nil {
 		return "", err
 	}
