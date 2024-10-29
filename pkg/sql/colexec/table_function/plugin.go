@@ -33,6 +33,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// Plugin is a framework to run an executable with input data (datalink or string) from stdin and
+// output must be a JSON array
+// Plugin needs two input columns
+// 1. command line with arguments in JSON, e.g. ["cat", "filename"]. Note: file path must be an absolute path
+// 2. input data with datalink or string. With offset and size parameter in datalink, only portion
+// of data is read and send to stdin.
+// Return:
+// output buffer in JSON Array format
+//
+// One of the example is wikipedia dumps.  Wiki dump is a multisteam file which combine multiple bzip2
+// data chunks and its index file has the (offset, ID, title).  The advantage is we don't need to unpack
+// the whole file before getting the required data.
+// Also, for LLM application, you can run the table_function plugin_exec() to convert the data from datalink
+// into the embedding by calling external LLM vendor.
+// All you have to do it to write a plugin executable in any language that
+// 1. read the data from stdin, unzip data with bzip2, parse xml to get all pages
+// 2. For each page, cut into multiple chunks
+// 3. send each chunk to LLM to convert into embedding
+// 4. format list of chunk embedding into JSON Array format
+// 5. Write the JSON to stdout
+// 6. Insert the embedding into table with the JSON array returned from stdout
+//
+// To do this, simple run the SQL like this:
+// INSERT INTO t1 SELECT json_unquote(json_extract(result, '$.chunk')), json_unquote(json_extract(result, '$.e')) from
+// plugin_exec('["python3", "gen_embedding.py", "arg1", "arg2"]', cast('stage://mys3/wiki.bz2?offset=0&size=123456' as datalink)) as f;
+
 type pluginState struct {
 	inited bool
 	called bool
