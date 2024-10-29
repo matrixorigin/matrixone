@@ -54,6 +54,11 @@ chunk    e
 truncate t1;
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
 from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
+select * from t1;
+chunk    e
+0    [1.1, 2.2, 3.3]
+1    [2.5, 3.5, 4.5]
+2    [9.1, 8.2, 7.3]
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
 from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
 select * from t1;

@@ -27,6 +27,8 @@ truncate t1;
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e")) 
 from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
 
+select * from t1;
+
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
 from plugin_exec('cat', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
 
