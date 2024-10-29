@@ -114,28 +114,17 @@ type RowEntry struct {
 
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
-	cmp := r.BlockID.Compare(&than.BlockID)
-	if cmp < 0 {
-		return true
+	if cmp := r.BlockID.Compare(&than.BlockID); cmp != 0 {
+		return cmp < 0
 	}
-	if cmp > 0 {
-		return false
-	}
+
 	// asc
-	if r.RowID.LT(&than.RowID) {
-		return true
+	if cmp := r.RowID.Compare(&than.RowID); cmp != 0 {
+		return cmp < 0
 	}
-	if than.RowID.LT(&r.RowID) {
-		return false
-	}
+
 	// desc
-	if than.Time.LT(&r.Time) {
-		return true
-	}
-	if r.Time.LT(&than.Time) {
-		return false
-	}
-	return false
+	return r.Time.Compare(&than.Time) > 0
 }
 
 type PrimaryIndexEntry struct {
@@ -173,22 +162,12 @@ type ObjectIndexByTSEntry struct {
 
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	// asc
-	if b.Time.LT(&than.Time) {
-		return true
-	}
-	if than.Time.LT(&b.Time) {
-		return false
+	if cmp := b.Time.Compare(&than.Time); cmp != 0 {
+		return cmp < 0
 	}
 
-	cmp := bytes.Compare(b.ShortObjName[:], than.ShortObjName[:])
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-
-	return false
+	// asc
+	return bytes.Compare(b.ShortObjName[:], than.ShortObjName[:]) < 0
 }
 
 var nextRowEntryID = int64(1)
