@@ -232,8 +232,8 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 }
 
 func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp, tableName string) {
-	
+	ts timestamp.Timestamp,
+	tableName string) {
 	if !f.isValid {
 		return
 	}
