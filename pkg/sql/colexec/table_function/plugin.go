@@ -163,7 +163,7 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		if err != nil {
 			return err
 		}
-		bytes, err = dl.GetBytes(proc)
+		bytes, err = dl.GetPlainText(proc)
 		if err != nil {
 			return err
 		}
