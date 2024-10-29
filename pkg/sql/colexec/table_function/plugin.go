@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"strings"
@@ -148,7 +149,6 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		return err
 	}
 
-	//logutil.Infof("Output Array Json %s", out)
 	nitem := 0
 	var jserr error
 	jsonparser.ArrayEach(out, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
@@ -158,13 +158,33 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 			return
 		}
 
-		//logutil.Infof("value %s", string(value))
 		bj := bytejson.ByteJson{}
-		err = bj.UnmarshalJSON(value)
-		if err != nil {
-			jserr = errors.Join(jserr, err)
+		isnull := false
+		switch dataType {
+		case jsonparser.String:
+			jsdata, err := json.Marshal(string(value))
+			if err != nil {
+				jserr = errors.Join(jserr, err)
+				return
+			}
+			err = bj.UnmarshalJSON(jsdata)
+			if err != nil {
+				jserr = errors.Join(jserr, err)
+				return
+			}
+		case jsonparser.Number, jsonparser.Boolean, jsonparser.Object, jsonparser.Array:
+			err = bj.UnmarshalJSON(value)
+			if err != nil {
+				jserr = errors.Join(jserr, err)
+				return
+			}
+		case jsonparser.Null:
+			isnull = true
+		default:
+			jserr = errors.Join(jserr, moerr.NewInternalErrorNoCtx("unknown json type"))
+			return
 		}
-		vector.AppendByteJson(u.batch.Vecs[0], bj, false, proc.Mp())
+		vector.AppendByteJson(u.batch.Vecs[0], bj, isnull, proc.Mp())
 		nitem += 1
 	})
 

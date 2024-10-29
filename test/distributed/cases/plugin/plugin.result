@@ -1,0 +1,30 @@
+select * from plugin_exec('cat', '[1,2,3]') as f;
+result
+1
+2
+3
+select * from plugin_exec('cat', '["1","2","3"]') as f;
+result
+"1"
+"2"
+"3"
+select * from plugin_exec('cat', '["a","b","c"]') as f;
+result
+"a"
+"b"
+"c"
+select * from plugin_exec('cat', '["a","b",null]') as f;
+result
+"a"
+"b"
+null
+select * from plugin_exec('cat', '[false,true,null]') as f;
+result
+false
+true
+null
+select json_extract(result, "$.id") from plugin_exec('cat', '[{"id":1},{"id":2},{"id":3}]') as f;
+json_extract(result, $.id)
+1
+2
+3
