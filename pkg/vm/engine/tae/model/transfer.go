@@ -42,8 +42,10 @@ type TransferTable[T PageT[T]] struct {
 }
 
 func NewTransferTable[T PageT[T]](ctx context.Context, fs fileservice.FileService) (*TransferTable[T], error) {
-	list, _ := fs.List(ctx, "transfer")
-	for _, dir := range list {
+	for dir, err := range fs.List(ctx, "transfer") {
+		if err != nil {
+			return nil, err
+		}
 		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseNewTransferTable)
 		err := fs.Delete(ctx, path.Join("transfer", dir.Name))
 		err = moerr.AttachCause(ctx, err)

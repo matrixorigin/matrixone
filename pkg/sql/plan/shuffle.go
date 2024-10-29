@@ -256,6 +256,24 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
+		child := builder.qry.Nodes[n.Children[0]]
+		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
+			col = child.GroupBy[col.ColPos].GetCol()
+			if col == nil {
+				return
+			}
+			_, ok = builder.tag2Table[col.RelPos]
+			if !ok {
+				return
+			}
+			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
+			n.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
+			n.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
+			n.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
+			n.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
+		}
 		return
 	}
 	colName := tableDef.Cols[col.ColPos].Name
@@ -288,8 +306,10 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if s == nil {
 		return
 	}
-	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-		return
+	if n.NodeType == plan.Node_AGG {
+		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+			return
+		}
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
@@ -321,8 +341,8 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if join children is agg or filter, do not allow shuffle
-	if isAggOrFilter(builder.qry.Nodes[n.Children[0]], builder) || isAggOrFilter(builder.qry.Nodes[n.Children[1]], builder) {
+	// for now, if join children is merge group or filter, do not allow shuffle
+	if dontShuffle(builder.qry.Nodes[n.Children[0]], builder) || dontShuffle(builder.qry.Nodes[n.Children[1]], builder) {
 		return
 	}
 
@@ -359,12 +379,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	//find the highest ndv
-	highestNDV := n.OnList[idx].Ndv
-	if highestNDV < ShuffleThreshHoldOfNDV {
-		return
-	}
-
 	// get the column of left child
 	var expr0, expr1 *plan.Expr
 	cond := n.OnList[idx]
@@ -394,12 +408,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 }
 
-// find agg or agg->filter node
-func isAggOrFilter(n *plan.Node, builder *QueryBuilder) bool {
-	if n.NodeType == plan.Node_AGG {
+// find mergegroup or mergegroup->filter node
+func dontShuffle(n *plan.Node, builder *QueryBuilder) bool {
+	if n.NodeType == plan.Node_AGG && !n.Stats.HashmapStats.Shuffle {
 		return true
-	} else if n.NodeType == plan.Node_FILTER {
-		if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+	}
+	if n.NodeType == plan.Node_FILTER {
+		if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG && !builder.qry.Nodes[n.Children[0]].Stats.HashmapStats.Shuffle {
 			return true
 		}
 	}
@@ -421,7 +436,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	child := builder.qry.Nodes[n.Children[0]]
 
 	// for now, if agg children is agg or filter, do not allow shuffle
-	if isAggOrFilter(child, builder) {
+	if dontShuffle(child, builder) {
 		return
 	}
 
@@ -496,16 +511,11 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 		return ret1
 	}
 
-	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
-	if ret3 >= maxret {
-		return ret2
-	}
-
-	if ret3 <= ncpu {
+	if ret2 <= ncpu {
 		return ncpu
 	}
 
-	return (ret3/ncpu + 1) * ncpu
+	return (ret2/ncpu + 1) * ncpu
 }
 
 // default shuffle type for scan is hash

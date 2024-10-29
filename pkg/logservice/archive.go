@@ -66,12 +66,11 @@ func (a *archiverIO) Write(ctx context.Context, subDir string, filePath string) 
 
 // List implements the config.ArchiveIO interface.
 func (a *archiverIO) List(ctx context.Context, subDir string) ([]string, error) {
-	entries, err := a.fs.List(ctx, a.vfs.PathJoin(archiveLogDir, subDir))
-	if err != nil {
-		return nil, err
-	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
+	files := make([]string, 0, 64)
+	for entry, err := range a.fs.List(ctx, a.vfs.PathJoin(archiveLogDir, subDir)) {
+		if err != nil {
+			return nil, err
+		}
 		if !entry.IsDir {
 			files = append(files, entry.Name)
 		}
