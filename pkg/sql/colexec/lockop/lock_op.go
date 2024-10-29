@@ -951,7 +951,8 @@ func hasNewVersionInRange(
 		}
 	}
 
-	crs := new(perfcounter.CounterSet)
+	//crs := new(perfcounter.CounterSet)
+	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	defer func() {
 		if analyzer != nil {
