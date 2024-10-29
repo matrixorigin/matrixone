@@ -29,7 +29,7 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			cache.EnsureNBytes(1, 1)
+			cache.EnsureNBytes(1)
 		}
 	})
 }
