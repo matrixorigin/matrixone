@@ -46,6 +46,24 @@ type AnalyzeModule struct {
 	explainPhyBuffer *bytes.Buffer
 }
 
+// Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
+func (anal *AnalyzeModule) Reset() {
+	if anal != nil {
+		anal.phyPlan = nil
+		anal.remotePhyPlans = nil
+		anal.explainPhyBuffer = nil
+		anal.retryTimes = 0
+		for _, node := range anal.qry.Nodes {
+			if node.AnalyzeInfo == nil {
+				node.AnalyzeInfo = new(plan.AnalyzeInfo)
+			} else {
+				node.AnalyzeInfo.Reset()
+			}
+		}
+	}
+
+}
+
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
 	anal.mu.Lock()
 	defer anal.mu.Unlock()

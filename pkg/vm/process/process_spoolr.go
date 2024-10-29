@@ -180,6 +180,10 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		}
 		if content == nil {
 			receiver.removeIdxReceiver(chosen)
+
+			if info != nil {
+				return nil, info
+			}
 			continue
 		}
 

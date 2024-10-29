@@ -1662,11 +1662,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			if err != nil {
 				return nil, nil, err
 			}
-			entries, err := fs.List(param.Ctx, readPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range fs.List(param.Ctx, readPath) {
+				if err != nil {
+					return nil, nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}

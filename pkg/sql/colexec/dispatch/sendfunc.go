@@ -27,6 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func (ctr *container) removeIdxReceiver(idx int) {
+	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
+	ctr.remoteRegsCnt--
+	ctr.aliveRegCnt--
+}
+
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, pSpool.SendToAllLocal, bat, nil)
@@ -64,9 +70,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			}
 
 			if remove {
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:i], ap.ctr.remoteReceivers[i+1:]...)
-				ap.ctr.remoteRegsCnt--
-				ap.ctr.aliveRegCnt--
+				ap.ctr.removeIdxReceiver(i)
 				if ap.ctr.remoteRegsCnt == 0 {
 					return true, nil
 				}
@@ -93,7 +97,9 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		}
 	}
 
-	for _, r := range ap.ctr.remoteReceivers {
+	for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+		r := ap.ctr.remoteReceivers[i]
+
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
@@ -102,9 +108,14 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 					err = errEncode
 					break
 				}
-				if _, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
+				if remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
 					err = errSend
 					break
+				} else {
+					if remove {
+						ap.ctr.removeIdxReceiver(i)
+						i--
+					}
 				}
 			}
 		}
@@ -133,7 +144,9 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 
 	// send to remote first because send to spool will modify the bat.Agg.
-	for _, r := range ap.ctr.remoteReceivers {
+	for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+		r := ap.ctr.remoteReceivers[i]
+
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
@@ -141,8 +154,13 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				if errEncode != nil {
 					return errEncode
 				}
-				if _, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
+				} else {
+					if remove {
+						ap.ctr.removeIdxReceiver(i)
+						i--
+					}
 				}
 			}
 		}
@@ -254,9 +272,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			return false, err
 		} else {
 			if remove {
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
-				ap.ctr.remoteRegsCnt--
-				ap.ctr.aliveRegCnt--
+				ap.ctr.removeIdxReceiver(regIdx)
 				if ap.ctr.remoteRegsCnt == 0 {
 					return true, nil
 				}

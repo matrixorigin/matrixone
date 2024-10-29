@@ -128,6 +128,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
 		}
+		// [issue#19574]
+		// if < 0, it's special for agg or others.
+		if ce.relIndex < 0 {
+			ce.relIndex = 0
+		}
 		return ce, nil
 
 	case *plan.Expr_P:

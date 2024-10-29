@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
 	gotrace "runtime/trace"
@@ -62,20 +63,19 @@ func NewQCloudSDK(
 		return nil, err
 	}
 
-	// transport
-	transport := &cos.AuthorizationTransport{
+	// http client
+	httpClient := newHTTPClient(args)
+	httpClient.Transport = &cos.AuthorizationTransport{
 		SecretID:     args.KeyID,
 		SecretKey:    args.KeySecret,
 		SessionToken: args.SessionToken,
-		Transport:    newHTTPClient(args).Transport,
+		Transport:    httpClient.Transport,
 	}
 
 	// client
 	client := cos.NewClient(
 		&cos.BaseURL{BucketURL: baseURL},
-		&http.Client{
-			Transport: transport,
-		},
+		httpClient,
 	)
 
 	logutil.Info("new object storage",
@@ -103,49 +103,48 @@ var _ ObjectStorage = new(QCloudSDK)
 func (a *QCloudSDK) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	var cont string
-
-loop1:
-	for {
-		result, err := a.listObjects(ctx, prefix, cont)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
 
-		for _, obj := range result.Contents {
-			more, err := fn(false, obj.Key, obj.Size)
+		var cont string
+
+	loop1:
+		for {
+			result, err := a.listObjects(ctx, prefix, cont)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range result.Contents {
+				if !yield(&DirEntry{
+					Name: obj.Key,
+					Size: obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range result.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !result.IsTruncated {
+				break
+			}
+			cont = result.NextMarker
 		}
 
-		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !result.IsTruncated {
-			break
-		}
-		cont = result.NextMarker
 	}
-
-	return nil
 }
 
 func (a *QCloudSDK) Stat(

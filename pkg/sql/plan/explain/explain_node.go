@@ -494,24 +494,28 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 			hashCol = exprImpl.F.Args[0]
 		}
 
-		if shuffleType == plan.ShuffleType_Hash {
-			buf.WriteString(" shuffle: hash(")
-			err := describeExpr(ctx, hashCol, options, buf)
-			if err != nil {
-				return "", err
-			}
-			buf.WriteString(")")
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			buf.WriteString(" shuffle: REUSE")
 		} else {
-			buf.WriteString(" shuffle: range(")
-			err := describeExpr(ctx, hashCol, options, buf)
-			if err != nil {
-				return "", err
+			if shuffleType == plan.ShuffleType_Hash {
+				buf.WriteString(" shuffle: hash(")
+				err := describeExpr(ctx, hashCol, options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			} else {
+				buf.WriteString(" shuffle: range(")
+				err := describeExpr(ctx, hashCol, options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
 			}
-			buf.WriteString(")")
-		}
 
-		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
-			buf.WriteString(" HYBRID ")
+			if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+				buf.WriteString(" HYBRID ")
+			}
 		}
 	}
 
