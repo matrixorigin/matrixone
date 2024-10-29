@@ -456,6 +456,8 @@ func (p *FunctionParameterScalarNull[T]) WithAnyNullValue() bool {
 }
 
 type FunctionResultWrapper interface {
+	OptFunctionResultWrapper
+
 	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
 	Free()
@@ -472,6 +474,12 @@ type FunctionResult[T types.FixedSizeT] struct {
 	isVarlena bool
 	cols      []T
 	length    uint64
+
+	//  convenientParam save parameter wrappers for easy getting row values.
+	//
+	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
+	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
+	convenientParam []reusableParameterWrapper
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -495,6 +503,16 @@ func newResultFunc[T types.FixedSizeT](
 		f.isVarlena = true
 	}
 	return f
+}
+
+func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
+	if fr.convenientParam == nil {
+		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	}
+}
+
+func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper {
+	return fr.convenientParam
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
@@ -622,16 +640,11 @@ func (fr *FunctionResult[T]) Free() {
 		fr.vec.Free(fr.mp)
 		fr.vec = nil
 	}
+	fr.convenientParam = nil
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
-
-	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		// IF STRING type.
-		return newResultFunc[types.Varlena](typ, mp)
-	case types.T_json:
+	if typ.IsVarlen() {
 		return newResultFunc[types.Varlena](typ, mp)
 	}
 
