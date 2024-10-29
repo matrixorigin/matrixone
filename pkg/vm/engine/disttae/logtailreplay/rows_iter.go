@@ -110,17 +110,20 @@ type primaryKeyIter struct {
 }
 
 type PrimaryKeyMatchSpec struct {
-	// Move moves to the target
-	Move func(p *primaryKeyIter) bool
-	Name string
+	// Next() --> Move() --> moveInner()
+	// the existence of Move is to avoid
+	// the redundant comparison .
+	Move      func(p *primaryKeyIter) bool
+	Name      string
+	moveInner func(p *primaryKeyIter) bool
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
 	first := true
 	cnt := 3
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "Exact",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
@@ -157,18 +160,35 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 					return false
 				}
 			}
+			return true
+		},
+	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			ok = spec.moveInner(p)
+			if !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
 
 			item := p.iter.Item()
 			return bytes.Equal(item.Bytes, key)
-		},
+		}
 	}
+
+	return spec
 }
 
 func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 	first := true
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "Prefix",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
@@ -184,10 +204,27 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			item := p.iter.Item()
-			return bytes.HasPrefix(item.Bytes, prefix)
+			return true
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			item := p.iter.Item()
+			return bytes.HasPrefix(item.Bytes, prefix)
+		}
+	}
+
+	return spec
 }
 
 func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
@@ -241,9 +278,9 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	}
 
 	first := true
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "Between Kind",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
@@ -261,10 +298,27 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			item := p.iter.Item()
-			return validCheck(item.Bytes)
+			return true
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			item := p.iter.Item()
+			return validCheck(item.Bytes)
+		}
+	}
+
+	return spec
 }
 
 type phase int
@@ -362,9 +416,9 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 		return true
 	}
 
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "InKind",
-		Move: func(p *primaryKeyIter) (ret bool) {
+		moveInner: func(p *primaryKeyIter) (ret bool) {
 			// TODO: optimize the case where len(encodes) >> p.primaryIndex.Len(), refer to the UT TestPrefixIn
 			for {
 				switch currentPhase {
@@ -397,6 +451,23 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 			}
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return spec
 }
 
 var _ RowsIter = new(primaryKeyIter)
