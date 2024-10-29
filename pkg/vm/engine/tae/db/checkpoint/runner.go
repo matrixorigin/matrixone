@@ -647,14 +647,15 @@ func (r *runner) doGlobalCheckpoint(
 	entry.truncateLSN = truncateLSN
 
 	logutil.Info(
-		"Checkpoint-Start",
+		"GCKP-Start",
 		zap.String("entry", entry.String()),
+		zap.String("ts", end.ToString()),
 	)
 
 	defer func() {
 		if err != nil {
 			logutil.Error(
-				"Checkpoint-Error",
+				"GCKP-Error",
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
@@ -664,7 +665,7 @@ func (r *runner) doGlobalCheckpoint(
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
-				"Checkpoint-End",
+				"GCKP-End",
 				fields...,
 			)
 		}
