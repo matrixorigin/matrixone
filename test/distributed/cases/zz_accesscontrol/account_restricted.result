@@ -231,7 +231,7 @@ select count(*) > 0 from system.statement_info;
 count( * ) > 0
 true
 delete from system.statement_info;
-internal error: do not have enough storage to execute the statement
+internal error: do not have privilege to execute the statement
 select * from res_test.r_test;
 c1    c2
 2    a
