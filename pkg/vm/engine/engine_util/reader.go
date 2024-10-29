@@ -437,10 +437,6 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-
-	if r.readBlockCnt > r.threshHold {
-		policy = fileservice.SkipMemoryCacheWrites
-	}
 	r.readBlockCnt++
 
 	if len(r.cacheVectors) == 0 {
