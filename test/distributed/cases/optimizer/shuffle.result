@@ -13,6 +13,8 @@ mo_ctl(dn, flush, d1.t1)
 select mo_ctl('dn', 'flush', 'd1.t2');
 mo_ctl(dn, flush, d1.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('cn', 'mergeobjects', 't:d1.t1');
+(.*)
 select Sleep(1);
 sleep(1)
 0
@@ -95,6 +97,7 @@ Project
                     Runtime Filter Probe: t1.c2
               ->  Table Scan on d1.t2
                     Filter Cond: (t2.c3 < 500000)
+                    Block Filter Cond: (t2.c3 < 500000)
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 count(*)
 499999
@@ -109,6 +112,7 @@ Project
               ->  Table Scan on d1.t1
               ->  Table Scan on d1.t2
                     Filter Cond: (t2.c3 < 5000000)
+                    Block Filter Cond: (t2.c3 < 5000000)
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
 count(*)
 4999999
@@ -153,6 +157,7 @@ Project
               ->  Table Scan on d1.t1
               ->  Table Scan on d1.t2
                     Filter Cond: (t2.c3 > 100000)
+                    Block Filter Cond: (t2.c3 > 100000)
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 count(*)
 8900000
@@ -167,6 +172,7 @@ Project
               ->  Table Scan on d1.t1
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c3 BETWEEN 100 AND 7000000
+                    Block Filter Cond: t2.c3 BETWEEN 100 AND 7000000
 select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
 count(*)
 3000099
@@ -180,8 +186,10 @@ Project
               Join Cond: (t2.c3 = t1.c2) shuffle: range(t2.c3)
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c3 BETWEEN 10000 AND 6000000
+                    Block Filter Cond: t2.c3 BETWEEN 10000 AND 6000000
               ->  Table Scan on d1.t1
                     Filter Cond: (t1.c3 < 800000)
+                    Block Filter Cond: (t1.c3 < 800000)
 select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
 count(*)
 9999
@@ -195,6 +203,7 @@ Project
               Join Cond: (t2.c2 = t1.c2) shuffle: range(t2.c2)
               ->  Table Scan on d1.t2
                     Filter Cond: (t2.c3 > 100000)
+                    Block Filter Cond: (t2.c3 > 100000)
               ->  Table Scan on d1.t1
                     Filter Cond: (t1.c1 < 300000)
                     Block Filter Cond: (t1.c1 < 300000)
@@ -212,6 +221,7 @@ Project
               ->  Table Scan on d1.t2
               ->  Table Scan on d1.t1
                     Filter Cond: (t1.c3 > 5000000)
+                    Block Filter Cond: (t1.c3 > 5000000)
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 count(*)
 5000000
@@ -230,6 +240,9 @@ count(*)
 10000000
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
+select mo_ctl('dn', 'flush', 'd1.t3');
+mo_ctl(dn, flush, d1.t3)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -248,6 +261,7 @@ Project
                           Filter Cond: (t1.c2 <> 20000)
                     ->  Table Scan on d1.t2
                           Filter Cond: (t2.c3 > 150000)
+                          Block Filter Cond: (t2.c3 > 150000)
 select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 count(*)
 149999
