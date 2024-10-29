@@ -88,13 +88,11 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
-	t := v.GetType()
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[T])
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		return true
 	}
@@ -104,7 +102,6 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		r.scalarValue = cols[0]
 		return true
@@ -114,7 +111,6 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		r.values = cols
 		r.nullMap = v.GetNulls().GetBitmap()
@@ -124,7 +120,6 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 	if !ok {
 		return false
 	}
-	r.typ = *t
 	r.sourceVector = v
 	r.values = cols
 	return true
@@ -182,13 +177,11 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 }
 
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
-	t := v.GetType()
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		return true
 	}
@@ -199,7 +192,6 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		r.scalarValue = cols[0]
 		r.scalarStr = cols[0].GetByteSlice(v.area)
@@ -212,7 +204,6 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 			if !ok {
 				return false
 			}
-			r.typ = *t
 			r.sourceVector = v
 			r.strValues = cols
 			r.nullMap = v.GetNulls().GetBitmap()
@@ -222,7 +213,6 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		r.strValues = cols
 		r.area = v.area
@@ -234,7 +224,6 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 		if !ok {
 			return false
 		}
-		r.typ = *t
 		r.sourceVector = v
 		r.strValues = cols
 		return true
@@ -243,7 +232,6 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 	if !ok {
 		return false
 	}
-	r.typ = *t
 	r.sourceVector = v
 	r.strValues = cols
 	r.area = v.area
