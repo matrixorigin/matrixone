@@ -16,7 +16,9 @@ package fifocache
 
 import (
 	"context"
+	"hash/maphash"
 	"math"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -32,12 +34,27 @@ func NewDataCache(
 	postGet func(key fscache.CacheKey, value fscache.Data),
 	postEvict func(key fscache.CacheKey, value fscache.Data),
 ) *DataCache {
-	keyShardFunc := func(key fscache.CacheKey) uint8 {
-		return uint8(key.Offset ^ key.Sz)
-	}
 	return &DataCache{
-		fifo: New(capacity, keyShardFunc, postSet, postGet, postEvict),
+		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
 	}
+}
+
+var seed = maphash.MakeSeed()
+
+func shardCacheKey(key fscache.CacheKey) uint64 {
+	data := unsafe.Slice(
+		unsafe.StringData(key.Path),
+		len(key.Path),
+	)
+	data = append(data, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&key.Offset)),
+		unsafe.Sizeof(key.Offset),
+	)...)
+	data = append(data, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&key.Sz)),
+		unsafe.Sizeof(key.Sz),
+	)...)
+	return maphash.Bytes(seed, data)
 }
 
 var _ fscache.DataCache = new(DataCache)
@@ -82,8 +99,6 @@ func (d *DataCache) EnsureNBytes(want int, target int) {
 	if int(d.Available()) >= want {
 		return
 	}
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
 	d.fifo.evict(nil, int64(target))
 }
 
@@ -92,8 +107,6 @@ func (d *DataCache) Evict(ch chan int64) {
 }
 
 func (d *DataCache) Flush() {
-	d.fifo.queueLock.Lock()
-	defer d.fifo.queueLock.Unlock()
 	d.fifo.evict(nil, math.MaxInt64)
 }
 
