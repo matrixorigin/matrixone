@@ -423,7 +423,7 @@ table02    CREATE TABLE `table02` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DE
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
-col2    CHAR(1)    YES        'c'        
+col2    CHAR(1)    YES        c        
 col3    DECIMAL(38,0)    NO        null        
 select * from table02;
 col1    col2    col3
@@ -1543,7 +1543,7 @@ test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMAL
 create publication publication01 database test;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-10-28 18:32:44    null    *    
+publication01    test    2024-10-29 10:32:13    null    *    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1565,7 +1565,7 @@ a    b    c    d
 3    4    c    324243243
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-10-28 18:32:45    null    *    
+sys_pub_1    test    2024-10-29 10:32:14    null    *    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all

@@ -52,7 +52,7 @@ show create table enum01;
 Table    Create Table
 enum01    CREATE TABLE `enum01` (\n  `col1` ENUM('red','blue','green') DEFAULT NULL\n)
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 enum01    col1    ENUM    YES
 select * from enum01;
 col1
@@ -72,7 +72,7 @@ null
 show columns from enum03;
 no such table enum.enum03
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 enum02    col1    ENUM    YES
 drop table enum02;
 drop table if exists enum03;
@@ -90,7 +90,7 @@ show columns from enum03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    ENUM('ejwuijfew','ewrwrewretr','werwre')    NO        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table enum03;
 drop table if exists enum02;
 drop table if exists enum03;
@@ -178,7 +178,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
 col2    ENUM('数据库','数据库系统','数据库管理系统')    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri02    col1    INT    YES
 pri02    col2    ENUM    YES
 drop table pri02;
@@ -200,7 +200,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
 col2    ENUM('数据库','数据库系统','数据库管理系统')    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri03    col1    INT    YES
 pri03    col2    ENUM    YES
 drop table pri03;
@@ -222,7 +222,7 @@ select * from pri04 where col2 = 'database';
 col1    col2
 1    database
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 pri04    col1    INT    YES
 pri04    col2    ENUM    YES
 drop table pri04;
@@ -265,7 +265,7 @@ drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        'T'        
+col1    ENUM('T','E')    NO        T        
 insert into default01 values(default);
 select * from default01;
 col1
@@ -275,7 +275,7 @@ drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        '1'        
+col1    ENUM('T','E')    NO        1        
 insert into default02 values(default);
 select * from default02;
 col1
@@ -305,7 +305,7 @@ drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('T','E')    NO        '2'        
+col1    ENUM('T','E')    NO        2        
 insert into default05 values(default);
 select * from default05;
 col1
@@ -462,6 +462,7 @@ select group_concat(col1,col2) from builtin01;
 group_concat(col1, col2, ,)
   云原生数据库   database,存储引擎 TAEengine ,database systemengine 
 drop table builtin01;
+
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'));
 insert into agg01 values (1, 'egwjqebwq');

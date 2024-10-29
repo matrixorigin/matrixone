@@ -197,7 +197,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
-x    DATETIME(0)    YES        '2023-06-21 12:34:45'        
+x    DATETIME(0)    YES        2023-06-21 12:34:45        
 d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    x    d
@@ -222,7 +222,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    '2023-06-21'        
+c    DATETIME(0)    NO    PRI    2023-06-21        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -245,7 +245,7 @@ x    a    b
 alter table t1 change x y datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-y    DATETIME(0)    NO    PRI    '2023-06-21'        
+y    DATETIME(0)    NO    PRI    2023-06-21        
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 select * from t1;
@@ -412,11 +412,11 @@ Multiple primary key defined
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    NULL
 t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
 t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
 t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -699,7 +699,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        '1990-12-17'        
+c    DATE(0)    YES        1990-12-17        
 d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -719,7 +719,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        '2003-12-17'        
+c    DATE(0)    YES        2003-12-17        
 d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
@@ -1717,9 +1717,9 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
-cast02    col22361738278472874382    BIGINT    YES
 cast02    col1new    INT UNSIGNED    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
+cast02    col22361738278472874382    BIGINT    YES
 cast02    col4cdhewjruekhwjf    SMALLINT    YES
 drop table cast02;
 drop table if exists cast03;
@@ -1769,10 +1769,10 @@ null    null    null    null
 null    null    null    null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
+cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
 cast04    col3    TEXT    YES
 cast04    col4    BLOB    YES
 cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL    YES
-cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
 drop table cast04;
 drop table if exists cast05;
 create table cast05 (col1 date);
@@ -1981,8 +1981,8 @@ col2worejnfenrororiri    iwijwehfndatabasectm
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
-cluster01    iwijwehfndatabasectm    DOUBLE    YES
 cluster01    col2worejnfenrororiri    FLOAT    YES
+cluster01    iwijwehfndatabasectm    DOUBLE    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
