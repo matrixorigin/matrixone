@@ -146,6 +146,7 @@ type PrimaryIndexEntry struct {
 	BlockID objectio.Blockid
 	RowID   objectio.Rowid
 	Time    types.TS
+	Deleted bool
 }
 
 func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
