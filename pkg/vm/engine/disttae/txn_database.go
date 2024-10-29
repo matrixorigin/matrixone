@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -225,17 +226,31 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+
+	rmFault := func() {}
+
+	if objectio.Debug19524Injected() {
+		if rmFault, err = objectio.InjectRanges(
+			ctx,
+			catalog.MO_TABLES,
+		); err != nil {
+			return nil, err
+		}
+	}
 	res, err := execReadSql(ctx, db.op, sql, true)
+	rmFault()
 	if err != nil {
 		return nil, err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
-		logutil.Error("FIND_TABLE deleteTableError",
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
 			zap.String("sql", sql),
+			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
 			zap.Uint64("tid", rel.GetTableID(ctx)),
 			zap.String("workspace", db.getTxn().PPString()))
