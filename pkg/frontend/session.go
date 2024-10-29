@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1221,15 +1220,9 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	if !isSuperUser(userInput) {
-		lastChangedTime, err := rsset[0].GetString(tenantCtx, 0, 3)
-		if err != nil {
-			return nil, err
-		}
-		err = checkPasswordExpired(tenantCtx, ses, tenantID, lastChangedTime)
-		if err != nil {
-			return nil, err
-		}
+	lastChangedTime, err := rsset[0].GetString(tenantCtx, 0, 3)
+	if err != nil {
+		return nil, err
 	}
 
 	//the default_role in the mo_user table.
@@ -1324,8 +1317,18 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// TO Check password
 	if checkPassword(psw, salt, authResponse) {
 		ses.Debug(tenantCtx, "check password succeeded")
-		if err = ses.InitSystemVariables(ctx); err != nil {
+		if err = ses.InitSystemVariables(tenantCtx); err != nil {
 			return nil, err
+		}
+		if !isSuperUser(userInput) {
+			var expired bool
+			expired, err = checkPasswordExpired(tenantCtx, ses, lastChangedTime)
+			if err != nil {
+				return nil, err
+			}
+			if expired {
+				ses.getRoutine().setExpired(true)
+			}
 		}
 	} else {
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
@@ -1869,40 +1872,40 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	return fields
 }
 
-func checkPasswordExpired(ctx context.Context, ses *Session, tenantId int64, lastChangedTime string) error {
+func checkPasswordExpired(ctx context.Context, ses *Session, lastChangedTime string) (bool, error) {
 	var (
 		defaultPasswordLifetime int
 		err                     error
 		lastChanged             time.Time
 	)
 	// get the default password lifetime
-	defaultPasswordLifetime, err = getPasswordLifetime(ctx, ses, tenantId)
+	defaultPasswordLifetime, err = getPasswordLifetime(ctx, ses)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// if the default password lifetime is 0, the password never expires
 	if defaultPasswordLifetime == 0 {
-		return nil
+		return false, nil
 	}
 
 	// get the last password change time as utc time
 	lastChanged, err = time.ParseInLocation("2006-01-02 15:04:05", lastChangedTime, time.UTC)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// get the current time as utc time
 	now := time.Now().UTC()
 	if lastChanged.AddDate(0, 0, defaultPasswordLifetime).Before(now) {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("password has expired %d days after last changed", now.Sub(lastChanged)/24/time.Hour))
+		return true, nil
 	}
 
-	return nil
+	return false, nil
 }
 
-func getPasswordLifetime(ctx context.Context, ses *Session, tenantId int64) (int, error) {
-	value, err := getGlobalVariable(ctx, ses, tenantId, DefaultPasswordLifetime)
+func getPasswordLifetime(ctx context.Context, ses *Session) (int, error) {
+	value, err := ses.GetGlobalSysVar(DefaultPasswordLifetime)
 	if err != nil {
 		return 0, err
 	}
@@ -1911,33 +1914,10 @@ func getPasswordLifetime(ctx context.Context, ses *Session, tenantId int64) (int
 		return 0, nil
 	}
 
-	lifetime, ok := value.(string)
+	lifetime, ok := value.(int64)
 	if !ok {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", DefaultPasswordLifetime)
 	}
 
-	return strconv.Atoi(lifetime)
-}
-
-func getGlobalVariable(ctx context.Context, ses *Session, tenantId int64, name string) (interface{}, error) {
-	var (
-		sql   string
-		err   error
-		rsset []ExecResult
-	)
-	sql = getSqlForGetSystemVariableValue(uint64(tenantId), name)
-	rsset, err = executeSQLInBackgroundSession(ctx, ses, sql)
-	if err != nil {
-		return "", err
-	}
-
-	if !execResultArrayHasData(rsset) {
-		return nil, nil
-	}
-
-	value, err := rsset[0].GetString(ctx, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	return value, nil
+	return int(lifetime), nil
 }

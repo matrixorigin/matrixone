@@ -2053,6 +2053,8 @@ type privilege struct {
 	clusterTableOperation clusterTableOperationType
 	//can execute in restricted status
 	canExecInRestricted bool
+	//can execute in password expired status
+	canExecInPasswordExpired bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -5110,6 +5112,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	special := specialTagNone
 	objType := objectTypeAccount
 	canExecInRestricted := false
+	canExecInPasswordExpired := false
 	var extraEntries []privilegeEntry
 	writeDatabaseAndTableDirectly := false
 	var clusterTable bool
@@ -5160,6 +5163,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
 		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
+		canExecInPasswordExpired = true
 	case *tree.CreateRole:
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
@@ -5515,6 +5519,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		isClusterTable:                clusterTable,
 		clusterTableOperation:         clusterTableOperation,
 		canExecInRestricted:           canExecInRestricted,
+		canExecInPasswordExpired:      canExecInPasswordExpired,
 	}
 }
 
