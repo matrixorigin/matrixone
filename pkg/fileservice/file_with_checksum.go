@@ -262,9 +262,9 @@ func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, putback PutB
 		return nil, putback, err
 	}
 
-	perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
-		c.FileService.FileWithChecksum.UnderlyingRead.Add(int64(n))
-	}, f.perfCounterSets...)
+	//perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
+	//	c.FileService.FileWithChecksum.UnderlyingRead.Add(int64(n))
+	//}, f.perfCounterSets...)
 
 	if n < _ChecksumSize {
 		// empty
