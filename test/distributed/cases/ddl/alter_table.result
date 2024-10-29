@@ -273,7 +273,7 @@ t5    0    col3    1    col3    A    0    NULL    NULL                        YE
 t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
-t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+t5    0    zxxxxx    1    col3    A    0    NULL    NULL                        YES    NULL
 alter table t5 add unique key zxxxxx(col3);
 duplicate key name 'zxxxxx'
 show index from t5;
@@ -283,7 +283,7 @@ t5    0    col3    1    col3    A    0    NULL    NULL                        YE
 t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
-t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+t5    0    zxxxxx    1    col3    A    0    NULL    NULL                        YES    NULL
 alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col3);
 alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col4);
 duplicate key name 'idx_6dotkott2kjsp8v'
@@ -294,8 +294,8 @@ t5    0    col3    1    col3    A    0    NULL    NULL                        YE
 t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
 t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
-t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    idx_6dotkott2kjsp8v    1    col3    A    0    NULL    NULL                    YES    NULL
+t5    0    zxxxxx    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    idx_6dotkott2kjsp8v    1    col3    A    0    NULL    NULL                        YES    NULL
 drop table t5;
 create table t5(a int);
 alter table t5 comment = "comment_1";
@@ -333,7 +333,7 @@ m    DATE(0)    YES        null
 n    DATETIME(0)    YES        null        
 o    TIMESTAMP(0)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL(5)    YES        null        
+q    DECIMAL(5,2)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
@@ -347,14 +347,14 @@ m    DATE(0)    YES        null
 n    DATETIME(0)    YES        null        
 o    TIMESTAMP(0)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL(5)    YES        null        
+q    DECIMAL(5,2)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 p    BOOL(0)    YES        null        
-q    DECIMAL(5)    YES        null        
+q    DECIMAL(5,2)    YES        null        
 r    TEXT(0)    YES        null        
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;
