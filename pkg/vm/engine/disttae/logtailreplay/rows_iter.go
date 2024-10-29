@@ -16,6 +16,8 @@ package logtailreplay
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -129,6 +131,8 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				if ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: key,
 					Time:  p.ts,
+					// if bytes and time matched, we hope scan from the first
+					RowEntryID: math.MaxInt64,
 				}); !ok {
 					return false
 				}
@@ -194,6 +198,8 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: prefix,
 					Time:  p.ts,
+					// if bytes and time matched, we hope scan from the first
+					RowEntryID: math.MaxInt64,
 				})
 			} else {
 				ok = p.iter.Next()
@@ -286,6 +292,8 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				if ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: lb,
 					Time:  p.ts,
+					// if bytes and time matched, we hope scan from the first
+					RowEntryID: math.MaxInt64,
 				}); ok {
 					ok = seek2First(&p.iter)
 				}
@@ -364,7 +372,10 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 				first = false
 				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: lb,
-					Time:  p.ts})
+					Time:  p.ts,
+					// if bytes and time matched, we hope scan from the first
+					RowEntryID: math.MaxInt64,
+				})
 
 				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
 					ok = p.iter.Next()
@@ -429,6 +440,8 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					if !p.iter.Seek(&PrimaryIndexEntry{
 						Bytes: encoded,
 						Time:  p.ts,
+						// if bytes and time matched, we hope scan from the first
+						RowEntryID: math.MaxInt64,
 					}) {
 						return false
 					}
