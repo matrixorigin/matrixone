@@ -4461,6 +4461,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, childId)
 	case "stage_list":
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, childId)
+	case "plugin_exec":
+		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
