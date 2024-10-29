@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -87,6 +88,7 @@ func NewTopProcess(
 		logger:         util.GetLogger(sid),
 		UnixTime:       time.Now().UnixNano(),
 		PostDmlSqlList: threadsafe.NewSlice[string](),
+		StageCache:     threadsafe.NewMap[string, stage.StageDef](),
 	}
 
 	proc := &Process{
