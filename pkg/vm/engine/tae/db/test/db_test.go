@@ -74,9 +74,10 @@ import (
 )
 
 const (
-	ModuleName               = "TAEDB"
-	smallCheckpointBlockRows = 10
-	smallCheckpointSize      = 1024
+	ModuleName                     = "TAEDB"
+	smallCheckpointBlockRows       = 10
+	smallCheckpointSize            = 1024
+	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
 
 func TestAppend1(t *testing.T) {
@@ -7292,7 +7293,8 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	tae.GlobalCheckpoint(txn.GetStartTS(), 0, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, 0)
+	assert.Nil(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CreateRelAndAppend2(bat, false)
@@ -7303,7 +7305,8 @@ func TestGlobalCheckpoint2(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	tae.IncrementalCheckpoint(currTs, false, true, true)
-	tae.GlobalCheckpoint(currTs, time.Duration(1), false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, currTs, defaultGlobalCheckpointTimeout, time.Duration(1))
+	assert.Nil(t, err)
 
 	p := &catalog.LoopProcessor{}
 	tableExisted := false
@@ -7413,8 +7416,8 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
-	assert.NoError(t, err)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
+	assert.Nil(t, err)
 
 	tae.CreateRelAndAppend(bat, true)
 
@@ -7434,7 +7437,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetCommitTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
 	assert.NoError(t, err)
 
 	tae.CreateRelAndAppend(bat, false)
@@ -7475,7 +7478,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7483,7 +7486,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7502,8 +7505,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
-	assert.NoError(t, err)
+	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpIntervalTimeout)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -7541,7 +7543,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.DoAppend(bats[i+1])
 		txn, err = tae.StartTxn(nil)
 		assert.NoError(t, err)
-		err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+		err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, globalCkpInterval)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 

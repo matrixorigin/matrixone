@@ -349,7 +349,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		}
 		if ctx.end.LE(&maxEnd) {
 			logutil.Warn(
-				"skip global checkpoint",
+				"OnGlobalCheckpointEntries-Skip",
 				zap.String("checkpoint", ctx.end.ToString()))
 			continue
 		}

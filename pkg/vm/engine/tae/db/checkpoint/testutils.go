@@ -104,14 +104,14 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 	var err error
 	defer func() {
 		if err != nil {
-			logutil.Error("force global checkpoint failed",
+			logutil.Error("ForceGlobalCheckpoint-Failed",
 				zap.Error(err),
 				zap.Uint64("retryTime", uint64(retryTime)))
 			return
 		}
 
 		if retryTime > 0 {
-			logutil.Info("force global checkpoint success",
+			logutil.Info("ForceGlobalCheckpoint-Success",
 				zap.Uint64("retryTime", uint64(retryTime)))
 		}
 	}()
