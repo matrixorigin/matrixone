@@ -56,6 +56,36 @@ var _ FunctionParameterWrapper[int64] = &FunctionParameterScalarNull[int64]{}
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterNormalSpecial1[types.Varlena]{}
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpecial1[types.Varlena]{}
 
+// FixedArg and BytesArg were used to get value from input vector.
+type FixedArg[T types.FixedSizeTExceptStrType] struct {
+	Wrapper FunctionParameterWrapper[T]
+}
+type BytesArg struct {
+	Wrapper FunctionParameterWrapper[types.Varlena]
+}
+
+func (arg *FixedArg[T]) Prepare(v *Vector) {
+	if arg.Wrapper == nil {
+		arg.Wrapper = GenerateFunctionFixedTypeParameter[T](v)
+	} else {
+		ok := ReuseFunctionFixedTypeParameter(v, arg.Wrapper)
+		if !ok {
+			arg.Wrapper = GenerateFunctionFixedTypeParameter[T](v)
+		}
+	}
+}
+
+func (arg *BytesArg) Prepare(v *Vector) {
+	if arg.Wrapper == nil {
+		arg.Wrapper = GenerateFunctionStrParameter(v)
+	} else {
+		ok := ReuseFunctionStrParameter(v, arg.Wrapper)
+		if !ok {
+			arg.Wrapper = GenerateFunctionStrParameter(v)
+		}
+	}
+}
+
 func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
 	t := v.GetType()
 	if v.IsConstNull() {
@@ -460,6 +490,7 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+	GetParameterWrapper() []any
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -469,9 +500,10 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
-	isVarlena bool
-	cols      []T
-	length    uint64
+	isVarlena    bool
+	cols         []T
+	length       uint64
+	paramWrapper []any
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -611,6 +643,13 @@ func (fr *FunctionResult[T]) SetResultVector(v *Vector) {
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
+}
+
+func (fr *FunctionResult[T]) GetParameterWrapper() []any {
+	if len(fr.paramWrapper) < 16 {
+		fr.paramWrapper = make([]any, 16) //make sure it's long enough
+	}
+	return fr.paramWrapper
 }
 
 func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[types.Varlena] {

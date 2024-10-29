@@ -734,8 +734,26 @@ func opBinaryFixedFixedToFixed[
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 T2) Tr, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
+	var p1 vector.FunctionParameterWrapper[T1]
+	var p2 vector.FunctionParameterWrapper[T2]
+	wrapper := result.GetParameterWrapper()
+	if pr1, ok := wrapper[0].(vector.FixedArg[T1]); ok {
+		pr1.Prepare(parameters[0])
+		p1 = pr1.Wrapper
+	}
+	if pr2, ok := wrapper[1].(vector.FixedArg[T2]); ok {
+		pr2.Prepare(parameters[1])
+		p2 = pr2.Wrapper
+	}
+	if p1 == nil {
+		p1 = vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
+		wrapper[0] = vector.FixedArg[T1]{Wrapper: p1}
+	}
+	if p2 == nil {
+		p2 = vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
+		wrapper[1] = vector.FixedArg[T2]{Wrapper: p2}
+	}
+
 	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
