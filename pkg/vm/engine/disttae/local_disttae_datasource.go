@@ -19,9 +19,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"sort"
-	
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"go.uber.org/zap"
 )
 
 func NewLocalDataSource(
