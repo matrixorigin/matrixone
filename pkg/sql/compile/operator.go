@@ -1351,7 +1351,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	return hasRemote, arg
 }
 
-func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.Shuffle {
+func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
 	var expr *plan.Expr
 	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
@@ -1369,7 +1369,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.S
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.BucketNum = int32(len(ss))
+	arg.BucketNum = bucketNum
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))

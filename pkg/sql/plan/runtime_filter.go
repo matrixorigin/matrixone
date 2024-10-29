@@ -100,6 +100,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Outcnt > 5000000 {
 		return
 	}
+	if node.Stats.HashmapStats.HashOnPK && rightChild.Stats.Outcnt > 320000 {
+		return
+	}
 
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
