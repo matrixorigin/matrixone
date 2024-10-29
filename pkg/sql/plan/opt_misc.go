@@ -1000,6 +1000,10 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		node.Stats.ForceOneCN = force
 	} else if node.NodeType == plan.Node_JOIN {
+		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
+			force = true
+		}
+
 		if len(node.RuntimeFilterBuildList) > 0 {
 			switch node.JoinType {
 			case plan.Node_RIGHT:
