@@ -1929,9 +1929,11 @@ func updatePartitionOfPush(
 			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 				t0 = time.Now()
 				state.UpdateDuration(ckpStart, types.MaxTs())
-				//Notice that the checkpoint duration is same among all mo system tables,
-				//such as mo_databases, mo_tables, mo_columns.
-				if !lazyLoad {
+				if lazyLoad {
+					state.AppendCheckpoint(tl.CkpLocation, partition)
+				} else {
+					//Notice that the checkpoint duration is same among all mo system tables,
+					//such as mo_databases, mo_tables, mo_columns.
 					e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
 				}
 				v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
