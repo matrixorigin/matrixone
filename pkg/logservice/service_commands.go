@@ -243,7 +243,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	}
 
 	// check the logService TN replica's health on this store.
-	s.checkReplicaHealth(ctx)
+	s.checkReplicaHealth(ctx2)
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()

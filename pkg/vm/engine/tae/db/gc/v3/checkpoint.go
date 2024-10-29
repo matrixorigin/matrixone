@@ -285,7 +285,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	}()
 
 	var dirs []fileservice.DirEntry
-	if dirs, err = c.fs.ListDir(GCMetaDir); err != nil {
+	if dirs, err = fileservice.SortedList(c.fs.ListDir(GCMetaDir)); err != nil {
 		return
 	}
 	if len(dirs) == 0 {
@@ -428,7 +428,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 		isConsumedGCkp := false
 		var checkpointEntries []*checkpoint.CheckpointEntry
 		if checkpointEntries, err = checkpoint.ListSnapshotCheckpoint(
-			c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), 0,
+			c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), c.checkpointCli.GetCheckpointMetaFiles(),
 		); err != nil {
 			logutil.Error(
 				"GC-REPLAY-LIST-ERROR",
@@ -878,6 +878,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		toMergeEntries,
 		bf,
 		&checkpointMaxEnd,
+		c.checkpointCli,
 		c.mp,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
@@ -1719,10 +1720,14 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	ckp *checkpoint.CheckpointEntry,
 	data *logtail.CheckpointData,
 ) error {
-	_, err := c.mutation.snapshotMeta.Update(
-		c.ctx, c.fs.Service, data, ckp.GetStart(), ckp.GetEnd(),
+	return c.mutation.snapshotMeta.Update(
+		c.ctx,
+		c.fs.Service,
+		data,
+		ckp.GetStart(),
+		ckp.GetEnd(),
+		c.TaskNameLocked(),
 	)
-	return err
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {

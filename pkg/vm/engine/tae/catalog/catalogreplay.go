@@ -214,7 +214,8 @@ func (catalog *Catalog) RelayFromSysTableObjects(
 	readTxn txnif.AsyncTxn,
 	dataFactory DataFactory,
 	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
-	sortFunc func([]containers.Vector, int) error) {
+	sortFunc func([]containers.Vector, int) error,
+) {
 	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
 		panic(err)
@@ -379,7 +380,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			},
 			TxnMVCCNode: txnNode,
 			BaseNode: &TableMVCCNode{
-				Schema: schema,
+				Schema:          schema,
+				TombstoneSchema: GetTombstoneSchema(schema),
 			},
 		}
 		tbl.InsertLocked(un)
@@ -411,7 +413,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		},
 		TxnMVCCNode: txnNode,
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	tbl.InsertLocked(un)

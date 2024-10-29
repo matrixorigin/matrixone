@@ -233,17 +233,9 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				err2 := checkGCTS(ctx, h.base.changesHandle.start, h.fs)
-				if err2 != nil {
-					logutil.Info("ChangesHandle-CheckGCTS",
-						zap.String("err", err2.Error()),
-						zap.String("origin err", err.Error()))
-					err = err2
-				} else {
-					logutil.Info("ChangesHandle-CheckGCTS",
-						zap.String("err", "nil"),
-						zap.String("origin err", err.Error()))
-				}
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", err.Error()))
+				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.base.changesHandle.start.ToString())
 			}
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
@@ -374,17 +366,9 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				err2 := checkGCTS(ctx, h.p.changesHandle.start, h.fs)
-				if err2 != nil {
-					logutil.Info("ChangesHandle-CheckGCTS",
-						zap.String("err", err2.Error()),
-						zap.String("origin err", err.Error()))
-					err = err2
-				} else {
-					logutil.Info("ChangesHandle-CheckGCTS",
-						zap.String("err", "nil"),
-						zap.String("origin err", err.Error()))
-				}
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", err.Error()))
+				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.p.changesHandle.start.ToString())
 			}
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
@@ -737,15 +721,15 @@ func NewChangesHandler(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
-	if state.minTS.GT(&start) {
-		return nil, moerr.NewErrStaleReadNoCtx(state.minTS.ToString(), start.ToString())
+	if state.start.GT(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow: int(maxRow),
 		start:        start,
 		end:          end,
 		fs:           fs,
-		minTS:        state.minTS,
+		minTS:        state.start,
 		LogThreshold: LogThreshold,
 		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
 	}
@@ -1136,24 +1120,12 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 	bat.Vecs = append(bat.Vecs, commitTSVec)
 }
 
-func checkGCTS(ctx context.Context, ts types.TS, fs fileservice.FileService) (err error) {
-	maxGCTS, err := getGCTS(ctx, fs)
-	if err != nil {
-		return
-	}
-	if ts.LT(&maxGCTS) {
-		return moerr.NewErrStaleReadNoCtx(maxGCTS.ToString(), ts.ToString())
-	}
-	logutil.Infof("ChangesHandle-CheckGCTS, gc TS %v, start ts %v", ts.ToString(), ts.ToString())
-	return nil
-}
-
 func getGCTS(ctx context.Context, fs fileservice.FileService) (maxGCTS types.TS, err error) {
-	dirs, err := fs.List(ctx, checkpoint.CheckpointDir)
-	if err != nil {
-		return
-	}
-	for _, dir := range dirs {
+	var dir *fileservice.DirEntry
+	for dir, err = range fs.List(ctx, checkpoint.CheckpointDir) {
+		if err != nil {
+			return
+		}
 		_, end, ext := blockio.DecodeCheckpointMetadataFileName(dir.Name)
 		if ext == blockio.CompactedExt {
 			if end.GT(&maxGCTS) {

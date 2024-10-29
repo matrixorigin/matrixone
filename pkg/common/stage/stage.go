@@ -357,11 +357,10 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 			if err != nil {
 				return nil, err
 			}
-			entries, err := etlfs.List(proc.Ctx, readpath)
-			if err != nil {
-				return nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range etlfs.List(proc.Ctx, readpath) {
+				if err != nil {
+					return nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}
@@ -403,11 +402,10 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 	if err != nil {
 		return nil, err
 	}
-	entries, err := etlfs.List(proc.Ctx, readpath)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
+	for entry, err := range etlfs.List(proc.Ctx, readpath) {
+		if err != nil {
+			return nil, err
+		}
 		fileList = append(fileList, path.Join(pattern, entry.Name))
 	}
 

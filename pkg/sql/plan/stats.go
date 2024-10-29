@@ -839,6 +839,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if needResetHashMapStats {
 			resetHashMapStats(node.Stats)
 		}
+		if node.Stats.HashmapStats.Shuffle {
+			return //dont calc shuffle nodes again
+		}
 
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		if ndv < 1 {

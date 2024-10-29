@@ -1007,12 +1007,12 @@ func (r *runner) collectTableMemUsage(entry *logtail.DirtyTreeEntry) (memPressur
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
-
 	logutil.Info(
-		"[flushtabletail] mem scan result",
+		"Flush-CollectMemUsage",
 		zap.Float64("pressure", pressure),
-		zap.String("totalSize", common.HumanReadableBytes(totalSize)),
+		zap.String("size", common.HumanReadableBytes(totalSize)),
 	)
+
 	return pressure
 }
 
@@ -1023,7 +1023,11 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		dirtyTree := entry.GetTree().GetTable(table.ID)
 
 		if force {
-			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
+			logutil.Info(
+				"Flush-Force",
+				zap.Uint64("id", table.ID),
+				zap.String("name", table.GetLastestSchemaLocked(false).Name),
+			)
 			if err := r.fireFlushTabletail(table, dirtyTree); err == nil {
 				table.Stats.ResetDeadline(r.options.maxFlushInterval)
 			}
@@ -1059,12 +1063,13 @@ func (r *runner) checkFlushConditionAndFire(entry *logtail.DirtyTreeEntry, force
 		ready := flushReady()
 
 		if asize+dsize > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
-				table.GetLastestSchemaLocked(false).Name,
-				common.HumanReadableBytes(asize+dsize),
-				common.HumanReadableBytes(dsize),
-				time.Until(table.Stats.GetFlushDeadline()),
-				ready,
+			logutil.Info(
+				"Flush-Tabletail",
+				zap.String("name", table.GetLastestSchemaLocked(false).Name),
+				zap.String("size", common.HumanReadableBytes(asize+dsize)),
+				zap.String("dsize", common.HumanReadableBytes(dsize)),
+				zap.Duration("count-down", time.Until(table.Stats.GetFlushDeadline())),
+				zap.Bool("ready", ready),
 			)
 		}
 
@@ -1081,7 +1086,7 @@ func (r *runner) scheduleFlush(entry *logtail.DirtyTreeEntry, force bool) {
 	if entry.IsEmpty() {
 		return
 	}
-	logutil.Debug(entry.String())
+	// logutil.Debug(entry.String())
 
 	pressure := r.collectTableMemUsage(entry)
 	r.checkFlushConditionAndFire(entry, force, pressure)

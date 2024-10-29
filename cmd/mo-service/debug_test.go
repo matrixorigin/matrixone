@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"io"
+	"iter"
 	"os"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func (tfs *testFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) 
 	panic("implement me")
 }
 
-func (tfs *testFS) List(ctx context.Context, dirPath string) ([]fileservice.DirEntry, error) {
+func (tfs *testFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
 	//TODO implement me
 	panic("implement me")
 }

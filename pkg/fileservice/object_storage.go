@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"iter"
 	"time"
 )
 
@@ -25,10 +26,7 @@ type ObjectStorage interface {
 	List(
 		ctx context.Context,
 		prefix string,
-		fn func(isPrefix bool, key string, size int64) (bool, error),
-	) (
-		err error,
-	)
+	) iter.Seq2[*DirEntry, error]
 
 	// Stat returns informations about an object
 	Stat(
