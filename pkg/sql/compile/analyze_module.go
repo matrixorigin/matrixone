@@ -46,11 +46,9 @@ type AnalyzeModule struct {
 	explainPhyBuffer *bytes.Buffer
 }
 
+// Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
 func (anal *AnalyzeModule) Reset() {
 	if anal != nil {
-		if anal.phyPlan != nil {
-			fmt.Println("")
-		}
 		anal.phyPlan = nil
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
