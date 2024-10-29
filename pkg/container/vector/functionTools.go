@@ -64,7 +64,7 @@ type BytesArg struct {
 	Wrapper FunctionParameterWrapper[types.Varlena]
 }
 
-func (arg *FixedArg[T]) Prepare(v *Vector) {
+func (arg FixedArg[T]) Prepare(v *Vector) {
 	if arg.Wrapper == nil {
 		arg.Wrapper = GenerateFunctionFixedTypeParameter[T](v)
 	} else {
@@ -75,7 +75,7 @@ func (arg *FixedArg[T]) Prepare(v *Vector) {
 	}
 }
 
-func (arg *BytesArg) Prepare(v *Vector) {
+func (arg BytesArg) Prepare(v *Vector) {
 	if arg.Wrapper == nil {
 		arg.Wrapper = GenerateFunctionStrParameter(v)
 	} else {
@@ -485,12 +485,16 @@ func (p *FunctionParameterScalarNull[T]) WithAnyNullValue() bool {
 	return true
 }
 
+type ParamWrapper interface {
+	Prepare(v *Vector)
+}
+
 type FunctionResultWrapper interface {
 	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
-	GetParameterWrapper(i int) []any
+	GetParameterWrapper(i int) []ParamWrapper
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -503,7 +507,7 @@ type FunctionResult[T types.FixedSizeT] struct {
 	isVarlena    bool
 	cols         []T
 	length       uint64
-	paramWrapper []any
+	paramWrapper []ParamWrapper
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -645,9 +649,9 @@ func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
 }
 
-func (fr *FunctionResult[T]) GetParameterWrapper(i int) []any {
+func (fr *FunctionResult[T]) GetParameterWrapper(i int) []ParamWrapper {
 	if len(fr.paramWrapper) < i {
-		fr.paramWrapper = make([]any, i)
+		fr.paramWrapper = make([]ParamWrapper, i)
 	}
 	return fr.paramWrapper
 }

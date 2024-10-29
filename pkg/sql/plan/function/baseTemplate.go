@@ -736,22 +736,20 @@ func opBinaryFixedFixedToFixed[
 	resultFn func(v1 T1, v2 T2) Tr, selectList *FunctionSelectList) error {
 	var p1 vector.FunctionParameterWrapper[T1]
 	var p2 vector.FunctionParameterWrapper[T2]
-	wrapper := result.GetParameterWrapper(2)
-	if pr1, ok := wrapper[0].(vector.FixedArg[T1]); ok {
-		pr1.Prepare(parameters[0])
-		p1 = pr1.Wrapper
-	}
-	if pr2, ok := wrapper[1].(vector.FixedArg[T2]); ok {
-		pr2.Prepare(parameters[1])
-		p2 = pr2.Wrapper
-	}
-	if p1 == nil {
+	wrappers := result.GetParameterWrapper(2)
+	if wrappers[0] == nil {
 		p1 = vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
-		wrapper[0] = vector.FixedArg[T1]{Wrapper: p1}
+		wrappers[0] = vector.FixedArg[T1]{Wrapper: p1}
+	} else {
+		wrappers[0].Prepare(parameters[0])
+		p1 = wrappers[0].(vector.FixedArg[T1]).Wrapper
 	}
-	if p2 == nil {
+	if wrappers[1] == nil {
 		p2 = vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
-		wrapper[1] = vector.FixedArg[T2]{Wrapper: p2}
+		wrappers[1] = vector.FixedArg[T2]{Wrapper: p2}
+	} else {
+		wrappers[1].Prepare(parameters[1])
+		p2 = wrappers[1].(vector.FixedArg[T2]).Wrapper
 	}
 
 	rs := vector.MustFunctionResult[Tr](result)
