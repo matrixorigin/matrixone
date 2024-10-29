@@ -30,6 +30,7 @@ const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
 	SendJoinMap
+	SendSucceed
 )
 
 type container struct {
@@ -83,21 +84,17 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	hashBuild.ctr.state = BuildHashMap
-	hashBuild.ctr.runtimeFilterIn = false
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
-	if pipelineFailed || err != nil {
+	if hashBuild.ctr.state != SendSucceed {
 		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
 	} else {
 		hashBuild.ctr.hashmapBuilder.Reset(proc)
 	}
+
+	hashBuild.ctr.state = BuildHashMap
+	hashBuild.ctr.runtimeFilterIn = false
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-
-	if pipelineFailed || err != nil {
-		hashBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		hashBuild.ctr.hashmapBuilder.Free(proc)
-	}
+	hashBuild.ctr.hashmapBuilder.Free(proc)
 }
