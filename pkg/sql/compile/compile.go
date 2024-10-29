@@ -476,6 +476,14 @@ func (c *Compile) prePipelineInitializer() (err error) {
 // run once
 func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
+
+	// defer cleanup at the end of runOnce()
+	defer func() {
+		// cleanup post dml sql and stage cache
+		c.proc.Base.PostDmlSqlList.Clear()
+		c.proc.Base.StageCache.Clear()
+	}()
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -530,10 +538,6 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 
-	// cleanup post dml sql
-	defer func() {
-		c.proc.Base.PostDmlSqlList.Clear()
-	}()
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
 		err = c.runSql(sql)
 		if err != nil {

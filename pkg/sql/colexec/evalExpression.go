@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -493,8 +493,10 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+
+	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
+		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
 			expr.selectList2[i] = selectList[i]
@@ -535,8 +537,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
+			bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
+
 			for j := 0; j < rowCount; j++ {
-				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
+				b, null := bs.GetValue(uint64(j))
 				if !null && b {
 					expr.selectList1[j] = false
 					expr.selectList2[j] = true
