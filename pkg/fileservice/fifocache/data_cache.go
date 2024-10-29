@@ -42,10 +42,19 @@ func NewDataCache(
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
-	return maphash.Bytes(seed, unsafe.Slice(
-		(*byte)(unsafe.Pointer(&key)),
-		unsafe.Sizeof(key),
-	))
+	data := unsafe.Slice(
+		unsafe.StringData(key.Path),
+		len(key.Path),
+	)
+	data = append(data, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&key.Offset)),
+		unsafe.Sizeof(key.Offset),
+	)...)
+	data = append(data, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&key.Sz)),
+		unsafe.Sizeof(key.Sz),
+	)...)
+	return maphash.Bytes(seed, data)
 }
 
 var _ fscache.DataCache = new(DataCache)
