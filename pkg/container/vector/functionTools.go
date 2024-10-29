@@ -490,7 +490,7 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
-	GetParameterWrapper() []any
+	GetParameterWrapper(i int) []any
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -645,9 +645,9 @@ func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
 }
 
-func (fr *FunctionResult[T]) GetParameterWrapper() []any {
-	if len(fr.paramWrapper) < 16 {
-		fr.paramWrapper = make([]any, 16) //make sure it's long enough
+func (fr *FunctionResult[T]) GetParameterWrapper(i int) []any {
+	if len(fr.paramWrapper) < i {
+		fr.paramWrapper = make([]any, i)
 	}
 	return fr.paramWrapper
 }

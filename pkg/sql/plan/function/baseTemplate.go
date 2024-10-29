@@ -736,7 +736,7 @@ func opBinaryFixedFixedToFixed[
 	resultFn func(v1 T1, v2 T2) Tr, selectList *FunctionSelectList) error {
 	var p1 vector.FunctionParameterWrapper[T1]
 	var p2 vector.FunctionParameterWrapper[T2]
-	wrapper := result.GetParameterWrapper()
+	wrapper := result.GetParameterWrapper(2)
 	if pr1, ok := wrapper[0].(vector.FixedArg[T1]); ok {
 		pr1.Prepare(parameters[0])
 		p1 = pr1.Wrapper

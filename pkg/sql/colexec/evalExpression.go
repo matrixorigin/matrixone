@@ -493,8 +493,9 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+	paramWrapper := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
+		b, null := paramWrapper.GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
 			expr.selectList2[i] = selectList[i]
