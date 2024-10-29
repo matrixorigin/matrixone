@@ -1603,20 +1603,6 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	return cpuNum
 }
 
-func (c *Compile) getParallelSizeForTableFunc(n *plan.Node, cpuNum int) int {
-	if n.Stats == nil {
-		return cpuNum
-	}
-	totalSize := n.Stats.Cost * n.Stats.Rowsize
-	parallelSize := int(totalSize / float64(colexec.WriteS3Threshold))
-	if parallelSize < 1 {
-		return 1
-	} else if parallelSize < cpuNum {
-		return parallelSize
-	}
-	return cpuNum
-}
-
 // load data inline goes here, should always be single parallel
 func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	s := c.constructScopeForExternal(c.addr, false)
@@ -3288,8 +3274,8 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
-		/*if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
-			mcpu := c.getParallelSizeForTableFunc(n, ncpu)
+		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
+			mcpu := c.getParallelSizeForExternalScan(n, ncpu)
 			if mcpu > 1 {
 				oldScope := ss[0]
 
@@ -3309,7 +3295,7 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 
 				ss[0].PreScopes = append(ss[0].PreScopes, oldScope)
 			}
-		}*/
+		}
 
 		for i := range ss {
 			multiUpdateArg := constructMultiUpdate(n, c.e)
@@ -3318,10 +3304,10 @@ func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope)
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
-		//rs := ss[0]
-		//if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
-		rs := c.newMergeScope(ss)
-		//}
+		rs := ss[0]
+		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
+			rs = c.newMergeScope(ss)
+		}
 
 		multiUpdateArg := constructMultiUpdate(n, c.e)
 		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
