@@ -464,6 +464,38 @@ type FunctionResultWrapper interface {
 	PreExtendAndReset(size int) error
 }
 
+type reusableParameterWrapper interface{}
+
+type OptFunctionResultWrapper interface {
+	UseOptFunctionParamFrame(paramCount int)
+	getConvenientParamList() []reusableParameterWrapper
+}
+
+func OptGetParamFromWrapper[ParamType types.FixedSizeTExceptStrType](
+	wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[ParamType] {
+	ws := wrapper.getConvenientParamList()
+
+	if fr, ok := ws[idx].(FunctionParameterWrapper[ParamType]); ok && ReuseFunctionFixedTypeParameter(src, fr) {
+		return fr
+	}
+
+	fr := GenerateFunctionFixedTypeParameter[ParamType](src)
+	ws[idx] = fr
+	return fr
+}
+
+func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[types.Varlena] {
+	ws := wrapper.getConvenientParamList()
+
+	if fr, ok := ws[idx].(FunctionParameterWrapper[types.Varlena]); ok && ReuseFunctionStrParameter(src, fr) {
+		return fr
+	}
+
+	fr := GenerateFunctionStrParameter(src)
+	ws[idx] = fr
+	return fr
+}
+
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
