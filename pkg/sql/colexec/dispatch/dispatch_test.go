@@ -81,3 +81,24 @@ func Test_waitRemoteRegsReady(t *testing.T) {
 	assert.Error(t, err)
 	assert.False(t, ret)
 }
+
+func Test_removeIdxReceiver(t *testing.T) {
+	d := &Dispatch{
+		ctr: &container{},
+	}
+
+	w1 := &process.WrapCs{}
+	w2 := &process.WrapCs{}
+	w3 := &process.WrapCs{}
+	d.ctr.remoteReceivers = []*process.WrapCs{w1, w2, w3}
+	d.ctr.remoteRegsCnt = 3
+	d.ctr.aliveRegCnt = 10
+
+	d.ctr.removeIdxReceiver(1)
+
+	require.Equal(t, 9, d.ctr.aliveRegCnt)
+	require.Equal(t, 2, d.ctr.remoteRegsCnt)
+	require.Equal(t, 2, len(d.ctr.remoteReceivers))
+	require.Equal(t, w1, d.ctr.remoteReceivers[0])
+	require.Equal(t, w3, d.ctr.remoteReceivers[1])
+}

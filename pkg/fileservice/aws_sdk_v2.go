@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -193,60 +194,59 @@ var _ ObjectStorage = new(AwsSDKv2)
 func (a *AwsSDKv2) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	var marker *string
-
-loop1:
-	for {
-		output, err := a.listObjects(
-			ctx,
-			&s3.ListObjectsInput{
-				Bucket:    ptrTo(a.bucket),
-				Delimiter: ptrTo("/"),
-				Prefix:    zeroToNil(prefix),
-				Marker:    marker,
-				MaxKeys:   zeroToNil(a.listMaxKeys),
-			},
-		)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		select {
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return
+		default:
 		}
 
-		for _, obj := range output.Contents {
-			more, err := fn(false, *obj.Key, *obj.Size)
+		var marker *string
+
+	loop1:
+		for {
+			output, err := a.listObjects(
+				ctx,
+				&s3.ListObjectsInput{
+					Bucket:    ptrTo(a.bucket),
+					Delimiter: ptrTo("/"),
+					Prefix:    zeroToNil(prefix),
+					Marker:    marker,
+					MaxKeys:   zeroToNil(a.listMaxKeys),
+				},
+			)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range output.Contents {
+				if !yield(&DirEntry{
+					Name: *obj.Key,
+					Size: *obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range output.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  *prefix.Prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !*output.IsTruncated {
+				break
+			}
+			marker = output.NextMarker
 		}
 
-		for _, prefix := range output.CommonPrefixes {
-			more, err := fn(true, *prefix.Prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !*output.IsTruncated {
-			break
-		}
-		marker = output.NextMarker
 	}
-
-	return nil
 }
 
 func (a *AwsSDKv2) Stat(
