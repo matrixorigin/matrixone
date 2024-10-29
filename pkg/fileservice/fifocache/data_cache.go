@@ -95,7 +95,7 @@ func (d *DataCache) deletePath(shardIndex int, path string) {
 	}
 }
 
-func (d *DataCache) EnsureNBytes(want int, target int) {
+func (d *DataCache) EnsureNBytes(want int) {
 	d.fifo.evict(nil, int64(want))
 }
 
