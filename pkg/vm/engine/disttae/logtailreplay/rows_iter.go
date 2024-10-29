@@ -475,12 +475,14 @@ func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
 	iter := p.rows.Iter()
 	defer iter.Release()
 
-	var pivot RowEntry = RowEntry{
+	var pivot = RowEntry{
 		Time:    p.ts,
 		BlockID: pkItem.BlockID,
 		RowID:   pkItem.RowID,
 	}
 
+	// for 1000*10 items:
+	// Seek() ≈ 10x compare(pk bytes) ≈ 10x Next()
 	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 		row := iter.Item()
 
@@ -489,8 +491,11 @@ func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
 		}
 
 		if p.specHint.isDelIter && !row.Deleted {
+			// pick up deletes, should test each item
 			continue
+
 		} else if !p.specHint.isDelIter && row.Deleted {
+			// pick up inserts, quick break if found this item deleted already
 			break
 		}
 
@@ -516,45 +521,6 @@ func (p *primaryKeyIter) Next() bool {
 		if p.isPKItemValid(*entry) {
 			return true
 		}
-
-		// validate
-		//valid := false
-		//rowsIter := p.rows.Iter()
-		//for ok := rowsIter.Seek(RowEntry{
-		//	BlockID: entry.BlockID,
-		//	RowID:   entry.RowID,
-		//	Time:    p.ts,
-		//}); ok; ok = rowsIter.Next() {
-		//	row := rowsIter.Item()
-		//	if row.BlockID != entry.BlockID {
-		//		// no more
-		//		break
-		//	}
-		//	if row.RowID != entry.RowID {
-		//		// no more
-		//		break
-		//	}
-		//	if row.Time.GT(&p.ts) {
-		//		// not visible
-		//		continue
-		//	}
-		//	if row.Deleted {
-		//		// visible and deleted, no longer valid
-		//		break
-		//	}
-		//	valid = row.ID == entry.RowEntryID
-		//	if valid {
-		//		p.curRow = row
-		//	}
-		//	break
-		//}
-		//rowsIter.Release()
-		//
-		//if !valid {
-		//	continue
-		//}
-		//
-		//return true
 	}
 }
 
@@ -589,43 +555,6 @@ func (p *primaryKeyDelIter) Next() bool {
 		if p.isPKItemValid(*entry) {
 			return true
 		}
-
-		//// validate
-		//valid := false
-		//rowsIter := p.rows.Iter()
-		//for ok := rowsIter.Seek(RowEntry{
-		//	BlockID: entry.BlockID,
-		//	RowID:   entry.RowID,
-		//	Time:    p.ts,
-		//}); ok; ok = rowsIter.Next() {
-		//	row := rowsIter.Item()
-		//	if row.BlockID != entry.BlockID {
-		//		// no more
-		//		break
-		//	}
-		//	if row.RowID != entry.RowID {
-		//		// no more
-		//		break
-		//	}
-		//	if row.Time.GT(&p.ts) {
-		//		// not visible
-		//		continue
-		//	}
-		//	if !row.Deleted {
-		//		// skip not deleted
-		//		continue
-		//	}
-		//	valid = row.ID == entry.RowEntryID
-		//	if valid {
-		//		p.curRow = row
-		//	}
-		//	break
-		//}
-		//rowsIter.Release()
-		//
-		//if !valid {
-		//	continue
-		//}
 	}
 }
 
