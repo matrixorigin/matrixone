@@ -42,7 +42,6 @@ var _ RowsIter = new(rowsIter)
 
 func (p *rowsIter) Next() bool {
 	for {
-
 		if !p.firstCalled {
 			if p.checkBlockID {
 				if !p.iter.Seek(RowEntry{
@@ -472,6 +471,40 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 var _ RowsIter = new(primaryKeyIter)
 
+func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
+	iter := p.rows.Iter()
+	defer iter.Release()
+
+	var pivot RowEntry = RowEntry{
+		Time:    p.ts,
+		BlockID: pkItem.BlockID,
+		RowID:   pkItem.RowID,
+	}
+
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		row := iter.Item()
+
+		if !row.RowID.EQ(&pkItem.RowID) {
+			break
+		}
+
+		if p.specHint.isDelIter && !row.Deleted {
+			continue
+		} else if !p.specHint.isDelIter && row.Deleted {
+			break
+		}
+
+		if row.ID == pkItem.RowEntryID {
+			p.curRow = row
+			return true
+		}
+
+		return false
+	}
+
+	return false
+}
+
 func (p *primaryKeyIter) Next() bool {
 	for {
 		if !p.spec.Move(p) {
@@ -480,44 +513,48 @@ func (p *primaryKeyIter) Next() bool {
 
 		entry := p.iter.Item()
 
+		if p.isPKItemValid(*entry) {
+			return true
+		}
+
 		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
-				break
-			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.GT(&p.ts) {
-				// not visible
-				continue
-			}
-			if row.Deleted {
-				// visible and deleted, no longer valid
-				break
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
-		}
-		rowsIter.Release()
-
-		if !valid {
-			continue
-		}
-
-		return true
+		//valid := false
+		//rowsIter := p.rows.Iter()
+		//for ok := rowsIter.Seek(RowEntry{
+		//	BlockID: entry.BlockID,
+		//	RowID:   entry.RowID,
+		//	Time:    p.ts,
+		//}); ok; ok = rowsIter.Next() {
+		//	row := rowsIter.Item()
+		//	if row.BlockID != entry.BlockID {
+		//		// no more
+		//		break
+		//	}
+		//	if row.RowID != entry.RowID {
+		//		// no more
+		//		break
+		//	}
+		//	if row.Time.GT(&p.ts) {
+		//		// not visible
+		//		continue
+		//	}
+		//	if row.Deleted {
+		//		// visible and deleted, no longer valid
+		//		break
+		//	}
+		//	valid = row.ID == entry.RowEntryID
+		//	if valid {
+		//		p.curRow = row
+		//	}
+		//	break
+		//}
+		//rowsIter.Release()
+		//
+		//if !valid {
+		//	continue
+		//}
+		//
+		//return true
 	}
 }
 
@@ -549,44 +586,46 @@ func (p *primaryKeyDelIter) Next() bool {
 			continue
 		}
 
-		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
-				break
-			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.GT(&p.ts) {
-				// not visible
-				continue
-			}
-			if !row.Deleted {
-				// skip not deleted
-				continue
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
-		}
-		rowsIter.Release()
-
-		if !valid {
-			continue
+		if p.isPKItemValid(*entry) {
+			return true
 		}
 
-		return true
+		//// validate
+		//valid := false
+		//rowsIter := p.rows.Iter()
+		//for ok := rowsIter.Seek(RowEntry{
+		//	BlockID: entry.BlockID,
+		//	RowID:   entry.RowID,
+		//	Time:    p.ts,
+		//}); ok; ok = rowsIter.Next() {
+		//	row := rowsIter.Item()
+		//	if row.BlockID != entry.BlockID {
+		//		// no more
+		//		break
+		//	}
+		//	if row.RowID != entry.RowID {
+		//		// no more
+		//		break
+		//	}
+		//	if row.Time.GT(&p.ts) {
+		//		// not visible
+		//		continue
+		//	}
+		//	if !row.Deleted {
+		//		// skip not deleted
+		//		continue
+		//	}
+		//	valid = row.ID == entry.RowEntryID
+		//	if valid {
+		//		p.curRow = row
+		//	}
+		//	break
+		//}
+		//rowsIter.Release()
+		//
+		//if !valid {
+		//	continue
+		//}
 	}
 }
 
