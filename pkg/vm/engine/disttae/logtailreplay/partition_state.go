@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type PartitionState struct {
@@ -73,6 +74,17 @@ type PartitionState struct {
 	shared *sharedStates
 }
 
+func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
+	data, _ := batch.ProtoBatchToBatch(entry.Bat)
+	logutil.Info(
+		msg,
+		zap.String("table-name", entry.TableName),
+		zap.Uint64("table-id", p.tid),
+		zap.String("ps", fmt.Sprintf("%p", p)),
+		zap.String("data", common.MoBatchToString(data, 1000)),
+	)
+}
+
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -85,14 +97,26 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {
+			if objectio.PartitionStateInjected(entry.TableName) {
+				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
+			}
 			p.HandleDataObjectList(ctx, entry, fs, pool)
 		} else if IsTombstoneObjectList(entry.TableName) {
+			if objectio.PartitionStateInjected(entry.TableName) {
+				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
+			}
 			p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 		} else {
+			if objectio.PartitionStateInjected(entry.TableName) {
+				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
+			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
 		}
 
 	case api.Entry_Delete:
+		if objectio.PartitionStateInjected(entry.TableName) {
+			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
+		}
 		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
 
 	default:
@@ -216,6 +240,7 @@ func (p *PartitionState) HandleDataObjectList(
 							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
+								Time:       entry.Time,
 							})
 						}
 						numDeleted++
@@ -330,6 +355,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 		for ok := tbIter.Seek(&PrimaryIndexEntry{
 			Bytes: objEntry.ObjectName().ObjectId()[:],
+			Time:  types.MaxTs(),
 		}); ok; ok = tbIter.Next() {
 			if truncatePoint.LT(&tbIter.Item().Time) {
 				continue
@@ -355,6 +381,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 					Bytes:      deletedRow.PrimaryIndexBytes,
 					RowEntryID: deletedRow.ID,
+					Time:       deletedRow.Time,
 				})
 			}
 		}
@@ -436,6 +463,7 @@ func (p *PartitionState) HandleRowsDelete(
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
@@ -447,6 +475,7 @@ func (p *PartitionState) HandleRowsDelete(
 			RowID:      entry.RowID,
 			Time:       entry.Time,
 			RowEntryID: entry.ID,
+			Deleted:    entry.Deleted,
 		}
 
 		p.inMemTombstoneRowIdIndex.Set(&index)
@@ -511,14 +540,15 @@ func (p *PartitionState) HandleRowsInsert(
 		p.rows.Set(entry)
 
 		{
-			entry := &PrimaryIndexEntry{
+			pe := &PrimaryIndexEntry{
 				Bytes:      primaryKeys[i],
 				RowEntryID: entry.ID,
 				BlockID:    blockID,
 				RowID:      rowID,
 				Time:       entry.Time,
+				Deleted:    entry.Deleted,
 			}
-			p.rowPrimaryKeyIndex.Set(entry)
+			p.rowPrimaryKeyIndex.Set(pe)
 		}
 	}
 
@@ -749,6 +779,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	for _, key := range keys {
 
 		idxEntry.Bytes = key
+		idxEntry.Time = types.MaxTs()
 
 		for ok := iter.Seek(idxEntry); ok; ok = iter.Next() {
 

@@ -92,8 +92,8 @@ func metaCacheSize() int64 {
 	return 2 * mpool.GB
 }
 
-func shardMetaCacheKey(key mataCacheKey) uint8 {
-	return uint8(xxhash.Sum64(key[:]))
+func shardMetaCacheKey(key mataCacheKey) uint64 {
+	return xxhash.Sum64(key[:])
 }
 
 func init() {

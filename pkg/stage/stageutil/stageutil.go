@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package stage
+package stageutil
 
 import (
 	"container/list"
 	"context"
-	"encoding/csv"
 	"fmt"
 	"net/url"
 	"path"
@@ -27,139 +26,30 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 
-	//"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const STAGE_PROTOCOL = "stage"
-const S3_PROTOCOL = "s3"
-const FILE_PROTOCOL = "file"
-
-const PARAMKEY_AWS_KEY_ID = "aws_key_id"
-const PARAMKEY_AWS_SECRET_KEY = "aws_secret_key"
-const PARAMKEY_AWS_REGION = "aws_region"
-const PARAMKEY_ENDPOINT = "endpoint"
-const PARAMKEY_COMPRESSION = "compression"
-const PARAMKEY_PROVIDER = "provider"
-
-const S3_PROVIDER_AMAZON = "amazon"
-const S3_PROVIDER_MINIO = "minio"
-const S3_PROVIDER_COS = "cos"
-
-const S3_SERVICE = "s3"
-const MINIO_SERVICE = "minio"
-
-type StageDef struct {
-	Id          uint32
-	Name        string
-	Url         *url.URL
-	Credentials map[string]string
-	Status      string
-}
-
-func (s *StageDef) GetCredentials(key string, defval string) (string, bool) {
-	if s.Credentials == nil {
-		// no credential in this stage
-		return defval, false
-	}
-
-	k := strings.ToLower(key)
-	res, ok := s.Credentials[k]
-	if !ok {
-		return defval, false
-	}
-	return res, ok
-}
-
-func (s *StageDef) expandSubStage(proc *process.Process) (StageDef, error) {
-	if s.Url.Scheme == STAGE_PROTOCOL {
-		stagename, prefix, query, err := ParseStageUrl(s.Url)
+func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
+	if s.Url.Scheme == stage.STAGE_PROTOCOL {
+		stagename, prefix, query, err := stage.ParseStageUrl(s.Url)
 		if err != nil {
-			return StageDef{}, err
+			return stage.StageDef{}, err
 		}
 
 		res, err := StageLoadCatalog(proc, stagename)
 		if err != nil {
-			return StageDef{}, err
+			return stage.StageDef{}, err
 		}
 
 		res.Url = res.Url.JoinPath(prefix)
 		res.Url.RawQuery = query
-		return res.expandSubStage(proc)
+		return ExpandSubStage(res, proc)
 	}
 
-	return *s, nil
-}
-
-// get stages and expand the path. stage may be a file or s3
-// use the format of path  s3,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
-// or minio,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
-// expand the subpath to MO path.
-// subpath is in the format like path or path with query like path?q1=v1&q2=v2...
-func (s *StageDef) ToPath() (mopath string, query string, err error) {
-
-	if s.Url.Scheme == S3_PROTOCOL {
-		bucket, prefix, query, err := ParseS3Url(s.Url)
-		if err != nil {
-			return "", "", err
-		}
-
-		// get S3 credentials
-		aws_key_id, found := s.GetCredentials(PARAMKEY_AWS_KEY_ID, "")
-		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_KEY_ID not found")
-		}
-		aws_secret_key, found := s.GetCredentials(PARAMKEY_AWS_SECRET_KEY, "")
-		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_SECRET_KEY not found")
-		}
-		aws_region, found := s.GetCredentials(PARAMKEY_AWS_REGION, "")
-		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: AWS_REGION not found")
-		}
-		provider, found := s.GetCredentials(PARAMKEY_PROVIDER, "")
-		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: PROVIDER not found")
-		}
-		endpoint, found := s.GetCredentials(PARAMKEY_ENDPOINT, "")
-		if !found {
-			return "", "", moerr.NewBadConfig(context.TODO(), "Stage credentials: ENDPOINT not found")
-		}
-
-		service, err := getS3ServiceFromProvider(provider)
-		if err != nil {
-			return "", "", err
-		}
-
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		opts := []string{service, endpoint, aws_region, bucket, aws_key_id, aws_secret_key, ""}
-
-		if err = w.Write(opts); err != nil {
-			return "", "", err
-		}
-		w.Flush()
-		return fileservice.JoinPath(buf.String(), prefix), query, nil
-	} else if s.Url.Scheme == FILE_PROTOCOL {
-		return s.Url.Path, s.Url.RawQuery, nil
-	}
-	return "", "", moerr.NewBadConfigf(context.TODO(), "URL protocol %s not supported", s.Url.Scheme)
-}
-
-func getS3ServiceFromProvider(provider string) (string, error) {
-	provider = strings.ToLower(provider)
-	switch provider {
-	case S3_PROVIDER_COS:
-		return S3_SERVICE, nil
-	case S3_PROVIDER_AMAZON:
-		return S3_SERVICE, nil
-	case S3_PROVIDER_MINIO:
-		return MINIO_SERVICE, nil
-	default:
-		return "", moerr.NewBadConfigf(context.TODO(), "provider %s not supported", provider)
-	}
+	return s, nil
 }
 
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -179,37 +69,22 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
-func credentialsToMap(cred string) (map[string]string, error) {
-	if len(cred) == 0 {
-		return nil, nil
+func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef, err error) {
+
+	cache := proc.GetStageCache()
+	s, ok := cache.Get(stagename)
+	if ok {
+		return s, nil
 	}
 
-	opts := strings.Split(cred, ",")
-	if len(opts) == 0 {
-		return nil, nil
-	}
-
-	credentials := make(map[string]string)
-	for _, o := range opts {
-		kv := strings.SplitN(o, "=", 2)
-		if len(kv) != 2 {
-			return nil, moerr.NewBadConfig(context.TODO(), "Format error: invalid stage credentials")
-		}
-		credentials[strings.ToLower(kv[0])] = kv[1]
-	}
-
-	return credentials, nil
-}
-
-func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err error) {
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
 	res, err := runSql(proc, getAllStagesSql)
 	if err != nil {
-		return StageDef{}, err
+		return stage.StageDef{}, err
 	}
 	defer res.Close()
 
-	var reslist []StageDef
+	var reslist []stage.StageDef
 	const id_idx = 0
 	const name_idx = 1
 	const url_idx = 2
@@ -223,28 +98,29 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 					stage_name := string(batch.Vecs[name_idx].GetBytesAt(i))
 					stage_url, err := url.Parse(string(batch.Vecs[url_idx].GetBytesAt(i)))
 					if err != nil {
-						return StageDef{}, err
+						return stage.StageDef{}, err
 					}
 					stage_cred := string(batch.Vecs[cred_idx].GetBytesAt(i))
 
-					credmap, err := credentialsToMap(stage_cred)
+					credmap, err := stage.CredentialsToMap(stage_cred)
 					if err != nil {
-						return StageDef{}, err
+						return stage.StageDef{}, err
 					}
 
 					stage_status := string(batch.Vecs[status_idx].GetBytesAt(i))
 
 					//logutil.Infof("CATALOG: ID %d,  stage %s url %s cred %s", stage_id, stage_name, stage_url, stage_cred)
-					reslist = append(reslist, StageDef{stage_id, stage_name, stage_url, credmap, stage_status})
+					reslist = append(reslist, stage.StageDef{Id: stage_id, Name: stage_name, Url: stage_url, Credentials: credmap, Status: stage_status})
 				}
 			}
 		}
 	}
 
 	if reslist == nil {
-		return StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
+		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
+	cache.Set(stagename, reslist[0])
 	return reslist[0], nil
 }
 
@@ -258,60 +134,30 @@ func UrlToPath(furl string, proc *process.Process) (path string, query string, e
 	return s.ToPath()
 }
 
-func ParseStageUrl(u *url.URL) (stagename, prefix, query string, err error) {
-	if u.Scheme != STAGE_PROTOCOL {
-		return "", "", "", moerr.NewBadConfig(context.TODO(), "ParseStageUrl: URL protocol is not stage://")
-	}
-
-	stagename = u.Host
-	if len(stagename) == 0 {
-		return "", "", "", moerr.NewBadConfig(context.TODO(), "Invalid stage URL: stage name is empty string")
-	}
-
-	prefix = u.Path
-	query = u.RawQuery
-
-	return
-}
-
-func ParseS3Url(u *url.URL) (bucket, fpath, query string, err error) {
-	bucket = u.Host
-	fpath = u.Path
-	query = u.RawQuery
-	err = nil
-
-	if len(bucket) == 0 {
-		err = moerr.NewBadConfig(context.TODO(), "Invalid s3 URL: bucket is empty string")
-		return "", "", "", err
-	}
-
-	return
-}
-
-func UrlToStageDef(furl string, proc *process.Process) (s StageDef, err error) {
+func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err error) {
 
 	aurl, err := url.Parse(furl)
 	if err != nil {
-		return StageDef{}, err
+		return stage.StageDef{}, err
 	}
 
-	if aurl.Scheme != STAGE_PROTOCOL {
-		return StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
+	if aurl.Scheme != stage.STAGE_PROTOCOL {
+		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
 	}
 
-	stagename, subpath, query, err := ParseStageUrl(aurl)
+	stagename, subpath, query, err := stage.ParseStageUrl(aurl)
 	if err != nil {
-		return StageDef{}, err
+		return stage.StageDef{}, err
 	}
 
 	sdef, err := StageLoadCatalog(proc, stagename)
 	if err != nil {
-		return StageDef{}, err
+		return stage.StageDef{}, err
 	}
 
-	s, err = sdef.expandSubStage(proc)
+	s, err = ExpandSubStage(sdef, proc)
 	if err != nil {
-		return StageDef{}, err
+		return stage.StageDef{}, err
 	}
 
 	s.Url = s.Url.JoinPath(subpath)
@@ -357,11 +203,10 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 			if err != nil {
 				return nil, err
 			}
-			entries, err := etlfs.List(proc.Ctx, readpath)
-			if err != nil {
-				return nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range etlfs.List(proc.Ctx, readpath) {
+				if err != nil {
+					return nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}
@@ -403,11 +248,10 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 	if err != nil {
 		return nil, err
 	}
-	entries, err := etlfs.List(proc.Ctx, readpath)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
+	for entry, err := range etlfs.List(proc.Ctx, readpath) {
+		if err != nil {
+			return nil, err
+		}
 		fileList = append(fileList, path.Join(pattern, entry.Name))
 	}
 
