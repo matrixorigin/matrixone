@@ -1182,6 +1182,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			ClusterBy:     clusterByDef,
 			Indexes:       indexes,
 			Version:       tbl.version,
+			DbId:          tbl.GetDBID(ctx),
 		}
 	}
 	return tbl.tableDef
