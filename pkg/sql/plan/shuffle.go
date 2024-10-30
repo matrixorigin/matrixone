@@ -392,8 +392,21 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol0, n, builder)
+	}
+
+	//recheck shuffle plan
+	if n.Stats.HashmapStats.Shuffle == true {
 		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			n.Stats.HashmapStats.Shuffle = false
+		}
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range && n.Stats.HashmapStats.Ranges == nil && n.Stats.HashmapStats.ShuffleColMax-n.Stats.HashmapStats.ShuffleColMin < 100000 {
+			n.Stats.HashmapStats.Shuffle = false
+		}
+		if n.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+			highestNDV := n.OnList[idx].Ndv
+			if highestNDV < ShuffleThreshHoldOfNDV {
+				n.Stats.HashmapStats.Shuffle = false
+			}
 		}
 	}
 }
