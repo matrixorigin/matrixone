@@ -15,6 +15,7 @@
 package fifocache
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -28,7 +29,26 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			cache.EnsureNBytes(1, 1)
+			cache.EnsureNBytes(1)
 		}
 	})
+}
+
+func TestShardCacheKey(t *testing.T) {
+	var shards [numShards]int
+	for offset := range int64(128) {
+		for size := range int64(128) {
+			sum := shardCacheKey(fscache.CacheKey{
+				Path:   fmt.Sprintf("%v%v", offset, size),
+				Offset: offset,
+				Sz:     size,
+			})
+			shards[sum%numShards]++
+		}
+	}
+	for _, n := range shards {
+		if n == 0 {
+			t.Fatal("not good")
+		}
+	}
 }

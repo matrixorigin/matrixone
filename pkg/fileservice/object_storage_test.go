@@ -48,14 +48,13 @@ func testObjectStorage[T ObjectStorage](
 
 			// list
 			n := 0
-			err = storage.List(ctx, prefix+"/", func(isPrefix bool, key string, size int64) (bool, error) {
+			for entry, err := range storage.List(ctx, prefix+"/") {
+				assert.Nil(t, err)
 				n++
-				assert.Equal(t, false, isPrefix)
-				assert.Equal(t, name, key)
-				assert.Equal(t, int64(3), size)
-				return true, nil
-			})
-			assert.Nil(t, err)
+				assert.Equal(t, false, entry.IsDir)
+				assert.Equal(t, name, entry.Name)
+				assert.Equal(t, int64(3), entry.Size)
+			}
 			assert.Equal(t, 1, n)
 
 			// stat
@@ -91,6 +90,69 @@ func testObjectStorage[T ObjectStorage](
 			_, err = storage.Read(ctx, "filenotexists", nil, nil)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
+			// sub dirs
+			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), 1, nil)
+			assert.Nil(t, err)
+			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), 1, nil)
+			assert.Nil(t, err)
+			err = storage.Write(ctx, "a/2", bytes.NewReader([]byte{'a'}), 1, nil)
+			assert.Nil(t, err)
+
+			// set list max entries
+			switch s := any(storage).(type) {
+			case *AliyunSDK:
+				s.listMaxKeys = 1
+			case *MinioSDK:
+				s.listMaxKeys = 1
+			case *QCloudSDK:
+				s.listMaxKeys = 1
+			case *AwsSDKv2:
+				s.listMaxKeys = 1
+			}
+
+			// list dir
+			n = 0
+			for _, err := range storage.List(ctx, "a/1") {
+				assert.Nil(t, err)
+				n++
+			}
+			assert.Equal(t, 1, n) // a/1/
+
+			// list files
+			n = 0
+			for _, err := range storage.List(ctx, "a/1/") {
+				assert.Nil(t, err)
+				n++
+			}
+			assert.Equal(t, 2, n)
+
+			// list mixed
+			n = 0
+			for _, err := range storage.List(ctx, "a/") {
+				assert.Nil(t, err)
+				n++
+			}
+			assert.Equal(t, 2, n)
+
+			// early break
+			for entry, err := range storage.List(ctx, "a/") {
+				assert.Nil(t, err)
+				if entry.IsDir {
+					break
+				}
+			}
+			for entry, err := range storage.List(ctx, "a/") {
+				assert.Nil(t, err)
+				if !entry.IsDir {
+					break
+				}
+			}
+
+			// list empty
+			for range storage.List(ctx, "notexistsd") {
+				t.Fatal()
+			}
+
 		})
 
 	})
@@ -124,6 +186,13 @@ func TestObjectStorages(t *testing.T) {
 				})
 				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
 					storage, err := NewMinioSDK(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
+				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(context.Background(), args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -175,6 +244,13 @@ func TestObjectStorages(t *testing.T) {
 				// qiniu
 				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
 					storage, err := NewMinioSDK(context.Background(), args, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return storage
+				})
+				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
+					storage, err := NewAwsSDKv2(context.Background(), args, nil)
 					if err != nil {
 						t.Fatal(err)
 					}

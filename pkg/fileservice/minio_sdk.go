@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
 	gotrace "runtime/trace"
@@ -193,49 +194,48 @@ var _ ObjectStorage = new(MinioSDK)
 func (a *MinioSDK) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	var marker string
-
-loop1:
-	for {
-		result, err := a.listObjects(ctx, prefix, marker)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
 
-		for _, obj := range result.Contents {
-			more, err := fn(false, obj.Key, obj.Size)
+		var marker string
+
+	loop1:
+		for {
+			result, err := a.listObjects(ctx, prefix, marker)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range result.Contents {
+				if !yield(&DirEntry{
+					Name: obj.Key,
+					Size: obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range result.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  prefix.Prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !result.IsTruncated {
+				break
+			}
+			marker = result.NextMarker
 		}
 
-		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix.Prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !result.IsTruncated {
-			break
-		}
-		marker = result.Marker
 	}
-
-	return nil
 }
 
 func (a *MinioSDK) Stat(

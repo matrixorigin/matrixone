@@ -254,6 +254,10 @@ func (reader *tableReader) readTableWithTxn(
 				_ = reader.sinker.SendRollback(ctx)
 			}
 		}
+
+		if err == nil {
+			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
+		}
 	}()
 
 	var curHint engine.ChangesHandle_Hint

@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"iter"
 	"net/http/httptrace"
 	pathpkg "path"
 	"runtime"
@@ -84,7 +85,7 @@ func NewS3FS(
 	switch {
 
 	case args.IsMinio ||
-		// 天翼云
+		// 天翼云，使用SignatureV2验证，其他SDK不再支持
 		strings.Contains(args.Endpoint, "ctyunapi.cn"):
 		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
@@ -150,22 +151,14 @@ func NewS3FS(
 
 func (s *S3FS) AllocateCacheData(size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(
-			size,
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(s.memCache.cache.Capacity()/100),
-		)
+		s.memCache.cache.EnsureNBytes(size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(
-			len(data),
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(s.memCache.cache.Capacity()/100),
-		)
+		s.memCache.cache.EnsureNBytes(len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(data)
 }
@@ -239,51 +232,58 @@ func (s *S3FS) keyToPath(key string) string {
 	return path
 }
 
-func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
-	ctx, span := trace.Start(ctx, "S3FS.List")
-	defer span.End()
-	start := time.Now()
-	defer func() {
-		metric.FSReadDurationList.Observe(time.Since(start).Seconds())
-	}()
+func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		ctx, span := trace.Start(ctx, "S3FS.List")
+		defer span.End()
+		start := time.Now()
+		defer func() {
+			metric.FSReadDurationList.Observe(time.Since(start).Seconds())
+		}()
 
-	path, err := ParsePathAtService(dirPath, s.name)
-	if err != nil {
-		return nil, err
-	}
-	prefix := s.pathToKey(path.File)
-	if prefix != "" {
-		prefix += "/"
-	}
-
-	if err := s.storage.List(ctx, prefix, func(isPrefix bool, key string, size int64) (bool, error) {
-
-		if isPrefix {
-			filePath := s.keyToPath(key)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			entries = append(entries, DirEntry{
-				Name:  name,
-				IsDir: true,
-			})
-
-		} else {
-			filePath := s.keyToPath(key)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			entries = append(entries, DirEntry{
-				Name:  name,
-				IsDir: false,
-				Size:  size,
-			})
+		path, err := ParsePathAtService(dirPath, s.name)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		prefix := s.pathToKey(path.File)
+		if prefix != "" {
+			prefix += "/"
 		}
 
-		return true, nil
-	}); err != nil {
-		return nil, err
-	}
+		for entry, err := range s.storage.List(ctx, prefix) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
 
-	return
+			if entry.IsDir {
+				filePath := s.keyToPath(entry.Name)
+				filePath = strings.TrimRight(filePath, "/")
+				_, name := pathpkg.Split(filePath)
+				if !yield(&DirEntry{
+					Name:  name,
+					IsDir: true,
+				}, nil) {
+					break
+				}
+
+			} else {
+				filePath := s.keyToPath(entry.Name)
+				filePath = strings.TrimRight(filePath, "/")
+				_, name := pathpkg.Split(filePath)
+				if !yield(&DirEntry{
+					Name:  name,
+					IsDir: false,
+					Size:  entry.Size,
+				}, nil) {
+					break
+				}
+			}
+
+		}
+
+	}
 }
 
 func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
