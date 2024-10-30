@@ -117,7 +117,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		if ctr.needDupVec {
 			for i := range ctr.vecs {
 				for j := range ctr.vecs[i] {
-					ctr.vecs[i][j].Free(proc.Mp())
+					if ctr.vecs[i][j] != nil {
+						ctr.vecs[i][j].Free(proc.Mp())
+					}
 				}
 			}
 		}
