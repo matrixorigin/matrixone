@@ -125,22 +125,18 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
-	// plugin exec
-	vlen := len(tf.ctr.argVecs)
-	if vlen != 2 {
-		return moerr.NewInternalError(proc.Ctx, "plugin_exec: number of args != 2")
-	}
+	// plugin exec: number of args is always 2.
 
 	// command
 	var cmdbytes []byte
 	cmdVec := tf.ctr.argVecs[0]
+	if cmdVec.IsNull(uint64(nthRow)) {
+		u.batch.SetRowCount(0)
+		return nil
+	}
 	switch cmdVec.GetType().Oid {
 	case types.T_json:
 
-		if cmdVec.IsNull(uint64(nthRow)) {
-			u.batch.SetRowCount(0)
-			return nil
-		}
 		cmd := cmdVec.GetBytesAt(nthRow)
 		cmdjs := bytejson.ByteJson{}
 		cmdjs.Unmarshal(cmd)
@@ -179,7 +175,7 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	}
 
 	if len(args) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "command is empty")
+		return moerr.NewInternalError(proc.Ctx, "command is empty or invalid")
 	}
 
 	//logutil.Infof("ARGS %v", args)

@@ -1,7 +1,23 @@
 select * from plugin_exec('cat', '[1,2,3]') as f;
-internal error: command is empty
+internal error: command is empty or invalid
 select * from plugin_exec(cast('"cat"' as json), '[1,2,3]') as f;
 internal error: command is a JSON array
+select * from plugin_exec(cast('[1]' as json), '[1,2,3]') as f;
+internal error: command argument is not string
+select * from plugin_exec('["cat"]') as f;
+invalid input: Invalid number of arguments (NARGS != 2).
+select * from plugin_exec('["unknown"]', '[1,2,3]') as f;
+exec: "unknown": executable file not found in $PATH
+select * from plugin_exec('["cat"]', 1) as f;
+internal error: plugin_exec input type not supported
+select * from plugin_exec('["cat"]', '[1a,2,3]') as f;
+internal error: parse json: json: expected token but found 'a': a
+select * from plugin_exec(null, null) as f;
+result
+select * from plugin_exec('["cat"]', null) as f;
+result
+select * from plugin_exec('["cat"]', '') as f;
+result
 select * from plugin_exec('["cat"]', '[1,2,3]') as f;
 result
 1

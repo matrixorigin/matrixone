@@ -1,9 +1,20 @@
 -- error
 select * from plugin_exec('cat', '[1,2,3]') as f;
 select * from plugin_exec(cast('"cat"' as json), '[1,2,3]') as f;
+select * from plugin_exec(cast('[1]' as json), '[1,2,3]') as f;
+select * from plugin_exec('["cat"]') as f;
+select * from plugin_exec('["unknown"]', '[1,2,3]') as f;
+select * from plugin_exec('["cat"]', 1) as f;
+select * from plugin_exec('["cat"]', '[1a,2,3]') as f;
 
 -- start test
 -- index of multistream.json (offset, size) = [(0, 155), (155, 164)]
+
+select * from plugin_exec(null, null) as f;
+select * from plugin_exec('["cat"]', null) as f;
+
+select * from plugin_exec('["cat"]', '') as f;
+
 select * from plugin_exec('["cat"]', '[1,2,3]') as f;
 
 select * from plugin_exec('["cat"]', '["1","2","3"]') as f;
