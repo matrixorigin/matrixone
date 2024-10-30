@@ -3552,7 +3552,13 @@ func IsFkBannedDatabase(db string) bool {
 
 // IsForeignKeyChecksEnabled returns the system variable foreign_key_checks is true or false
 func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
-	if disable := ctx.GetContext().Value(defines.DisableFkCheck{}); disable != nil {
+	ignore := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+	if ignore != nil {
+		return !ignore.(bool), nil
+	}
+
+	disable := ctx.GetContext().Value(defines.DisableFkCheck{})
+	if disable != nil {
 		return !disable.(bool), nil
 	}
 
