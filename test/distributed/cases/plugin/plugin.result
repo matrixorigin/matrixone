@@ -94,6 +94,6 @@ pkey    chunk    e    t
 drop stage llmstage;
 drop table src;
 drop table embed;
-select * from plugin_exec('["python3", "$resources/plugin/ask.py", "index_table"]', 'this is question to LLM') as f;
+select * from plugin_exec('["$resources/plugin/ask.sh", "index_table"]', 'this is question to LLM') as f;
 result
-"this is answer from LLM with index table name = index_table. Question: this is question to LLM"
+"This is answer from LLM. Input Data: this is question to LLM. Index Table: index_table."
