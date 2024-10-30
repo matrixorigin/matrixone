@@ -48,11 +48,6 @@ func (b Bytes) Retain() {
 	}
 }
 
-func (b *Bytes) Init() {
-	b._refs.Store(1)
-	b.refs = &b._refs
-}
-
 func (b *Bytes) Release() {
 	if b.refs != nil {
 		if n := b.refs.Add(-1); n == 0 {
@@ -84,7 +79,8 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 		bytes:       slice,
 		deallocator: dec,
 	}
-	bytes.Init()
+	bytes._refs.Store(1)
+	bytes.refs = &bytes._refs
 	return bytes
 }
 
