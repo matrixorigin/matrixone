@@ -171,9 +171,6 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	}
 	expr.folded.foldVector = expr.resultVector.GetResultVector()
 	expr.resultVector.SetResultVector(nil)
-	if execLen == 1 {
-		expr.folded.foldVector.SetClass(vector.CONSTANT)
-	}
 	expr.folded.canFold = true
 	return nil
 }
