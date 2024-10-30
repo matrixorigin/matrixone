@@ -74,10 +74,10 @@ func initSysTable(
 	service string,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
-	moCatalogCreatedTime *vector.Vector,
-	moDatabaseCreatedTime *vector.Vector,
-	moTablesCreatedTime *vector.Vector,
-	moColumnsCreatedTime *vector.Vector,
+	moCatalogCreatedTime **vector.Vector,
+	moDatabaseCreatedTime **vector.Vector,
+	moTablesCreatedTime **vector.Vector,
+	moColumnsCreatedTime **vector.Vector,
 	part *logtailreplay.Partition,
 	cc *cache.CatalogCache,
 	tid uint64,
@@ -106,7 +106,7 @@ func initSysTable(
 			return err
 		}
 		if moCatalogCreatedTime != nil {
-			moCatalogCreatedTime = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
+			*moCatalogCreatedTime = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
 		}
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -137,7 +137,7 @@ func initSysTable(
 			return err
 		}
 		if moDatabaseCreatedTime != nil {
-			moDatabaseCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+			*moDatabaseCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -167,7 +167,7 @@ func initSysTable(
 			return err
 		}
 		if moTablesCreatedTime != nil {
-			moTablesCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+			*moTablesCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err = fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -196,7 +196,7 @@ func initSysTable(
 			return err
 		}
 		if moColumnsCreatedTime != nil {
-			moColumnsCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+			*moColumnsCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err = fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -312,10 +312,10 @@ func (e *Engine) init(ctx context.Context) error {
 		e.service,
 		e.mp,
 		e.packerPool,
-		e.moCatalogCreatedTime,
-		e.moDatabaseCreatedTime,
-		e.moTablesCreatedTime,
-		e.moColumnsCreatedTime,
+		&e.moCatalogCreatedTime,
+		&e.moDatabaseCreatedTime,
+		&e.moTablesCreatedTime,
+		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}],
 		e.catalog,
 		catalog.MO_DATABASE_ID,
@@ -329,10 +329,10 @@ func (e *Engine) init(ctx context.Context) error {
 		e.service,
 		e.mp,
 		e.packerPool,
-		e.moCatalogCreatedTime,
-		e.moDatabaseCreatedTime,
-		e.moTablesCreatedTime,
-		e.moColumnsCreatedTime,
+		&e.moCatalogCreatedTime,
+		&e.moDatabaseCreatedTime,
+		&e.moTablesCreatedTime,
+		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}],
 		e.catalog,
 		catalog.MO_TABLES_ID,
@@ -347,10 +347,10 @@ func (e *Engine) init(ctx context.Context) error {
 		e.service,
 		e.mp,
 		e.packerPool,
-		e.moCatalogCreatedTime,
-		e.moDatabaseCreatedTime,
-		e.moTablesCreatedTime,
-		e.moColumnsCreatedTime,
+		&e.moCatalogCreatedTime,
+		&e.moDatabaseCreatedTime,
+		&e.moTablesCreatedTime,
+		&e.moColumnsCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}],
 		e.catalog,
 		catalog.MO_COLUMNS_ID,
