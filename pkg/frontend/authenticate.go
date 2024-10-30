@@ -7871,6 +7871,11 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			if err != nil {
 				return err
 			}
+		} else {
+			passwordHistory, err = generageEmptyPasswordRecord()
+			if err != nil {
+				return err
+			}
 		}
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.

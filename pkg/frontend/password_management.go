@@ -349,6 +349,11 @@ func generateSinglePasswordRecod(pwd string) ([]byte, error) {
 	return json.Marshal(records)
 }
 
+func generageEmptyPasswordRecord() ([]byte, error) {
+	records := make([]passwordHistoryRecord, 0)
+	return json.Marshal(records)
+}
+
 func getUserPassword(ctx context.Context, bh BackgroundExec, user string) ([]passwordHistoryRecord, error) {
 	var (
 		err             error
