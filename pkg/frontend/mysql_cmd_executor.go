@@ -1727,11 +1727,13 @@ func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
 		filterLabels(labels), clusterservice.Contain)
+	moc := clusterservice.GetMOCluster(ses.GetService())
+	moc.ForceRefresh(true)
 	if isSysTenant(tenant) {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
-			clusterservice.GetMOCluster(ses.GetService()).GetCNService(
+			moc.GetCNService(
 				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
