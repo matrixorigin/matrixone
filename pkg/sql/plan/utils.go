@@ -2439,8 +2439,6 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 			return false, nil
 		case *plan.Expr_Vec:
 			return false, nil
-		case *plan.Expr_P:
-			return false, nil
 		default:
 			return true, nil
 		}
