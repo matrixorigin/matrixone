@@ -490,6 +490,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 				)
 				return
 			}
+			c.mutation.snapshotMeta = logtail.NewSnapshotMeta()
 			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
 			ckpData.Close()
 		}
