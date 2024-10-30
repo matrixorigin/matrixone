@@ -34,15 +34,15 @@ json_extract(result, $.id)
 3
 select * from plugin_exec('["cat"]', cast('file:///$resources/plugin/result.json' as datalink)) as f;
 result
-{"chunk": 0, "e": "[1.1, 2.2, 3.3]"}
-{"chunk": "1", "e": "[2.5, 3.5, 4.5]"}
-{"chunk": "2", "e": "[9.1, 8.2, 7.3]"}
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
+{"chunk": 0, "e": "[1.1, 2.2, 3.3]", "t": "text0"}
+{"chunk": "1", "e": "[2.5, 3.5, 4.5]", "t": "text1"}
+{"chunk": "2", "e": "[9.1, 8.2, 7.3]", "t": "text2"}
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 0    "[1.1, 2.2, 3.3]"
 "1"    "[2.5, 3.5, 4.5]"
 "2"    "[9.1, 8.2, 7.3]"
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 3    "[10.1, 20.2, 30.3]"
 "4"    "[20.5, 30.5, 40.5]"
@@ -57,14 +57,14 @@ chunk    e
 2    [9.1, 8.2, 7.3]
 truncate t1;
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=116' as datalink) ) as f;
+from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
 1    [2.5, 3.5, 4.5]
 2    [9.1, 8.2, 7.3]
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=116&size=125' as datalink) ) as f;
+from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
@@ -76,20 +76,21 @@ chunk    e
 drop table t1;
 create stage llmstage URL='file:///$resources/plugin/';
 create table src (pkey int primary key, dlink datalink);
-create table embed (pkey int, chunk int, e vecf32(3));
+create table embed (pkey int, chunk int, e vecf32(3), t varchar);
 insert into src values
-(0, 'stage://llmstage/multistream.json?offset=0&size=116'),
-(1, 'stage://llmstage/multistream.json?offset=116&size=125');
-insert into embed select src.pkey, json_unquote(json_extract(f.result, "$.chunk")), json_unquote(json_extract(f.result, "$.e"))
+(0, 'stage://llmstage/multistream.json?offset=0&size=155'),
+(1, 'stage://llmstage/multistream.json?offset=155&size=164');
+insert into embed select src.pkey, json_unquote(json_extract(f.result, "$.chunk")),
+json_unquote(json_extract(f.result, "$.e")), json_unquote(json_extract(f.result, "$.t"))
 from src CROSS APPLY plugin_exec('["cat"]', src.dlink) as f;
 select * from embed;
-pkey    chunk    e
-0    0    [1.1, 2.2, 3.3]
-0    1    [2.5, 3.5, 4.5]
-0    2    [9.1, 8.2, 7.3]
-1    3    [10.1, 20.2, 30.3]
-1    4    [20.5, 30.5, 40.5]
-1    5    [90.1, 80.2, 70.3]
+pkey    chunk    e    t
+0    0    [1.1, 2.2, 3.3]    text0
+0    1    [2.5, 3.5, 4.5]    text1
+0    2    [9.1, 8.2, 7.3]    text2
+1    3    [10.1, 20.2, 30.3]    text3
+1    4    [20.5, 30.5, 40.5]    text4
+1    5    [90.1, 80.2, 70.3]    text5
 drop stage llmstage;
 drop table src;
 drop table embed;
