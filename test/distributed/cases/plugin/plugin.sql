@@ -62,3 +62,5 @@ drop stage llmstage;
 drop table src;
 drop table embed;
 
+-- simulate ask function
+select * from plugin_exec('["python3", "$resources/plugin/ask.py", "index_table"]', 'this is question to LLM') as f;

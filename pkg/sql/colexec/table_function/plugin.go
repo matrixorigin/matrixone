@@ -58,6 +58,16 @@ import (
 // To do this, simple run the SQL like this:
 // INSERT INTO t1 SELECT json_unquote(json_extract(result, '$.chunk')), json_unquote(json_extract(result, '$.e')) from
 // plugin_exec('["python3", "gen_embedding.py", "arg1", "arg2"]', cast('stage://mys3/wiki.bz2?offset=0&size=123456' as datalink)) as f;
+//
+// You can also do ASK function with plugin "ask" command like this:
+// SELECT * FROM plugin_exec('["ask", "index_table"]', 'this is a question?') as f;
+//
+// the plugin ask do the following:
+// 1. get the question from stdin
+// 2. get the embedding of the question from LLM
+// 3. query the database with index_table. SELECT * from index_table order by L2_DISTANCE(e, "[1.3,2.3,3.4]") LIMIT 3;
+// 4. send the result from database to LLM and get the answer
+// 5. return answer to stdout
 
 type pluginState struct {
 	inited bool
