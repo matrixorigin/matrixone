@@ -256,8 +256,6 @@ func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Read.Load()
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
-	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.UnderlyingRead.Load()
-	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.UnderlyingWrite.Load()
 }
 
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
