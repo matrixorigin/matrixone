@@ -33,8 +33,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"

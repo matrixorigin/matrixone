@@ -151,22 +151,14 @@ func NewS3FS(
 
 func (s *S3FS) AllocateCacheData(size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(
-			size,
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(s.memCache.cache.Capacity()/100),
-		)
+		s.memCache.cache.EnsureNBytes(size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(
-			len(data),
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(s.memCache.cache.Capacity()/100),
-		)
+		s.memCache.cache.EnsureNBytes(len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(data)
 }

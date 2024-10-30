@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -103,4 +104,16 @@ func BenchmarkParallelEvict(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkShardCacheKey(b *testing.B) {
+	key := fscache.CacheKey{
+		Sz:     42,
+		Offset: 3,
+		Path:   strings.Repeat("abc", 42),
+	}
+	b.ResetTimer()
+	for range b.N {
+		shardCacheKey(key)
+	}
 }
