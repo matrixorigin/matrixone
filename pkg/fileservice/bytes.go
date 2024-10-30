@@ -29,20 +29,20 @@ type Bytes struct {
 	refs        *atomic.Int32
 }
 
-func (b Bytes) Size() int64 {
+func (b *Bytes) Size() int64 {
 	return int64(len(b.bytes))
 }
 
-func (b Bytes) Bytes() []byte {
+func (b *Bytes) Bytes() []byte {
 	return b.bytes
 }
 
-func (b Bytes) Slice(length int) fscache.Data {
+func (b *Bytes) Slice(length int) fscache.Data {
 	b.bytes = b.bytes[:length]
-	return &b
+	return b
 }
 
-func (b Bytes) Retain() {
+func (b *Bytes) Retain() {
 	if b.refs != nil {
 		b.refs.Add(1)
 	}
