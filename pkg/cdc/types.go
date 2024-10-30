@@ -60,6 +60,7 @@ type Reader interface {
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
+	Run(ctx context.Context, ar *ActiveRoutine)
 	Sink(ctx context.Context, data *DecoderOutput) error
 	SendBegin(ctx context.Context) error
 	SendCommit(ctx context.Context) error

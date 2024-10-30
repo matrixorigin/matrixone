@@ -81,6 +81,8 @@ func NewConsoleSinker(
 	}
 }
 
+func (s *consoleSinker) Run(_ context.Context, _ *ActiveRoutine) {}
+
 func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) error {
 	logutil.Info("====console sinker====")
 
@@ -136,10 +138,14 @@ type mysqlSinker struct {
 	watermarkUpdater *WatermarkUpdater
 	ar               *ActiveRoutine
 
-	// buffers, allocate only once
 	maxAllowedPacket uint64
+
 	// buf of sql statement
-	sqlBuf []byte
+	sqlBufs      [2][]byte
+	curBufIdx    int
+	sqlBuf       []byte
+	sqlBufSendCh chan []byte
+
 	// buf of row data from batch, e.g. values part of insert statement (insert into xx values (a), (b), (c))
 	// or `where ... in ... ` part of delete statement (delete from xx where pk in ((a), (b), (c)))
 	rowBuf         []byte
@@ -179,8 +185,13 @@ var NewMysqlSinker = func(
 	}
 	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&s.maxAllowedPacket)
 
-	// buf
-	s.sqlBuf = make([]byte, 0, s.maxAllowedPacket)
+	// sqlBuf
+	s.sqlBufs[0] = make([]byte, 0, s.maxAllowedPacket)
+	s.sqlBufs[1] = make([]byte, 0, s.maxAllowedPacket)
+	s.curBufIdx = 0
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.sqlBufSendCh = make(chan []byte)
+
 	s.rowBuf = make([]byte, 0, 1024)
 
 	// prefix
@@ -221,6 +232,22 @@ var NewMysqlSinker = func(
 	return s
 }
 
+func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
+	logutil.Infof("cdc mysqlSinker(%v).Run: start", s.dbTblInfo)
+	defer func() {
+		logutil.Infof("cdc mysqlSinker(%v).Run: end", s.dbTblInfo)
+	}()
+
+	for {
+		select {
+		case sqlBuf := <-s.sqlBufSendCh:
+			if err := s.mysql.Send(ctx, ar, util.UnsafeBytesToString(sqlBuf)); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v", s.dbTblInfo, err)
+			}
+		}
+	}
+}
+
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblIdStr)
 	if data.toTs.LE(&watermark) {
@@ -242,9 +269,9 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error)
 
 		// output the left sql
 		if s.preSqlBufLen != 0 {
-			if err = s.mysql.Send(ctx, s.ar, util.UnsafeBytesToString(s.sqlBuf)); err != nil {
-				return
-			}
+			s.sqlBufSendCh <- s.sqlBuf
+			s.curBufIdx ^= 1
+			s.sqlBuf = s.sqlBufs[s.curBufIdx]
 		}
 
 		// reset status
@@ -434,9 +461,9 @@ func (s *mysqlSinker) appendSqlBuf(ctx context.Context, rowType RowType) (err er
 		}
 
 		// send it to downstream
-		if err = s.mysql.Send(ctx, s.ar, util.UnsafeBytesToString(s.sqlBuf)); err != nil {
-			return
-		}
+		s.sqlBufSendCh <- s.sqlBuf
+		s.curBufIdx ^= 1
+		s.sqlBuf = s.sqlBufs[s.curBufIdx]
 
 		// reset s.sqlBuf
 		s.preSqlBufLen = 0
@@ -513,6 +540,7 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 }
 
 func (s *mysqlSinker) Close() {
+	//close(s.sqlBufSendCh)
 	s.mysql.Close()
 	s.sqlBuf = nil
 	s.rowBuf = nil
