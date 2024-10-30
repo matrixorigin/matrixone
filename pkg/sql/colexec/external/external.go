@@ -1080,7 +1080,6 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return err
 	}
 
-	//crs := new(perfcounter.CounterSet)
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	// getZonemapBatch will access Fileservice
