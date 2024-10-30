@@ -1185,7 +1185,7 @@ const (
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
-	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history, status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
 

@@ -38,11 +38,16 @@ const (
 
 	// password expiration management
 	DefaultPasswordLifetime = "default_password_lifetime"
+
 	// password history management
 	PasswordHistory       = "password_history"
 	PasswordReuseInterval = "password_reuse_interval"
 	PasswordTimestamp     = "password_timestamp"
 	Password              = "password"
+
+	// password lock management
+	ConnectionControlFailedConnectionsThreshold = "connection_control_failed_connections_threshold"
+	ConnectionControlMaxConnectionDelay         = "connection_control_max_connection_delay"
 )
 
 type passwordHistoryRecord struct {
