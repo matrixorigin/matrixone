@@ -407,13 +407,17 @@ func checkWorkspaceEntryType(
 }
 
 func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch) {
-	if len(writes) > 200 && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
+	if objectio.Debug19357Injected() && len(writes) > 20 && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
 		outLen := outBatch.Vecs[0].Length()
-		start := outLen - 3
-		if start < 0 {
-			start = 0
+		var slim *batch.Batch
+		if outLen > 0 {
+			start := outLen - 3
+			if start < 0 {
+				start = 0
+			}
+			slim, _ = outBatch.Window(start, outLen)
 		}
-		slim, _ := outBatch.Window(start, outLen)
+
 		logutil.Info("yyyyyy checkTxnLastInsertRow",
 			zap.String("txn", hex.EncodeToString(ls.table.db.op.Txn().ID)),
 			zap.Int("txnOffset", ls.txnOffset),
