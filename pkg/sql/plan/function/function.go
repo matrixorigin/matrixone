@@ -226,6 +226,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	vec := result.GetResultVector()
 	if fold {
 		vec.ToConst()
+		vec.SetLength(length)
 	}
 	return vec, nil
 }
