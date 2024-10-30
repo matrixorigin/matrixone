@@ -650,7 +650,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
-	expr.folded.reset(expr.m)
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {

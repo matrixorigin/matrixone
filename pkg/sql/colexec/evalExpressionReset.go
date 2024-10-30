@@ -34,16 +34,11 @@ func (expr *FixedVectorExpressionExecutor) ResetForNextQuery() {
 type functionFolding struct {
 	needFoldingCheck bool
 	canFold          bool
-	foldVector       *vector.Vector
 }
 
-func (fF *functionFolding) reset(m *mpool.MPool) {
-	if fF.foldVector != nil {
-		fF.foldVector.Free(m)
-	}
+func (fF *functionFolding) reset(_ *mpool.MPool) {
 	fF.needFoldingCheck = true
 	fF.canFold = false
-	fF.foldVector = nil
 }
 
 type functionInformationForEval struct {
@@ -100,10 +95,11 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 }
 
 func (expr *FunctionExpressionExecutor) getFoldedVector(requiredLength int) *vector.Vector {
-	if expr.folded.foldVector.IsConst() {
-		expr.folded.foldVector.SetLength(requiredLength)
+	rv := expr.resultVector.GetResultVector()
+	if rv.IsConst() {
+		rv.SetLength(requiredLength)
 	}
-	return expr.folded.foldVector
+	return rv
 }
 
 func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime bool) (err error) {
@@ -169,16 +165,8 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return err
 	}
-	rv := expr.resultVector.GetResultVector()
-	if rv.IsConstNull() || rv.GetNulls().Contains(0) {
-		expr.folded.foldVector = vector.NewConstNull(*rv.GetType(), 1, proc.Mp())
-		rv.Free(proc.Mp())
-	} else {
-		expr.folded.foldVector = rv
-		expr.resultVector.SetResultVector(nil)
-		if execLen == 1 {
-			expr.folded.foldVector.SetClass(vector.CONSTANT)
-		}
+	if execLen == 1 {
+		expr.resultVector.GetResultVector().ToConst()
 	}
 
 	expr.folded.canFold = true
