@@ -273,6 +273,7 @@ type PrepareStmt struct {
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
+	Ts      timestamp.Timestamp
 }
 
 /*
