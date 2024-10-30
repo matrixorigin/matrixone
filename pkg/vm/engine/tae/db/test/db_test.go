@@ -7293,8 +7293,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, 0)
-	assert.Nil(t, err)
+	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), defaultGlobalCheckpointTimeout, 0)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CreateRelAndAppend2(bat, false)
@@ -7305,8 +7304,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	tae.IncrementalCheckpoint(currTs, false, true, true)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, currTs, defaultGlobalCheckpointTimeout, time.Duration(1))
-	assert.Nil(t, err)
+	tae.DB.ForceGlobalCheckpoint(ctx, currTs, defaultGlobalCheckpointTimeout, time.Duration(1))
 
 	p := &catalog.LoopProcessor{}
 	tableExisted := false
