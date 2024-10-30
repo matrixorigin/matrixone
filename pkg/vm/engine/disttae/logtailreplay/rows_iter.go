@@ -338,8 +338,8 @@ const (
 
 func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
 	first := true
-	return PrimaryKeyMatchSpec{
-		Move: func(p *primaryKeyIter) bool {
+	spec := PrimaryKeyMatchSpec{
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
@@ -359,14 +359,31 @@ func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
 			return bytes.Compare(p.iter.Item().Bytes, ub) < 0
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return spec
 }
 
 func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 	// a > x
 	// a >= x
 	first := true
-	return PrimaryKeyMatchSpec{
-		Move: func(p *primaryKeyIter) bool {
+	spec := PrimaryKeyMatchSpec{
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
@@ -386,6 +403,23 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 			return p.iter.Next()
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return spec
 }
 
 func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
