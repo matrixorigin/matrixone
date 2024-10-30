@@ -397,10 +397,12 @@ func checkPasswordHistoryRule(ctx context.Context, reuseInfo *passwordReuseInfo,
 	// check the password history
 	// from the latest password record to the oldest password record
 	// check time not exceed the password history
-	for i := len(userPasswords) - 1; i >= 0; i-- {
+	checkNum := reuseInfo.PasswordHisoty - 1
+	for i := len(userPasswords) - 1; i >= 0 && checkNum >= 0; i-- {
 		if userPasswords[i].Password == pwd {
-			return false, moerr.NewInvalidInputf(ctx, "The password '%s' has been used before", pwd)
+			return false, moerr.NewInvalidInputf(ctx, "The password has been used before")
 		}
+		checkNum--
 	}
 
 	return true, nil
@@ -426,7 +428,7 @@ func checkPasswordIntervalRule(ctx context.Context, reuseInfo *passwordReuseInfo
 			}
 
 			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now()) {
-				return false, moerr.NewInvalidInputf(ctx, "The password '%s' has been used before", pwd)
+				return false, moerr.NewInvalidInputf(ctx, "The password has been used before")
 			}
 		}
 	}
@@ -464,7 +466,7 @@ func passwordVerification(ctx context.Context, reuseInfo *passwordReuseInfo, pwd
 		}
 
 		if !canUse {
-			return false, 0, moerr.NewInvalidInputf(ctx, "The password '%s' has been used before", pwd)
+			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before")
 		}
 	}
 
@@ -476,7 +478,7 @@ func passwordVerification(ctx context.Context, reuseInfo *passwordReuseInfo, pwd
 		}
 
 		if !canUse {
-			return false, 0, moerr.NewInvalidInputf(ctx, "The password '%s' has been used before", pwd)
+			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before")
 		}
 
 	}
@@ -515,12 +517,23 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return err
 	}
 	if !canUse {
-		return moerr.NewInvalidInputf(ctx, "The password '%s' has been used before", pwd)
+		return moerr.NewInvalidInputf(ctx, "The password has been used before")
 	}
 
 	// delete the password records that exceed the password history
 	if canDeleteNum > 0 {
-		userPasswords = userPasswords[canDeleteNum:]
+		for i := 0; i < int(canDeleteNum); i++ {
+			// if password time exceeds the password history, delete the password record
+			var passwordTime time.Time
+			passwordTime, err = time.ParseInLocation("2006-01-02 15:04:05", userPasswords[i].PasswordTimestamp, time.UTC)
+			if err != nil {
+				return err
+			}
+
+			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordHisoty)).Before(time.Now()) {
+				userPasswords = userPasswords[i+1:]
+			}
+		}
 	}
 
 	// add the new password record
