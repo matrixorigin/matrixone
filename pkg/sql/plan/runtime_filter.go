@@ -159,9 +159,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				return
 			}
 			if sortOrder != 0 {
-				if rightChild.Stats.Outcnt > 10000 {
-					return
-				}
 				if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 					return
 				}
