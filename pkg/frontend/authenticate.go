@@ -1145,11 +1145,12 @@ var (
 				status,
 				created_time,
 				expired_time,
+				password_history,
 				login_type,
 				creator,
 				owner,
 				default_role
-    		) values("%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
 	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
@@ -1184,7 +1185,9 @@ const (
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
-	getPasswordOfUserFormat = `select user_id,authentication_string,default_role,password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+
+	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
 
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
 
@@ -1465,8 +1468,6 @@ const (
 
 	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s';`
 
-	getSystemVariableValueFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s';`
-
 	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
@@ -1630,6 +1631,14 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(getPasswordOfUserFormat, user), nil
+}
+
+func getSqlForUpdatePasswordHistoryOfUser(ctx context.Context, passwordHistory, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updatePasswordHistoryOfUserFormat, passwordHistory, user), nil
 }
 
 func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (string, error) {
@@ -1906,10 +1915,6 @@ func getSqlForGetSysVarWithAccount(accountId uint64, varName string) string {
 
 func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
 	return fmt.Sprintf(insertSystemVariableWithAccountFormat, accountId, accountName, varName, varValue, true)
-}
-
-func getSqlForGetSystemVariableValue(accountId uint64, varName string) string {
-	return fmt.Sprintf(getSystemVariableValueFormat, accountId, varName)
 }
 
 // getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
@@ -2772,6 +2777,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 
 	//encryption the password
 	encryption = HashPassWord(password)
+
+	err = checkPasswordReusePolicy(ctx, ses, bh, encryption, userName)
+	if err != nil {
+		return err
+	}
 
 	if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
@@ -7850,13 +7860,26 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		//encryption the password
 		encryption := HashPassWord(password)
 
+		var needSaveHistory bool
+		var passwordHistory []byte
+		needSaveHistory, err = whetherSavePasswordHistory(ses)
+		if err != nil {
+			return err
+		}
+		if needSaveHistory {
+			passwordHistory, err = generateSinglePasswordRecod(encryption)
+			if err != nil {
+				return err
+			}
+		}
+
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		host = user.Hostname
 		if len(user.Hostname) == 0 || user.Hostname == "%" {
 			host = rootHost
 		}
 		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
-			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, string(passwordHistory), rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
 		bh.ClearExecResultSet()
