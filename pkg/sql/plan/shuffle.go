@@ -395,7 +395,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	//recheck shuffle plan
-	if n.Stats.HashmapStats.Shuffle == true {
+	if n.Stats.HashmapStats.Shuffle {
 		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			n.Stats.HashmapStats.Shuffle = false
 		}
