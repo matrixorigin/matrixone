@@ -119,18 +119,20 @@ func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
 	}
 }
 
-// cloneSomeVecFromCompactBatchs  for hidden table. copy vec to new batch
+// cloneSomeVecFromCompactBatchs  copy vec to new batch
 func cloneSomeVecFromCompactBatchs(
 	proc *process.Process,
 	src *batch.CompactBatchs,
 	partitionIdxInBatch int,
 	getPartitionIdx int,
 	cols []int,
-	attrs []string) ([]*batch.Batch, error) {
+	attrs []string,
+	sortIdx int) ([]*batch.Batch, error) {
 
 	var err error
 	var newBat *batch.Batch
-	bats := make([]*batch.Batch, src.Length())
+	bats := make([]*batch.Batch, 0, src.Length())
+
 	defer func() {
 		if err != nil {
 			for _, bat := range bats {
@@ -152,6 +154,7 @@ func cloneSomeVecFromCompactBatchs(
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
+			sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
@@ -163,7 +166,7 @@ func cloneSomeVecFromCompactBatchs(
 			}
 
 			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(i)) {
+				if !nulls.Contains(uint64(rowIdx)) && !sortNulls.Contains(uint64(rowIdx)) {
 					if partition == -1 {
 						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expect {
@@ -175,8 +178,12 @@ func cloneSomeVecFromCompactBatchs(
 					}
 				}
 			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			bats[i] = newBat
+			if newBat.Vecs[0].Length() > 0 {
+				newBat.SetRowCount(newBat.Vecs[0].Length())
+				bats = append(bats, newBat)
+			} else {
+				newBat.Clean(proc.GetMPool())
+			}
 			newBat = nil
 		}
 	} else {
@@ -184,14 +191,39 @@ func cloneSomeVecFromCompactBatchs(
 			newBat = batch.NewWithSize(len(cols))
 			newBat.Attrs = attrs
 			oldBat := src.Get(i)
-			for newColIdx, oldColIdx := range cols {
-				newBat.Vecs[newColIdx], err = oldBat.Vecs[oldColIdx].Dup(proc.GetMPool())
-				if err != nil {
-					return nil, err
+
+			sortVec := oldBat.Vecs[cols[sortIdx]]
+			if sortVec.HasNull() {
+				sortNulls := sortVec.GetNulls()
+				for newColIdx, oldColIdx := range cols {
+					typ := oldBat.Vecs[oldColIdx].GetType()
+					newBat.Vecs[newColIdx] = vector.NewVec(*typ)
+				}
+
+				for j := 0; j < oldBat.RowCount(); j++ {
+					if !sortNulls.Contains(uint64(j)) {
+						for newColIdx, oldColIdx := range cols {
+							if err = newBat.Vecs[newColIdx].UnionOne(oldBat.Vecs[oldColIdx], int64(j), proc.GetMPool()); err != nil {
+								return nil, err
+							}
+						}
+					}
+				}
+			} else {
+				for newColIdx, oldColIdx := range cols {
+					newBat.Vecs[newColIdx], err = oldBat.Vecs[oldColIdx].Dup(proc.GetMPool())
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			bats[i] = newBat
+
+			if newBat.Vecs[0].Length() > 0 {
+				newBat.SetRowCount(newBat.Vecs[0].Length())
+				bats = append(bats, newBat)
+			} else {
+				newBat.Clean(proc.GetMPool())
+			}
 			newBat = nil
 		}
 	}
