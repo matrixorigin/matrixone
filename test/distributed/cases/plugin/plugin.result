@@ -74,3 +74,22 @@ chunk    e
 4    [20.5, 30.5, 40.5]
 5    [90.1, 80.2, 70.3]
 drop table t1;
+create stage llmstage URL='file:///$resources/plugin/';
+create table src (pkey int primary key, dlink datalink);
+create table embed (pkey int, chunk int, e vecf32(3));
+insert into src values
+(0, 'stage://llmstage/multistream.json?offset=0&size=116'),
+(1, 'stage://llmstage/multistream.json?offset=116&size=125');
+insert into embed select src.pkey, json_unquote(json_extract(f.result, "$.chunk")), json_unquote(json_extract(f.result, "$.e"))
+from src CROSS APPLY plugin_exec('["cat"]', src.dlink) as f;
+select * from embed;
+pkey    chunk    e
+0    0    [1.1, 2.2, 3.3]
+0    1    [2.5, 3.5, 4.5]
+0    2    [9.1, 8.2, 7.3]
+1    3    [10.1, 20.2, 30.3]
+1    4    [20.5, 30.5, 40.5]
+1    5    [90.1, 80.2, 70.3]
+drop stage llmstage;
+drop table src;
+drop table embed;
