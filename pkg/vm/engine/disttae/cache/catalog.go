@@ -846,5 +846,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		ClusterBy:     clusterByDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
+		DbId:          tblItem.DatabaseId,
 	}, tableDef
 }
