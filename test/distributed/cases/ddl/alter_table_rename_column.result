@@ -23,9 +23,9 @@ rename01    CREATE TABLE `rename01` (\n  `col1new` INT DEFAULT NULL,\n  `col2` D
 show columns from rename01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    YES        null        
-col2    DECIMAL(38)    YES        null        
+col2    DECIMAL(38,0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table rename01;
 drop table if exists rename02;
 create table rename02 (`colcolcol1` int, `colcolcol2` binary);
@@ -47,7 +47,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 colcolcol1    INT(32)    YES        null        
 colcolcol2    BINARY(1)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename02    colcolcol1    INT    YES
 rename02    colcolcol2    BINARY    YES
 drop table rename02;
@@ -89,7 +89,7 @@ col1new    INT(32)    YES        null
 col2    INT(32)    YES        null        
 col3new    VARCHAR(20)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename03    col1new    INT    YES
 rename03    col2    INT    YES
 rename03    col3new    VARCHAR    YES
@@ -131,7 +131,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 newnewa    INT(32)    YES        null        
 b    INT(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename04    b    INT    YES
 rename04    newnewa    INT    YES
 drop table rename04;
@@ -155,7 +155,7 @@ alter table rename06 rename column col1 to `数据库系统`;
 alter table rename06 rename column col1 to `数据操作，数据收集7327323467dhhjfkrnfe`;
 Unknown column 'col1' in 'rename06'
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 rename06    数据库系统    INT    YES
 show columns from rename06;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -189,7 +189,7 @@ col1new    col2
 show columns from primary01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    NO    PRI    null        
-col2    DECIMAL(38)    YES        null        
+col2    DECIMAL(38,0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 primary01    col1new    INT    NO
@@ -269,13 +269,13 @@ colnewcolumn    INT(32)    YES    MUL    null
 col3    INT(32)    NO    PRI    null        
 col2new    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 foreign01    col1new    INT    NO
 foreign01    col2new    VARCHAR    YES
 foreign01    col3    INT    YES
 foreign01    col4    BIGINT    YES
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 foreign02    col2new    DOUBLE    YES
 foreign02    col3    INT    NO
 foreign02    colnewcolumn    INT    YES
@@ -300,8 +300,8 @@ Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` INT NOT NULL,\n  `bnew` CHAR(10) DEFAULT NULL,\n  `c` DATE DEFAULT NULL,\n  `d` DECIMAL(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bnew`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
 index01    0    a    2    bnew    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
 insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
 Unknown column 'b' in 'index01'
 insert into index01 (a, bnew, c, d) values (5, 'bh', '1999-01-01', 3000);
@@ -330,7 +330,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    MUL    null        
 bnew    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 index01    a    INT    NO
@@ -372,7 +372,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 bnewnew    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    INT    NO
@@ -406,7 +406,7 @@ b    SMALLINT(16)    YES        null
 c    INT UNSIGNED(32)    YES        null        
 d    BIGINT(64)    NO        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 cluster01    b    SMALLINT    YES
 cluster01    c    INT UNSIGNED    YES
 cluster01    d    BIGINT    NO
@@ -426,7 +426,7 @@ uuuyggbbjbj    col2
 show columns from temporary01;
 Field    Type    Null    Key    Default    Extra    Comment
 uuuyggbbjbj    INT(32)    YES        null        
-col2    DECIMAL(38)    YES        null        
+col2    DECIMAL(38,0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 temporary01    col2    DECIMAL    YES
