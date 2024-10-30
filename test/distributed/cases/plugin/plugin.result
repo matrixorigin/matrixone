@@ -96,4 +96,4 @@ drop table src;
 drop table embed;
 select * from plugin_exec('["python3", "$resources/plugin/ask.py", "index_table"]', 'this is question to LLM') as f;
 result
-"this is answer from LLM with index table name = index_table"
+"this is answer from LLM with index table name = index_table. Question: this is question to LLM"
