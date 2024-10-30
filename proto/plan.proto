@@ -472,6 +472,7 @@ message TableDef {
 	bool is_dynamic = 31;
 
 	string db_name = 32;
+	uint64 db_id = 33;
 }
 
 message TableFunction{

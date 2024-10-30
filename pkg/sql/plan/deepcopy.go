@@ -458,6 +458,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
+		DbId:           table.DbId,
 	}
 
 	if withCols {
