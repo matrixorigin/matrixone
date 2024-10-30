@@ -400,7 +400,7 @@ func checkPasswordHistoryRule(ctx context.Context, reuseInfo *passwordReuseInfo,
 	checkNum := reuseInfo.PasswordHisoty - 1
 	for i := len(userPasswords) - 1; i >= 0 && checkNum >= 0; i-- {
 		if userPasswords[i].Password == pwd {
-			return false, moerr.NewInvalidInputf(ctx, "The password has been used before")
+			return false, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one.")
 		}
 		checkNum--
 	}
@@ -428,7 +428,7 @@ func checkPasswordIntervalRule(ctx context.Context, reuseInfo *passwordReuseInfo
 			}
 
 			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now()) {
-				return false, moerr.NewInvalidInputf(ctx, "The password has been used before")
+				return false, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 			}
 		}
 	}
@@ -466,7 +466,7 @@ func passwordVerification(ctx context.Context, reuseInfo *passwordReuseInfo, pwd
 		}
 
 		if !canUse {
-			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before")
+			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 		}
 	}
 
@@ -478,7 +478,7 @@ func passwordVerification(ctx context.Context, reuseInfo *passwordReuseInfo, pwd
 		}
 
 		if !canUse {
-			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before")
+			return false, 0, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 		}
 
 	}
@@ -517,7 +517,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return err
 	}
 	if !canUse {
-		return moerr.NewInvalidInputf(ctx, "The password has been used before")
+		return moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 	}
 
 	// delete the password records that exceed the password history
