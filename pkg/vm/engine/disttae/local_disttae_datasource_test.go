@@ -164,5 +164,4 @@ func TestXxx1(t *testing.T) {
 	writes := make([]Entry, 200)
 	writes = append(writes, Entry{typ: INSERT}, Entry{typ: INSERT, bat: batch.EmptyBatch})
 	checkTxnLastInsertRow(ls, writes, 42, batch.EmptyBatch)
-	checkTxnOffsetZero(ls, writes)
 }

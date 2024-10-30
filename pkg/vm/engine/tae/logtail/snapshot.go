@@ -495,7 +495,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 				continue
 			}
 			if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-				logutil.Infof("yyyy skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
+				logutil.Infof("snapshotMeta skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
 				continue
 			}
 			deleteRows = append(deleteRows, tombstone{
