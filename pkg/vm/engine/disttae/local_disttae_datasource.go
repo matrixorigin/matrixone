@@ -407,7 +407,8 @@ func checkWorkspaceEntryType(
 }
 
 func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch) {
-	if objectio.Debug19357Injected() && len(writes) > 20 && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
+	injected, writesT := objectio.Debug19357Injected()
+	if injected && int64(len(writes)) > writesT && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
 		outLen := outBatch.Vecs[0].Length()
 		var slim *batch.Batch
 		if outLen > 0 {

@@ -165,7 +165,7 @@ func TestXxx1(t *testing.T) {
 	}
 	fault.Enable()
 	defer fault.Disable()
-	fault.AddFaultPoint(context.Background(), objectio.FJ_Debug19357, ":::", "echo", 0, "")
+	fault.AddFaultPoint(context.Background(), objectio.FJ_Debug19357, ":::", "echo", 20, "")
 	t.Log(objectio.Debug19357Injected())
 	writes := make([]Entry, 200)
 	writes = append(writes, Entry{typ: INSERT}, Entry{typ: INSERT, bat: batch.EmptyBatch})

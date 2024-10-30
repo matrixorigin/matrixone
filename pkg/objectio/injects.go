@@ -38,9 +38,9 @@ func Debug19524Injected() bool {
 	return injected
 }
 
-func Debug19357Injected() bool {
-	_, _, injected := fault.TriggerFault(FJ_Debug19357)
-	return injected
+func Debug19357Injected() (bool, int64) {
+	iret, _, injected := fault.TriggerFault(FJ_Debug19357)
+	return injected, iret
 }
 
 func RangesInjected(name string) bool {
