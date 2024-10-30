@@ -95,11 +95,8 @@ func (d *DataCache) deletePath(shardIndex int, path string) {
 	}
 }
 
-func (d *DataCache) EnsureNBytes(want int, target int) {
-	if int(d.Available()) >= want {
-		return
-	}
-	d.fifo.evict(nil, int64(target))
+func (d *DataCache) EnsureNBytes(want int) {
+	d.fifo.evict(nil, int64(want))
 }
 
 func (d *DataCache) Evict(ch chan int64) {

@@ -329,6 +329,8 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
+	// clear stage cache
+	c.proc.GetStageCache().Clear()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
