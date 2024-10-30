@@ -500,16 +500,16 @@ func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if ret2 >= maxret {
 		return ret1
 	}
-
-	ret3 := int(hashmapSize/float64(lencn)/2666666) + 1
-	if ret3 >= maxret {
-		return ret2
-	}
-
-	if ret3 <= ncpu {
+	ret3 := int(hashmapSize/float64(lencn)/320000) + 1
+	if ret3 <= ncpu/2 {
 		return ncpu
 	}
-
+	if ret3 >= maxret-1 {
+		return maxret
+	}
+	if ret3 <= ncpu {
+		return ncpu * 2
+	}
 	return (ret3/ncpu + 1) * ncpu
 }
 
