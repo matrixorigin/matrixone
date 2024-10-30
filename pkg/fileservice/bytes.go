@@ -84,7 +84,7 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 }
 
 func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
-	return b.allocateCacheData(size, malloc.NoHints)
+	return b.allocateCacheData(size, malloc.NoClear)
 }
 
 func (b *bytesAllocator) CopyToCacheData(data []byte) fscache.Data {
