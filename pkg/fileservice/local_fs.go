@@ -114,22 +114,14 @@ func NewLocalFS(
 
 func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(
-			size,
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(l.memCache.cache.Capacity()/100),
-		)
+		l.memCache.cache.EnsureNBytes(size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
 }
 
 func (l *LocalFS) CopyToCacheData(data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(
-			len(data),
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(l.memCache.cache.Capacity()/100),
-		)
+		l.memCache.cache.EnsureNBytes(len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(data)
 }
