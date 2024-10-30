@@ -163,34 +163,30 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	}
 
 	// fold the function.
-	if execLen > 1 {
-		if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
-			return err
-		}
-		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
-			return err
-		}
-		expr.folded.foldVector = expr.resultVector.GetResultVector()
-		expr.resultVector.SetResultVector(nil)
-
-	} else {
-		if err = expr.resultVector.PreExtendAndReset(1); err != nil {
-			return err
-		}
-		if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, 1, nil); err != nil {
-			return err
-		}
-		if expr.folded.foldVector, err = expr.resultVector.GetResultVector().ToConst(0, 1, proc.Mp()).Dup(proc.Mp()); err != nil {
-			return err
-		}
-		expr.resultVector.Free()
+	if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
+		return err
+	}
+	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
+		return err
+	}
+	expr.folded.foldVector = expr.resultVector.GetResultVector()
+	expr.resultVector.SetResultVector(nil)
+	if execLen == 1 {
+		expr.folded.foldVector.SetClass(vector.CONSTANT)
 	}
 	expr.folded.canFold = true
 	return nil
 }
 
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {
-	// do nothing.
+	if expr.null != nil {
+		expr.null.Free(expr.mp)
+		expr.null = nil
+	}
+	if expr.vec != nil {
+		expr.vec.Free(expr.mp)
+		expr.vec = nil
+	}
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {
