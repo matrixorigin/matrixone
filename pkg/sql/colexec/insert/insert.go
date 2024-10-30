@@ -236,7 +236,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 				return input, err
 			}
 
-			//crs := new(perfcounter.CounterSet)
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			err = insert.ctr.partitionSources[partIdx].Write(newCtx, insert.ctr.buf)
@@ -258,7 +257,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 		insert.ctr.buf.SetRowCount(input.Batch.RowCount())
 
-		//crs := new(perfcounter.CounterSet)
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
@@ -281,7 +279,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 
 func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batch, analyzer process.Analyzer) error {
 	if writer.StashBatch(proc, bat) {
-		//crs := new(perfcounter.CounterSet)
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
@@ -301,7 +298,6 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 }
 
 func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.CallResult, analyzer process.Analyzer) error {
-	//crs := new(perfcounter.CounterSet)
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 

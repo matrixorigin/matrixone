@@ -73,7 +73,6 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		bat := result.Batch
 
-		//retrievedCounter := new(perfcounter.CounterSet)
 		crs := analyzer.GetOpCounterSet()
 		if err = output.Func(bat, crs); err != nil {
 			result.Status = vm.ExecStop
@@ -121,7 +120,6 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
 
-				//retrievedCounter := new(perfcounter.CounterSet)
 				crs := analyzer.GetOpCounterSet()
 				if err := output.Func(bat, crs); err != nil {
 					result.Status = vm.ExecStop
