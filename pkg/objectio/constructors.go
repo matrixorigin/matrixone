@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -45,7 +46,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		}
 
 		// lz4 compress
-		decompressed := allocator.AllocateCacheData(int(size))
+		decompressed := allocator.AllocateCacheDataWithHint(int(size), malloc.NoClear)
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return

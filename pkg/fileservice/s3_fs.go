@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -154,6 +156,13 @@ func (s *S3FS) AllocateCacheData(size int) fscache.Data {
 		s.memCache.cache.EnsureNBytes(size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(size)
+}
+
+func (s *S3FS) AllocateCacheDataWithHint(size int, hints malloc.Hints) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(size, hints)
 }
 
 func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
