@@ -25,6 +25,7 @@ type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
 	deallocated uint32
+	_refs       atomic.Int32
 	refs        *atomic.Int32
 }
 
@@ -45,6 +46,11 @@ func (b Bytes) Retain() {
 	if b.refs != nil {
 		b.refs.Add(1)
 	}
+}
+
+func (b *Bytes) Init() {
+	b._refs.Store(1)
+	b.refs = &b._refs
 }
 
 func (b *Bytes) Release() {
@@ -74,13 +80,12 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	if err != nil {
 		panic(err)
 	}
-	var refs atomic.Int32
-	refs.Store(1)
-	return &Bytes{
+	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
-		refs:        &refs,
 	}
+	bytes.Init()
+	return bytes
 }
 
 func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
