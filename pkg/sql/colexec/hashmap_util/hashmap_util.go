@@ -91,11 +91,9 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 	return nil
 }
 
-func (hb *HashmapBuilder) Reset(proc *process.Process, cleanHashTable bool) {
-	if cleanHashTable {
-		if hb.InputBatchRowCount == 0 {
-			hb.FreeHashMapAndBatches(proc)
-		}
+func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool) {
+	if hashTableHasNotSent || hb.InputBatchRowCount == 0 {
+		hb.FreeHashMapAndBatches(proc)
 	}
 
 	if hb.needDupVec {
@@ -111,7 +109,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, cleanHashTable bool) {
 	hb.StrHashMap = nil
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].CleanOnlyData()
+		hb.UniqueJoinKeys[i].Free(proc.Mp())
 	}
 	hb.UniqueJoinKeys = nil
 	hb.MultiSels.Free()
