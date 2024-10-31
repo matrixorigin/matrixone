@@ -6697,8 +6697,8 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function 'grouping'
+  
+  // function 'grouping'
 	{
 		functionId: GROUPING,
 		class:      plan.Function_STRICT,
@@ -6740,6 +6740,27 @@ var supportedOthersBuiltIns = []FuncNew{
 		checkFn:    fixedDirectlyTypeMatch,
 
 		Overloads: fulltext_expand_overload(types.T_float32),
+	},
+  
+  // function `LLM_EXTRACT_TEXT`
+	{
+		functionId: LLM_EXTRACT_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_datalink, types.T_datalink, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LLMExtractText
+				},
+			},
+		},
 	},
 }
 

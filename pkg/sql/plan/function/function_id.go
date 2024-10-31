@@ -392,6 +392,7 @@ const (
 	BITMAP_COUNT
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
+	LLM_EXTRACT_TEXT
 
 	// fulltext function
 	FULLTEXT_MATCH
@@ -723,4 +724,6 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+  "llm_extract_text": LLM_EXTRACT_TEXT,
+
 }
