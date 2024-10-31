@@ -56,6 +56,8 @@ func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion s
 func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
 	var initMoAccount string
 	var initDataSqls []string
+	var passwordHistory []byte
+	var err error
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
@@ -86,9 +88,13 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 
 	//encryption the password
 	encryption := HashPassWord(defaultPassword)
+	passwordHistory, err = generageEmptyPasswordRecord()
+	if err != nil {
+		return err
+	}
 
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, string(passwordHistory), rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, string(passwordHistory), dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 

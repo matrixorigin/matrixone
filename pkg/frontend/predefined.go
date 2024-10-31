@@ -34,7 +34,7 @@ var (
 				password_last_changed timestamp default utc_timestamp,
 				password_history json default NULL,
 				login_attempts int unsigned default 0,
-				lock_time timestamp default NULL,
+				lock_time timestamp default utc_timestamp,
 				login_type  varchar(16),
 				creator int signed,
 				owner int signed,

@@ -505,6 +505,11 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		userPasswords []passwordHistoryRecord
 		sql           string
 	)
+
+	// if user is super user, no need to check the password reuse policy
+	if isSuperUser(user) {
+		return nil
+	}
 	// get the password reuse information
 	reuseInfo, err = getPasswordReuseInfo(ses)
 	if err != nil {

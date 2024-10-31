@@ -1123,7 +1123,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		loginAttempts        uint64
 		lockTime             string
 		lockTimeExpired      bool
-		lockTimeIsNull       bool
 		needCheckLock        bool
 		maxLoginAttempts     int64
 	)
@@ -1254,15 +1253,9 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	lockTimeIsNull, err = rsset[0].ColumnIsNull(tenantCtx, 0, 7)
+	lockTime, err = rsset[0].GetString(tenantCtx, 0, 7)
 	if err != nil {
 		return nil, err
-	}
-	if !lockTimeIsNull {
-		lockTime, err = rsset[0].GetString(tenantCtx, 0, 7)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	tenant.SetUserID(uint32(userID))
