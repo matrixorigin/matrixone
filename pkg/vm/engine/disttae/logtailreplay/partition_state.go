@@ -935,3 +935,30 @@ func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) 
 
 	return item.RowID.EQ(&rowId)
 }
+
+func (p *PartitionState) CollectInMemDeletesOnNAObjs(
+	mp *mpool.MPool,
+	snapshot types.TS,
+	outVector *vector.Vector,
+) (err error) {
+
+	var lastInsert types.Rowid
+	p.rows.Scan(func(item RowEntry) bool {
+		if !item.Deleted {
+			lastInsert = item.RowID
+			return true
+		}
+
+		if item.RowID.BorrowObjectID().EQ(lastInsert.BorrowObjectID()) {
+			return true
+		}
+
+		if err = vector.AppendFixed[types.Rowid](outVector, item.RowID, false, mp); err != nil {
+			return false
+		}
+
+		return true
+	})
+
+	return
+}

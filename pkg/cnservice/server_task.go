@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"strings"
 	"time"
 
@@ -277,6 +278,11 @@ func (s *service) registerExecutorsLocked() {
 			export.WithFileService(s.etlFS),
 		),
 	)
+	// init mo table stats task
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_MOTableStats,
+		disttae.GetMOTableStatsExecutor(s.cfg.UUID, s.storeEngine, ieFactory))
+
 	// init metric task
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
