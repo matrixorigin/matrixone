@@ -1191,6 +1191,14 @@ const (
 
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
 
+	updateStatusUnlockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_name = "%s" order by user_id;`
+
+	updateLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = login_attempts + 1  where user_name = "%s";`
+
+	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
+
+	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
+
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1647,6 +1655,38 @@ func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (
 		return "", err
 	}
 	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
+}
+
+func getSqlForUpdateUnlcokStatusOfUser(ctx context.Context, status, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, status, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user), nil
+}
+
+func getSqlForUpdateLoginAttemptsOfUser(ctx context.Context, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user), nil
+}
+
+func getSqlForUpdateLockTimeOfUser(ctx context.Context, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateLockTimeOfUserFormat, user), nil
+}
+
+func getSqlForUpdateStatusLockOfUser(ctx context.Context, status, user string) (string, error) {
+	err := inputNameIsInvalid(ctx, status, user)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user), nil
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
