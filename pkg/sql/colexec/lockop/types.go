@@ -17,7 +17,6 @@ package lockop
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -69,7 +68,6 @@ type LockOp struct {
 	ctr     state
 	engine  engine.Engine
 	targets []lockTarget
-	block   bool
 }
 
 func (lockOp *LockOp) GetOperatorBase() *vm.OperatorBase {
@@ -121,6 +119,7 @@ type RowsFilter func(row int, filterCols []int32) bool
 type hasNewVersionInRangeFunc func(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -130,16 +129,6 @@ type state struct {
 	parker               *types.Packer
 	retryError           error
 	defChanged           bool
-	step                 int
 	fetchers             []FetchLockRowsFunc
-	cachedBatches        []*batch.Batch
-	buf                  *batch.Batch
-	batchFetchFunc       func(proc *process.Process) (vm.CallResult, error)
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
-
-const (
-	stepLock = iota
-	stepDownstream
-	stepEnd
-)

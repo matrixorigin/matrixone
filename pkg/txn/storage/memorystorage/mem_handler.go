@@ -1084,7 +1084,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req *memo
 	}
 	m.iterators.Unlock()
 
-	b := batch.New(false, req.ColNames)
+	b := batch.New(req.ColNames)
 
 	for i, name := range req.ColNames {
 		b.Vecs[i] = vector.NewVec(iter.AttrsMap[name].Type)

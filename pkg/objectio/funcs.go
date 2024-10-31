@@ -124,7 +124,7 @@ func ReadOneBlock(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	policy fileservice.Policy,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVec fileservice.IOVector, err error) {
 	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
 }
 
@@ -139,8 +139,8 @@ func ReadOneBlockWithMeta(
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
-) (ioVec *fileservice.IOVector, err error) {
-	ioVec = &fileservice.IOVector{
+) (ioVec fileservice.IOVector, err error) {
+	ioVec = fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
@@ -192,7 +192,7 @@ func ReadOneBlockWithMeta(
 		})
 	}
 	if len(ioVec.Entries) > 0 {
-		err = fs.Read(ctx, ioVec)
+		err = fs.Read(ctx, &ioVec)
 		if err != nil {
 			return
 		}
@@ -218,56 +218,13 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.DefaultCacheDataAllocator().AllocateCacheData(buf.Len())
-				copy(cacheData.Bytes(), buf.Bytes())
+				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}
 		}
 		ioVec.Entries = filledEntries
 	}
 
-	return
-}
-
-func ReadMultiBlocksWithMeta(
-	ctx context.Context,
-	name string,
-	meta ObjectMeta,
-	options map[uint16]*ReadBlockOptions,
-	fs fileservice.FileService,
-	factory CacheConstructorFactory,
-) (ioVec *fileservice.IOVector, err error) {
-	ioVec = &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0),
-	}
-	var dataMeta ObjectDataMeta
-	for _, opt := range options {
-		for seqnum := range opt.Idxes {
-			if DataMetaType(opt.DataType) == SchemaData {
-				dataMeta = meta.MustDataMeta()
-			} else if DataMetaType(opt.DataType) == SchemaTombstone {
-				dataMeta = meta.MustTombstoneMeta()
-			} else {
-				dataMeta, _ = meta.SubMeta(ConvertToCkpIdx(opt.DataType))
-			}
-			blkmeta := dataMeta.GetBlockMeta(uint32(opt.Id))
-			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-				// prefetch, do not generate
-				continue
-			}
-			col := blkmeta.ColumnMeta(seqnum)
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
-
-				ToCacheData: factory(int64(col.Location().OriginSize()), col.Location().Alg()),
-			})
-		}
-	}
-
-	err = fs.Read(ctx, ioVec)
-	//TODO when to call ioVec.Release?
 	return
 }
 
@@ -280,8 +237,8 @@ func ReadAllBlocksWithMeta(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
-) (ioVec *fileservice.IOVector, err error) {
-	ioVec = &fileservice.IOVector{
+) (ioVec fileservice.IOVector, err error) {
+	ioVec = fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
 		Policy:   policy,
@@ -301,10 +258,11 @@ func ReadAllBlocksWithMeta(
 
 				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
 			})
+
 		}
 	}
 
-	err = fs.Read(ctx, ioVec)
+	err = fs.Read(ctx, &ioVec)
 	//TODO when to call ioVec.Release?
 	return
 }

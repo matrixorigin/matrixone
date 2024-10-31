@@ -18,14 +18,16 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -39,11 +41,9 @@ type outputTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []outputTestCase
-)
+var tcs []outputTestCase
 
-func sqlOutput(_ *batch.Batch) error {
+func sqlOutput(_ *batch.Batch, _ *perfcounter.CounterSet) error {
 	return nil
 }
 
@@ -55,6 +55,26 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Output{
+				Data: nil,
+				Func: sqlOutput,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_int8.ToType(),
+			},
+			arg: &Output{
+				ctr: container{
+					block: true,
+				},
 				Data: nil,
 				Func: sqlOutput,
 				OperatorBase: vm.OperatorBase{

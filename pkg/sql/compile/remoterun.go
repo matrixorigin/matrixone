@@ -18,13 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -42,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
@@ -51,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -62,10 +58,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
@@ -73,10 +71,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -336,7 +337,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		bs := []byte(p.Node.Payload)
 		var relData engine.RelData
 		if len(bs) > 0 {
-			rd, err := disttae.UnmarshalRelationData(bs)
+			rd, err := engine_util.UnmarshalRelationData(bs)
 			if err != nil {
 				return nil, err
 			}
@@ -458,7 +459,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
-			Block:   t.Block(),
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
@@ -488,7 +488,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleType = t.ShuffleType
 		in.Shuffle.ShuffleColMax = t.ShuffleColMax
 		in.Shuffle.ShuffleColMin = t.ShuffleColMin
-		in.Shuffle.AliveRegCnt = t.AliveRegCnt
+		in.Shuffle.AliveRegCnt = t.BucketNum
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
@@ -511,7 +511,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				PipelineId:     ctx0.id,
 			}
 		}
-
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i := range t.RemoteRegs {
@@ -526,6 +525,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Agg = &pipeline.Group{
 			PreAllocSize: t.PreAllocSize,
 			NeedEval:     t.NeedEval,
+			GroupingFlag: t.GroupingFlag,
 			Exprs:        t.Exprs,
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 		}
@@ -642,10 +642,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
-		in.Filter = t.GetExeExpr()
-		if in.Filter == nil {
-			in.Filter = t.E
-		}
+		in.Filter = t.E
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -714,17 +711,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx,
 		}
-	case *mark.MarkJoin:
-		in.MarkJoin = &pipeline.MarkJoin{
-			Result:     t.Result,
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
-			Expr:       t.Cond,
-			OnList:     t.OnList,
-			HashOnPk:   t.HashOnPK,
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
@@ -806,6 +792,42 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.IndexBuild = &pipeline.Indexbuild{
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
+	case *apply.Apply:
+		relList, colList := getRelColList(t.Result)
+		in.Apply = &pipeline.Apply{
+			ApplyType: int32(t.ApplyType),
+			RelList:   relList,
+			ColList:   colList,
+			Types:     convertToPlanTypes(t.Typs),
+		}
+		in.ProjectList = t.ProjectList
+		in.TableFunction = &pipeline.TableFunction{
+			Attrs:  t.TableFunction.Attrs,
+			Rets:   t.TableFunction.Rets,
+			Args:   t.TableFunction.Args,
+			Params: t.TableFunction.Params,
+			Name:   t.TableFunction.FuncName,
+		}
+	case *postdml.PostDml:
+		in.PostDml = &pipeline.PostDml{
+			AddAffectedRows:        t.PostDmlCtx.AddAffectedRows,
+			Ref:                    t.PostDmlCtx.Ref,
+			PrimaryKeyIdx:          t.PostDmlCtx.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PostDmlCtx.PrimaryKeyName,
+			IsDelete:               t.PostDmlCtx.IsDelete,
+			IsInsert:               t.PostDmlCtx.IsInsert,
+			IsDeleteWithoutFilters: t.PostDmlCtx.IsDeleteWithoutFilters,
+		}
+		if t.PostDmlCtx.FullText != nil {
+			ft := t.PostDmlCtx.FullText
+			fulltext := &plan.PostDmlFullTextCtx{
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			in.PostDml.FullText = fulltext
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -864,7 +886,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.LockOp:
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
-		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
@@ -926,7 +947,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleType = t.ShuffleType
 		arg.ShuffleColMin = t.ShuffleColMin
 		arg.ShuffleColMax = t.ShuffleColMax
-		arg.AliveRegCnt = t.AliveRegCnt
+		arg.BucketNum = t.AliveRegCnt
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
@@ -976,6 +997,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := group.NewArgument()
 		arg.PreAllocSize = t.PreAllocSize
 		arg.NeedEval = t.NeedEval
+		arg.GroupingFlag = t.GroupingFlag
 		arg.Exprs = t.Exprs
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
@@ -1124,17 +1146,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
-	case vm.Mark:
-		t := opr.GetMarkJoin()
-		arg := mark.NewArgument()
-		arg.Result = t.Result
-		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
-		arg.Cond = t.Expr
-		arg.OnList = t.OnList
-		arg.HashOnPK = t.HashOnPk
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
 	case vm.Top:
 		op = top.NewArgument().
 			WithLimit(opr.Limit).
@@ -1222,14 +1233,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		op.(*table_scan.TableScan).ProjectList = opr.ProjectList
 	case vm.ValueScan:
-		op = value_scan.NewArgument()
+		op = value_scan.NewValueScanFromProcess()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
-			bat := new(batch.Batch)
+			bat := batch.NewOffHeapEmpty()
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
-			bat.Cnt = 1
 			op.(*value_scan.ValueScan).Batchs = append(op.(*value_scan.ValueScan).Batchs, bat)
 		}
 	case vm.UnionAll:
@@ -1260,6 +1270,44 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
 		arg.RuntimeFilterSpec = opr.GetIndexBuild().RuntimeFilterSpec
+		op = arg
+	case vm.Apply:
+		arg := apply.NewArgument()
+		t := opr.GetApply()
+		arg.ApplyType = int(t.ApplyType)
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
+		arg.TableFunction = table_function.NewArgument()
+		arg.TableFunction.Attrs = opr.TableFunction.Attrs
+		arg.TableFunction.Rets = opr.TableFunction.Rets
+		arg.TableFunction.Args = opr.TableFunction.Args
+		arg.TableFunction.FuncName = opr.TableFunction.Name
+		arg.TableFunction.Params = opr.TableFunction.Params
+		op = arg
+	case vm.PostDml:
+		t := opr.GetPostDml()
+		arg := postdml.NewArgument()
+		arg.PostDmlCtx = &postdml.PostDmlCtx{
+			Ref:                    t.Ref,
+			AddAffectedRows:        t.AddAffectedRows,
+			PrimaryKeyIdx:          t.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PrimaryKeyName,
+			IsDelete:               t.IsDelete,
+			IsInsert:               t.IsInsert,
+			IsDeleteWithoutFilters: t.IsDeleteWithoutFilters,
+		}
+
+		if t.FullText != nil {
+			ft := t.FullText
+			fulltext := &postdml.PostDmlFullTextCtx{
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			arg.PostDmlCtx.FullText = fulltext
+		}
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1343,7 +1391,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
-	bat := new(batch.Batch)
+	bat := batch.NewOffHeapEmpty()
 	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err

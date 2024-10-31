@@ -147,9 +147,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 
 type fakeRunningPipelinesManager struct{}
 
-func (m *fakeRunningPipelinesManager) PauseService()                   {}
-func (m *fakeRunningPipelinesManager) KillAllQueriesWithError(_ error) {}
-func (m *fakeRunningPipelinesManager) ResumeService()                  {}
+func (m *fakeRunningPipelinesManager) PauseService()            {}
+func (m *fakeRunningPipelinesManager) KillAllQueriesWithError() {}
+func (m *fakeRunningPipelinesManager) ResumeService()           {}
 
 func TestTxnClientAbortAllRunningTxn(t *testing.T) {
 	SetRunningPipelineManagement(&fakeRunningPipelinesManager{})
@@ -261,4 +261,14 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			require.Error(t, err)
 		},
 		WithMaxActiveTxn(1))
+}
+
+func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
+	c := &txnClient{}
+	c.mu.state = paused
+
+	op := &txnOperator{}
+	op.opts.options = op.opts.options.WithDisableWaitPaused()
+
+	require.Error(t, c.openTxn(op))
 }

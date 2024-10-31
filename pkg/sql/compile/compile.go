@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -47,7 +46,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -77,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -110,7 +112,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 
 	c.e = e
 	c.db = db
@@ -143,7 +145,7 @@ func (c *Compile) Release() {
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 	}
-	GetCompileService().putCompile(c)
+	releaseCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -164,7 +166,7 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	return nil
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	c.proc = proc
@@ -172,9 +174,14 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	c.anal.Reset()
 
 	for _, s := range c.scopes {
 		s.Reset(c)
+	}
+
+	for _, e := range c.filterExprExes {
+		e.ResetForNextQuery()
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
@@ -188,8 +195,23 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
+
+		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
+		// that cause a dml statement can not see the previous statements' operations.
+		if len(c.scopes) > 0 {
+			for i := range c.scopes {
+				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
+			}
+		}
 	} else {
 		c.TxnOffset = 0
+	}
+}
+
+func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
+	scope.TxnOffset = txnOffset
+	for i := range scope.PreScopes {
+		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
 	}
 }
 
@@ -228,6 +250,13 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+	c.hasMergeOp = false
+	c.needBlock = false
+
+	for _, exe := range c.filterExprExes {
+		exe.Free()
+	}
+	c.filterExprExes = nil
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -288,6 +317,7 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
 	switch s.Magic {
 	case Normal:
 		err := s.Run(c)
@@ -411,74 +441,100 @@ func (c *Compile) printPipeline() {
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 */
-// run once
-func (c *Compile) runOnce() error {
-	var wg sync.WaitGroup
-	err := c.lockMetaTables()
-	if err != nil {
+
+// prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
+//
+// for example
+// 1. lock table.
+// 2. init data source.
+func (c *Compile) prePipelineInitializer() (err error) {
+	// do table lock.
+	if err = c.lockMetaTables(); err != nil {
+		return err
+	}
+	if err = c.lockTable(); err != nil {
 		return err
 	}
 
-	err = c.lockTable()
-	if err != nil {
-		return err
-	}
-	errC := make(chan error, len(c.scopes))
+	// init data source.
 	for _, s := range c.scopes {
-		err = s.InitAllDataSource(c)
-		if err != nil {
+		if err = s.InitAllDataSource(c); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
-	if err = GetCompileService().recordRunningCompile(c); err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = GetCompileService().removeRunningCompile(c)
-	}()
-
+// run once
+func (c *Compile) runOnce() (err error) {
 	//c.printPipeline()
 
-	for i := range c.scopes {
-		wg.Add(1)
-		scope := c.scopes[i]
-		errSubmit := ants.Submit(func() {
-			defer func() {
-				if e := recover(); e != nil {
-					err := moerr.ConvertPanicError(c.proc.Ctx, e)
-					c.proc.Error(c.proc.Ctx, "panic in run",
-						zap.String("sql", c.sql),
-						zap.String("error", err.Error()))
-					errC <- err
-				}
-				wg.Done()
-			}()
-			errC <- c.run(scope)
-		})
-		if errSubmit != nil {
-			errC <- errSubmit
-			wg.Done()
-		}
-	}
-	wg.Wait()
-	close(errC)
+	// defer cleanup at the end of runOnce()
+	defer func() {
+		// cleanup post dml sql and stage cache
+		c.proc.Base.PostDmlSqlList.Clear()
+		c.proc.Base.StageCache.Clear()
+	}()
 
-	errList := make([]error, 0, len(c.scopes))
-	for e := range errC {
-		if e != nil {
-			errList = append(errList, e)
-			if c.isRetryErr(e) {
-				return e
+	if c.IsTpQuery() && len(c.scopes) == 1 {
+		if err = c.run(c.scopes[0]); err != nil {
+			return err
+		}
+	} else {
+		errC := make(chan error, len(c.scopes))
+		for i := range c.scopes {
+			scope := c.scopes[i]
+			errSubmit := ants.Submit(func() {
+				defer func() {
+					if e := recover(); e != nil {
+						err := moerr.ConvertPanicError(c.proc.Ctx, e)
+						c.proc.Error(c.proc.Ctx, "panic in run",
+							zap.String("sql", c.sql),
+							zap.String("error", err.Error()))
+						errC <- err
+					}
+				}()
+				errC <- c.run(scope)
+			})
+			if errSubmit != nil {
+				errC <- errSubmit
 			}
 		}
+
+		var errToThrowOut error
+		for i := 0; i < cap(errC); i++ {
+			e := <-errC
+
+			// cancel this query if the first error occurs.
+			if e != nil && errToThrowOut == nil {
+				errToThrowOut = e
+
+				// cancel all scope tree.
+				for j := range c.scopes {
+					if c.scopes[j].Proc != nil {
+						c.scopes[j].Proc.Cancel()
+					}
+				}
+			}
+
+			// if any error already return is retryable, we should throw this one
+			// to make sure query will retry.
+			if e != nil && c.isRetryErr(e) {
+				errToThrowOut = e
+			}
+		}
+		close(errC)
+
+		if errToThrowOut != nil {
+			return errToThrowOut
+		}
 	}
 
-	if len(errList) > 0 {
-		err = errList[0]
-	}
-	if err != nil {
-		return err
+	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
@@ -711,10 +767,11 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 		return false
 	}
 	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
 	defer cancel()
 	err = client.Ping(ctx, addr)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		// ping failed
 		logutil.Debugf("ping %s err %+v\n", addr, err)
 		return false
@@ -771,7 +828,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL())
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -876,7 +933,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
 		rs.setRootOperator(
 			output.NewArgument().
-				WithFunc(c.fill),
+				WithFunc(c.fill).
+				WithBlock(c.needBlock),
 		)
 		return rs, nil
 	}
@@ -979,11 +1037,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
-			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
-			return ss, nil
-		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
+			return ss, nil
+		} else if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns, anyDistinctAgg))))
@@ -1232,15 +1290,24 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
-	/*case plan.Node_APPLY:
-	left, err = c.compilePlanScope(step, n.Children[0], ns)
-	if err != nil {
-		return nil, err
-	}
+	case plan.Node_APPLY:
+		left, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
 
-	c.setAnalyzeCurrent(left, int(curNodeIdx))
-	ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
-	return ss, nil*/
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		ss = c.compileSort(n, c.compileApply(n, ns[n.Children[1]], left))
+		return ss, nil
+	case plan.Node_POSTDML:
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.compilePostDml(n, ss)
+		return ss, nil
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -1284,6 +1351,7 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	ds.Proc = c.proc.NewNoContextChildProc(1)
 	ds.Proc.Base.LoadTag = true
 	arg := merge.NewArgument()
+	c.hasMergeOp = true
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 
 	ds.setRootOperator(arg)
@@ -1359,6 +1427,94 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	return nil, false
 }
 
+func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
+	param := &tree.ExternParam{}
+	if externScan.LoadType == tree.INLINE {
+		param.ScanType = int(externScan.LoadType)
+		param.Data = externScan.Data
+		param.Format = externScan.Format
+		param.Tail = new(tree.TailParameter)
+		param.Tail.IgnoredLines = externScan.IgnoredLines
+		param.Tail.Fields = &tree.Fields{
+			Terminated: &tree.Terminated{
+				Value: externScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: externScan.EnclosedBy[0],
+			},
+			EscapedBy: &tree.EscapedBy{
+				Value: externScan.EscapedBy[0],
+			},
+		}
+		param.JsonData = externScan.JsonType
+	} else {
+		if err := json.Unmarshal([]byte(createsql), param); err != nil {
+			return nil, err
+		}
+	}
+	param.ExternType = externScan.Type
+	param.FileService = c.proc.Base.FileService
+	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
+		switch param.ScanType {
+		case tree.INFILE:
+			if err := plan2.InitInfileOrStageParam(param, proc); err != nil {
+				return nil, err
+			}
+		case tree.S3:
+			if err := plan2.InitS3Param(param); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return param, nil
+}
+
+func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []string) (readParallel bool, writeParallel bool) {
+	if !param.Parallel {
+		return false, false
+	}
+	if param.Local || external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		return false, true
+	}
+	return true, true
+}
+
+func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	switch n.ExternScan.Type {
+	case int32(plan.ExternType_EXTERNAL_TB):
+		t := time.Now()
+		_, spanReadDir := trace.Start(c.proc.Ctx, "compileExternScan.ReadDir")
+		fileList, fileSize, err = plan2.ReadDir(param)
+		if err != nil {
+			spanReadDir.End()
+			return nil, nil, err
+		}
+		spanReadDir.End()
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		if time.Since(t) > time.Second {
+			c.proc.Infof(c.proc.Ctx, "read dir cost %v", time.Since(t))
+		}
+	case int32(plan.ExternType_RESULT_SCAN):
+		fileList = strings.Split(param.Filepath, ",")
+		for i := range fileList {
+			fileList[i] = strings.TrimSpace(fileList[i])
+		}
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+	case int32(plan.ExternType_LOAD):
+		fileList = []string{param.Filepath}
+		fileSize = []int64{param.FileSize}
+	}
+	return fileList, fileSize, nil
+}
+
 func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
@@ -1372,123 +1528,22 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 	}()
 
-	ID2Addr := make(map[int]int, 0)
-	mcpu := 0
-	for i := 0; i < len(c.cnList); i++ {
-		tmp := mcpu
-		mcpu += c.cnList[i].Mcpu
-		ID2Addr[i] = mcpu - tmp
-	}
-	param := &tree.ExternParam{}
-
-	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
-		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-		if err != nil {
-			return nil, err
-		}
-		if n.ExternScan == nil {
-			param.ExtTab = true
-		}
-	} else {
-		param.ScanType = int(n.ExternScan.Type)
-		param.Data = n.ExternScan.Data
-		param.Format = n.ExternScan.Format
-		param.Tail = new(tree.TailParameter)
-		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
-		param.Tail.Fields = &tree.Fields{
-			Terminated: &tree.Terminated{
-				Value: n.ExternScan.Terminated,
-			},
-			EnclosedBy: &tree.EnclosedBy{
-				Value: n.ExternScan.EnclosedBy[0],
-			},
-			EscapedBy: &tree.EscapedBy{
-				Value: n.ExternScan.EscapedBy[0],
-			},
-		}
-		param.JsonData = n.ExternScan.JsonType
+	param, err := c.getExternParam(c.proc, n.ExternScan, n.TableDef.Createsql)
+	if err != nil {
+		return nil, err
 	}
 
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
 	}
-
-	if param.ScanType == tree.S3 {
-		if !param.Init {
-			if err := plan2.InitS3Param(param); err != nil {
-				return nil, err
-			}
-		}
-		if param.Parallel {
-			mcpu = 0
-			ID2Addr = make(map[int]int, 0)
-			for i := 0; i < len(c.cnList); i++ {
-				tmp := mcpu
-				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
-					mcpu += external.S3ParallelMaxnum
-				} else {
-					mcpu += c.cnList[i].Mcpu
-				}
-				ID2Addr[i] = mcpu - tmp
-			}
-		}
-	} else if param.ScanType == tree.INLINE {
+	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(n, param, strictSqlMode)
-	} else {
-		if err := plan2.InitInfileOrStageParam(param, c.proc); err != nil {
-			return nil, err
-		}
-
-		// if filepath is stage URL, ScanType may change to tree.S3.  check param.Parallel again
-		if param.ScanType == tree.S3 && param.Parallel {
-			mcpu = 0
-			ID2Addr = make(map[int]int, 0)
-			for i := 0; i < len(c.cnList); i++ {
-				tmp := mcpu
-				if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
-					mcpu += external.S3ParallelMaxnum
-				} else {
-					mcpu += c.cnList[i].Mcpu
-				}
-				ID2Addr[i] = mcpu - tmp
-			}
-		}
 	}
 
-	t := time.Now()
-	param.FileService = c.proc.Base.FileService
-	param.Ctx = c.proc.Ctx
-	var fileList []string
-	var fileSize []int64
-	if !param.Local && !param.Init {
-		if param.QueryResult {
-			fileList = strings.Split(param.Filepath, ",")
-			for i := range fileList {
-				fileList[i] = strings.TrimSpace(fileList[i])
-			}
-		} else {
-			_, spanReadDir := trace.Start(ctx, "compileExternScan.ReadDir")
-			fileList, fileSize, err = plan2.ReadDir(param)
-			if err != nil {
-				spanReadDir.End()
-				return nil, err
-			}
-			spanReadDir.End()
-		}
-		fileList, fileSize, err = external.FilterFileList(ctx, n, c.proc, fileList, fileSize)
-		if err != nil {
-			return nil, err
-		}
-		if param.LoadFile && len(fileList) == 0 {
-			return nil, moerr.NewInvalidInput(ctx, "the file does not exist in load flow")
-		}
-	} else {
-		fileList = []string{param.Filepath}
-		fileSize = []int64{param.FileSize}
-	}
-	if time.Since(t) > time.Second {
-		c.proc.Infof(ctx, "read dir cost %v", time.Since(t))
+	fileList, fileSize, err := c.getExternalFileListAndSize(n, param)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(fileList) == 0 {
@@ -1498,6 +1553,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
+
+		// bad here.
+		// this will generate a pipeline `value_scan(empty batch, nil) -> projection(1, a, b) -> output.`
+		//
+		// we cannot ensure empty batch has enough count of vectors for column projection.
+		// for resolve this bug, I do a hack at method `ColumnExpressionExecutor.Eval` with `[hack-#002]` Flag.
+		//
+		// build a value scan from an EmptyTable with same table structure is the correct way.
 		op := constructValueScan()
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ret.setRootOperator(op)
@@ -1506,86 +1569,16 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
 	}
-	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
-		return c.compileExternScanParallel(n, param, fileList, fileSize, strictSqlMode)
-	}
 
-	t = time.Now()
-	var fileOffset [][]int64
+	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
 
-	if param.Parallel {
-		visibleCols := make([]*plan.ColDef, 0)
-		if param.Strict {
-			for _, col := range n.TableDef.Cols {
-				if !col.Hidden {
-					visibleCols = append(visibleCols, col)
-				}
-			}
-		}
-
-		for i := 0; i < len(fileList); i++ {
-			param.Filepath = fileList[i]
-			arr, err := external.ReadFileOffset(param, mcpu, fileSize[i], visibleCols)
-			fileOffset = append(fileOffset, arr)
-			if err != nil {
-				return nil, err
-			}
-		}
+	if readParallel && writeParallel {
+		return c.compileExternScanParallelReadWrite(n, param, fileList, fileSize, strictSqlMode)
+	} else if writeParallel {
+		return c.compileExternScanParallelWrite(n, param, fileList, fileSize, strictSqlMode)
 	} else {
-		for i := 0; i < len(fileList); i++ {
-			param.Filepath = fileList[i]
-		}
+		return c.compileExternScanSerialReadWrite(n, param, fileList, fileSize, strictSqlMode)
 	}
-
-	if time.Since(t) > time.Second {
-		c.proc.Infof(ctx, "read file offset cost %v", time.Since(t))
-	}
-
-	var ss []*Scope
-	if param.Parallel {
-		ss = make([]*Scope, len(c.cnList))
-		for i := range ss {
-			ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
-		}
-	} else {
-		ss = make([]*Scope, 1)
-		ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
-	}
-	pre := 0
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i].IsLoad = true
-		count := ID2Addr[i]
-		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
-		for j := range fileOffsetTmp {
-			preIndex := pre
-			fileOffsetTmp[j] = &pipeline.FileOffset{}
-			fileOffsetTmp[j].Offset = make([]int64, 0)
-			if param.Parallel {
-				if param.Strict {
-					if 2*preIndex+2*count < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-					} else if 2*preIndex < len(fileOffset[j]) {
-						fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
-					} else {
-						continue
-					}
-				} else {
-					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
-				}
-			} else {
-				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
-			}
-		}
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(op)
-		pre += count
-	}
-	c.anal.isFirst = false
-
-	return ss, nil
 }
 
 func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
@@ -1614,9 +1607,8 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 	return []*Scope{s}, nil
 }
 
-// load data infile, goes here for compressed file or parallel false
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1651,6 +1643,117 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	return ss, nil
 }
 
+func GetExternParallelSize(totalSize int64, cpuNum int) int {
+	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	if parallelSize < 1 {
+		return 1
+	} else if parallelSize < cpuNum {
+		return parallelSize
+	}
+	return cpuNum
+}
+
+func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	visibleCols := make([]*plan.ColDef, 0)
+	if param.Strict {
+		for _, col := range n.TableDef.Cols {
+			if !col.Hidden {
+				visibleCols = append(visibleCols, col)
+			}
+		}
+	}
+
+	var mcpu int
+	var ID2Addr map[int]int = make(map[int]int, 0)
+
+	if param.ScanType == tree.S3 {
+		for i := 0; i < len(c.cnList); i++ {
+			tmp := mcpu
+			if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
+				mcpu += external.S3ParallelMaxnum
+			} else {
+				mcpu += c.cnList[i].Mcpu
+			}
+			ID2Addr[i] = mcpu - tmp
+		}
+	} else {
+		for i := 0; i < len(c.cnList); i++ {
+			tmp := mcpu
+			mcpu += c.cnList[i].Mcpu
+			ID2Addr[i] = mcpu - tmp
+		}
+	}
+
+	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+
+	var fileOffset [][]int64
+	for i := 0; i < len(fileList); i++ {
+		param.Filepath = fileList[i]
+		arr, err := external.ReadFileOffset(param, parallelSize, fileSize[i], visibleCols)
+		fileOffset = append(fileOffset, arr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var ss []*Scope
+	pre := 0
+	currentFirstFlag := c.anal.isFirst
+	for i := 0; i < len(c.cnList); i++ {
+		scope := c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
+		ss = append(ss, scope)
+		scope.IsLoad = true
+		count := min(parallelSize, ID2Addr[i])
+		scope.NodeInfo.Mcpu = count
+		fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+		for j := range fileOffsetTmp {
+			preIndex := pre
+			fileOffsetTmp[j] = &pipeline.FileOffset{}
+			fileOffsetTmp[j].Offset = make([]int64, 0)
+			if param.Strict {
+				if 2*preIndex+2*count < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+				} else if 2*preIndex < len(fileOffset[j]) {
+					fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:]...)
+				} else {
+					continue
+				}
+			} else {
+				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, fileOffset[j][2*preIndex:2*preIndex+2*count]...)
+			}
+		}
+		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		pre += count
+		if parallelSize <= count {
+			break
+		}
+		parallelSize -= count
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	ss := make([]*Scope, 1)
+	ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
+
+	currentFirstFlag := c.anal.isFirst
+	ss[0].IsLoad = true
+	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+	for j := range fileOffsetTmp {
+		fileOffsetTmp[j] = &pipeline.FileOffset{}
+		fileOffsetTmp[j].Offset = make([]int64, 0)
+		fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
+	}
+	op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ss[0].setRootOperator(op)
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -1673,7 +1776,6 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	op.NodeType = n.NodeType
 	if n.RowsetData != nil {
 		op.RowsetData = n.RowsetData
 		op.ColCount = len(n.TableDef.Cols)
@@ -1687,6 +1789,12 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	compileStart := time.Now()
+	defer func() {
+		stats.AddCompileTableScanConsumption(time.Since(compileStart))
+	}()
+
 	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
@@ -1816,12 +1924,30 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 	}
 
-	var filterExpr *plan.Expr
-	if len(n.FilterList) > 0 {
-		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
+	if len(n.FilterList) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
+		for _, e := range s.DataSource.FilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for _, e := range s.DataSource.FilterList {
+		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 		if err != nil {
 			return err
+		}
+	}
+	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
+
+	if len(n.BlockFilterList) != len(s.DataSource.BlockFilterList) {
+		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(n.BlockFilterList)
+		for _, e := range s.DataSource.BlockFilterList {
+			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1833,7 +1959,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.PartitionRelationNames = partitionRelNames
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
-	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
 	return nil
@@ -2056,6 +2181,7 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 	merge0 := rs[0].RootOp.(*merge.Merge)
 	merge0.WithPartial(0, 1)
 	merge1 := merge.NewArgument().WithPartial(1, 2)
+	c.hasMergeOp = true
 
 	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
@@ -2086,6 +2212,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
 
+	c.hasMergeOp = true
 	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
 	case plan.Node_MINUS:
@@ -2145,8 +2272,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
-	isEq := plan2.IsEquiJoin2(node.OnList)
-	if !isEq {
+	if !plan2.IsEquiJoin2(node.OnList) {
 		panic("shuffle join only support equal join for now!")
 	}
 
@@ -2161,12 +2287,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	}
 
 	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
-
-	for i := range shuffleJoins {
-		mergeOp := merge.NewArgument()
-		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		shuffleJoins[i].setRootOperator(mergeOp)
-	}
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
@@ -2485,6 +2605,7 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
 
 			mergeOp := merge.NewArgument()
+			c.hasMergeOp = true
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(c, tmp[0].RootOp, int32(len(tmp))))
@@ -2507,6 +2628,7 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
 
 		mergeOp := merge.NewArgument()
+		c.hasMergeOp = true
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		bs.setRootOperator(mergeOp)
 		bs.setRootOperator(constructJoinBuildOperator(c, rs[i].RootOp, int32(rs[i].NodeInfo.Mcpu)))
@@ -2520,24 +2642,39 @@ func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-/*
-	func (c *Compile) compileApply(node, right *plan.Node, probeScopes []*Scope) []*Scope {
-		rs := c.mergeScopesByCN(probeScopes)
+func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 
-		switch node.JoinType {
-		case plan.Node_INNER:
-			for i := range rs {
-				op := constructApply(node, right, apply.CROSS, c.proc)
-				op.SetIdx(c.anal.curNodeIdx)
-				rs[i].setRootOperator(op)
-			}
-		default:
-			panic("unknown apply")
+	switch node.ApplyType {
+	case plan.Node_CROSSAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.CROSS, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
 		}
-
-		return rs
+	case plan.Node_OUTERAPPLY:
+		for i := range rs {
+			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.SetIdx(c.anal.curNodeIdx)
+			rs[i].setRootOperator(op)
+		}
+	default:
+		panic("unknown apply")
 	}
-*/
+
+	return rs
+}
+
+func (c *Compile) compilePostDml(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		arg := constructPostDml(n, c.e)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[i].setRootOperator(arg)
+	}
+	c.anal.isFirst = false
+	return ss
+}
+
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -2570,18 +2707,18 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
 		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
 			// get limit
-			vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
+			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Limit)
 			if err != nil {
 				panic(err)
 			}
-			defer vec1.Free(c.proc.Mp())
+			defer free1()
 
 			// get offset
-			vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
+			vec2, free2, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Offset)
 			if err != nil {
 				panic(err)
 			}
-			defer vec2.Free(c.proc.Mp())
+			defer free2()
 
 			limit, offset := vector.MustFixedColWithTypeCheck[uint64](vec1)[0], vector.MustFixedColWithTypeCheck[uint64](vec2)[0]
 			topN := limit + offset
@@ -2699,7 +2836,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructTimeWindow(c.proc.Ctx, n)
+	arg := constructTimeWindow(c.proc.Ctx, n, c.proc)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2789,6 +2926,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	merge1 := rs.RootOp.(*merge.Merge)
 	merge1.WithPartial(0, 1)
 	merge2 := merge.NewArgument().WithPartial(1, 2)
+	c.hasMergeOp = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
@@ -2914,25 +3052,34 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentIsFirst := c.anal.isFirst
-		for i := range ss {
-			op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(ss), c.proc)
+		for i := range inputSS {
+			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
-			ss[i].setRootOperator(op)
+			inputSS[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
 
-		ss = c.compileProjection(n, c.compileRestrict(n, ss))
-		return ss
+		inputSS = c.compileProjection(n, c.compileRestrict(n, inputSS))
+		return inputSS
 	}
 
-	ss = c.mergeShuffleScopesIfNeeded(ss, true)
+	inputSS = c.mergeShuffleScopesIfNeeded(inputSS, true)
+	if len(c.cnList) > 1 {
+		// merge here to avoid bugs, delete this in the future
+		for i := range inputSS {
+			if inputSS[i].NodeInfo.Mcpu > 1 {
+				inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
+			}
+		}
+	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	for _, cn := range c.cnList {
-		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(cn.Mcpu), len(ss), cn.Addr)
+		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
@@ -2942,23 +3089,23 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	}
 
 	j := 0
-	for i := range ss {
+	for i := range inputSS {
 		shuffleArg := constructShuffleArgForGroup(shuffleGroups, n)
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(shuffleArg)
-		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
-			ss[i] = c.newMergeScopeByCN([]*Scope{ss[i]}, ss[i].NodeInfo)
+		inputSS[i].setRootOperator(shuffleArg)
+		if len(c.cnList) > 1 && inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
 		}
-		dispatchArg := constructDispatch(j, shuffleGroups, ss[i], n, false)
+		dispatchArg := constructDispatch(j, shuffleGroups, inputSS[i], n, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		ss[i].setRootOperator(dispatchArg)
+		inputSS[i].setRootOperator(dispatchArg)
 		j++
-		ss[i].IsEnd = true
+		inputSS[i].IsEnd = true
 	}
 
 	currentIsFirst := c.anal.isFirst
 	for i := range shuffleGroups {
-		groupOp := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(shuffleGroups), c.proc)
+		groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(shuffleGroups), c.proc)
 		groupOp.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
 		shuffleGroups[i].setRootOperator(groupOp)
 	}
@@ -2966,7 +3113,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	shuffleGroups = c.compileProjection(n, c.compileRestrict(n, shuffleGroups))
 
 	//append prescopes
-	c.appendPrescopes(shuffleGroups, ss)
+	c.appendPrescopes(shuffleGroups, inputSS)
 	return shuffleGroups
 
 }
@@ -3032,6 +3179,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		}
 		parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
+		c.hasMergeOp = true
 		for i := 0; i < parallelSize; i++ {
 			s := c.newEmptyMergeScope()
 			mergeArg := merge.NewArgument()
@@ -3179,7 +3327,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
+			c.needBlock = true
 		}
 	}
 
@@ -3191,10 +3339,8 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		lockOpArg.SetBlock(block)
 		lockOpArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].doSetRootOperator(lockOpArg)
-
 	}
 	c.anal.isFirst = false
 	return ss, nil
@@ -3229,6 +3375,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	mergecteArg.AppendChild(mergeOp2)
 	c.anal.isFirst = false
+	c.hasMergeOp = true
 
 	return []*Scope{rs}, nil
 }
@@ -3246,6 +3393,7 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	rs.Proc.Reg.MergeReceivers = receivers
 
 	mergeOp := merge.NewArgument()
+	c.hasMergeOp = true
 	rs.setRootOperator(mergeOp)
 	currentFirstFlag := c.anal.isFirst
 	mergeRecursiveArg := mergerecursive.NewArgument()
@@ -3268,6 +3416,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 
 	currentFirstFlag := c.anal.isFirst
 	mergeArg := merge.NewArgument().WithSinkScan(true)
+	c.hasMergeOp = true
 	mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeArg)
 	c.anal.isFirst = false
@@ -3318,7 +3467,7 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *plan.Node) *Scope {
 	for i := 0; i < len(ss); i++ {
-		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
+		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 	}
@@ -3333,6 +3482,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *pl
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rs[i].setRootOperator(mergeOp)
 	}
+	c.hasMergeOp = true
 
 	for i := 0; i < len(ss); i++ {
 		dispatchArg := constructDispatch(i, rs, ss[i], n, false)
@@ -3371,6 +3521,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
 	mergeOp := merge.NewArgument()
+	c.hasMergeOp = true
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 
@@ -3414,6 +3565,7 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
 	mergeOp := merge.NewArgument()
+	c.hasMergeOp = true
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 	for i := range ss {
@@ -3445,6 +3597,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(mergeOp)
 	}
+	c.hasMergeOp = true
 	//c.anal.isFirst = false
 	return ss
 }
@@ -3511,78 +3664,100 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
-	single := len(c.cnList) <= 1
-	if single {
+	if len(c.cnList) <= 1 {
 		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
+	reuse := n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	if !reuse {
+		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
+	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
 
-	dop := plan2.GetShuffleDop(ncpu)
-	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
-	shuffleBuilds := make([]*Scope, 0, len(c.cnList)*dop)
+	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+
+	bucketNum := len(c.cnList) * dop
+	shuffleJoins := make([]*Scope, 0, bucketNum)
+	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
 	lenLeft := len(probeScopes)
 	lenRight := len(buildScopes)
 
-	for _, cn := range c.cnList {
-		ps := make([]*Scope, dop)
-		bs := make([]*Scope, dop)
-		for i := range ps {
-			ps[i] = newScope(Remote)
-			ps[i].NodeInfo.Addr = cn.Addr
-			ps[i].NodeInfo.Mcpu = 1
-			ps[i].Proc = c.proc.NewNoContextChildProc(lenLeft)
+	if !reuse {
+		for _, cn := range c.cnList {
+			probes := make([]*Scope, dop)
+			builds := make([]*Scope, dop)
+			for i := range probes {
+				probes[i] = newScope(Remote)
+				probes[i].NodeInfo.Addr = cn.Addr
+				probes[i].NodeInfo.Mcpu = 1
+				probes[i].Proc = c.proc.NewNoContextChildProc(lenLeft)
 
-			bs[i] = newScope(Remote)
-			bs[i].NodeInfo = ps[i].NodeInfo
-			bs[i].Proc = c.proc.NewNoContextChildProc(lenRight)
+				builds[i] = newScope(Remote)
+				builds[i].NodeInfo = probes[i].NodeInfo
+				builds[i].Proc = c.proc.NewNoContextChildProc(lenRight)
 
-			ps[i].PreScopes = []*Scope{bs[i]}
-			for _, rr := range ps[i].Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				probes[i].PreScopes = []*Scope{builds[i]}
+				for _, rr := range probes[i].Proc.Reg.MergeReceivers {
+					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				}
+				for _, rr := range builds[i].Proc.Reg.MergeReceivers {
+					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				}
 			}
-			for _, rr := range bs[i].Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
-			}
+			shuffleJoins = append(shuffleJoins, probes...)
+			shuffleBuilds = append(shuffleBuilds, builds...)
 		}
-		shuffleJoins = append(shuffleJoins, ps...)
-		shuffleBuilds = append(shuffleBuilds, bs...)
+	} else {
+		shuffleJoins = probeScopes
+		for i := range shuffleJoins {
+			buildscope := newScope(Remote)
+			buildscope.NodeInfo = shuffleJoins[i].NodeInfo
+			buildscope.Proc = c.proc.NewNoContextChildProc(lenRight)
+			for _, rr := range buildscope.Proc.Reg.MergeReceivers {
+				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+			}
+			shuffleBuilds = append(shuffleBuilds, buildscope)
+			prescopes := shuffleJoins[i].PreScopes
+			shuffleJoins[i].PreScopes = []*Scope{buildscope}
+			shuffleJoins[i].PreScopes = append(shuffleJoins[i].PreScopes, prescopes...) //make sure build scope is in prescope[0]
+		}
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	for i := range probeScopes {
-		shuffleProbeOp := constructShuffleJoinArg(shuffleJoins, n, true)
-		//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
-		shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		probeScopes[i].setRootOperator(shuffleProbeOp)
+	if !reuse {
+		for i := range probeScopes {
+			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), n, true)
+			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
+			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			probeScopes[i].setRootOperator(shuffleProbeOp)
 
-		if probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
-			probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
-		}
+			if len(c.cnList) > 1 && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
+			}
 
-		dispatchArg := constructDispatch(i, shuffleJoins, probeScopes[i], n, true)
-		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		probeScopes[i].setRootOperator(dispatchArg)
-		probeScopes[i].IsEnd = true
+			dispatchArg := constructDispatch(i, shuffleJoins, probeScopes[i], n, true)
+			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			probeScopes[i].setRootOperator(dispatchArg)
+			probeScopes[i].IsEnd = true
 
-		for _, js := range shuffleJoins {
-			if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
-				js.PreScopes = append(js.PreScopes, probeScopes[i])
-				break
+			for _, js := range shuffleJoins {
+				if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
+					js.PreScopes = append(js.PreScopes, probeScopes[i])
+					break
+				}
 			}
 		}
 	}
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleJoinArg(shuffleJoins, n, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
 
-		if buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs
+		if len(c.cnList) > 1 && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
@@ -3599,6 +3774,15 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 	c.anal.isFirst = false
+	c.hasMergeOp = true
+	if !reuse {
+		for i := range shuffleJoins {
+			mergeOp := merge.NewArgument()
+			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			shuffleJoins[i].setRootOperator(mergeOp)
+		}
+	}
+
 	return shuffleJoins
 }
 
@@ -3607,25 +3791,27 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 		return 1
 	}
 	ret := blocks/16 + 1
-	if ret < cpunum {
+	if c.isPrepare {
+		ret = blocks/64 + 1
+	}
+	if ret <= cpunum {
 		return ret
 	}
 	return cpunum
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT && len(n.RuntimeFilterProbeList) == 0 {
-		return true
+	// Each time the three tables are opened, a new txnTable is created, which can result in Compile and Run holding different partition states. To avoid this, delay opening the three tables until the Run phase
+	if n.ObjRef.SchemaName == catalog.MO_CATALOG && n.TableDef.Name != catalog.MO_TABLES && n.TableDef.Name != catalog.MO_COLUMNS && n.TableDef.Name != catalog.MO_DATABASE {
+		return true //avoid bugs
 	}
-
-	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
-		return true
+	if len(n.AggList) > 0 {
+		partialResult, _, _ := checkAggOptimize(n)
+		if partialResult != nil {
+			return true
+		}
 	}
-
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
 func collectTombstones(
@@ -3643,8 +3829,9 @@ func collectTombstones(
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
+		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
+		if !n.ScanSnapshot.TS.Equal(zeroTS) && n.ScanSnapshot.TS.Less(snapTS) {
 			if c.proc.GetCloneTxnOperator() != nil {
 				txnOp = c.proc.GetCloneTxnOperator()
 			} else {
@@ -3673,7 +3860,7 @@ func collectTombstones(
 	if err != nil {
 		return nil, err
 	}
-	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset)
+	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 	if err != nil {
 		return nil, err
 	}
@@ -3686,7 +3873,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}
@@ -3705,7 +3892,7 @@ func collectTombstones(
 				if err != nil {
 					return nil, err
 				}
-				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset)
+				subTombstone, err := subrelation.CollectTombstones(ctx, c.TxnOffset, engine.Policy_CollectAllTombstones)
 				if err != nil {
 					return nil, err
 				}
@@ -3723,7 +3910,7 @@ func collectTombstones(
 func (c *Compile) expandRanges(
 	n *plan.Node,
 	rel engine.Relation,
-	blockFilterList []*plan.Expr) (engine.RelData, error) {
+	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 	var err error
 	var db engine.Database
 	var relData engine.RelData
@@ -3763,7 +3950,17 @@ func (c *Compile) expandRanges(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
+	preAllocSize := 2
+	if !c.IsTpQuery() {
+		if len(blockFilterList) > 0 {
+			preAllocSize = 64
+		} else {
+			preAllocSize = int(n.Stats.BlockNum)
+		}
+	}
+
+	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -3773,17 +3970,17 @@ func (c *Compile) expandRanges(
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
 						return true, nil
@@ -3795,17 +3992,17 @@ func (c *Compile) expandRanges(
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
 				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfo) (bool, error) {
+					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
 						return true, nil
@@ -3813,6 +4010,7 @@ func (c *Compile) expandRanges(
 			}
 		}
 	}
+
 	return relData, nil
 
 }
@@ -3885,10 +4083,40 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				},
 			}
 		}
-		relData, err = c.expandRanges(n, rel, n.BlockFilterList)
+		//@todo need remove expandRanges from Compile.
+		// all expandRanges should be called by Run
+		var filterExpr []*plan.Expr
+		if len(n.BlockFilterList) > 0 {
+			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range filterExpr {
+				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			for _, e := range filterExpr {
+				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+		}
+
+		crs := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, rel, filterExpr, crs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.CompileExpandRangesS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 	} else {
 		// add current CN
 		nodes = append(nodes, engine.Node{
@@ -3903,8 +4131,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		var columnMap map[int]int
 		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
 		if partialResults != nil {
-			newRelData := relData.BuildEmptyRelData()
-			newRelData.AppendBlockInfo(relData.GetBlockInfo(0))
+			newRelData := relData.BuildEmptyRelData(1)
+			blk := relData.GetBlockInfo(0)
+			newRelData.AppendBlockInfo(&blk)
 
 			tombstones, err := collectTombstones(c, n, rel)
 			if err != nil {
@@ -3921,9 +4150,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				hasTombstone bool
 				err2         error
 			)
-			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk objectio.BlockInfo) (bool, error) {
+			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					ctx, blk.BlockID, fs,
+					ctx, &blk.BlockID, fs,
 				); err2 != nil {
 					return false, err2
 				} else if blk.IsAppendable() || hasTombstone {
@@ -3964,18 +4193,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	engineType := rel.GetEngineType()
-	// for an ordered scan, put all paylonds in current CN
+	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
-	if len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
+	// if not disttae engine, just put all payloads in current CN
+	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae {
+		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
 	}
-	// disttae engine
-	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
-		return nodes, partialResults, partialResultTypes, err
-	}
-	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
+	// only support disttae engine for now
+	nodes, err = shuffleBlocksToMultiCN(c, rel, relData, n)
+	return nodes, partialResults, partialResultTypes, err
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
@@ -4020,7 +4246,7 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 	return partialResults, partialResultTypes, columnMap
 }
 
-func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
+func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
 	if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 		partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 		return nil
@@ -4157,7 +4383,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						min := types.DecodeFixed[types.TS](zm.GetMinBuf())
 						ts := partialResults[i].(types.TS)
-						if min.Less(&ts) {
+						if min.LT(&ts) {
 							partialResults[i] = min
 						}
 					case types.T_Rowid:
@@ -4286,7 +4512,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 					case types.T_TS:
 						max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
 						ts := partialResults[i].(types.TS)
-						if max.Greater(&ts) {
+						if max.GT(&ts) {
 							partialResults[i] = max
 						}
 					case types.T_Rowid:
@@ -4309,98 +4535,22 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk objectio.BlockInfo, partialR
 	return nil
 }
 
-func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
-	var nodes engine.Nodes
-	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < relData.DataCnt(); i += step {
-		j := i / step
-		if i+step >= relData.DataCnt() {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, relData.DataCnt(), relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		} else {
-			if isSameCN(c.cnList[j].Addr, c.addr) {
-				if len(nodes) == 0 {
-					nodes = append(nodes, engine.Node{
-						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-						Data: relData.BuildEmptyRelData(),
-					})
-				}
-				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						nodes[0].Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-			} else {
-				node := engine.Node{
-					Id:   c.cnList[j].Id,
-					Addr: c.cnList[j].Addr,
-					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: relData.BuildEmptyRelData(),
-				}
-
-				engine.ForRangeShardID(i, i+step, relData,
-					func(shardID uint64) (bool, error) {
-						node.Data.AppendShardID(shardID)
-						return true, nil
-					})
-
-				nodes = append(nodes, node)
-			}
-		}
-	}
-	return nodes
-}
-
 func removeEmtpyNodes(
 	c *Compile,
 	n *plan.Node,
 	rel engine.Relation,
 	relData engine.RelData,
 	nodes engine.Nodes) (engine.Nodes, error) {
-	minWorkLoad := math.MaxInt32
-	maxWorkLoad := 0
+	minCnt := math.MaxInt32
+	maxCnt := 0
 	// remove empty node from nodes
-	var newNodes engine.Nodes
+	var newnodes engine.Nodes
 	for i := range nodes {
-		if nodes[i].Data.DataCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() > maxCnt {
+			maxCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
-		if nodes[i].Data.DataCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() < minCnt {
+			minCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4410,23 +4560,23 @@ func removeEmtpyNodes(
 				}
 				nodes[i].Data.AttachTombstones(tombstone)
 			}
-			newNodes = append(newNodes, nodes[i])
+			newnodes = append(newnodes, nodes[i])
 		}
 	}
-	if minWorkLoad*2 < maxWorkLoad {
+	if minCnt*2 < maxCnt {
 		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
 			n.TableDef.Name,
 			relData.DataCnt(),
-			len(newNodes),
-			maxWorkLoad,
-			minWorkLoad)
+			len(newnodes),
+			maxCnt,
+			minCnt)
 		logstring = logstring + " cnlist: "
 		for i := range c.cnList {
 			logstring = logstring + c.cnList[i].Addr + " "
 		}
 		c.proc.Warn(c.proc.Ctx, logstring)
 	}
-	return newNodes, nil
+	return newnodes, nil
 }
 
 func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
@@ -4434,25 +4584,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData()
-	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfo)
-	// only memory table block
-	if relData.DataCnt() == 1 {
-		return nodes, nil
-	}
-	// only one cn
-	if len(c.cnList) == 1 {
-		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk objectio.BlockInfo) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(blk)
-				return true, nil
-			})
-
-		return nodes, nil
-	}
+	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
+	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
@@ -4460,8 +4596,8 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 			nodes = append(nodes, engine.Node{
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
-				Data: relData.BuildEmptyRelData(),
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
+				Data: relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList)),
 			})
 		}
 	}
@@ -4487,48 +4623,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	}
 
 	return removeEmtpyNodes(c, n, rel, relData, nodes)
-
-	//minWorkLoad := math.MaxInt32
-	//maxWorkLoad := 0
-	//// remove empty node from nodes
-	//var newNodes engine.Nodes
-	//for i := range nodes {
-	//	if nodes[i].Data.DataCnt() > maxWorkLoad {
-	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() < minWorkLoad {
-	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
-	//	}
-	//	if nodes[i].Data.DataCnt() > 0 {
-	//		if nodes[i].Addr != c.addr {
-	//			tombstone, err := collectTombstones(c, n, rel)
-	//			if err != nil {
-	//				return nil, err
-	//			}
-	//			nodes[i].Data.AttachTombstones(tombstone)
-	//		}
-	//		newNodes = append(newNodes, nodes[i])
-	//	}
-	//}
-	//if minWorkLoad*2 < maxWorkLoad {
-	//	logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
-	//		n.TableDef.Name,
-	//		relData.DataCnt(),
-	//		len(newNodes),
-	//		maxWorkLoad,
-	//		minWorkLoad)
-	//	logstring = logstring + " cnlist: "
-	//	for i := range c.cnList {
-	//		logstring = logstring + c.cnList[i].Addr + " "
-	//	}
-	//	c.proc.Warnf(c.proc.Ctx, logstring)
-	//}
-	//return newNodes, nil
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
 			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
@@ -4554,7 +4653,7 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 		1,
 		cnt,
 		relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			nodes[1].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
@@ -4572,7 +4671,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var index uint64
 
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfo) (bool, error) {
+		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 			if err != nil {
@@ -4614,12 +4713,12 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, relData engine.RelData) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
 	})
 	nodes[0].Data = relData
 	return nodes
@@ -4705,6 +4804,12 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower)
+
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
+		}
+	}
 
 	ctx := c.proc.Ctx
 	if accountId >= 0 {

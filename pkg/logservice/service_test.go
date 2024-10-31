@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -36,40 +37,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	testServicePort        = 9000
-	testGossipPort         = 9010
-	testServiceAddress     = "127.0.0.1:9000"
-	testGossipAddress      = "127.0.0.1:9010"
-	dummyGossipSeedAddress = "127.0.0.1:9100"
-	testServerMaxMsgSize   = 1000
-)
-
-func getServiceTestConfig() Config {
-	c := DefaultConfig()
-	c.UUID = uuid.New().String()
-	c.RTTMillisecond = 10
-	c.GossipPort = testGossipPort
-	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
-	c.DeploymentID = 1
-	c.FS = vfs.NewStrictMem()
-	c.LogServicePort = testServicePort
-	c.DisableWorkers = true
-	c.UseTeeLogDB = true
-	c.RPC.MaxMessageSize = testServerMaxMsgSize
-
-	rt := runtime.ServiceRuntime("")
-	runtime.SetupServiceBasedRuntime(c.UUID, rt)
-	runtime.SetupServiceBasedRuntime("", rt)
-	return c
-}
-
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -111,9 +88,55 @@ func runServiceTest(t *testing.T,
 
 func TestNewService(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceRetry(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg0 := getServiceTestConfig()
+	genCfg0 := func() Config {
+		return cfg0
+	}
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
+	service0, err := NewServiceWithRetry(genCfg0,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service0.Close())
+	}()
+
+	var cfg Config
+	first := true
+	genCfg := func() Config {
+		if first {
+			first = false
+			return cfg0
+		} else {
+			cfg = getServiceTestConfig()
+			return cfg
+		}
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -330,36 +353,6 @@ func TestServiceHandleAppend(t *testing.T) {
 		resp = s.handleAppend(ctx, req, cmd)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
-	}
-	runServiceTest(t, false, true, fn)
-}
-
-func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
-	fn := func(t *testing.T, s *Service) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		req := pb.Request{
-			Method: pb.CONNECT_RO,
-			LogRequest: pb.LogRequest{
-				ShardID: 1,
-				TNID:    100,
-			},
-		}
-		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
-
-		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID+1, data)
-		req = pb.Request{
-			Method: pb.APPEND,
-			LogRequest: pb.LogRequest{
-				ShardID: 1,
-			},
-		}
-		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, uint32(moerr.ErrNotLeaseHolder), resp.ErrorCode)
-		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -1186,4 +1179,328 @@ func TestServiceHandleProxyHeartbeat(t *testing.T) {
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleUpdateNonVotingReplicaNum(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method:              pb.UPDATE_NON_VOTING_REPLICA_NUM,
+			NonVotingReplicaNum: 3,
+		}
+		resp := s.handleUpdateNonVotingReplicaNum(ctx0, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, uint64(3), resp.CheckerState.NonVotingReplicaNum)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleUpdateNonVotingLocality(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.UPDATE_NON_VOTING_LOCALITY,
+			NonVotingLocality: &pb.Locality{
+				Value: map[string]string{
+					"region": "east",
+					"type":   "mysql",
+				},
+			},
+		}
+		resp := s.handleUpdateNonVotingLocality(ctx0, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx1, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, 2, len(resp.CheckerState.NonVotingLocality.Value))
+		v, ok := resp.CheckerState.NonVotingLocality.Value["region"]
+		assert.True(t, ok)
+		assert.Equal(t, "east", v)
+		v, ok = resp.CheckerState.NonVotingLocality.Value["type"]
+		assert.True(t, ok)
+		assert.Equal(t, "mysql", v)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.UPDATE_NON_VOTING_LOCALITY,
+			NonVotingLocality: &pb.Locality{
+				Value: map[string]string{
+					"zone": "asia",
+				},
+			},
+		}
+		resp = s.handleUpdateNonVotingLocality(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, 1, len(resp.CheckerState.NonVotingLocality.Value))
+		v, ok = resp.CheckerState.NonVotingLocality.Value["zone"]
+		assert.True(t, ok)
+		assert.Equal(t, "asia", v)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleGetLatestLsn(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    100,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		data := make([]byte, 8)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		req = pb.Request{
+			Method: pb.APPEND,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleAppend(ctx, req, cmd)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.GET_LATEST_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleGetLatestLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceRequiredLsn(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    100,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		data := make([]byte, 8)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		req = pb.Request{
+			Method: pb.APPEND,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleAppend(ctx, req, cmd)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.SET_REQUIRED_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     4,
+			},
+		}
+		resp = s.handleSetRequiredLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.GET_REQUIRED_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleGetRequiredLsn(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceLeaderID(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.GET_LEADER_ID,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp := s.handleGetLeaderID(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(1), resp.LogResponse.LeaderID)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceCheckHealth(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = s.ID()
+		require.NoError(t, s.store.startHAKeeperReplica(1, peers, false))
+		s.store.hakeeperTick()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		_, err := s.store.addLogStoreHeartbeat(ctx, s.store.getHeartbeatMessage())
+		assert.NoError(t, err)
+
+		req := pb.Request{
+			Method: pb.CHECK_HEALTH,
+			CheckHealth: &pb.CheckHealth{
+				ShardID: 1,
+			},
+		}
+		resp := s.handleCheckHealth(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceReadLsn(t *testing.T) {
+	orig := defaultLogDBMaxLogFileSize
+	defaultLogDBMaxLogFileSize = 500
+	defaultArchiverEnabled = true
+	defer func() {
+		defaultArchiverEnabled = false
+		defaultLogDBMaxLogFileSize = orig
+	}()
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			req := pb.Request{
+				Method: pb.APPEND,
+				LogRequest: pb.LogRequest{
+					ShardID: 1,
+				},
+			}
+			resp := s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(0), resp.ErrorCode)
+		}
+		searchTime := time.Now()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			req := pb.Request{
+				Method: pb.APPEND,
+				LogRequest: pb.LogRequest{
+					ShardID: 1,
+				},
+			}
+			resp := s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+
+		req := pb.Request{
+			Method: pb.READ_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TS:      time.Now(),
+			},
+		}
+		resp, _ := s.handleReadLsn(ctx, req)
+		assert.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		resp = s.handleGetLatestLsn(ctx, pb.Request{
+			Method: pb.GET_LATEST_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		})
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		lsn := resp.LogResponse.Lsn
+		t.Logf("lastest lsn is: %d", lsn)
+
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            lsn - 1,
+		}
+		_, err := s.store.nh.SyncRequestSnapshot(ctx, 1, opts)
+		assert.NoError(t, err)
+
+		timeout := time.NewTimer(time.Second * 5)
+		defer timeout.Stop()
+		tick := time.NewTicker(time.Millisecond * 10)
+		defer tick.Stop()
+		var readLsn uint64
+	FOR:
+		for {
+			select {
+			case <-timeout.C:
+				panic("the lsn is not valid")
+
+			case <-tick.C:
+				req := pb.Request{
+					Method: pb.READ_LSN,
+					LogRequest: pb.LogRequest{
+						ShardID: 1,
+						TS:      searchTime,
+					},
+				}
+				resp, _ := s.handleReadLsn(ctx, req)
+				if resp.ErrorCode == 0 && resp.LogResponse.Lsn > 0 {
+					t.Logf("lsn is %d", resp.LogResponse.Lsn)
+					readLsn = resp.LogResponse.Lsn
+					break FOR
+				}
+			}
+		}
+
+		req = pb.Request{
+			Method: pb.READ,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     readLsn - 10,
+				MaxSize: math.MaxUint64,
+			},
+		}
+		resp, logRec := s.handleRead(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, readLsn-10, resp.LogResponse.LastLsn)
+		require.NotEqual(t, 0, len(logRec.Records))
+	}
+	runServiceTest(t, false, true, fn)
 }

@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -46,8 +49,8 @@ import (
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_InsertRows(t *testing.T) {
@@ -252,7 +255,8 @@ func TestLogtailBasic(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
-	schema.Comment = "rows:10;blks=1"
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txnop := p.StartCNTxn()
 	p.CreateDBAndTable(txnop, "todrop", schema)
@@ -599,6 +603,29 @@ func TestInProgressTransfer(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
+	fault.Enable()
+	defer fault.Disable()
+	err1 := fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitDelete,
+		":::",
+		"echo",
+		0,
+		"trace delete",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
+	err1 = fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitSlowLog,
+		":::",
+		"echo",
+		0,
+		"trace slowlog",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
+
 	var did, tid uint64
 	var theRow *batch.Batch
 	{
@@ -779,8 +806,8 @@ func TestCacheGC(t *testing.T) {
 	// gc
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
-	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
-	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
+	require.Equal(t, 4, r.TStaleItem)
+	require.Equal(t, 2 /*test2 & test 4*/, r.TStaleCpk)
 
 }
 

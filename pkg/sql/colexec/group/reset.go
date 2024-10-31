@@ -22,6 +22,7 @@ import (
 func (group *Group) Reset(
 	proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
+	group.ctr.itr = nil
 	group.ctr.skipInitReusableMem = true
 	group.ctr.state = vm.Build
 
@@ -39,12 +40,13 @@ func (group *Group) Reset(
 				}
 
 				group.ctr.bat.Vecs = group.ctr.bat.Vecs[:len(group.Exprs)]
-				for i := 0; i < len(group.ctr.bat.Vecs); i++ {
-					group.ctr.bat.Vecs[i].CleanOnlyData()
-				}
 			}
-			group.ctr.bat.SetRowCount(0)
 		}
+
+		for i := 0; i < len(group.ctr.bat.Vecs); i++ {
+			group.ctr.bat.Vecs[i].CleanOnlyData()
+		}
+		group.ctr.bat.SetRowCount(0)
 
 		for i := 0; i < len(group.ctr.bat.Aggs); i++ {
 			if group.ctr.bat.Aggs[i] != nil {

@@ -15,9 +15,11 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +48,8 @@ type container struct {
 
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
+	remoteInfo      process.RemotePipelineInformationChannel
+
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error)
 
@@ -65,6 +69,8 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
+
+	marshalBuf bytes.Buffer
 }
 
 type Dispatch struct {

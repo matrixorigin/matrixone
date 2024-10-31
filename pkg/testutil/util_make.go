@@ -15,6 +15,8 @@
 package testutil
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,28 +28,64 @@ import (
 var (
 	TestUtilMp = mpool.MustNewZeroNoFixed()
 
-	MakeInt64Vector = func(values []int64, nsp []uint64) *vector.Vector {
-		return makeVector(values, nsp, int64Type)
+	MakeBoolVector = func(values []bool, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, boolType)
 	}
 
-	MakeInt32Vector = func(values []int32, nsp []uint64) *vector.Vector {
-		return makeVector(values, nsp, int32Type)
-	}
-
-	MakeInt16Vector = func(values []int16, nsp []uint64) *vector.Vector {
-		return makeVector(values, nsp, int16Type)
-	}
-
-	MakeRowIdVector = func(values []types.Rowid, nsp []uint64) *vector.Vector {
-		return makeVector(values, nsp, rowIdType)
+	MakeBitVector = func(values []uint64, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, bitType)
 	}
 
 	MakeInt8Vector = func(values []int8, nsp []uint64) *vector.Vector {
 		return makeVector(values, nsp, int8Type)
 	}
 
+	MakeInt16Vector = func(values []int16, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, int16Type)
+	}
+
+	MakeInt32Vector = func(values []int32, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, int32Type)
+	}
+
+	MakeInt64Vector = func(values []int64, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, int64Type)
+	}
+
+	MakeUint8Vector = func(values []uint8, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, uint8Type)
+	}
+
 	MakeUint16Vector = func(values []uint16, nsp []uint64) *vector.Vector {
 		return makeVector(values, nsp, uint16Type)
+	}
+
+	MakeUint32Vector = func(values []uint32, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, uint32Type)
+	}
+
+	MakeUint64Vector = func(values []uint64, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, uint64Type)
+	}
+
+	MakeFloat32Vector = func(values []float32, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, float32Type)
+	}
+
+	MakeFloat64Vector = func(values []float64, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, float64Type)
+	}
+
+	MakeRowIdVector = func(values []types.Rowid, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, rowIdType)
+	}
+
+	MakeBlockIdVector = func(values []types.Blockid, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, blockIdType)
+	}
+
+	MakeTSVector = func(values []types.TS, nsp []uint64) *vector.Vector {
+		return makeVector(values, nsp, tsType)
 	}
 
 	MakeVarcharVector = func(values []string, nsp []uint64) *vector.Vector {
@@ -66,8 +104,20 @@ var (
 		return makeJsonVector(values, nsp)
 	}
 
+	MakeDateVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeDateVector(values, nsp)
+	}
+
+	MakeTimeVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeTimeVector(values, nsp)
+	}
+
 	MakeDatetimeVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeDatetimeVector(values, nsp)
+	}
+
+	MakeTimestampVector = func(values []string, nsp []uint64) *vector.Vector {
+		return makeTimestampVector(values, nsp)
 	}
 )
 
@@ -142,6 +192,50 @@ func makeJsonVector(values []string, nsp []uint64) *vector.Vector {
 	return vec
 }
 
+func makeDateVector(values []string, nsp []uint64) *vector.Vector {
+	var err error
+
+	newVals := make([]types.Date, len(values))
+	for i := range values {
+		dt, err := types.ParseDatetime(values[i], 0)
+		if err != nil {
+			panic(err)
+		}
+		newVals[i] = dt.ToDate()
+	}
+
+	vec := vector.NewVec(dateType)
+	err = vector.AppendFixedList(vec, newVals, nil, TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
+	if err != nil {
+		panic(err)
+	}
+
+	return vec
+}
+
+func makeTimeVector(values []string, nsp []uint64) *vector.Vector {
+	var err error
+
+	newVals := make([]types.Time, len(values))
+	for i := range values {
+		dt, err := types.ParseDatetime(values[i], 0)
+		if err != nil {
+			panic(err)
+		}
+		newVals[i] = dt.ToTime(6)
+	}
+
+	vec := vector.NewVec(timeType)
+	err = vector.AppendFixedList(vec, newVals, nil, TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
+	if err != nil {
+		panic(err)
+	}
+
+	return vec
+}
+
 func makeDatetimeVector(values []string, nsp []uint64) *vector.Vector {
 	var err error
 
@@ -155,6 +249,28 @@ func makeDatetimeVector(values []string, nsp []uint64) *vector.Vector {
 	}
 
 	vec := vector.NewVec(datetimeType)
+	err = vector.AppendFixedList(vec, newVals, nil, TestUtilMp)
+	vec.SetNulls(nulls.Build(len(values), nsp...))
+	if err != nil {
+		panic(err)
+	}
+
+	return vec
+}
+
+func makeTimestampVector(values []string, nsp []uint64) *vector.Vector {
+	var err error
+
+	newVals := make([]types.Timestamp, len(values))
+	for i := range values {
+		dt, err := types.ParseDatetime(values[i], 0)
+		if err != nil {
+			panic(err)
+		}
+		newVals[i] = dt.ToTimestamp(time.UTC)
+	}
+
+	vec := vector.NewVec(timestampType)
 	err = vector.AppendFixedList(vec, newVals, nil, TestUtilMp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {

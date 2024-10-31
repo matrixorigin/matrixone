@@ -1,0 +1,2 @@
+select llm_extract_text(cast('file://$resources/llm_test/extract_text/MODocs1.pdf?offset=0&size=4' as datalink), cast('file://$resources/llm_test/extract_text/MODocs1.txt' as datalink), "pdf");
+select llm_extract_text(cast('file://$resources/llm_test/extract_text/example.pdf?offset=0&size=4' as datalink), cast('file://$resources/llm_test/extract_text/example.txt' as datalink), "pdf");

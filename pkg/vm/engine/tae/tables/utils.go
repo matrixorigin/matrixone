@@ -18,11 +18,12 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -58,6 +59,21 @@ import (
 //	return vectors[0], nil
 //}
 
+func PreparePhyAddrData(
+	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
+) (col containers.Vector, err error) {
+	col = pool.GetVector(&objectio.RowidType)
+	vec := col.GetDownstreamVector()
+	m := col.GetAllocator()
+	if err = objectio.ConstructRowidColumnTo(
+		vec, id, startRow, length, m,
+	); err != nil {
+		col.Close()
+		col = nil
+	}
+	return
+}
+
 func LoadPersistedColumnDatas(
 	ctx context.Context,
 	schema *catalog.Schema,
@@ -66,22 +82,24 @@ func LoadPersistedColumnDatas(
 	colIdxs []int,
 	location objectio.Location,
 	mp *mpool.MPool,
-) ([]containers.Vector, error) {
+	tsForAppendable *types.TS,
+) ([]containers.Vector, *nulls.Nulls, error) {
 	cols := make([]uint16, 0)
 	typs := make([]types.Type, 0)
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
+	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
-		if colIdx == catalog.COLIDX_COMMITS {
+		if colIdx == objectio.SEQNUM_COMMITTS {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
-			typs = append(typs, catalog.CommitTSType)
+			typs = append(typs, objectio.TSType)
 			continue
 		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
-			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
-				return nil, err
+				return nil, deletes, err
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
@@ -91,7 +109,14 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		return vectors, nil
+		return vectors, deletes, nil
+	}
+	if tsForAppendable != nil {
+		deletes = nulls.NewWithSize(1024)
+		cols = append(cols, objectio.SEQNUM_COMMITTS)
+		defer func() {
+			cols = cols[:len(cols)-1]
+		}()
 	}
 	var vecs []containers.Vector
 	var err error
@@ -106,7 +131,16 @@ func LoadPersistedColumnDatas(
 		true,
 		rt.VectorPool.Transient)
 	if err != nil {
-		return nil, err
+		return nil, deletes, err
+	}
+	if tsForAppendable != nil {
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[len(vecs)-1].GetDownstreamVector())
+		for i := 0; i < len(commits); i++ {
+			if commits[i].GT(tsForAppendable) {
+				deletes.Add(uint64(i))
+			}
+		}
+		vecs = vecs[:len(vecs)-1]
 	}
 	for i, vec := range vecs {
 		idx := i
@@ -115,7 +149,7 @@ func LoadPersistedColumnDatas(
 		}
 		vectors[idx] = vec
 	}
-	return vectors, nil
+	return vectors, deletes, nil
 }
 
 func MakeImmuIndex(
@@ -124,12 +158,8 @@ func MakeImmuIndex(
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	stats, err := meta.MustGetObjectStats()
-	if err != nil {
-		return
-	}
 	idx = indexwrapper.NewImmutIndex(
-		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
+		meta.SortKeyZoneMap(), bf, meta.ObjectLocation(),
 	)
 	return
 }

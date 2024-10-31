@@ -265,9 +265,11 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -277,8 +279,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu("").TxnClient = txnClient
+	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
 	var c clock.Clock
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
@@ -294,10 +296,12 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -307,8 +311,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu("").TxnClient = txnClient
+	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
 
 	var c clock.Clock
@@ -327,10 +331,12 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -340,8 +346,8 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	}).AnyTimes()
 
 	ses := newTestSession(t, ctrl)
-	getGlobalPu().TxnClient = txnClient
-	getGlobalPu().StorageEngine = eng
+	getPu("").TxnClient = txnClient
+	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
 
 	var c clock.Clock
@@ -364,8 +370,10 @@ func Test_rollbackStatement(t *testing.T) {
 				txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 				wsp := newTestWorkspace()
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
-				txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+				txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+				txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 				return txnOperator, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -381,7 +389,7 @@ func Test_rollbackStatement(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 
 		ses := newTestSession(t, ctrl)
-		getGlobalPu().TxnClient = txnClient
+		getPu("").TxnClient = txnClient
 		ses.txnHandler.storage = eng
 
 		ec := newTestExecCtx(ctx, ctrl)

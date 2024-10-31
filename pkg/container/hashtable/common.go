@@ -22,14 +22,19 @@ const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
 	maxBlockSize        = 256 * (1 << 20)
+	MB                  = 1 << 20
 )
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {
-	if cellCnt*cellSize < maxBlockSize {
+	totalSize := cellCnt * cellSize
+	if totalSize < 64*MB {
 		return cellCnt / 2
-	} else {
+	} else if totalSize < 128*MB {
+		return cellCnt * 2 / 3
+	} else if totalSize < 256*MB {
 		return cellCnt * 3 / 4
 	}
+	return cellCnt * 4 / 5
 }
 
 type Aggregator interface {

@@ -34,7 +34,6 @@ import (
 )
 
 var StopMerge atomic.Bool
-var DisableDeltaLocMerge atomic.Bool
 
 type CNMergeScheduler interface {
 	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
@@ -174,7 +173,7 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 	if entry == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CauseCleanUpUselessFiles)
 	defer cancel()
 	for _, filepath := range entry.BookingLoc {
 		_ = fs.Delete(ctx, filepath)
@@ -197,8 +196,8 @@ const (
 
 type policy interface {
 	onObject(*catalog.ObjectEntry, *BasicPolicyConfig) bool
-	revise(cpu, mem int64, config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind)
-	resetForTable(*catalog.TableEntry)
+	revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
+	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {

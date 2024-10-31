@@ -548,8 +548,7 @@ func (c *DashboardCreator) initTombstoneTransferRow() dashboard.Option {
 		c.getTimeSeries(
 			"Transfer tombstones count",
 			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
+				"sum (increase(%s[$interval]))",
 				c.getMetricWithFilter(`mo_txn_transfer_tombstones_count_sum`, ""),
 			)},
 			[]string{"count"},

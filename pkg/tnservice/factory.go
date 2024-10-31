@@ -18,6 +18,8 @@ import (
 	"context"
 	"math"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
@@ -96,15 +97,20 @@ func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice
 }
 
 func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), s.cfg.LogService.ConnectTimeout.Duration, moerr.CauseNewLogServiceClient)
 	defer cancel()
-	return logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
+	client, err := logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
 		ReadOnly:         false,
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
+		DiscoveryAddress: s.cfg.HAKeeper.ClientConfig.DiscoveryAddress,
 		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
+	if err != nil {
+		return nil, moerr.AttachCause(ctx, err)
+	}
+	return client, nil
 }
 
 func (s *store) newMemTxnStorage(
@@ -158,6 +164,10 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 		CheckGC:        s.cfg.GCCfg.CheckGC,
+		CacheSize:      s.cfg.GCCfg.CacheSize,
+		GCMergeCount:   s.cfg.GCCfg.GCMergeCount,
+		GCestimateRows: s.cfg.GCCfg.GCestimateRows,
+		GCProbility:    s.cfg.GCCfg.GCProbility,
 	}
 
 	mergeCfg := &options.MergeConfig{
@@ -165,6 +175,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		CNTakeOverAll:         s.cfg.Merge.CNTakeOverAll,
 		CNTakeOverExceed:      uint64(s.cfg.Merge.CNTakeOverExceed),
 		CNStandaloneTake:      s.cfg.Merge.CNStandaloneTake,
+		DisableZMBasedMerge:   s.cfg.Merge.DisableZMBasedMerge,
 	}
 
 	logtailServerAddr := s.logtailServiceListenAddr()

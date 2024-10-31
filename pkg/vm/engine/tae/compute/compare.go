@@ -16,6 +16,7 @@ package compute
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"unsafe"
 
@@ -24,12 +25,7 @@ import (
 )
 
 func CompareOrdered[T types.OrderedT](a, b T) int {
-	if a > b {
-		return 1
-	} else if a < b {
-		return -1
-	}
-	return 0
+	return cmp.Compare(a, b)
 }
 
 func CompareBool(a, b bool) int {
@@ -42,14 +38,7 @@ func CompareBool(a, b bool) int {
 }
 
 func CompareBytes(a, b []byte) int {
-	res := bytes.Compare(a, b)
-	if res > 0 {
-		return 1
-	} else if res < 0 {
-		return -1
-	} else {
-		return 0
-	}
+	return bytes.Compare(a, b)
 }
 
 func compareArrayFromBytes[T types.RealNumbers](a, b []byte) int {
@@ -99,9 +88,9 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
 	case types.T_TS:
-		// PXU FIXME Done
-		aa, bb := types.TS(a), types.TS(b)
-		return aa.Compare(&bb)
+		aa := (*types.TS)(unsafe.Pointer(&a[0]))
+		bb := (*types.TS)(unsafe.Pointer(&b[0]))
+		return aa.Compare(bb)
 
 	case types.T_Rowid:
 		// Row id is very special. it is not valena type but always be

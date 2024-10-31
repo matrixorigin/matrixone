@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -101,7 +102,7 @@ func (r *replayer) replay() {
 func (r *replayer) readRecords() (readEnd bool) {
 	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
 		r.readCount++
-		if record.meta.metaType == TReplay {
+		if record.Meta.metaType == TReplay {
 			r.internalCount++
 			cmd := NewEmptyReplayCmd()
 			cmd.Unmarshal(record.payload)
@@ -188,7 +189,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	logutil.Infof("skip %v", skipMap)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
-	recordEntry.meta.metaType = TReplay
+	recordEntry.Meta.metaType = TReplay
 	recordEntry.cmd = cmd
 	size := recordEntry.prepareRecord()
 	c, lsn := r.d.getClient()
@@ -197,13 +198,15 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	record := c.record
 	copy(record.Payload(), recordEntry.payload)
 	record.ResizePayload(size)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd)
 	_, err := c.c.Append(ctx, c.record)
+	err = moerr.AttachCause(ctx, err)
 	cancel()
 	if err != nil {
 		err = RetryWithTimeout(r.d.config.RetryTimeout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseAppendSkipCmd2)
 			_, err := c.c.Append(ctx, c.record)
+			err = moerr.AttachCause(ctx, err)
 			cancel()
 			return err == nil
 		})

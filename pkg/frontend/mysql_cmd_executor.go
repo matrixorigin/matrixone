@@ -51,6 +51,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -152,7 +154,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
 			// case: exec `set @t = 2;` will trigger an internal query with the same session.
@@ -160,11 +162,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
 			//  + envStmt = fmtCtx.String()
-			text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
 		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
+		text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -216,6 +218,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		requestAt = time.Now()
 	}
 
+	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
@@ -432,13 +435,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 // getDataFromPipeline: extract the data from the pipeline.
 // obj: session
-func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) error {
+func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs *perfcounter.CounterSet) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
 	defer task.End()
 	ses := obj.(*Session)
 
 	begin := time.Now()
-	err := ses.GetResponser().RespResult(execCtx, bat)
+	err := ses.GetResponser().RespResult(execCtx, crs, bat)
 	if err != nil {
 		return err
 	}
@@ -471,7 +474,7 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	txnHandler := ses.GetTxnHandler()
 	txn := txnHandler.GetTxn()
 	//TODO: check meta data
-	if dbMeta, err = getGlobalPu().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = getPu(ses.GetService()).StorageEngine.Database(ctx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -964,6 +967,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if err != nil {
 		return err
 	}
+	es.CmpContext = ses.GetTxnCompileCtx()
 
 	//get query optimizer and execute Optimize
 	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
@@ -1126,6 +1130,7 @@ func createPrepareStmt(
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
 	}
+	prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	return prepareStmt, nil
 }
 
@@ -1413,13 +1418,39 @@ func handleRevokeRole(ses FeSession, execCtx *ExecCtx, rr *tree.RevokeRole) erro
 }
 
 // handleGrantRole grants the privilege to the role
-func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) error {
-	return doGrantPrivilege(execCtx.reqCtx, ses, gp)
+func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doGrantPrivilege(ctx, ses, gp, bh)
 }
 
 // handleRevokePrivilege revokes the privilege from the user or role
-func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) error {
-	return doRevokePrivilege(execCtx.reqCtx, ses, rp)
+func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doRevokePrivilege(ctx, ses, rp, bh)
 }
 
 // handleSwitchRole switches the role to another role
@@ -1433,9 +1464,9 @@ func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 	//false: kill a query in a connection
 	idThatKill := uint64(ses.GetConnectionID())
 	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
+		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
 	} else {
-		err = getGlobalRtMgr().kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
+		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
 	}
 	return err
 }
@@ -1698,11 +1729,13 @@ func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
 		filterLabels(labels), clusterservice.Contain)
+	moc := clusterservice.GetMOCluster(ses.GetService())
+	moc.ForceRefresh(true)
 	if isSysTenant(tenant) {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
-			clusterservice.GetMOCluster(ses.GetService()).GetCNService(
+			moc.GetCNService(
 				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
@@ -1797,7 +1830,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -1814,17 +1847,17 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 
 func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New(true, []string{explainColName})
+	bat := batch.New([]string{explainColName})
 	vs := make([][]byte, 0)
 	count := 0
 	for {
@@ -1849,12 +1882,12 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 	bat.Vecs[0] = vec
 	bat.SetRowCount(count)
 
-	err := fill(session, execCtx, bat)
+	err := fill(session, execCtx, bat, nil)
 	if err != nil {
 		return err
 	}
 	// to trigger save result meta
-	err = fill(session, execCtx, nil)
+	err = fill(session, execCtx, nil, nil)
 	return err
 }
 
@@ -1893,7 +1926,19 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	stats := statistic.StatsInfoFromContext(reqCtx)
 	stats.PlanStart()
-	defer stats.PlanEnd()
+	crs := new(perfcounter.CounterSet)
+	reqCtx = perfcounter.AttachBuildPlanMarkKey(reqCtx, crs)
+	defer func() {
+		stats.AddBuildPlanS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+		stats.PlanEnd()
+	}()
 
 	isPrepareStmt := false
 	if ses != nil {
@@ -2017,7 +2062,12 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
+		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		cws = append(cws, tcw)
+		return cws, nil
+	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -2084,7 +2134,7 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) error {
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2132,7 +2182,7 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2153,7 +2203,7 @@ func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session
 func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
-	if getGlobalPu().SV.SkipCheckPrivilege {
+	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return nil
 	}
 	err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
@@ -2188,10 +2238,16 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
-func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
+func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (_ bool, _ time.Duration, _ time.Duration, err error) {
 	var readTime, writeTime time.Duration
+	var payload []byte
 	readStart := time.Now()
-	payload, err := mysqlRrWr.ReadLoadLocalPacket()
+	defer func() {
+		if err != nil {
+			mysqlRrWr.FreeLoadLocal()
+		}
+	}()
+	payload, err = mysqlRrWr.ReadLoadLocalPacket()
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return skipWrite, readTime, writeTime, err
@@ -2208,7 +2264,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	if length == 0 {
 		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
-	ses.CountPayload(len(payload))
+	ses.CountPayload(length)
 
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
@@ -2234,13 +2290,30 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
-func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
+func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
+	//pipewriter may stick when there is no reader reading on the pipereader.
+	//so we need to make sure the pipewriter.write returns.
+	//issue3976
+	quitC := make(chan int)
+	go func() {
+		select {
+		case <-execCtx.reqCtx.Done():
+			//close reader
+			_ = reader.Close()
+		case <-quitC:
+		}
+	}()
+	defer func() {
+		close(quitC)
+	}()
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
 		}
+		//free load local buffer anyway
+		mysqlRrWr.FreeLoadLocal()
 	}()
 	err = plan2.InitInfileParam(param)
 	if err != nil {
@@ -2459,7 +2532,6 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2474,7 +2546,6 @@ func executeStmtWithWorkspace(ses FeSession,
 		if txnOp != nil {
 			ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeEnd)
 			defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeEnd)
-			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2503,12 +2574,23 @@ func executeStmtWithIncrStmt(ses FeSession,
 	}
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
-	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
-	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
+
+	crs := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
+	err = txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	if err != nil {
 		return err
 	}
+	stats := statistic.StatsInfoFromContext(newCtx)
+	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
+		List:      crs.FileService.S3.List.Load(),
+		Head:      crs.FileService.S3.Head.Load(),
+		Put:       crs.FileService.S3.Put.Load(),
+		Get:       crs.FileService.S3.Get.Load(),
+		Delete:    crs.FileService.S3.Delete.Load(),
+		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+	})
 
 	defer func() {
 		if ses.GetTxnHandler() == nil {
@@ -2520,8 +2602,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//if txnOp != nil {
 		//	err = rollbackLastStmt(execCtx, txnOp, err)
 		//}
-		tempTxn := ses.GetTxnHandler().GetTxn()
-		setFPrints(tempTxn, ses.GetFPrints())
 	}()
 
 	err = dispatchStmt(ses, execCtx)
@@ -2533,7 +2613,7 @@ func dispatchStmt(ses FeSession,
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
-	if execCtx.cw.Plan() != nil {
+	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
 
 			//plan changed
@@ -2585,9 +2665,17 @@ func executeStmt(ses *Session,
 	var cmpBegin time.Time
 	var ret interface{}
 
-	switch execCtx.stmt.StmtKind().ExecLocation() {
+	getExecLocation := func() tree.ExecLocation {
+		// because when isBinaryProtExecute is true, execCtx.stmt is preparestmt, actually it's execute
+		if execCtx.input.isBinaryProtExecute {
+			return tree.EXEC_IN_ENGINE
+		}
+		return execCtx.stmt.StmtKind().ExecLocation()
+	}
+	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
 		return execInFrontend(ses, execCtx)
+
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
@@ -2595,7 +2683,7 @@ func executeStmt(ses *Session,
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			if getGlobalPu().SV.DisableSelectInto {
+			if getPu(ses.GetService()).SV.DisableSelectInto {
 				err = moerr.NewSyntaxError(execCtx.reqCtx, "Unsupport select statement")
 				return
 			}
@@ -2759,20 +2847,21 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
+	pu := getPu(ses.GetService())
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
-	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
-		Host:                 getGlobalPu().SV.Host,
+		Host:                 pu.SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(getGlobalPu(), version),
+		Version:              makeServerVersion(pu, version),
 		TimeZone:             ses.GetTimeZone(),
-		StorageEngine:        getGlobalPu().StorageEngine,
+		StorageEngine:        pu.StorageEngine,
 		LastInsertID:         ses.GetLastInsertID(),
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
@@ -2780,6 +2869,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:            ses.GetSessId(),
 	}
+	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -2814,20 +2904,22 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseStartTime = beginInstant
+
+	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 
 	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 		ses.GetUserName(),
-		getGlobalPu().StorageEngine,
+		pu.StorageEngine,
 		proc, ses)
 
 	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
-		statsInfo.ParseDuration = ParseDuration
+		statsInfo.ParseStage.ParseDuration = ParseDuration
 		var err2 error
 		execCtx.reqCtx, err2 = RecordParseErrorStatement(execCtx.reqCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		if err2 != nil {
@@ -2891,7 +2983,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		statsInfo.Reset()
 		//average parse duration
-		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+		statsInfo.ParseStage.ParseStartTime = beginInstant
+		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
@@ -2996,6 +3089,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			} else {
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
+			// log the query's statement and error info.
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
 	ses.EnterFPrint(FPExecRequest)
@@ -3015,7 +3110,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUERY:
 		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
@@ -3076,7 +3171,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
@@ -3511,25 +3606,59 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 	}
 	statsInfo := statistic.StatsInfoFromContext(ctx)
 	if statsInfo != nil {
-		val := int64(statsByte.GetTimeConsumed()) +
-			int64(statsInfo.ParseDuration+
-				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
-		if val < 0 {
-			ses.Debugf(ctx, "issue#14926 negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+		operatorTimeConsumed := int64(statsByte.GetTimeConsumed())
+		totalTime := operatorTimeConsumed +
+			int64(statsInfo.ParseStage.ParseDuration) +
+			int64(statsInfo.PlanStage.PlanDuration) +
+			int64(statsInfo.CompileStage.CompileDuration) +
+			statsInfo.PrepareRunStage.ScopePrepareDuration +
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration - statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+
+		if totalTime < 0 {
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 				uuid.UUID(h.stmt.StatementID).String(),
-				statsInfo.ParseDuration,
-				statsInfo.CompileDuration,
-				statsInfo.PlanDuration,
+				h.stmt.StatementType,
+				statsInfo.ParseStage.ParseDuration,
+				statsInfo.PlanStage.PlanDuration,
+				statsInfo.CompileStage.CompileDuration,
+				operatorTimeConsumed,
+				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption(),
-				val)
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
+				totalTime,
+			)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
-			statsByte.WithTimeConsumed(float64(val))
+			statsByte.WithTimeConsumed(float64(totalTime))
 		}
-	}
 
+		planS3Input := statsInfo.PlanStage.BuildPlanS3Request.CountPUT()
+		planS3Output := statsInfo.PlanStage.BuildPlanS3Request.CountGET()
+		planS3List := statsInfo.PlanStage.BuildPlanS3Request.CountLIST()
+		planS3Delete := statsInfo.PlanStage.BuildPlanS3Request.CountDELETE()
+
+		compileS3Input := statsInfo.CompileStage.CompileS3Request.CountPUT()
+		compileS3Output := statsInfo.CompileStage.CompileS3Request.CountGET()
+		compileS3List := statsInfo.CompileStage.CompileS3Request.CountLIST()
+		compileS3Delete := statsInfo.CompileStage.CompileS3Request.CountDELETE()
+
+		preRunS3Input := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountPUT()
+		preRunS3Output := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountGET()
+		preRunS3List := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountLIST()
+		preRunS3Delete := statsInfo.PrepareRunStage.ScopePrepareS3Request.CountDELETE()
+
+		totalS3Input := statsByte.GetS3IOInputCount() + float64(planS3Input+compileS3Input+preRunS3Input)
+		totalS3Output := statsByte.GetS3IOOutputCount() + float64(planS3Output+compileS3Output+preRunS3Output)
+		totalS3List := statsByte.GetS3IOListCount() + float64(planS3List+compileS3List+preRunS3List)
+		totalS3Delete := statsByte.GetS3IODeleteCount() + float64(planS3Delete+compileS3Delete+preRunS3Delete)
+
+		statsByte.WithS3IOInputCount(totalS3Input)
+		statsByte.WithS3IOOutputCount(totalS3Output)
+		statsByte.WithS3IOListCount(totalS3List)
+		statsByte.WithS3IODeleteCount(totalS3Delete)
+	}
 	return
 }
 

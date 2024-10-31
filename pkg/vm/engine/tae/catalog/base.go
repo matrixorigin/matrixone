@@ -16,7 +16,6 @@ package catalog
 
 import (
 	"fmt"
-	// "io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,15 +33,6 @@ type BaseEntry interface {
 	RUnlock()
 	DeleteBeforeLocked(ts types.TS) bool
 	DeleteBefore(ts types.TS) bool
-}
-
-func CompareUint64(left, right uint64) int {
-	if left > right {
-		return 1
-	} else if left < right {
-		return -1
-	}
-	return 0
 }
 
 type BaseEntryImpl[T BaseNode[T]] struct {
@@ -162,7 +152,7 @@ func (be *BaseEntryImpl[T]) DeleteBeforeLocked(ts types.TS) bool {
 	if createAt.IsEmpty() {
 		return false
 	}
-	return createAt.Less(&ts)
+	return createAt.LT(&ts)
 }
 
 func (be *BaseEntryImpl[T]) NeedWaitCommittingLocked(startTS types.TS) (bool, txnif.TxnReader) {
@@ -236,7 +226,7 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.DeletedAt.Greater(&ts)
+	return un.DeletedAt.GT(&ts)
 }
 
 func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {

@@ -15,10 +15,13 @@
 package compile
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,18 +78,18 @@ func Test_processPhyScope(t *testing.T) {
 	*/
 
 	operatorStats := &process.OperatorStats{
-		OperatorName:          "ExampleOperator",
-		CallNum:               10,
-		TotalTimeConsumed:     5000,
-		TotalWaitTimeConsumed: 2000,
-		TotalMemorySize:       1024,
-		TotalInputRows:        1000,
-		TotalOutputRows:       950,
-		TotalInputSize:        2048,
-		TotalInputBlocks:      0,
-		TotalOutputSize:       1900,
-		TotalS3IOByte:         0,
-		TotalNetworkIO:        600,
+		OperatorName:     "ExampleOperator",
+		CallNum:          10,
+		TimeConsumed:     5000,
+		WaitTimeConsumed: 2000,
+		MemorySize:       1024,
+		InputRows:        1000,
+		OutputRows:       950,
+		InputSize:        2048,
+		InputBlocks:      0,
+		OutputSize:       1900,
+		ScanBytes:        0,
+		NetworkIO:        600,
 		//TotalScanTime:         1500,
 		//TotalInsertTime:       0,
 	}
@@ -333,9 +336,309 @@ func Test_processPhyScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			phyPlan := models.NewPhyPlan()
 			phyPlan.LocalScope = append(phyPlan.LocalScope, tt.args.scope)
-			explainPhyPlan := models.ExplainPhyPlan(phyPlan, models.NormalOption)
+
+			statsInfo := new(statistic.StatsInfo)
+			statsInfo.ParseStage.ParseDuration = 72872
+			statsInfo.PlanStage.PlanDuration = 7544049
+			statsInfo.PlanStage.BuildPlanStatsDuration = 142500
+			statsInfo.CompileStage.CompileDuration = 59396
+			statsInfo.CompileStage.CompileTableScanDuration = 260717
+			statsInfo.CompileStage.CompileS3Request = statistic.S3Request{
+				List:      0,
+				Get:       2,
+				Put:       1,
+				Head:      1,
+				Delete:    0,
+				DeleteMul: 0,
+			}
+
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration = 49396
+			statsInfo.PrepareRunStage.ScopePrepareDuration = 12000
+			statsInfo.PrepareRunStage.BuildReaderDuration = 11000
+
+			explainPhyPlan := models.ExplainPhyPlan(phyPlan, statsInfo, models.NormalOption)
 			t.Logf("%s", explainPhyPlan)
-			processPhyScope(&tt.args.scope, tt.args.nodes)
+			processPhyScope(&tt.args.scope, tt.args.nodes, new(statistic.StatsInfo))
+		})
+	}
+}
+
+func Test_explainResourceOverview(t *testing.T) {
+	operatorStats := &process.OperatorStats{
+		OperatorName:     "ExampleOperator",
+		CallNum:          10,
+		TimeConsumed:     5000,
+		WaitTimeConsumed: 2000,
+		MemorySize:       1024,
+		InputRows:        1000,
+		OutputRows:       950,
+		InputSize:        2048,
+		InputBlocks:      0,
+		OutputSize:       1900,
+		ScanBytes:        0,
+		NetworkIO:        600,
+		//TotalScanTime:         1500,
+		//TotalInsertTime:       0,
+	}
+	operatorStats.AddOpMetric(process.OpScanTime, 1500)
+	operatorStats.AddOpMetric(process.OpInsertTime, 2500)
+	operatorStats.AddOpMetric(process.OpIncrementTime, 3500)
+
+	phyOperator1_0 := models.PhyOperator{
+		OpName:  "Merge",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: operatorStats,
+	}
+
+	phyOperator1_1 := models.PhyOperator{
+		OpName:   "MergeGroup",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_0},
+	}
+
+	phyOperator1_2 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_1},
+	}
+
+	phyOperator1_3 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  1,
+		Status:   isFirstTrue | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_2},
+	}
+
+	phyOperator1_4 := models.PhyOperator{
+		OpName:   "Output",
+		NodeIdx:  -1,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_3},
+	}
+
+	phyScope1 := models.PhyScope{
+		Magic: "Merge",
+		Receiver: []models.PhyReceiver{
+			{
+				Idx:        4,
+				RemoteUuid: "",
+			},
+		},
+		RootOperator: &phyOperator1_4,
+	}
+
+	//---------------------------------------------------------------------------------
+	phyOperator2_0 := models.PhyOperator{
+		OpName:  "Merge",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: operatorStats,
+	}
+
+	phyOperator2_1 := models.PhyOperator{
+		OpName:   "MergeGroup",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator2_0},
+	}
+
+	phyOperator2_2 := models.PhyOperator{
+		OpName:  "Connect",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		DestReceiver: []models.PhyReceiver{
+			{
+				Idx:        4,
+				RemoteUuid: "",
+			},
+		},
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator2_1},
+	}
+
+	phyScope2 := models.PhyScope{
+		Magic: "Normal",
+		Receiver: []models.PhyReceiver{
+			{
+				Idx:        0,
+				RemoteUuid: "",
+			},
+			{
+				Idx:        1,
+				RemoteUuid: "",
+			},
+		},
+		RootOperator: &phyOperator2_2,
+	}
+	//---------------------------------------------------------------------------------
+
+	phyOperator3_0 := models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstTrue | isLastFalse,
+		OpStats: operatorStats,
+	}
+
+	phyOperator3_1 := models.PhyOperator{
+		OpName:   "Filter",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator3_0},
+	}
+
+	phyOperator3_2 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator3_1},
+	}
+
+	phyOperator3_3 := models.PhyOperator{
+		OpName:   "Group",
+		NodeIdx:  1,
+		Status:   isFirstTrue | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator3_2},
+	}
+
+	phyOperator3_4 := models.PhyOperator{
+		OpName:  "Connect",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		DestReceiver: []models.PhyReceiver{
+			{
+				Idx:        0,
+				RemoteUuid: "",
+			},
+		},
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator3_3},
+	}
+
+	phyScope3 := models.PhyScope{
+		Magic:        "Normal",
+		PreScopes:    []models.PhyScope{},
+		RootOperator: &phyOperator3_4,
+	}
+	//----------------------------------------------------------------------------
+	phyOperator4_0 := models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstTrue | isLastFalse,
+		OpStats: operatorStats,
+	}
+
+	phyOperator4_1 := models.PhyOperator{
+		OpName:   "Filter",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator4_0},
+	}
+
+	phyOperator4_2 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  0,
+		Status:   isFirstFalse | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator4_1},
+	}
+
+	phyOperator4_3 := models.PhyOperator{
+		OpName:   "Group",
+		NodeIdx:  1,
+		Status:   isFirstTrue | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator4_2},
+	}
+
+	phyOperator4_4 := models.PhyOperator{
+		OpName:  "Connect",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		DestReceiver: []models.PhyReceiver{
+			{
+				Idx:        0,
+				RemoteUuid: "",
+			},
+		},
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator4_3},
+	}
+
+	phyScope4 := models.PhyScope{
+		Magic:        "Normal",
+		RootOperator: &phyOperator4_4,
+	}
+
+	phyScope2.PreScopes = []models.PhyScope{phyScope3, phyScope4}
+	phyScope1.PreScopes = []models.PhyScope{phyScope2}
+
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseDuration = 72872
+	statsInfo.PlanStage.PlanDuration = 7544049
+	statsInfo.PlanStage.BuildPlanStatsDuration = 142500
+
+	statsInfo.CompileStage.CompileDuration = 59396
+	statsInfo.CompileStage.CompileTableScanDuration = 260717
+	statsInfo.CompileStage.CompileS3Request = statistic.S3Request{
+		List:      0,
+		Get:       2,
+		Put:       1,
+		Head:      1,
+		Delete:    0,
+		DeleteMul: 0,
+	}
+
+	statsInfo.PrepareRunStage.CompilePreRunOnceDuration = 49396
+	statsInfo.PrepareRunStage.ScopePrepareDuration = 12000
+	statsInfo.PrepareRunStage.BuildReaderDuration = 11000
+
+	type args struct {
+		queryResult *util.RunResult
+		statsInfo   *statistic.StatsInfo
+		anal        *AnalyzeModule
+		option      *ExplainOption
+		buffer      *bytes.Buffer
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "test01",
+			args: args{
+				queryResult: &util.RunResult{
+					AffectRows: 1,
+				},
+				statsInfo: statsInfo,
+				anal: &AnalyzeModule{
+					phyPlan: &models.PhyPlan{},
+				},
+				option: &ExplainOption{
+					Analyze: true,
+				},
+				buffer: bytes.NewBuffer(make([]byte, 0, 300)),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			phyPlan := models.NewPhyPlan()
+			phyPlan.LocalScope = append(phyPlan.LocalScope, phyScope1)
+			tt.args.anal.phyPlan = phyPlan
+			explainResourceOverview(tt.args.queryResult, tt.args.statsInfo, tt.args.anal, tt.args.option, tt.args.buffer)
+			t.Logf("%s", tt.args.buffer.String())
 		})
 	}
 }

@@ -80,6 +80,8 @@ const (
 	ATAN
 	ATAN2
 	AVG
+	AVG_TW_CACHE
+	AVG_TW_RESULT
 	BASE64_DECODE
 	BASE64_ENCODE
 	BIT_AND
@@ -116,6 +118,7 @@ const (
 	TIMEDIFF
 	TIMESTAMPDIFF
 	DENSE_RANK
+	MO_WIN_DIVISOR
 	EMPTY
 	ENDSWITH
 	EXP
@@ -123,7 +126,7 @@ const (
 	FIRST_VALUE
 	FLOOR
 	GREATEST
-	GROUPING_ID
+	GROUPING
 	HASH
 	HASH_AGG
 	HEX_DECODE
@@ -305,6 +308,7 @@ const (
 	ADD_FAULT_POINT     // Add a fault point
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
+	MO_WIN_TRUNCATE
 
 	MO_MEMORY_USAGE // Dump memory usage
 	MO_ENABLE_MEMORY_USAGE_DETAIL
@@ -316,6 +320,7 @@ const (
 
 	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
 	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
+	MO_SHOW_COL_UNIQUE       // show column whether unique key
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -387,6 +392,11 @@ const (
 	BITMAP_COUNT
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
+	LLM_EXTRACT_TEXT
+
+	// fulltext function
+	FULLTEXT_MATCH
+	FULLTEXT_MATCH_SCORE
 
 	LLM_CHUNK
 
@@ -457,7 +467,10 @@ var functionIdRegister = map[string]int32{
 	"min":                   MIN,
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
+	"grouping":              GROUPING,
 	"avg":                   AVG,
+	"avg_tw_cache":          AVG_TW_CACHE,
+	"avg_tw_result":         AVG_TW_RESULT,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,
 	"bit_or":                BIT_OR,
@@ -597,9 +610,11 @@ var functionIdRegister = map[string]int32{
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
+	"mo_win_divisor":                 MO_WIN_DIVISOR,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
+	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,
@@ -631,6 +646,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -706,5 +722,10 @@ var functionIdRegister = map[string]int32{
 	"bitmap_count":         BITMAP_COUNT,
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
-	"llm_chunk":            LLM_CHUNK,
+
+	// match function
+	"fulltext_match":       FULLTEXT_MATCH,
+	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+  "llm_extract_text": LLM_EXTRACT_TEXT,
+  "llm_chunk":            LLM_CHUNK,
 }

@@ -210,7 +210,7 @@ func TestMOErrorCanHandled(t *testing.T) {
 					writeResponse(ctx, getLogger(""), cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
@@ -315,7 +315,7 @@ func TestLockTableBindChanged(t *testing.T) {
 					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
@@ -351,6 +351,7 @@ func TestNewClientWithMOCluster(t *testing.T) {
 					LockServiceAddress: testSockets,
 				},
 			}))
+	defer cluster.Close()
 	var newClientFailed bool
 	func() {
 		defer func() {
@@ -408,6 +409,7 @@ func runRPCTests(
 								LockServiceAddress: testSockets,
 							},
 						}))
+				defer cluster.Close()
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 				s, err := NewServer(sid, testSockets, morpc.Config{}, opts...)
@@ -462,6 +464,7 @@ func runRPCServerNoCloseTests(
 							LockServiceAddress: testSockets,
 						},
 					}))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 			s, err := NewServer(sid, testSockets, morpc.Config{}, opts...)

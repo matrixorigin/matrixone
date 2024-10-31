@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,7 +44,7 @@ func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if len(exprImpl.Col.Name) > 0 {
+		if len(exprImpl.Col.Name) > 0 && !strings.HasPrefix(exprImpl.Col.Name, catalog.PrefixIndexTableName) {
 			buf.WriteString(exprImpl.Col.Name)
 		} else {
 			buf.WriteString("#[")
@@ -208,7 +210,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 	switch layout {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
-		if len(funcExpr.Args) > 0 {
+		if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+			//contains invisible character, need special handling
+			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+			if err != nil {
+				return err
+			}
+		} else if len(funcExpr.Args) > 0 {
 			var first = true
 			for _, v := range funcExpr.Args {
 				if !first {

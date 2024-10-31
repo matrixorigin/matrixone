@@ -15,6 +15,7 @@
 package semi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,9 +35,10 @@ const (
 )
 
 type container struct {
-	state int
-
-	rbat *batch.Batch
+	state    int
+	itr      hashmap.Iterator
+	eligible []int64
+	rbat     *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -103,7 +105,8 @@ func (semiJoin *SemiJoin) Release() {
 
 func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &semiJoin.ctr
-
+	ctr.itr = nil
+	ctr.eligible = ctr.eligible[:0]
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
@@ -128,6 +131,7 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &semiJoin.ctr
 
+	ctr.eligible = nil
 	ctr.cleanExecutor()
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)

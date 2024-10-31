@@ -58,6 +58,10 @@ func New(
 
 var _ engine.Engine = new(Engine)
 
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func (e *Engine) GetService() string {
 	return e.sid
 }

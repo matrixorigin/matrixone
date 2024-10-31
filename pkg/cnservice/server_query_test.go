@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_file"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
@@ -48,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -158,7 +158,6 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr error
-		want    *query.Response
 	}{
 		{
 			name:   "normal",
@@ -166,17 +165,25 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			args: args{
 				ctx: ctx,
 				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
-					Type:      0,
+					Type:      query.FileServiceCacheType_Disk,
 					CacheSize: 0,
 				}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheResponse: query.FileServiceCacheResponse{
-				CacheSize:     0,
-				CacheCapacity: 0,
-				Message:       "Not Implemented",
-			}},
+		},
+		{
+			name:   "normal",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheRequest: query.FileServiceCacheRequest{
+					Type:      query.FileServiceCacheType_Memory,
+					CacheSize: 0,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
 		},
 	}
 	for _, tt := range tests {
@@ -184,8 +191,6 @@ func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 			s := &service{}
 			err := s.handleFileServiceCacheRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
-			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -203,22 +208,30 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr error
-		want    *query.Response
 	}{
 		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
-				ctx:  ctx,
-				req:  &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{Type: 0}},
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{
+					Type: query.FileServiceCacheType_Disk,
+				}},
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want: &query.Response{FileServiceCacheEvictResponse: query.FileServiceCacheEvictResponse{
-				CacheSize:     0,
-				CacheCapacity: 0,
-				Message:       "Not Implemented",
-			}},
+		},
+		{
+			name:   "normal",
+			fields: fields{},
+			args: args{
+				ctx: ctx,
+				req: &query.Request{FileServiceCacheEvictRequest: query.FileServiceCacheEvictRequest{
+					Type: query.FileServiceCacheType_Memory,
+				}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
 		},
 	}
 	for _, tt := range tests {
@@ -226,8 +239,6 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 			s := &service{}
 			err := s.handleFileServiceCacheEvictRequest(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
-			require.Equalf(t, tt.want, tt.args.resp,
-				"handleFileServiceCacheEvictRequest(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -919,6 +930,19 @@ func Test_service_handleGetReplicaCount(t *testing.T) {
 			wantErr: nil,
 			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: mockReplicaCount}},
 		},
+		{
+			name: "disabled",
+			fields: fields{
+				shardService: nil,
+			},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: 0}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -992,11 +1016,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 	ctx := context.Background()
 	ctl := gomock.NewController(t)
 
-	mockFs := mock_file.NewMockFileService(ctl)
-	mockFs.EXPECT().Name().Return(defines.SharedFileServiceName).AnyTimes()
-	mockFs.EXPECT().ReadCache(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	fs, err := fileservice.NewFileServices("dummy", mockFs)
+	fs, err := fileservice.NewFileServices("dummy", testutil.NewSharedFS())
 	require.NoError(t, err)
 
 	mockQuery := mock_query.NewMockQueryService(ctl)

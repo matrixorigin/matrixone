@@ -25,6 +25,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -66,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -86,7 +87,11 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
-	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
+
+	options = append(options, WithBootstrapOptions(
+		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
+		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
+	))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -136,6 +141,18 @@ func NewService(
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	srv.registerServices()
+
+	pu := config.NewParameterUnit(
+		&cfg.Frontend,
+		nil,
+		nil,
+		engine.Nodes{engine.Node{
+			Addr: srv.pipelineServiceServiceAddr(),
+		}})
+
+	frontend.InitServerVersion(pu.SV.MoVersion)
+	srv.pu = pu
+
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
@@ -153,15 +170,7 @@ func NewService(
 		},
 	}
 
-	pu := config.NewParameterUnit(
-		&cfg.Frontend,
-		nil,
-		nil,
-		engine.Nodes{engine.Node{
-			Addr: srv.pipelineServiceServiceAddr(),
-		}})
 	pu.HAKeeperClient = srv._hakeeperClient
-	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{
@@ -186,7 +195,6 @@ func NewService(
 		panic(err)
 	}
 
-	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryClient = srv.queryClient
@@ -221,7 +229,6 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
-	srv.storeEngine = pu.StorageEngine
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
@@ -316,20 +323,20 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
@@ -519,13 +526,15 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 	s.initHakeeperClientOnce.Do(func() {
 		s.hakeeperConnected = make(chan struct{})
 
-		ctx, cancel := context.WithTimeout(
+		ctx, cancel := context.WithTimeoutCause(
 			context.Background(),
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+			moerr.CauseGetHAKeeperClient,
 		)
 		defer cancel()
 		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			return
 		}
 		s._hakeeperClient = client
@@ -690,6 +699,12 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						} else if txn.Options.InRollback {
 							v2.TxnInRollbackCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+						} else if txn.Options.InIncrStmt {
+							v2.TxnInIncrStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in incr statement", fields...)
+						} else if txn.Options.InRollbackStmt {
+							v2.TxnInRollbackStmtCounter.Inc()
+							runtime.DefaultRuntime().Logger().Error("found txn in rollback statement", fields...)
 						} else {
 							v2.TxnLeakCounter.Inc()
 							runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
@@ -754,6 +769,7 @@ func (s *service) initShardService() {
 	}
 
 	store := shardservice.NewShardStorage(
+		s.cfg.UUID,
 		runtime.ServiceRuntime(s.cfg.UUID).Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
@@ -764,10 +780,13 @@ func (s *service) initShardService() {
 			shardservice.ReadApproxObjectsNum:         disttae.HandleShardingReadApproxObjectsNum,
 			shardservice.ReadRanges:                   disttae.HandleShardingReadRanges,
 			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
-			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
+			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
 			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
+			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
+			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
+			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
 		},
 		s.storeEngine,
 	)
@@ -885,24 +904,25 @@ func (s *service) bootstrap() error {
 		s.options.bootstrapOptions...,
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		panic(err)
+		panic(moerr.AttachCause(ctx, err))
 	}
 
 	trace.GetService(s.cfg.UUID).EnableFlush()
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 				if err != context.Canceled {
+					err = moerr.AttachCause(ctx, err)
 					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
 					//panic(err)
 				}
@@ -968,10 +988,11 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*3, moerr.CauseSaveProfile)
 	defer cancel()
 	err = etlFS.Write(ctx, writeVec)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
 		return
 	}

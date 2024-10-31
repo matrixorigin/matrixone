@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -80,6 +81,7 @@ type cluster struct {
 	readyOnce       sync.Once
 	readyC          chan struct{}
 	services        atomic.Pointer[services]
+	regexpCache     *regexpCache
 	options         struct {
 		disableRefresh bool
 	}
@@ -103,6 +105,7 @@ func NewMOCluster(
 		forceRefreshC:   make(chan struct{}, 1),
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
+		regexpCache:     newRegexCache(cacheTTL),
 	}
 
 	c.services.Store(&services{})
@@ -119,12 +122,33 @@ func NewMOCluster(
 			close(c.readyC)
 		})
 	}
+	if err := c.stopper.RunTask(c.regexpCacheGC); err != nil {
+		c.logger.Error("failed to start regex cache gc task", zap.Error(err))
+	}
 	return c
+}
+
+func (c *cluster) regexpCacheGC(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour * 5)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if c.regexpCache != nil {
+				c.regexpCache.gc()
+				c.logger.Info("regex cache gc")
+			}
+		}
+	}
 }
 
 func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		// If the all field is false, the work state of CN service MUST be
@@ -146,6 +170,9 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
 
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
 		if selector.filterCN(cn) {
@@ -158,7 +185,9 @@ func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(
 
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
-
+	if selector.regexpCache == nil && c.regexpCache != nil {
+		selector.regexpCache = c.regexpCache
+	}
 	s := c.services.Load()
 	for _, tn := range s.tn {
 		if selector.filterTN(tn) {
@@ -198,7 +227,7 @@ func (c *cluster) Close() {
 
 // DebugUpdateCNLabel implements the MOCluster interface.
 func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*3, moerr.CauseDebugUpdateCNLabel)
 	defer cancel()
 	convert := make(map[string]metadata.LabelList)
 	for k, v := range kvs {
@@ -210,13 +239,13 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 	}
 	proxyClient := c.client.(labelSupportedClient)
 	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
 
 func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*3, moerr.CauseDebugUpdateCNWorkState)
 	defer cancel()
 	wstate := logpb.CNWorkState{
 		UUID:  uuid,
@@ -224,7 +253,7 @@ func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
 	}
 	proxyClient := c.client.(labelSupportedClient)
 	if err := proxyClient.UpdateCNWorkState(ctx, wstate); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	return nil
 }
@@ -291,11 +320,12 @@ func (c *cluster) refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.refreshInterval)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), c.refreshInterval, moerr.CauseRefresh)
 	defer cancel()
 
 	details, err := c.client.GetClusterDetails(ctx)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		c.logger.Error("failed to refresh cluster details from hakeeper",
 			zap.Error(err))
 		return

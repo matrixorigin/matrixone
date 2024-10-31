@@ -116,7 +116,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Second*2)
+			ctx, cancel := context.WithTimeoutCause(ctx, time.Second*2, moerr.CauseRemoteCacheRead)
 			defer cancel()
 			resp, err := r.client.SendMessage(ctx, target, req)
 			if err != nil {
@@ -130,7 +130,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 					idx := int(cacheData.Index)
 					if cacheData.Hit {
 						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = Bytes{bytes: cacheData.Data}
+						vector.Entries[idx].CachedData = &Bytes{bytes: cacheData.Data}
 						vector.Entries[idx].fromCache = r
 						numHit++
 					}
@@ -153,6 +153,10 @@ func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 }
 
 func (r *RemoteCache) Evict(done chan int64) {
+}
+
+func (r *RemoteCache) Close() {
+	_ = r.client.Close()
 }
 
 func HandleRemoteRead(

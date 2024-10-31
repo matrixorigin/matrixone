@@ -92,7 +92,7 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef
-	// get needed info for stats by table
+	// get needed info for stats by table, NOTE: Stats May indirectly access the file service
 	Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string
@@ -120,6 +120,7 @@ type CompilerContext interface {
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
+	BuildTableDefByMoColumns(dbName, table string) (*TableDef, error)
 	ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef)
 
 	ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error)
@@ -173,11 +174,12 @@ type QueryBuilder struct {
 	nextTag    int32
 	nextMsgTag int32
 
-	isPrepareStatement bool
-	mysqlCompatible    bool
-	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
-	isForUpdate        bool // if it's a query plan for update
-	isRestore          bool
+	isPrepareStatement    bool
+	mysqlCompatible       bool
+	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
+	isForUpdate           bool // if it's a query plan for update
+	isRestore             bool
+	isSkipResolveTableDef bool
 
 	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 	skipStats      bool
@@ -232,6 +234,7 @@ type BindContext struct {
 	unionSelect            bool
 	recRecursiveScanNodeId int32
 	isTryBindingCTE        bool
+	sliding                bool
 
 	cteName  string
 	headings []string
@@ -294,6 +297,9 @@ type BindContext struct {
 
 	// lower is sys var lower_case_table_names
 	lower int64
+
+	isGroupingSet bool
+	groupingFlag  []bool
 }
 
 type NameTuple struct {

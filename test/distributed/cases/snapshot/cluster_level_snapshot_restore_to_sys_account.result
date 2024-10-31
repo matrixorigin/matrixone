@@ -65,7 +65,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
+272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -102,7 +102,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0    
+272562    test01    def    create database test01    0    1    2024-08-28 11:23:19    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -156,10 +156,10 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303172    test02    def    create database test02    0    1    2024-07-08 17:35:46    0    
+303172    test02    def    create database test02    0    1    2024-07-08 17:35:46    0
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-07-08 17:06:49    0    
+1    mo_catalog    mo_catalog        0    0    2024-07-08 17:06:49    0
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
@@ -272,7 +272,7 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-303195    test03    def    create database test03    0    1    2024-07-08 17:35:47    0    
+303195    test03    def    create database test03    0    1    2024-07-08 17:35:47    0
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
 empno
@@ -290,7 +290,7 @@ loc
 __mo_rowid
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-07-08 09:35:47.77113    cluster            
+sp04    2024-07-08 09:35:47.77113    cluster
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -438,7 +438,7 @@ system
 system_metrics
 test03
 select * from test01.t1;
-invalid database test01
+Unknown database test01
 select count(*) from test03.t3;
 count(*)
 3
@@ -526,8 +526,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-07-08 09:35:50.882008    cluster            
-sp07    2024-07-08 09:35:50.863196    cluster            
+sp08    2024-07-08 09:35:50.882008    cluster
+sp07    2024-07-08 09:35:50.863196    cluster
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -576,8 +576,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-07-08 09:35:51.701227    cluster            
-sp09    2024-07-08 09:35:51.665012    cluster            
+sp10    2024-07-08 09:35:51.701227    cluster
+sp09    2024-07-08 09:35:51.665012    cluster
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -813,382 +813,3 @@ drop snapshot sp14;
 drop snapshot sp13;
 drop snapshot sp12;
 drop snapshot sp11;
-drop database if exists db04;
-create database db04;
-use db04;
-create table table01(col1 int primary key );
-insert into table01 values (1);
-insert into table01 values (2);
-drop database if exists db05;
-create database db05;
-use db05;
-create table table01(col1 int primary key );
-insert into table01 values (1);
-insert into table01 values (2);
-drop database if exists db06;
-create database db06;
-use db06;
-create table table01(col1 int auto_increment );
-insert into table01 values (1);
-insert into table01 values (2);
-select * from db04.table01;
-col1
-1
-2
-select * from db05.table01;
-col1
-1
-2
-select * from db06.table01;
-col1
-1
-2
-drop snapshot if exists sp13;
-create snapshot sp13 for cluster;
-insert into db04.table01 values (200);
-insert into db05.table01 values (400);
-restore account sys database db04 from snapshot sp13;
-show databases;
-Database
-cluster_level_snapshot_restore_to_sys_account
-db04
-db05
-db06
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-use db04;
-select count(*) from db04.table01;
-count(*)
-2
-select * from db04.table01;
-col1
-1
-2
-use db05;
-select count(*) from db05.table01;
-count(*)
-3
-select * from db05.table01;
-col1
-1
-2
-400
-use db06;
-select count(*) from db06.table01;
-count(*)
-2
-select * from db06.table01;
-col1
-1
-2
-drop snapshot sp13;
-drop database db04;
-drop database db05;
-drop database db06;
-drop database if exists db07;
-create database db07;
-use db07;
-create table table01 (col1 int auto_increment, col2 enum ('a','b','c'));
-insert into table01 values(1,'a');
-insert into table01 values(2, 'b');
-create table table02 (col1 int, col2 enum ('a','b','c'));
-insert into table02 values(1,'a');
-insert into table02 values(2, 'b');
-drop database if exists db08;
-create database db08;
-use db08;
-create table index01(col1 int,key key1(col1));
-insert into index01 values (1);
-insert into index01 values (2);
-show create table db07.table02;
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
-drop snapshot if exists sp14;
-create snapshot sp14 for cluster;
-use db07;
-drop table table01;
-alter table table02 add column newC int first;
-show create table table02;
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `newC` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
-show create table table02 {snapshot = 'sp14'};
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
-drop database db08;
-drop snapshot if exists sp15;
-create snapshot sp15 for cluster;
-restore account sys database db07 from snapshot sp15;
-restore account sys database db08 from snapshot sp15;
-invalid database db08
-show databases;
-Database
-cluster_level_snapshot_restore_to_sys_account
-db07
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-use db07;
-show tables;
-Tables_in_db07
-table02
-show create table table01 {snapshot = 'sp14'};
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
-show create table table01;
-no such table db07.table01
-select * from table01;
-SQL parser error: table "table01" does not exist
-show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-07-08 09:35:54.322018    cluster            
-sp14    2024-07-08 09:35:54.273922    cluster            
-drop snapshot sp14;
-drop snapshot sp15;
-drop database db07;
-drop database if exists db08;
-create database db08;
-use db08;
-create table db08 (col1 int);
-insert into db08 values(1), (100), (20000);
-drop snapshot if exists sp15;
-create snapshot sp15 for cluster;
-insert into db08 (col1) values (3000);
-restore account sys database db from snapshot sp15;
-invalid database db
-drop snapshot sp15;
-drop database db08;
-drop database if exists db09;
-create database db09;
-use db09;
-drop table if exists index01;
-create table index01(
-col1 int not null,
-col2 date not null,
-col3 varchar(16) not null,
-col4 int unsigned not null,
-primary key (col1)
-);
-insert into index01 values(1, '1980-12-17','Abby', 21);
-insert into index01 values(2, '1981-02-20','Bob', 22);
-insert into index01 values(3, '1981-02-20','Bob', 22);
-select count(*) from index01;
-count(*)
-3
-drop table if exists index02;
-create table index02(col1 char, col2 int, col3 binary);
-insert into index02 values('a', 33, 1);
-insert into index02 values('c', 231, 0);
-alter table index02 add key pk(col1) comment 'primary key';
-select count(*) from index02;
-count(*)
-2
-drop database if exists db10;
-create database db10;
-use db10;
-drop table if exists index03;
-create table index03 (
-emp_no      int             not null,
-birth_date  date            not null,
-first_name  varchar(14)     not null,
-last_name   varchar(16)     not null,
-gender      varchar(5)      not null,
-hire_date   date            not null,
-primary key (emp_no)
-) partition by range columns (emp_no)(
-partition p01 values less than (100001),
-partition p02 values less than (200001),
-partition p03 values less than (300001),
-partition p04 values less than (400001)
-);
-insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
-(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-drop snapshot if exists sp16;
-create snapshot sp16 for cluster;
-use db09;
-delete from index02 where col1 = 'a';
-select * from index02;
-col1    col2    col3
-c    231    0
-update index01 set col1 = 1000 where col1 = 1;
-select * from index01;
-col1    col2    col3    col4
-2    1981-02-20    Bob    22
-3    1981-02-20    Bob    22
-1000    1980-12-17    Abby    21
-use db10;
-truncate index03;
-restore account sys database db09 table index01 from snapshot sp16;
-restore account sys database db10 table index03 from snapshot sp16;
-use db09;
-select * from index02;
-col1    col2    col3
-c    231    0
-select * from index01;
-col1    col2    col3    col4
-1    1980-12-17    Abby    21
-2    1981-02-20    Bob    22
-3    1981-02-20    Bob    22
-show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` varchar(16) NOT NULL,\n  `col4` int unsigned NOT NULL,\n  PRIMARY KEY (`col1`)\n)
-show create table index02;
-Table    Create Table
-index02    CREATE TABLE `index02` (\n  `col1` char(1) DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` binary(1) DEFAULT NULL,\n  KEY `pk` (`col1`) COMMENT 'primary key'\n)
-use db10;
-select * from index03;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
-show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-08-26 04:02:21.809805    cluster
-drop database db09;
-drop database db10;
-drop snapshot sp16;
-drop database if exists db11;
-create database db11;
-use db11;
-drop table if exists pri01;
-create table pri01 (col1 int, col2 decimal);
-insert into pri01 (col1, col2) values (1,2378.328839842);
-insert into pri01 values (234, -3923.2342342);
-select * from pri01;
-col1    col2
-1    2378
-234    -3923
-drop snapshot if exists sp17;
-create snapshot sp17 for cluster;
-alter table pri01 add constraint primary key(col1);
-insert into pri01 values (23423, 32432543.3242);
-insert into pri01 values (234222, -3923.2342342);
-drop snapshot if exists sp18;
-create snapshot sp18 for cluster;
-restore account sys database db11 table pri01 from snapshot sp18;
-show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
-select * from pri01;
-col1    col2
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
-select count(*) from pri01;
-count(*)
-4
-restore account sys database db11 table pri01 from snapshot sp17;
-show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
-select * from pri01;
-col1    col2
-1    2378
-234    -3923
-select count(*) from pri01;
-count(*)
-2
-restore account sys database db11 table pri01 from snapshot sp18;
-show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
-select * from pri01;
-col1    col2
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
-select count(*) from pri01;
-count(*)
-4
-insert into pri01 values(23420, 32432543.3242);
-select * from pri01;
-col1    col2
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
-23420    32432543
-show columns from pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null
-col2    DECIMAL(38)    YES        null
-select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
-count(*)
-1
-select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272812    db11    def    create database db11    0    1    2024-08-26 12:02:22    0
-select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
-attname
-col1
-col2
-__mo_rowid
-drop database db11;
-drop snapshot sp18;
-drop snapshot sp17;
-drop database if exists test_fk;
-create database test_fk;
-use test_fk;
-CREATE TABLE Students (
-StudentID INT PRIMARY KEY,
-Name VARCHAR(100)
-);
-CREATE TABLE Courses (
-CourseID INT PRIMARY KEY,
-CourseName VARCHAR(100)
-);
-CREATE TABLE Enrollments (
-EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
-StudentID INT,
-CourseID INT,
-Grade CHAR(2),
-FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
-FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
-);
-INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
-INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
-INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
-INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
-INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
-INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
-INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
-drop snapshot if exists sp_fk;
-create snapshot sp_fk for cluster;
-restore account sys database test_fk table Students from snapshot sp_fk;
-restore account sys database test_fk table Courses from snapshot sp_fk;
-restore account sys database test_fk table Enrollments from snapshot sp_fk;
-show databases;
-Database
-cluster_level_snapshot_restore_to_sys_account
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
-test_fk
-select * from Students;
-studentid    name
-1    Alice
-2    Bob
-select * from Courses;
-courseid    coursename
-101    Mathematics
-102    Physics
-select * from Enrollments;
-enrollmentid    studentid    courseid    grade
-1    1    101    A
-2    1    102    B
-3    2    101    B
-drop snapshot sp_fk;
-drop database test_fk;

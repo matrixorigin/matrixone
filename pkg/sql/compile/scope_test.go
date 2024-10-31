@@ -17,9 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
+	"path"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -175,7 +178,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.ReplaceTopCtx(ctx)
 		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
 		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
-		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
+		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch, crs *perfcounter.CounterSet) error {
 			return nil
 		})
 		require.NoError(t1, err)
@@ -301,14 +304,14 @@ func TestNewParallelScope(t *testing.T) {
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector})
+			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
 
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
 	}
 }
 
@@ -326,14 +329,15 @@ func TestCompileExternValueScan(t *testing.T) {
 		},
 	}
 	n := &plan.Node{
-		TableDef: &plan.TableDef{},
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
 	}
 	rs, err := testCompile.compileExternValueScan(n, param, true)
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External}))
 }
 
-func TestCompileExternScanParallel(t *testing.T) {
+func TestCompileExternScanParallelWrite(t *testing.T) {
 	testCompile := &Compile{
 		proc: testutil.NewProcess(),
 	}
@@ -347,12 +351,49 @@ func TestCompileExternScanParallel(t *testing.T) {
 		},
 	}
 	n := &plan.Node{
-		TableDef: &plan.TableDef{},
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
 	}
-	rs, err := testCompile.compileExternScanParallel(n, param, []string{"a", "b"}, []int64{100000, 100000}, true)
+	rs, err := testCompile.compileExternScanParallelWrite(n, param, []string{"a", "b"}, []int64{100000, 100000}, true)
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
+func TestCompileExternScanParallelReadWrite(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	ctx := context.TODO()
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			Ctx:    ctx,
+			Strict: true,
+		},
+	}
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+	}
+	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	filePath = path.Clean("/" + filePath)
+	fileSize := []int64{int64(colexec.WriteS3Threshold) * 2}
+	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
+	require.NoError(t, err)
+	param.Strict = false
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
+	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
+	require.NoError(t, err)
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
@@ -437,4 +478,60 @@ func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
 
 	stack = append(stack, rootOp.OpType())
 	return stack
+}
+
+func TestRemoveStringBetween(t *testing.T) {
+	cases := []struct {
+		input, output string
+	}{
+		{
+			input:  "/* comment */ replace into t1 values (1);",
+			output: " replace into t1 values (1);",
+		},
+		{
+			input:  "/* comment */ replace /* replace */ into t1 values (1);",
+			output: " replace  into t1 values (1);",
+		},
+	}
+
+	for _, c := range cases {
+		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
+	}
+}
+
+type fakeStreamSender2 struct {
+	morpc.Stream
+	number int
+}
+
+func (s *fakeStreamSender2) Close(_ bool) error {
+	s.number++
+	return nil
+}
+
+func TestNotifyMessageClean(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	ff := &fakeStreamSender2{
+		number: 0,
+	}
+	sender := &messageSenderOnClient{
+		streamSender: ff,
+		safeToClose:  true,
+	}
+	// no matter error happens or not, clean method should close the sender.
+	n1 := notifyMessageResult{
+		sender: sender,
+		err:    moerr.NewInternalErrorNoCtx("there is an error."),
+	}
+	n2 := notifyMessageResult{
+		sender: sender,
+		err:    nil,
+	}
+
+	n1.clean(proc)
+	require.Equal(t, 1, ff.number)
+
+	n2.clean(proc)
+	require.Equal(t, 2, ff.number)
 }

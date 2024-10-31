@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -723,8 +724,15 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	})
 
 	tableDef.Pkey.PkeyColName = "a"
+	var exes []colexec.ExpressionExecutor
+
+	for _, expr := range exprs {
+		plan2.ReplaceFoldExpr(proc, expr, &exes)
+	}
 	for i, expr := range exprs {
-		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc)
+		plan2.EvalFoldExpr(proc, expr, &exes)
+
+		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, filters[i].Valid, BasePKFilter.Valid, exprStrings[i])
 		if filters[i].Valid {
@@ -734,6 +742,9 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		}
 	}
 
+	for _, exe := range exes {
+		exe.Free()
+	}
 	for i := range needFreeVecs {
 		needFreeVecs[i].Free(m)
 	}
@@ -835,8 +846,8 @@ func TestConstructBlockPKFilter(t *testing.T) {
 			vector.AppendFixed(vec, float64(ub), false, mp)
 		}
 
-		sel1 := blkPKFilter.SortedSearchFunc([]*vector.Vector{vec})
-		sel2 := blkPKFilter.UnSortedSearchFunc([]*vector.Vector{vec})
+		sel1 := blkPKFilter.SortedSearchFunc(vec)
+		sel2 := blkPKFilter.UnSortedSearchFunc(vec)
 
 		require.Equal(t, sel1, sel2, basePKFilters[i].String())
 	}
@@ -920,11 +931,11 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 		left.Oid = ty
 		right.Oid = ty
 
-		ret, err := mergeBaseFilterInKind(left, right, false, proc)
+		ret, err := mergeBaseFilterInKind(left, right, false, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int(1), int(ret.Vec.Length()), ret.Oid.String())
 
-		ret, err = mergeBaseFilterInKind(left, right, true, proc)
+		ret, err = mergeBaseFilterInKind(left, right, true, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, int(5), int(ret.Vec.Length()))
 

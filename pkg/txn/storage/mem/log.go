@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -87,6 +88,10 @@ func (mc *memLogClient) Read(ctx context.Context, firstIndex logservice.Lsn, max
 	return values, firstIndex, nil
 }
 
+func (mc *memLogClient) ReadLsn(ctx context.Context, ts time.Time) (logservice.Lsn, error) {
+	return 0, nil
+}
+
 func (mc *memLogClient) Truncate(ctx context.Context, index logservice.Lsn) error {
 	mc.Lock()
 	defer mc.Unlock()
@@ -104,5 +109,17 @@ func (mc *memLogClient) GetTruncatedLsn(ctx context.Context) (logservice.Lsn, er
 }
 
 func (mc *memLogClient) GetTSOTimestamp(ctx context.Context, count uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (mc *memLogClient) GetLatestLsn(ctx context.Context) (logservice.Lsn, error) {
+	return 0, nil
+}
+
+func (mc *memLogClient) SetRequiredLsn(ctx context.Context, lsn logservice.Lsn) error {
+	return nil
+}
+
+func (mc *memLogClient) GetRequiredLsn(ctx context.Context) (logservice.Lsn, error) {
 	return 0, nil
 }

@@ -89,7 +89,7 @@ func doUnsubscribeTable(
 				DatabaseID: dbID,
 				TableID:    tbID,
 			}
-			ctx, cancel := context.WithTimeout(proc.Ctx, time.Second*3)
+			ctx, cancel := context.WithTimeoutCause(proc.Ctx, time.Second*3, moerr.CauseDoUnsubscribeTable)
 			defer cancel()
 			resp, err := proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
 			if err != nil {

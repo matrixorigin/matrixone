@@ -15,15 +15,20 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"context"
+	"math/rand"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
@@ -194,8 +199,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 		{
 			// deleted rows iter
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -261,8 +267,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	for i := 0; i < num; i++ {
 		{
-			blockID, _ := buildRowID(i + 1).Decode()
-			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), &blockID, true)
+			rowid := buildRowID(i + 1)
+			blockID := rowid.BorrowBlockID()
+			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
 			for iter.Next() {
@@ -523,4 +530,100 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		require.True(t, modified)
 	}
 
+}
+
+func TestPrefixIn(t *testing.T) {
+	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{
+		Degree: 64,
+	})
+
+	for i := 0; i < 10; i++ {
+		pkTree.Set(&PrimaryIndexEntry{
+			Bytes: []byte{byte(i)},
+		})
+	}
+
+	var encodes = [][]byte{{0}, {2}, {4}}
+
+	for i := 10; i < 150; i++ {
+		encodes = append(encodes, []byte{byte(i)})
+	}
+
+	// len(encodes) >> len(pkTree) to trigger Scan all
+	spec := InKind(encodes, function.PREFIX_IN)
+
+	pkIter := &primaryKeyIter{
+		primaryIndex: pkTree,
+		iter:         pkTree.Iter(),
+	}
+
+	spec.Move(pkIter)
+	require.Equal(t, []byte{0}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{2}, pkIter.iter.Item().Bytes)
+	spec.Move(pkIter)
+	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
+}
+
+func BenchmarkPrimaryKeyIter(b *testing.B) {
+	tree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less,
+		btree.Options{
+			Degree: 64,
+		})
+
+	itemCnt := 1000 * 10
+
+	for i := 0; i < itemCnt; i++ {
+		xx := rand.Intn(itemCnt / 10)
+		ts := types.BuildTS(rand.Int63n(int64(itemCnt)), 0)
+
+		tree.Set(&PrimaryIndexEntry{
+			Time:       ts,
+			RowEntryID: int64(i),
+			Bytes:      types.EncodeFixed[int](xx),
+		})
+	}
+
+	iter1 := tree.Copy().Iter()
+	iter2 := tree.Copy().Iter()
+
+	b.Run("Seek", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			xx := rand.Intn(itemCnt / 10)
+			ts := types.BuildTS(rand.Int63n(int64(itemCnt)), 0)
+			iter1.Seek(&PrimaryIndexEntry{
+				Time:       ts,
+				RowEntryID: rand.Int63n(int64(itemCnt)),
+				Bytes:      types.EncodeFixed[int](xx),
+			})
+		}
+	})
+
+	b.Run("Comparison Item", func(b *testing.B) {
+		items := tree.Items()
+		for i := 0; i < b.N; i++ {
+			x := rand.Intn(tree.Len())
+			y := rand.Intn(tree.Len())
+
+			items[x].Less(items[y])
+		}
+	})
+
+	b.Run("Comparison Bytes", func(b *testing.B) {
+		items := tree.Items()
+		for i := 0; i < b.N; i++ {
+			x := rand.Intn(tree.Len())
+			y := rand.Intn(tree.Len())
+
+			bytes.Compare(items[x].Bytes, items[y].Bytes)
+		}
+	})
+
+	b.Run("Next", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if !iter2.Next() {
+				iter2.First()
+			}
+		}
+	})
 }

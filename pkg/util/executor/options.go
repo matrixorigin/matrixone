@@ -28,6 +28,12 @@ func (opts Options) WithDisableIncrStatement() Options {
 	return opts
 }
 
+// WithDisableIncrStatement disable incr statement
+func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
+	opts.ignoreForeignKey = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -120,7 +126,11 @@ func (opts Options) DisableIncrStatement() bool {
 
 // GetTimeZone return the time zone of original session
 func (opts Options) GetTimeZone() *time.Location {
-	return opts.timeZone
+	l := opts.timeZone
+	if l == nil {
+		return time.Local
+	}
+	return l
 }
 
 // WithStatementOption set statement option
@@ -168,8 +178,17 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+func (opts StatementOption) IgnoreForeignKey() bool {
+	return opts.ignoreForeignKey
+}
+
 func (opts Options) WithDisableTrace() Options {
 	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
+	return opts
+}
+
+func (opts Options) WithDisableWaitPaused() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithDisableWaitPaused())
 	return opts
 }
 

@@ -15,11 +15,17 @@
 package motrace
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 func TestContentBuffer_isEmpty(t *testing.T) {
@@ -73,6 +79,60 @@ func TestContentBuffer_isEmpty(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, bufferCount.Load(), int32(0))
 			}
+		})
+	}
+}
+
+func TestContentBuffer_Add_Free_cause_panic(t *testing.T) {
+	// issue: https://github.com/matrixorigin/matrixone/issues/19046
+	type fields struct {
+		BufferConfig   BufferConfig
+		ctx            context.Context
+		buf            *bytes.Buffer
+		tbl            *table.Table
+		formatter      *db_holder.CSVWriter
+		checkWriteHook []table.AckHook
+	}
+	type args struct {
+		i batchpipe.HasName
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "panic",
+			fields: fields{
+				BufferConfig: BufferConfig{
+					bufferType:     "dummy",
+					Reminder:       bp.NewConstantClock(defaultClock),
+					sizeThreshold:  table.DefaultWriterBufferSize,
+					filterItemFunc: noopFilterItemFunc,
+					genBatchFunc:   noopGenBatchSQL,
+				},
+				ctx:            context.TODO(),
+				buf:            nil,
+				tbl:            nil,
+				formatter:      nil, // go with buf, keep nil.
+				checkWriteHook: nil,
+			},
+			args: args{
+				i: NewItemSyncer(newDummyLog()),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &ContentBuffer{
+				BufferConfig:   tt.fields.BufferConfig,
+				ctx:            tt.fields.ctx,
+				buf:            tt.fields.buf,
+				tbl:            tt.fields.tbl,
+				formatter:      tt.fields.formatter,
+				checkWriteHook: tt.fields.checkWriteHook,
+			}
+			b.Add(tt.args.i)
 		})
 	}
 }

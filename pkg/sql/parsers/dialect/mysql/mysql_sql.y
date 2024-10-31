@@ -59,6 +59,7 @@ import (
     tableExpr tree.TableExpr
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
+    fullTextSearchType tree.FullTextSearchType
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
@@ -314,6 +315,7 @@ import (
 
 %token <str> OUT INOUT
 
+
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
@@ -487,7 +489,10 @@ import (
 %token <str> CDC
 
 // ROLLUP
-%token <str> ROLLUP
+%token <str> GROUPING SETS CUBE ROLLUP 
+
+// Logservice
+%token <str> LOGSERVICE REPLICAS STORES SETTINGS
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
@@ -503,11 +508,11 @@ import (
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt show_connectors_stmt
+%type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -523,7 +528,7 @@ import (
 %type <statement> kill_stmt
 %type <statement> backup_stmt snapshot_restore_stmt
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
-%type <rowsExprs> row_constructor_list
+%type <rowsExprs> row_constructor_list grouping_sets 
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
@@ -602,6 +607,8 @@ import (
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
+%type <fullTextSearchType> fulltext_search_opt
+%type <str> search_pattern
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
@@ -984,11 +991,11 @@ backup_timestamp_opt:
     }
 
 create_cdc_stmt:
-    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
+    CREATE CDC not_exists_opt ident STRING STRING STRING STRING '{' create_cdc_opts '}'
     {
         $$ = &tree.CreateCDC{
              		IfNotExists: $3,
-             		TaskName:    $4,
+             		TaskName:    tree.Identifier($4.Compare()),
              		SourceUri:   $5,
              		SinkType:    $6,
              		SinkUri:     $7,
@@ -1017,27 +1024,25 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC STRING all_cdc_opt
+    SHOW CDC all_cdc_opt
     {
         $$ = &tree.ShowCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 pause_cdc_stmt:
-    PAUSE CDC STRING all_cdc_opt
+    PAUSE CDC all_cdc_opt
     {
         $$ = &tree.PauseCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
+                    Option:      $3,
         }
     }
 
 drop_cdc_stmt:
-    DROP CDC STRING all_cdc_opt
+    DROP CDC all_cdc_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($3)
     }
 
 all_cdc_opt:
@@ -1048,29 +1053,27 @@ all_cdc_opt:
                     TaskName: "",
         }
     }
-|   TASK STRING
+|   TASK ident
     {
         $$ = &tree.AllOrNotCDC{
             All: false,
-            TaskName: $2,
+            TaskName: tree.Identifier($2.Compare()),
         }
     }
 
 resume_cdc_stmt:
-    RESUME CDC STRING TASK STRING
+    RESUME CDC TASK ident
     {
         $$ = &tree.ResumeCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 
 restart_cdc_stmt:
-    RESUME CDC STRING TASK STRING STRING
+    RESUME CDC TASK ident STRING
     {
         $$ = &tree.RestartCDC{
-                    SourceUri:   $3,
-                    TaskName:    $5,
+                    TaskName:    tree.Identifier($4.Compare()),
         }
     }
 
@@ -1670,22 +1673,18 @@ variable:
 system_variable:
     AT_AT_ID
     {
-        vs := strings.Split($1, ".")
+        v := strings.ToLower($1)
         var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-           r = vs[1]
-        } else if len(vs) == 1 {
-           r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		}
         $$ = &tree.VarExpr{
-            Name: r,
+            Name: v,
             System: true,
             Global: isGlobal,
         }
@@ -2300,6 +2299,16 @@ set_stmt:
 |   set_default_role_stmt
 |   set_transaction_stmt
 |   set_connection_id_stmt
+|   set_logservice_non_voting_replica_num
+
+set_logservice_non_voting_replica_num:
+  SET LOGSERVICE SETTINGS var_name equal_or_assignment set_expr
+  {
+    $$ = &tree.SetLogserviceSettings{
+      Name: $4,
+      Value: $6,
+    }
+  }
 
 set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
@@ -2563,24 +2572,20 @@ var_assignment:
     }
 |   AT_AT_ID equal_or_assignment set_expr
     {
-        vs := strings.Split($1, ".")
-        var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-            r = vs[1]
-        } else if len(vs) == 1{
-            r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        v := strings.ToLower($1)
+		var isGlobal bool
+		if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
-            Name: r,
+            Name: v,
             Value: $3,
         }
     }
@@ -3982,6 +3987,27 @@ show_stmt:
 |   show_snapshots_stmt
 |   show_pitr_stmt
 |   show_cdc_stmt
+|   show_logservice_replicas_stmt
+|   show_logservice_stores_stmt
+|   show_logservice_settings_stmt
+
+show_logservice_replicas_stmt:
+    SHOW LOGSERVICE REPLICAS
+    {
+        $$ = &tree.ShowLogserviceReplicas{}
+    }
+
+show_logservice_stores_stmt:
+    SHOW LOGSERVICE STORES
+    {
+        $$ = &tree.ShowLogserviceStores{}
+    }
+
+show_logservice_settings_stmt:
+    SHOW LOGSERVICE SETTINGS
+    {
+        $$ = &tree.ShowLogserviceSettings{}
+    }
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -5647,10 +5673,50 @@ group_by_opt:
     }
 |   GROUP BY expression_list rollup_opt
     {
+        exprsList := []tree.Exprs{$3}
         $$ = &tree.GroupByClause{
-            GroupByExprs: $3,
-            RollUp:       $4,
+            GroupByExprsList: exprsList,
+            Apart: false,
+            Cube :      false,
+            Rollup:       $4,
         }
+    }
+|   GROUP BY GROUPING SETS '(' grouping_sets ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: $6,
+            Apart: false,
+            Cube :      false,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY CUBE '('  expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      true,
+            Rollup:       false,
+        }
+    }
+|   GROUP BY ROLLUP '(' expression_list ')'
+    {
+        $$ = &tree.GroupByClause{
+            GroupByExprsList: []tree.Exprs{$5},
+            Apart: false,
+            Cube :      false,
+            Rollup:       true,
+        }
+    }
+
+grouping_sets:
+    '(' expression_list_opt ')'
+    {
+        $$ = []tree.Exprs{$2}
+    }
+|   grouping_sets ',' '(' expression_list_opt ')'
+    {
+        $$ = append($1, $4)
     }
 
 rollup_opt:
@@ -5848,6 +5914,7 @@ values_stmt:
             Limit: $4,
         }
     }
+
 
 row_constructor_list:
     row_constructor
@@ -9262,6 +9329,27 @@ match:
         $$ = tree.MATCH_SIMPLE
     }
 
+fulltext_search_opt:
+    {
+	$$ = tree.FULLTEXT_DEFAULT
+    }
+|   IN NATURAL LANGUAGE MODE
+    {
+	$$ = tree.FULLTEXT_NL
+    }
+|   IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_NL_QUERY_EXPANSION
+    }
+|   IN BOOLEAN MODE
+    {
+	$$ = tree.FULLTEXT_BOOLEAN
+    }
+|   WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_QUERY_EXPANSION
+    }
+
 index_column_list_opt:
     {
         $$ = nil
@@ -9501,6 +9589,23 @@ simple_expr:
         $$ = $1
     }
 |   simple_expr COLLATE collate_name
+    {
+        $$ = $1
+    }
+|   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
+    {
+	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
+	if err != nil {
+		yylex.Error(err.Error())
+		goto ret1
+	}
+	$$ = val		
+    }
+
+
+
+search_pattern:
+    STRING
     {
         $$ = $1
     }
@@ -10197,6 +10302,23 @@ function_call_aggregate:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        var columnList tree.Exprs
+        for _, columnStr := range $4{
+            column := tree.NewUnresolvedColName(string(columnStr))
+            columnList = append(columnList, column)
+        }
+
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: columnList,
             Type: $3,
             WindowSpec: $6,
         }
@@ -12203,6 +12325,7 @@ non_reserved_keyword:
 |   LESS
 |   LEVEL
 |   LINESTRING
+|   LOGSERVICE
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
@@ -12252,6 +12375,7 @@ non_reserved_keyword:
 |   REDUNDANT
 |   REPAIR
 |   REPEATABLE
+|   REPLICAS
 |   RELEASE
 |   RESUME
 |   REVOKE
@@ -12260,6 +12384,7 @@ non_reserved_keyword:
 |   ROLLBACK
 |   RESTRICT
 |   SESSION
+|   SETTINGS
 |   SERIALIZABLE
 |   SHARE
 |   SIGNED
@@ -12270,6 +12395,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|   STORES
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
@@ -12469,6 +12595,10 @@ non_reserved_keyword:
 |	OWNERSHIP
 |   MO_TS
 |   ROLLUP
+|   GROUPING
+|   SETS
+|   CUBE
+
 
 func_not_keyword:
     DATE_ADD

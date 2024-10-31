@@ -26,11 +26,60 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBasicCluster(t *testing.T) {
+	c, err := NewCluster(
+		WithCNCount(3),
+		WithPreStart(
+			func(svc ServiceOperator) {
+				if svc.ServiceType() == metadata.ServiceType_CN {
+					svc.Adjust(
+						func(config *ServiceConfig) {
+							config.CN.AutomaticUpgrade = true
+						},
+					)
+				}
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+
+	validCNCanWork(t, c, 0)
+	validCNCanWork(t, c, 1)
+	validCNCanWork(t, c, 2)
+
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	v, err := c.GetService(cn.ServiceID())
+	require.NoError(t, err)
+	require.Equal(t, cn, v)
+
+	require.NoError(t, c.Close())
+}
+
+func TestSingleCNCluster(t *testing.T) {
+	c, err := NewCluster()
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+	require.Error(t, c.Start())
+
+	validCNCanWork(t, c, 0)
+
+	_, err = c.GetService("no")
+	require.Error(t, err)
+
+	_, err = c.GetCNService(1)
+	require.Error(t, err)
+
+	require.NoError(t, c.Close())
+}
+
+func TestClusterCanStartNewCNServices(t *testing.T) {
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
@@ -38,6 +87,9 @@ func TestBasicCluster(t *testing.T) {
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
 	validCNCanWork(t, c, 2)
+
+	require.NoError(t, c.StartNewCNService(1))
+	validCNCanWork(t, c, 3)
 
 	require.NoError(t, c.Close())
 }
@@ -130,7 +182,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 	)
 }
 
-func TestGetInitPort(t *testing.T) {
+func TestGetInitValue(t *testing.T) {
 	var wg sync.WaitGroup
 	var ports []uint64
 	var lock sync.Mutex
@@ -146,7 +198,7 @@ func TestGetInitPort(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			port := getInitPort(name)
+			port := getInitValue(name)
 			add(port)
 		}()
 	}
@@ -156,6 +208,14 @@ func TestGetInitPort(t *testing.T) {
 		return ports[i] < ports[j]
 	})
 	require.Equal(t, []uint64{10000, 11000, 12000, 13000}, ports)
+}
+
+func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
+	defer func() {
+		err := recover()
+		require.NotNil(t, err)
+	}()
+	getInitValue("")
 }
 
 func validCNCanWork(

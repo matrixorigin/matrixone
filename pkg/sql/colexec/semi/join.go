@@ -197,11 +197,17 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(mpbat[0], proc.Mp())
 	}
 	count := bat.RowCount()
-	mSels := ctr.mp.Sels()
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	itr := ctr.itr
 
 	rowCountIncrease := 0
-	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
+	if ctr.eligible == nil {
+		ctr.eligible = make([]int64, 0, hashmap.UnitLimit)
+	} else {
+		ctr.eligible = ctr.eligible[:0]
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -214,7 +220,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 			}
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
@@ -236,7 +242,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 						matched = true
 					}
 				} else {
-					sels := mSels[vals[k]-1]
+					sels := ctr.mp.GetSels(vals[k] - 1)
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
@@ -266,20 +272,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					continue
 				}
 			}
-			eligible = append(eligible, int64(i+k))
+			ctr.eligible = append(ctr.eligible, int64(i+k))
 			rowCountIncrease++
 		}
-		//eligible = eligible[:0]
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(ctr.eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
 			return err
 		}
 	}
 
 	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
+		if err := ctr.rbat.Vecs[j].Union(bat.Vecs[pos], ctr.eligible, proc.Mp()); err != nil {
 			return err
 		}
 	}

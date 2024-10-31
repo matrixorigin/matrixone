@@ -20,19 +20,15 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"net/http/httptrace"
 	"os"
-	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -134,8 +130,6 @@ func testS3FS(
 			switch storage := fs.storage.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
-			case *AwsSDKv1:
-				storage.listMaxKeys = 5
 			}
 
 			return fs
@@ -174,8 +168,9 @@ func testS3FS(
 		})
 		assert.Nil(t, err)
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
+
 		assert.True(t, len(entries) > 0)
 		assert.True(t, counterSet.FileService.S3.List.Load() > 0)
 		assert.True(t, counterSet2.FileService.S3.List.Load() > 0)
@@ -219,6 +214,32 @@ func testS3FS(
 				},
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](1),
+					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
+					DiskPath:       ptrTo(t.TempDir()),
+				},
+				nil,
+				false,
+				false,
+			)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("mem and disk caching file service", func(t *testing.T) {
+		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+					RoleARN:   config.RoleARN,
+				},
+				CacheConfig{
+					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
 					DiskPath:       ptrTo(t.TempDir()),
 				},
@@ -393,98 +414,6 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
-}
-
-func TestS3FSMinioServer(t *testing.T) {
-
-	// find minio executable
-	exePath, err := exec.LookPath("minio")
-	if errors.Is(err, exec.ErrNotFound) {
-		// minio not found in machine
-		return
-	}
-
-	// start minio
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cmd := exec.CommandContext(ctx,
-		exePath,
-		"server",
-		t.TempDir(),
-		//"--certs-dir", filepath.Join("testdata", "minio-certs"),
-	)
-	cmd.Env = append(os.Environ(),
-		"MINIO_SITE_NAME=test",
-		"MINIO_SITE_REGION=test",
-	)
-	//cmd.Stderr = os.Stderr
-	//cmd.Stdout = os.Stdout
-	err = cmd.Start()
-	assert.Nil(t, err)
-
-	// set s3 credentials
-	t.Setenv("AWS_REGION", "test")
-	t.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
-
-	endpoint := "http://localhost:9000"
-
-	// create bucket
-	ctx, cancel = context.WithTimeout(ctx, time.Second*59)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
-	assert.Nil(t, err)
-	client := s3.NewFromConfig(cfg,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					_ = options
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
-			),
-		),
-	)
-	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: ptrTo("test"),
-	})
-	assert.Nil(t, err)
-
-	// run test
-	t.Run("file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		testFileService(t, 0, func(name string) FileService {
-			ctx := context.Background()
-			fs, err := NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					Name:      name,
-					Endpoint:  endpoint,
-					Bucket:    "test",
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					IsMinio:   true,
-				},
-				CacheConfig{
-					DiskPath: ptrTo(cacheDir),
-				},
-				nil,
-				true,
-				false,
-			)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
 }
 
 func BenchmarkS3FS(b *testing.B) {
@@ -1045,4 +974,157 @@ func TestNewS3NoDefaultCredential(t *testing.T) {
 	)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	assert.True(t, strings.Contains(err.Error(), "no valid credentials"))
+}
+
+func TestS3FSIOMerger(t *testing.T) {
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			DiskPath:       ptrTo(t.TempDir()),
+			DiskCapacity:   ptrTo(toml.ByteSize(10 * (1 << 20))),
+			CheckOverlaps:  false,
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close()
+
+	var counterSet perfcounter.CounterSet
+	ctx := perfcounter.WithCounterSet(context.Background(), &counterSet)
+
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo",
+		Policy:   SkipDiskCache, // skip disk cache
+		Entries: []IOEntry{
+			{
+				Data: []byte("foo"),
+				Size: 3,
+			},
+		},
+	})
+	assert.Nil(t, err)
+
+	nThreads := 256
+	wg := new(sync.WaitGroup)
+	wg.Add(nThreads)
+	for range nThreads {
+		go func() {
+			defer wg.Done()
+			vec := &IOVector{
+				FilePath: "foo",
+				Entries: []IOEntry{
+					{
+						Size:        3,
+						ToCacheData: CacheOriginalData,
+					},
+				},
+			}
+			err := fs.Read(ctx, vec)
+			assert.Nil(t, err)
+			assert.Equal(t, []byte("foo"), vec.Entries[0].CachedData.Bytes())
+			vec.Release()
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(1), counterSet.FileService.S3.Put.Load())
+	assert.True(t, counterSet.FileService.S3.Get.Load() < int64(nThreads))
+
+}
+
+func BenchmarkS3FSAllocateCacheData(b *testing.B) {
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    b.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(b, err)
+	defer fs.Close()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			data := fs.AllocateCacheData(42)
+			data.Release()
+		}
+	})
+}
+
+func TestS3FSFromEnv(t *testing.T) {
+
+	// test disk backed S3
+	t.Setenv("TEST_S3FS_DISK", "name=disk,endpoint=disk,bucket="+t.TempDir())
+
+	// examples
+	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
+	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
+
+	// emulate env vars and get test specs
+	for _, pairs := range os.Environ() {
+		name, value, ok := strings.Cut(pairs, "=")
+		if !ok {
+			continue
+		}
+		// env vars begin with TEST_S3FS_
+		if !strings.HasPrefix(name, "TEST_S3FS_") {
+			continue
+		}
+
+		// parse args
+		reader := csv.NewReader(strings.NewReader(value))
+		argStrs, err := reader.Read()
+		if err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		var args ObjectStorageArguments
+		if err := args.SetFromString(argStrs); err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+
+		// test
+		t.Run(args.Name, func(t *testing.T) {
+			testFileService(t, 0, func(name string) FileService {
+				args.Name = name
+				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+				fs, err := NewS3FS(
+					context.Background(),
+					args,
+					DisabledCacheConfig,
+					nil,
+					true,
+					false,
+				)
+				if err != nil {
+					logutil.Error("S3FS errror",
+						zap.Any("args", args),
+						zap.Any("error", err),
+					)
+					t.Fatal(err)
+				}
+
+				return fs
+			})
+		})
+
+	}
 }

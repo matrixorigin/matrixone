@@ -20,6 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,8 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -165,8 +166,7 @@ func NewFlushTableTailTask(
 		return
 	}
 	task.schema = rel.Schema(false).(*catalog.Schema)
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+	task.BaseTask = tasks.NewBaseTask(task, tasks.FlushTableTailTask, ctx)
 
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
@@ -229,8 +229,6 @@ func NewFlushTableTailTask(
 			task.transMappings[i] = make(api.TransferMap)
 		}
 	}
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	task.createAt = time.Now()
 	return
@@ -571,7 +569,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		seqnums = append(seqnums, def.SeqNum)
 	}
 	if isTombstone {
-		readColIdxs = append(readColIdxs, catalog.COLIDX_COMMITS)
+		readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
 		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 	}
 
@@ -641,9 +639,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 	rowsLeft := totalRowCnt
 	for rowsLeft > 0 {
-		if rowsLeft > int(schema.BlockMaxRows) {
-			toLayout = append(toLayout, schema.BlockMaxRows)
-			rowsLeft -= int(schema.BlockMaxRows)
+		if rowsLeft > int(schema.Extra.BlockMaxRows) {
+			toLayout = append(toLayout, schema.Extra.BlockMaxRows)
+			rowsLeft -= int(schema.Extra.BlockMaxRows)
 		} else {
 			toLayout = append(toLayout, uint32(rowsLeft))
 			break
@@ -673,7 +671,13 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	// write!
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(objID)
-	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
+	writer, err := blockio.NewBlockWriterNew(
+		task.rt.Fs.Service,
+		name,
+		schema.Version,
+		seqnums,
+		isTombstone,
+	)
 	if err != nil {
 		return err
 	}
@@ -681,9 +685,8 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	if schema.HasPK() {
 		pkIdx := schema.GetSingleSortKeyIdx()
 		if isTombstone {
-			writer.SetDataType(objectio.SchemaTombstone)
 			writer.SetPrimaryKeyWithType(
-				uint16(catalog.TombstonePrimaryKeyIdx),
+				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
 				index.ObjectPrefixFn,
 				index.BlockPrefixFn,
@@ -791,7 +794,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 		// do not close data, leave that to wait phase
 		if isTombstone {
-			_, err = mergesort.SortBlockColumns(dataVer.Vecs, catalog.TombstonePrimaryKeyIdx, task.rt.VectorPool.Transient)
+			_, err = mergesort.SortBlockColumns(dataVer.Vecs, objectio.TombstonePrimaryKeyIdx, task.rt.VectorPool.Transient)
 			if err != nil {
 				logutil.Info(
 					"[FLUSH-AOBJ-ERR]",
@@ -825,7 +828,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 // waitFlushAObjForSnapshot waits all io tasks about flushing aobject for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, subtasks []*flushObjTask, isTombstone bool) (err error) {
-	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	ictx, cancel := context.WithTimeoutCause(ctx, 6*time.Minute, moerr.CauseWaitFlushAObjForSnapshot)
 	defer cancel()
 	var handles []handle.Object
 	if isTombstone {
@@ -838,7 +841,7 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 			continue
 		}
 		if err = subtask.WaitDone(ictx); err != nil {
-			return
+			return moerr.AttachCause(ictx, err)
 		}
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
@@ -856,9 +859,10 @@ func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, e
 			zap.String("task", ftask.Name()),
 		)
 		// add a timeout to avoid WaitDone block the whole process
-		ictx, cancel := context.WithTimeout(
+		ictx, cancel := context.WithTimeoutCause(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/
+			moerr.CauseReleaseFlushObjTasks,
 		)
 		defer cancel()
 		for _, subtask := range subtasks {

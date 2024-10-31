@@ -394,6 +394,10 @@ func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
 }
 
+func NewLockNeedUpgradeNoCtx() *Error {
+	return newError(Context(), ErrLockNeedUpgrade)
+}
+
 func NewUDFAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFunctionAlreadyExists, f)
 }
@@ -428,6 +432,10 @@ func NewKeyAlreadyExistsNoCtx() *Error {
 
 func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
 	return newError(Context(), ErrTooLargeObjectSize, option)
+}
+
+func NewErrStaleReadNoCtx(minTS, start string) *Error {
+	return newError(Context(), ErrStaleRead, minTS, start)
 }
 
 func NewArenaFullNoCtx() *Error {

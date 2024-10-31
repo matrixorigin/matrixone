@@ -135,7 +135,6 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				top.ctr.buildBat.Vecs = top.ctr.buildBat.Vecs[:len(bat.Vecs)]
 			}
 			top.ctr.buildBat.Recursive = bat.Recursive
-			top.ctr.buildBat.Ro = bat.Ro
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
 			top.ctr.buildBat.Attrs = bat.Attrs
 			top.ctr.buildBat.Aggs = bat.Aggs

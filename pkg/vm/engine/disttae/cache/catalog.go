@@ -20,8 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tidwall/btree"
 	"go.uber.org/zap"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -29,10 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -67,7 +70,7 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if cc.mu.start != types.MaxTs() && ts.Greater(&cc.mu.start) {
+	if cc.mu.start != types.MaxTs() && ts.GT(&cc.mu.start) {
 		cc.mu.start = ts
 		logutil.Info("FIND_TABLE CACHE update serve range (by start)",
 			zap.String("start", cc.mu.start.ToString()),
@@ -78,18 +81,16 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
+	return ts.GE(&cc.mu.start) && ts.LE(&cc.mu.end)
 }
 
 type GCReport struct {
 	TScanItem  int
 	TStaleItem int
 	TStaleCpk  int
-	TDelCpk    int
 	DScanItem  int
 	DStaleItem int
 	DStaleCpk  int
-	DDelCpk    int
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
@@ -130,9 +131,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			if item.Name != prevName {
 				prevName = item.Name
 				seenLargest = false
-				if item.deleted {
-					deletedCpkey = append(deletedCpkey, item)
-				}
 			}
 
 			if item.Ts.Less(ts) {
@@ -141,8 +139,11 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 					if item.deleted {
 						deletedItems = append(deletedItems, item)
 					}
-				} else {
+				} else if item.Id > catalog.MO_COLUMNS_ID {
 					deletedItems = append(deletedItems, item)
+					if !item.deleted {
+						deletedCpkey = append(deletedCpkey, item)
+					}
 				}
 			}
 			r.TScanItem++
@@ -154,11 +155,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.tables.data.Delete(item)
 		}
 		for _, item := range deletedCpkey {
-			lastest, exist := cc.tables.cpkeyIndex.Get(item)
-			if !exist || lastest.Ts.Greater(item.Ts) {
-				continue
-			}
-			r.TDelCpk += 1
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
@@ -173,11 +169,7 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			if item.Name != prevName {
 				prevName = item.Name
 				seenLargest = false
-				if item.deleted {
-					deletedCpkey = append(deletedCpkey, item)
-				}
 			}
-
 			if item.Ts.Less(ts) {
 				if !seenLargest {
 					seenLargest = true
@@ -186,6 +178,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 					}
 				} else {
 					deletedItems = append(deletedItems, item)
+					if !item.deleted {
+						deletedCpkey = append(deletedCpkey, item)
+					}
 				}
 			}
 			r.DScanItem++
@@ -198,11 +193,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.databases.data.Delete(item)
 		}
 		for _, item := range deletedCpkey {
-			lastest, exist := cc.databases.cpkeyIndex.Get(item)
-			if !exist || lastest.Ts.Greater(item.Ts) {
-				continue
-			}
-			r.DDelCpk += 1
 			cc.databases.cpkeyIndex.Delete(item)
 		}
 	}
@@ -434,22 +424,19 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
-		if item, ok := cc.tables.cpkeyIndex.Get(&TableItem{CPKey: pk}); ok {
-			// Note: the newItem.Id is the latest id under the name of the table,
-			// not the id that should be seen at the moment ts.
-			// Lucy thing is that the wrong tableid hold by this delete item will never be used.
+		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
 			newItem := &TableItem{
 				deleted:    true,
 				Id:         item.Id,
 				Name:       item.Name,
 				CPKey:      append([]byte{}, item.CPKey...),
-				Rowid:      item.Rowid,
 				AccountId:  item.AccountId,
 				DatabaseId: item.DatabaseId,
 				Ts:         ts.ToTimestamp(),
 			}
 			cc.tables.data.Set(newItem)
-		}
+			return false
+		})
 	}
 }
 
@@ -458,7 +445,7 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
-		if item, ok := cc.databases.cpkeyIndex.Get(&DatabaseItem{CPKey: pk}); ok {
+		cc.databases.cpkeyIndex.Ascend(&DatabaseItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *DatabaseItem) bool {
 			newItem := &DatabaseItem{
 				deleted:   true,
 				Id:        item.Id,
@@ -471,12 +458,12 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        ts.ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
-		}
+			return false
+		})
 	}
 }
 
 func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF)
@@ -492,6 +479,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
 	versions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
 	catalogVersions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
+	extraInfos := bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF)
 	pks := bat.GetVector(catalog.MO_TABLES_CPKEY_IDX + MO_OFF)
 	for i, account := range accounts {
 		item := new(TableItem)
@@ -513,9 +501,8 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 		item.PrimaryIdx = -1
 		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
-		copy(item.Rowid[:], rowids[i][:])
 		item.CPKey = append(item.CPKey, pks.GetBytesAt(i)...)
-
+		item.ExtraInfo = api.MustUnmarshalTblExtra(extraInfos.GetBytesAt(i))
 		f(item)
 	}
 }
@@ -805,6 +792,10 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Key:   catalog.SystemRelAttr_Kind,
 		Value: TableType,
 	})
+	props.Properties = append(props.Properties, engine.Property{
+		Key:   catalog.PropSchemaExtra,
+		Value: string(api.MustMarshalTblExtra(tblItem.ExtraInfo)),
+	})
 
 	if tblItem.CreateSql != "" {
 		properties = append(properties, &plan.Property{
@@ -855,5 +846,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		ClusterBy:     clusterByDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
+		DbId:          tblItem.DatabaseId,
 	}, tableDef
 }

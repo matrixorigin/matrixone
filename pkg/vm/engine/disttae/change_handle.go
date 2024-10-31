@@ -16,34 +16,46 @@ package disttae
 
 import (
 	"context"
+	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (tbl *txnTable) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+const DefaultLoadParallism = 20
+
+func (tbl *txnTable) CollectChanges(
+	ctx context.Context,
+	from, to types.TS,
+	mp *mpool.MPool,
+) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
-		return NewCheckpointChangesHandle(to, tbl, mp, ctx)
+		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(state, from, to, mp, 8192, tbl.getTxn().engine.fs, ctx), nil
+	return logtailreplay.NewChangesHandler(
+		ctx,
+		state,
+		from, to,
+		objectio.BlockMaxRows,
+		mp,
+		tbl.getTxn().engine.fs,
+	)
 }
 
-type ChangesHandle interface {
-	Next(mp *mpool.MPool, ctx context.Context) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error)
-	Close() error
-}
 type CheckpointChangesHandle struct {
 	end    types.TS
 	table  *txnTable
@@ -51,32 +63,80 @@ type CheckpointChangesHandle struct {
 	reader engine.Reader
 	attrs  []string
 	isEnd  bool
+
+	sid         string
+	blockList   objectio.BlockInfoSlice
+	prefetchIdx int
+	readIdx     int
+
+	duration      time.Duration
+	dataLength    int
+	lastPrintTime time.Time
 }
 
-func NewCheckpointChangesHandle(end types.TS, table *txnTable, mp *mpool.MPool, ctx context.Context) (*CheckpointChangesHandle, error) {
+func NewCheckpointChangesHandle(
+	ctx context.Context,
+	table *txnTable,
+	end types.TS,
+	mp *mpool.MPool,
+) (*CheckpointChangesHandle, error) {
 	handle := &CheckpointChangesHandle{
 		end:   end,
 		table: table,
 		fs:    table.getTxn().engine.fs,
+		sid:   table.proc.Load().GetService(),
 	}
 	err := handle.initReader(ctx)
 	return handle, err
 }
-
-func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+func (h *CheckpointChangesHandle) prefetch() {
+	blkCount := h.blockList.Len()
+	for i := 0; i < DefaultLoadParallism; i++ {
+		if h.prefetchIdx >= blkCount {
+			return
+		}
+		blk := h.blockList.Get(h.prefetchIdx)
+		err := blockio.Prefetch(h.sid, h.fs, blk.MetaLoc[:])
+		if err != nil {
+			logutil.Warnf("ChangesHandle: prefetch failed: %v", err)
+		}
+		h.prefetchIdx++
+	}
+}
+func (h *CheckpointChangesHandle) Next(
+	ctx context.Context, mp *mpool.MPool,
+) (
+	data *batch.Batch,
+	tombstone *batch.Batch,
+	hint engine.ChangesHandle_Hint,
+	err error,
+) {
+	if time.Since(h.lastPrintTime) > time.Minute {
+		h.lastPrintTime = time.Now()
+		if h.dataLength != 0 {
+			logutil.Infof("ChangesHandle-Slow, data length %d, duration %v", h.dataLength, h.duration)
+		}
+	}
 	select {
 	case <-ctx.Done():
 		return
 	default:
 	}
 	hint = engine.ChangesHandle_Snapshot
+	if h.isEnd {
+		return nil, nil, hint, nil
+	}
 	tblDef := h.table.GetTableDef(ctx)
+	if h.readIdx >= h.prefetchIdx {
+		h.prefetch()
+	}
 
+	t0 := time.Now()
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(len(tblDef.Cols))
 		for i, col := range tblDef.Cols {
 			bat.Attrs = append(bat.Attrs, col.Name)
-			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+			typ := plan2.ExprType2Type(&col.Typ)
 			bat.Vecs[i] = vector.NewVec(typ)
 		}
 		return bat
@@ -89,9 +149,9 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 		mp,
 		data,
 	)
+	h.readIdx++
 	if h.isEnd {
-		err = moerr.GetOkExpectedEOF()
-		return
+		return nil, nil, hint, nil
 	}
 	if err != nil {
 		return
@@ -105,7 +165,9 @@ func (h *CheckpointChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (da
 	rowidVec := data.Vecs[len(data.Vecs)-1]
 	rowidVec.Free(mp)
 	data.Vecs[len(data.Vecs)-1] = committs
-	data.Attrs[len(data.Attrs)-1] = catalog.AttrCommitTs
+	data.Attrs[len(data.Attrs)-1] = objectio.DefaultCommitTS_Attr
+	h.duration += time.Since(t0)
+	h.dataLength += data.Vecs[0].Length()
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
@@ -125,9 +187,8 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	}
 
 	var blockList objectio.BlockInfoSlice
-	if _, err = TryFastFilterBlocks(
+	if _, err = engine_util.TryFastFilterBlocks(
 		ctx,
-		h.table,
 		h.end.ToTimestamp(),
 		tblDef,
 		nil,
@@ -136,14 +197,13 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		nil,
 		&blockList,
 		h.fs,
-		h.table.proc.Load(),
 	); err != nil {
 		return
 	}
-	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfo) // read partition insert
+	relData := engine_util.NewBlockListRelationData(1)
+	h.blockList = blockList
 	for i, end := 0, blockList.Len(); i < end; i++ {
-		relData.AppendBlockInfo(*blockList.Get(i))
+		relData.AppendBlockInfo(blockList.Get(i))
 	}
 
 	readers, err := h.table.BuildReaders(

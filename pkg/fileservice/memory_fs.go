@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"iter"
 	pathpkg "path"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
 )
@@ -33,7 +33,6 @@ import (
 type MemoryFS struct {
 	name string
 	sync.RWMutex
-	memCache        *MemCache
 	tree            *btree.BTreeG[*_MemFSEntry]
 	caches          []IOVectorCache
 	perfCounterSets []*perfcounter.CounterSet
@@ -49,8 +48,7 @@ func NewMemoryFS(
 ) (*MemoryFS, error) {
 
 	fs := &MemoryFS{
-		name:     name,
-		memCache: NewMemCache(fscache.ConstCapacity(1<<20), nil, nil),
+		name: name,
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
@@ -65,52 +63,61 @@ func (m *MemoryFS) Name() string {
 }
 
 func (m *MemoryFS) Close() {
-	m.memCache.Flush()
 }
 
-func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
-	m.RLock()
-	defer m.RUnlock()
-
-	path, err := ParsePathAtService(dirPath, m.name)
-	if err != nil {
-		return nil, err
-	}
-
-	iter := m.tree.Iter()
-	defer iter.Release()
-
-	pivot := &_MemFSEntry{
-		FilePath: path.File,
-	}
-	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-		item := iter.Item()
-		if !strings.HasPrefix(item.FilePath, path.File) {
-			break
+func (m *MemoryFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		select {
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return
+		default:
 		}
 
-		relPath := strings.TrimPrefix(item.FilePath, path.File)
-		relPath = strings.Trim(relPath, "/")
-		parts := strings.Split(relPath, "/")
-		isDir := len(parts) > 1
-		name := parts[0]
+		m.RLock()
+		defer m.RUnlock()
 
-		if len(entries) == 0 || entries[len(entries)-1].Name != name {
-			entries = append(entries, DirEntry{
-				IsDir: isDir,
-				Name:  name,
-				Size:  int64(len(item.Data)),
-			})
+		path, err := ParsePathAtService(dirPath, m.name)
+		if err != nil {
+			yield(nil, err)
+			return
 		}
+
+		iter := m.tree.Iter()
+		defer iter.Release()
+
+		pivot := &_MemFSEntry{
+			FilePath: path.File,
+		}
+		n := 0
+		var lastName string
+		for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+			item := iter.Item()
+			if !strings.HasPrefix(item.FilePath, path.File) {
+				break
+			}
+
+			relPath := strings.TrimPrefix(item.FilePath, path.File)
+			relPath = strings.Trim(relPath, "/")
+			parts := strings.Split(relPath, "/")
+			isDir := len(parts) > 1
+			name := parts[0]
+
+			if n == 0 || lastName != name {
+				if !yield(&DirEntry{
+					IsDir: isDir,
+					Name:  name,
+					Size:  int64(len(item.Data)),
+				}, nil) {
+					break
+				}
+				n++
+				lastName = name
+			}
+		}
+
 	}
 
-	return
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {

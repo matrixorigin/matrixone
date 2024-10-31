@@ -17,8 +17,9 @@ package plan
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -191,7 +192,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FilterList:      make([]*plan.Expr, len(node.FilterList)),
 		BlockFilterList: make([]*plan.Expr, len(node.BlockFilterList)),
 		GroupBy:         make([]*plan.Expr, len(node.GroupBy)),
-		GroupingSet:     make([]*plan.Expr, len(node.GroupingSet)),
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
@@ -242,9 +242,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.GroupBy[idx] = DeepCopyExpr(expr)
 	}
 
-	for idx, expr := range node.GroupingSet {
-		newNode.GroupingSet[idx] = DeepCopyExpr(expr)
-	}
+	copy(newNode.GroupingFlag, node.GroupingFlag)
 
 	for idx, expr := range node.AggList {
 		newNode.AggList[idx] = DeepCopyExpr(expr)
@@ -487,6 +485,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
+		DbId:           table.DbId,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -1090,12 +1089,17 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:             analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
-		S3IOByte:               analyzeinfo.GetS3IOByte(),
-		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
-		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
+		ScanBytes:              analyzeinfo.GetScanBytes(),
+		S3List:                 analyzeinfo.GetS3List(),
+		S3Put:                  analyzeinfo.GetS3Put(),
+		S3Get:                  analyzeinfo.GetS3Get(),
+		S3Head:                 analyzeinfo.GetS3Head(),
+		S3Delete:               analyzeinfo.GetS3Delete(),
+		S3DeleteMul:            analyzeinfo.GetS3DeleteMul(),
 		NetworkIO:              analyzeinfo.GetNetworkIO(),
 		ScanTime:               analyzeinfo.GetScanTime(),
 		InsertTime:             analyzeinfo.GetInsertTime(),
+		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
 	}
 }
 

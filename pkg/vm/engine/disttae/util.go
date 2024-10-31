@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,9 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"go.uber.org/zap"
 )
 
 func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int64 {
@@ -392,20 +392,6 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 	}
 }
 
-func getNonSortedPKSearchFuncByPKVec(
-	vec *vector.Vector,
-) objectio.ReadFilterSearchFuncType {
-
-	searchPKFunc := LinearSearchOffsetByValFactory(vec)
-
-	if searchPKFunc != nil {
-		return func(vecs []*vector.Vector) []int64 {
-			return searchPKFunc(vecs[0])
-		}
-	}
-	return nil
-}
-
 // ListTnService gets all tn service in the cluster
 func ListTnService(
 	service string,
@@ -497,11 +483,10 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
 	}
 
-	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := objectio.BlockInfo{
-		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-		MetaLoc: objectio.ObjectLocation(loc),
-	}
+	var blk objectio.BlockInfo
+	objectio.BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
+	objectio.BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
+
 	return blk
 }
 
@@ -711,23 +696,6 @@ func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
 }
 
-// removeIf removes the elements that pred is true.
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
-
 func stringifySlice(req any, f func(any) string) string {
 	buf := &bytes.Buffer{}
 	v := reflect.ValueOf(req)
@@ -795,7 +763,7 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 }
 
 func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
-	tidIdx := cache.MO_OFF + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
+	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
 	if len(bs) == 1 {
 		return true
 	}

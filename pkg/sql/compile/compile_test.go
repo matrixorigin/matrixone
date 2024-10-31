@@ -21,10 +21,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -74,6 +81,13 @@ func init() {
 		newTestCase("select * from R limit 10", new(testing.T)),
 		newTestCase("select count(*) from R group by uid", new(testing.T)),
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
+		newTestCase("select _wstart, _wend, max(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second) fill(prev)", new(testing.T)),
+		newTestCase("select _wstart, sum(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, minute) sliding(1, minute) fill(none)", new(testing.T)),
+		newTestCase("select _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, hour) sliding(1, hour) fill(value, 1.2)", new(testing.T)),
+		newTestCase("select count(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, min(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(6, 2)) as b) as t interval(ts, 2, second)", new(testing.T)),
+		newTestCase("select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(16, 2)) as b) as t interval(ts, 2, second)", new(testing.T)),
 		// xxx because memEngine can not handle Halloween Problem
 		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
 		// newTestCase("insert into R select * from S", new(testing.T)),
@@ -82,7 +96,7 @@ func init() {
 	}
 }
 
-func testPrint(_ *batch.Batch) error {
+func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 	return nil
 }
 
@@ -207,7 +221,6 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
@@ -245,4 +258,110 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func GetFilePath() string {
 	dir, _ := os.Getwd()
 	return dir
+}
+
+func TestShuffleBlocksByHash(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	shuffleBlocksByHash(testCompile, reldata, testCompile.cnList)
+}
+
+func TestShuffleBlocksByMoCtl(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	require.NoError(t, shuffleBlocksByMoCtl(reldata, 2, testCompile.cnList))
+}
+
+func TestPutBlocksInCurrentCN(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	putBlocksInCurrentCN(testCompile, reldata)
+}
+
+func TestShuffleBlocksToMultiCN(t *testing.T) {
+	testCompile := &Compile{
+		proc: testutil.NewProcess(),
+	}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	n := &plan.Node{Stats: plan2.DefaultStats()}
+	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
+	require.NoError(t, err)
+}
+
+var _ morpc.RPCClient = new(testRpcClient)
+
+type testRpcClient struct {
+}
+
+func (tRpcClient *testRpcClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) Ping(ctx context.Context, backend string) error {
+	time.Sleep(time.Second)
+	return moerr.NewInternalErrorNoCtx("return err")
+}
+
+func (tRpcClient *testRpcClient) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) CloseBackend() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_isAvailable(t *testing.T) {
+	rpcClient := &testRpcClient{}
+	ret := isAvailable(rpcClient, "127.0.0.1:6001")
+	assert.False(t, ret)
 }

@@ -87,7 +87,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 		containers.MakeVector(types.T_Rowid.ToType(), mp),
 	)
 	bat.AddVector(
-		catalog.AttrCommitTs,
+		objectio.TombstoneAttr_CommitTs_Attr,
 		containers.MakeVector(types.T_TS.ToType(), mp),
 	)
 	// Types() is not used, then empty schema can also be handled here

@@ -19,32 +19,87 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+func IsRowDeleted(
+	ctx context.Context,
+	ts *types.TS,
+	row *types.Rowid,
+	getTombstoneFileFn func() (*objectio.ObjectStats, error),
+	fs fileservice.FileService,
+) (bool, error) {
+	var isDeleted bool
+	loadedBlkCnt := 0
+	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
+		if isDeleted {
+			return false, nil
+		}
+		var err error
+		var location objectio.ObjectLocation
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
+		deleted, err := IsRowDeletedByLocation(
+			ctx, ts, row, location[:], fs, tombstoneObject.GetCNCreated(),
+		)
+		if err != nil {
+			return false, err
+		}
+		loadedBlkCnt++
+		// if deleted, stop searching
+		if deleted {
+			isDeleted = true
+			return false, nil
+		}
+		return true, nil
+	}
+
+	tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err := CheckTombstoneFile(
+		ctx, row[:], getTombstoneFileFn, onBlockSelectedFn, fs,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
+	}
+	if totalBlkCnt > 0 {
+		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
+	}
+
+	return isDeleted, nil
+}
+
 func GetTombstonesByBlockId(
 	ctx context.Context,
-	ts types.TS,
-	blockId objectio.Blockid,
+	ts *types.TS,
+	blockId *objectio.Blockid,
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
-	deletedMask *nulls.Nulls,
+	deletedMask *objectio.Bitmap,
 	fs fileservice.FileService,
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		location := tombstoneObject.BlockLocation(uint16(pos), objectio.BlockMaxRows)
-		if mask, err := FillBlockDeleteMask(
-			ctx, ts, blockId, location, fs, tombstoneObject.GetCNCreated(),
-		); err != nil {
-			return false, err
+		var (
+			err2     error
+			mask     objectio.Bitmap
+			location objectio.ObjectLocation
+		)
+		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
+		if mask, err2 = FillBlockDeleteMask(
+			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
+		); err2 != nil {
+			return false, err2
 		} else {
 			deletedMask.Or(mask)
 		}
 		loadedBlkCnt++
+		mask.Release()
 		return true, nil
 	}
 
@@ -84,7 +139,7 @@ func FindTombstonesOfBlock(
 
 func FindTombstonesOfObject(
 	ctx context.Context,
-	objectId objectio.ObjectId,
+	objectId *objectio.ObjectId,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
 ) (sels bitmap.Bitmap, err error) {
@@ -162,19 +217,44 @@ func CheckTombstoneFile(
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.RowidPrefixEq(prefixPattern) {
-				if columnZonemap.RowidPrefixGT(prefixPattern) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			if columnZonemap.RowidPrefixEq(prefixPattern) {
+				var goOn bool
+				if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
 					break
 				}
-				continue
-			}
-			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			} else if columnZonemap.RowidPrefixGT(prefixPattern) {
+				// all zone maps are sorted by the rowid
+				// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
 				break
 			}
 		}
 	}
+	return
+}
+
+// CoarseFilterTombstoneObject It is used to filter out tombstone objects that do not contain any deleted data objects.
+// This is a coarse filter using ZM, so false positives may occur
+func CoarseFilterTombstoneObject(
+	ctx context.Context,
+	nextDeletedDataObject func() *objectio.ObjectId,
+	tombstoneObjects []objectio.ObjectStats,
+	fs fileservice.FileService,
+) (filtered []objectio.ObjectStats, err error) {
+	var bm, b bitmap.Bitmap
+	bm.InitWithSize(int64(len(tombstoneObjects)))
+	var objid *objectio.ObjectId
+	for objid = nextDeletedDataObject(); objid != nil; objid = nextDeletedDataObject() {
+		b, err = FindTombstonesOfObject(ctx, objid, tombstoneObjects, fs)
+		if err != nil {
+			return
+		}
+		bm.Or(&b)
+	}
+	filtered = make([]objectio.ObjectStats, 0, bm.Count())
+	itr := bm.Iterator()
+	for itr.HasNext() {
+		filtered = append(filtered, tombstoneObjects[itr.Next()])
+	}
+
 	return
 }

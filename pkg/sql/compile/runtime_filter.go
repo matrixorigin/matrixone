@@ -155,7 +155,7 @@ func ApplyRuntimeFilters(
 			continue
 		}
 
-		relData.SetBlockInfo(curr, blk)
+		relData.SetBlockInfo(curr, &blk)
 		curr++
 	}
 

@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,7 +45,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats     *common.TableCompactStat
+	Stats     common.TableCompactStat
 	ID        uint64
 	db        *DBEntry
 	tableData data.Table
@@ -84,7 +83,6 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:               db,
 		TableNode:        &TableNode{},
-		Stats:            common.NewTableCompactStat(),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 	}
@@ -102,7 +100,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
-	e.CreateWithTSLocked(types.SystemDBTS, &TableMVCCNode{Schema: schema})
+	e.CreateWithTSLocked(types.SystemDBTS,
+		&TableMVCCNode{
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema)})
 
 	if DefaultTableDataFactory != nil {
 		e.tableData = DefaultTableDataFactory(e)
@@ -116,7 +117,6 @@ func NewReplayTableEntry() *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 		TableNode:        &TableNode{},
 	}
 	return e
@@ -132,11 +132,10 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode:        node,
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
-		Stats:            common.NewTableCompactStat(),
 	}
 }
 
-func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
+func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
 	iter1 := entry.MakeDataObjectIt()
 	defer iter1.Release()
 	for iter1.Next() {
@@ -153,7 +152,7 @@ func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS t
 		if obj.DeletedAt.IsEmpty() {
 			continue
 		}
-		if obj.DeletedAt.GreaterEq(&dedupedTS) && obj.DeletedAt.LessEq(&collectTS) {
+		if obj.DeletedAt.GE(&dedupedTS) && obj.DeletedAt.LE(&collectTS) {
 			if objs == nil {
 				objs = make([]*ObjectEntry, 0)
 			}
@@ -354,12 +353,19 @@ func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
 	return entry.dataObjects.tree.Load().Len()
 }
 
-func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
+func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		w.WriteString("TOMBSTONES\n")
+		it = entry.MakeTombstoneObjectIt()
+	} else {
+		w.WriteString("DATA\n")
+		it = entry.MakeDataObjectIt()
+	}
 
-	it := entry.MakeDataObjectIt()
 	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
-	if schema := entry.GetLastestSchemaLocked(false); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+	if schema := entry.GetLastestSchemaLocked(isTombstone); schema.HasSortKey() && schema.GetSingleSortKey().Name == "__mo_cpkey_col" {
 		zonemapKind = common.ZonemapPrintKindCompose
 	}
 
@@ -389,9 +395,9 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		stat.ObjectCnt += 1
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
-			stat.Rows += int(objectEntry.GetRows())
-			stat.OSize += int(objectEntry.GetOriginSize())
-			stat.Csize += int(objectEntry.GetCompSize())
+			stat.Rows += int(objectEntry.Rows())
+			stat.OSize += int(objectEntry.OriginSize())
+			stat.Csize += int(objectEntry.Size())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
@@ -411,8 +417,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 	return
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int) string {
-	stat, detail := entry.ObjectStats(level, start, end)
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int, isTombstone bool) string {
+	stat, detail := entry.ObjectStats(level, start, end, isTombstone)
 
 	var avgCsize, avgRow, avgOsize int
 	if stat.Loaded > 0 {
@@ -422,10 +428,8 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int)
 	}
 
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v\n"+
-			"Update History:\n  rows %v\n  dels %v ",
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
 		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
-		entry.Stats.RowCnt.String(), entry.Stats.RowDel.String(),
 	)
 	detail.WriteString(summary)
 	return detail.String()
@@ -658,6 +662,8 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
 			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
 			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
+			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
+			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
 		}
 
@@ -678,7 +684,8 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	entry.InsertLocked(node)
@@ -712,6 +719,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry := NewReplayTableEntry()
 	entry.TableNode = &TableNode{}
 	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
 	return entry

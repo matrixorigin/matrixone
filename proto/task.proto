@@ -50,6 +50,9 @@ option (gogoproto.protosizer_all) = true;
      // CancelRequested is the state that cancel request has been proposed to
      // the task and has not been canceled.
      CancelRequested = 8;
+     // RestartRequested is the state that restart request has been proposed to
+     // the task and has not been restart.
+     RestartRequested = 9;
  }
 
  // TaskCode task code
@@ -68,6 +71,8 @@ option (gogoproto.protosizer_all) = true;
    MergeObject = 5;
    // Retention is for table retention
    Retention = 6;
+   // Init cdc task
+   InitCdc = 7;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -168,11 +173,26 @@ enum TaskType {
   Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
   KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
   RetentionType = 2 [(gogoproto.enumvalue_customname) = "TypeRetention"];
+  CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
 }
 
 message ConnectorDetails {
   string TableName = 1;
   map<string, string> Options = 2;
+}
+
+message Account {
+   uint64 Id = 1;
+   string Name = 2;
+}
+
+message CreateCdcDetails {
+  //cdc task uuid
+  string TaskId = 1;
+  //cdc task name in CreateCdc
+  string TaskName = 2;
+  //cdc source account
+  repeated Account Accounts = 3;
 }
 
 message RetentionDetails {}
@@ -186,6 +206,7 @@ message Details {
   oneof Details {
     ConnectorDetails Connector = 10;
     RetentionDetails Retention = 11;
+    CreateCdcDetails CreateCdc = 12;
   }
 }
 

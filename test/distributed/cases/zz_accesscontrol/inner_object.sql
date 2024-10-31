@@ -8,6 +8,9 @@ drop role if exists revoke_role_1;
 select user_name,owner from mo_catalog.mo_user where user_name="root";
 select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moadmin","public");
 
+select enable_fault_injection();
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
+
 --验证moadminaccount初始化，sys租户root下创建普通租户下管理员用户查看
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=account1:admin&password=123456
@@ -110,12 +113,14 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 desc mo_catalog.mo_indexes;
 -- @session
 
+select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
+select disable_fault_injection();
 
 -- sys and non sys account admin user information_schema:columns，schemata,tables，views，partitions isolation
 create account ac_1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
@@ -278,3 +283,44 @@ drop database user_db;
 drop account ac_1;
 drop user sys_user;
 drop role sys_role;
+
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+  `id` VARCHAR(128) NOT NULL,
+  `username` VARCHAR(255) DEFAULT NULL,
+  `password` VARCHAR(512) DEFAULT NULL,
+  `user_status` TINYINT DEFAULT NULL,
+  `user_role` TINYINT DEFAULT NULL,
+  `created_at` DATETIME DEFAULT NULL,
+  `updated_at` DATETIME DEFAULT NULL,
+  `user_source` TINYINT DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+drop database etao;
+
+drop account if exists acc1;
+create account acc1 admin_name 'root' identified by '111';
+-- @session:id=6&user=acc1:root&password=111
+drop database if exists etao;
+create database etao;
+use etao;
+CREATE TABLE `users` (
+  `id` VARCHAR(128) NOT NULL,
+  `username` VARCHAR(255) DEFAULT NULL,
+  `password` VARCHAR(512) DEFAULT NULL,
+  `user_status` TINYINT DEFAULT NULL,
+  `user_role` TINYINT DEFAULT NULL,
+  `created_at` DATETIME DEFAULT NULL,
+  `updated_at` DATETIME DEFAULT NULL,
+  `user_source` TINYINT DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_mocadmin_users_username` (`username`)
+);
+SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
+drop database etao;
+-- @session
+drop account acc1;

@@ -15,6 +15,7 @@
 package anti
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,7 +35,9 @@ const (
 )
 
 type container struct {
-	state int
+	state    int
+	itr      hashmap.Iterator
+	eligible []int64
 
 	batchRowCount int64
 	rbat          *batch.Batch
@@ -103,12 +106,13 @@ func (antiJoin *AntiJoin) Release() {
 
 func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &antiJoin.ctr
-
+	ctr.itr = nil
 	ctr.resetExecutor()
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.batchRowCount = 0
+	ctr.eligible = ctr.eligible[:0]
 
 	if antiJoin.ProjectList != nil {
 		if antiJoin.OpAnalyzer != nil {
@@ -127,6 +131,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &antiJoin.ctr
 
+	ctr.eligible = nil
 	ctr.cleanExecutor()
 	ctr.cleanExprExecutor()
 	ctr.cleanBatch(proc)
