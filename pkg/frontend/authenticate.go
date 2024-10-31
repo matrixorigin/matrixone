@@ -1138,7 +1138,7 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time,create_version from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
 	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
 
@@ -8745,15 +8745,6 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	if err != nil {
 		return err
 	}
-
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
-	}
-
 	return err
 }
 
@@ -8809,14 +8800,6 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	err = updateConfigForAccount()
 	if err != nil {
 		return err
-	}
-
-	// step3: update the session verison
-	if len(ses.GetDatabaseName()) != 0 {
-		err = changeVersion(ctx, ses, ses.GetDatabaseName())
-		if err != nil {
-			return err
-		}
 	}
 
 	return err
