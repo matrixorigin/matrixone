@@ -515,6 +515,10 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return nil
 	}
 
+	if reuseInfo.PasswordHisoty <= 0 && reuseInfo.PasswordReuseInterval <= 0 {
+		return nil
+	}
+
 	// get the password history
 	userPasswords, err = getUserPassword(ctx, bh, user)
 	if err != nil {
@@ -531,6 +535,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	}
 
 	// delete the password records that exceed the password history
+	deleteNum := 0
 	if canDeleteNum > 0 {
 		for i := 0; i < int(canDeleteNum); i++ {
 			// if password time exceeds the password history, delete the password record
@@ -541,8 +546,14 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 			}
 
 			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordHisoty)).Before(time.Now()) {
-				userPasswords = userPasswords[i+1:]
+				deleteNum++
+			} else {
+				break
 			}
+		}
+
+		if deleteNum > 0 {
+			userPasswords = userPasswords[deleteNum:]
 		}
 	}
 
