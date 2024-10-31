@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -164,10 +166,24 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 
 // TODO: vast items within h.mu.txnCtxs would incur performance penality.
 func (h *Handle) GCCache(now time.Time) error {
-	logutil.Infof("GC rpc handle txn cache")
+
+	var (
+		cnt, deleteCnt int
+	)
+
 	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
-		return v.deadline.Before(now)
+		cnt++
+		ok := v.deadline.Before(now)
+		if ok {
+			deleteCnt++
+		}
+		return ok
 	})
+	logutil.Info(
+		"GC-RPC-Cache",
+		zap.Int("total", cnt),
+		zap.Int("deleted", deleteCnt),
+	)
 	return nil
 }
 
@@ -262,7 +278,7 @@ func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
-) (releaseF []func(), err error) {
+) (releaseF []func(), hasDDL bool, err error) {
 	var (
 		inMemoryInsertRows        int
 		persistedMemoryInsertRows int
@@ -276,14 +292,19 @@ func (h *Handle) handleRequests(
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
+			hasDDL = true
 			err = h.HandleCreateDatabase(ctx, txn, req)
 		case *pkgcatalog.DropDatabaseReq:
+			hasDDL = true
 			err = h.HandleDropDatabase(ctx, txn, req)
 		case *pkgcatalog.CreateTableReq:
+			hasDDL = true
 			err = h.HandleCreateRelation(ctx, txn, req)
 		case *pkgcatalog.DropTableReq:
+			hasDDL = true
 			err = h.HandleDropRelation(ctx, txn, req)
 		case *api.AlterTableReq:
+			hasDDL = true
 			err = h.HandleAlterTable(ctx, txn, req)
 		case *cmd_util.WriteReq:
 			var r1, r2, r3, r4 int
@@ -384,11 +405,15 @@ func (h *Handle) HandlePreCommitWrite(
 // HandlePreCommitWrite impls TxnStorage:Commit
 func (h *Handle) HandleCommit(
 	ctx context.Context,
-	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
+	meta txn.TxnMeta,
+) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
 	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
-	var txn txnif.AsyncTxn
-	var releaseF []func()
+	var (
+		txn      txnif.AsyncTxn
+		releaseF []func()
+		hasDDL   bool = false
+	)
 	defer func() {
 		for _, f := range releaseF {
 			f()
@@ -398,13 +423,24 @@ func (h *Handle) HandleCommit(
 			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 		common.DoIfInfoEnabled(func() {
-			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+			_, _, injected := fault.TriggerFault(objectio.FJ_CommitSlowLog)
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || hasDDL || injected {
 				var tnTxnInfo string
 				if txn != nil {
 					tnTxnInfo = txn.String()
 				}
-				logutil.Warn(
-					"SLOW-LOG",
+				logger := logutil.Warn
+				msg := "HandleCommit-SLOW-LOG"
+				if err != nil {
+					logger = logutil.Error
+					msg = "HandleCommit-Error"
+				} else if hasDDL {
+					logger = logutil.Info
+					msg = "HandleCommit-With-DDL"
+				}
+				logger(
+					msg,
+					zap.Error(err),
 					zap.Duration("commit-latency", time.Since(start)),
 					zap.String("cn-txn", meta.DebugString()),
 					zap.String("tn-txn", tnTxnInfo),
@@ -419,7 +455,7 @@ func (h *Handle) HandleCommit(
 		if err != nil {
 			return
 		}
-		releaseF, err = h.handleRequests(ctx, txn, txnCtx)
+		releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
 		if err != nil {
 			return
 		}
@@ -457,7 +493,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			releaseF, err = h.handleRequests(ctx, txn, txnCtx)
+			releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
@@ -546,9 +582,11 @@ func (h *Handle) HandleCreateDatabase(
 	// modify memory structure
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] create database: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-CreateDB",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
@@ -564,7 +602,6 @@ func (h *Handle) HandleCreateDatabase(
 	}
 
 	// Write to mo_database table
-	// logutil.Infof("yyyy create db %v", common.MoBatchToString(req.Bat, 5))
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
 	err = AppendDataToTable(ctx, databaseTbl, req.Bat)
@@ -583,9 +620,11 @@ func (h *Handle) HandleDropDatabase(
 	}()
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] drop database: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-DropDB",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		if _, err = txn.DropDatabaseByID(c.Id); err != nil {
@@ -594,7 +633,6 @@ func (h *Handle) HandleDropDatabase(
 	}
 
 	// Delete in mo_database table
-	// logutil.Infof("yyyy drop db %v", common.MoBatchToString(req.Bat, 5))
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
 	rowIDVec := containers.ToTNVector(req.Bat.GetVector(0), common.WorkspaceAllocator)
@@ -618,9 +656,11 @@ func (h *Handle) HandleCreateRelation(
 
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] create table: %v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-CreateTBL",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
@@ -634,21 +674,11 @@ func (h *Handle) HandleCreateRelation(
 		}
 	}
 
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy create table %v", common.MoBatchToString(req.TableBat, 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] insert table %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
 	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat); err != nil {
 		return err
 	}
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy create table cols %v", common.MoBatchToString(req.ColumnBat[0], 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] insert columns %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
 		if err := AppendDataToTable(ctx, columnsTbl, bat); err != nil {
@@ -671,9 +701,11 @@ func (h *Handle) HandleDropRelation(
 
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof(
-				"[precommit] drop/truncate table: %+v (%v/%v) txn: %s",
-				c, i+1, len(req.Cmds), txn.String(),
+			logutil.Info(
+				"PreCommit-DropTBL",
+				zap.String("txn", txn.String()),
+				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
+				zap.String("cmd", fmt.Sprintf("%+v", c)),
 			)
 		})
 		db, err := txn.GetDatabaseByID(c.DatabaseId)
@@ -689,11 +721,6 @@ func (h *Handle) HandleDropRelation(
 		}
 	}
 
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy drop table %v", common.MoBatchToString(req.TableBat, 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] delete table%v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
 	rowIDVec := containers.ToTNVector(req.TableBat.GetVector(0), common.WorkspaceAllocator)
@@ -703,11 +730,6 @@ func (h *Handle) HandleDropRelation(
 	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
 		return err
 	}
-	// if len(req.Cmds) > 0 {
-	// 	logutil.Infof("yyyy drop table cols %v", common.MoBatchToString(req.ColumnBat[0], 5))
-	// } else {
-	// 	logutil.Infof("yyyy [alter] delete columns %v", common.MoBatchToString(req.TableBat, 5))
-	// }
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
 		rowIDVec := containers.ToTNVector(bat.GetVector(0), common.WorkspaceAllocator)
@@ -818,6 +840,7 @@ func (h *Handle) HandleWrite(
 				)
 			}
 		}
+
 		// TODO: debug for #13342, remove me later
 		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
 			schema := tb.Schema(false).(*catalog.Schema)
@@ -856,7 +879,7 @@ func (h *Handle) HandleWrite(
 		//wait for loading deleted row-id done.
 		nctx := context.Background()
 		if deadline, ok := ctx.Deadline(); ok {
-			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
+			_, req.Cancel = context.WithTimeoutCause(nctx, time.Until(deadline), moerr.CauseHandleWrite)
 		}
 		rowidIdx := 0
 		pkIdx := 1
@@ -917,12 +940,13 @@ func (h *Handle) HandleWrite(
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+	_, _, injected := fault.TriggerFault(objectio.FJ_CommitDelete)
+	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) || injected {
 		schema := tb.Schema(false).(*catalog.Schema)
 		if schema.HasPK() {
+			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
-			for i := 0; i < rowIDVec.Length(); i++ {
-				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			for i := 0; i < len(rowids); i++ {
 				if isCompositeKey {
 					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
 					tuple, _ := types.Unpack(pkbuf)
@@ -930,7 +954,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 						zap.Any("detail", tuple.SQLStrings(nil)),
 					)
 				} else {
@@ -938,7 +962,7 @@ func (h *Handle) HandleWrite(
 						"op2",
 						zap.String("txn", txn.String()),
 						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-						zap.String("rowid", rowID.String()),
+						zap.String("rowid", rowids[i].String()),
 					)
 				}
 			}
@@ -951,20 +975,36 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	req *api.AlterTableReq) (err error) {
-	logutil.Infof("[precommit] alter table: %v txn: %s", req.String(), txn.String())
+	req *api.AlterTableReq,
+) (err error) {
+	var (
+		dbase handle.Database
+		tbl   handle.Relation
+	)
 
-	dbase, err := txn.GetDatabaseByID(req.DbId)
-	if err != nil {
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"PreCommit-AlterTBL",
+			zap.String("req", req.String()),
+			zap.String("txn", txn.String()),
+			zap.Error(err),
+		)
+	}()
+
+	if dbase, err = txn.GetDatabaseByID(req.DbId); err != nil {
 		return
 	}
 
-	tbl, err := dbase.GetRelationByID(req.TableId)
-	if err != nil {
+	if tbl, err = dbase.GetRelationByID(req.TableId); err != nil {
 		return
 	}
 
-	return tbl.AlterTable(ctx, req)
+	err = tbl.AlterTable(ctx, req)
+	return
 }
 
 //#endregion

@@ -21,11 +21,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/models"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
@@ -241,6 +240,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "apply", nil
 	case plan.Node_MULTI_UPDATE:
 		return "multi_update", nil
+	case plan.Node_POSTDML:
+		return "postdml", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -650,6 +651,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Apply,
 			Value: []string{},
 		})
+	case plan.Node_POSTDML:
+		labels = append(labels, models.Label{
+			Name:  Label_PostDml,
+			Value: []string{},
+		})
 	default:
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -702,6 +708,7 @@ const TimeConsumed = "Time Consumed"
 const WaitTime = "Wait Time"
 const ScanTime = "Scan Time"
 const InsertTime = "Insert Time"
+const WaitLockTime = "Wait Lock Time"
 
 const InputRows = "Input Rows"
 const OutputRows = "Output Rows"
@@ -710,9 +717,13 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
-const S3IOInputCount = "S3 IO Input Count"
-const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
+const S3List = "S3 List Count"
+const S3Head = "S3 Head Count"
+const S3Put = "S3 Put Count"
+const S3Get = "S3 Get Count"
+const S3Delete = "S3 Delete Count"
+const S3DeleteMul = "S3 DeleteMul Count"
 
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
@@ -720,8 +731,11 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		analyzeInfo := node.AnalyzeInfo
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
-			WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
-			WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
+			WithS3IOInputCount(float64(analyzeInfo.S3Put)).
+			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
+			WithS3IOListCount(float64(analyzeInfo.S3List)).
+			WithS3IODeleteCount(float64(analyzeInfo.S3Delete + analyzeInfo.S3DeleteMul))
 	}
 	return
 }
@@ -763,6 +777,11 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  InsertTime,
 				Value: analyzeInfo.InsertTime,
+				Unit:  Statistic_Unit_ns,
+			},
+			{
+				Name:  WaitLockTime,
+				Value: analyzeInfo.WaitLockTime,
 				Unit:  Statistic_Unit_ns,
 			},
 		}
@@ -809,13 +828,33 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{
-				Name:  S3IOInputCount,
-				Value: analyzeInfo.S3IOInputCount,
+				Name:  S3List,
+				Value: analyzeInfo.S3List,
 				Unit:  Statistic_Unit_count, //"count",
 			},
 			{
-				Name:  S3IOOutputCount,
-				Value: analyzeInfo.S3IOOutputCount,
+				Name:  S3Head,
+				Value: analyzeInfo.S3Head,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  S3Put,
+				Value: analyzeInfo.S3Put,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  S3Get,
+				Value: analyzeInfo.S3Get,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  S3Delete,
+				Value: analyzeInfo.S3Delete,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  S3DeleteMul,
+				Value: analyzeInfo.S3DeleteMul,
 				Unit:  Statistic_Unit_count, //"count",
 			},
 		}

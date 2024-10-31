@@ -28,7 +28,8 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
-const selsDivideLength = 1024
+const selsDivideLength = 256
+const selsPreAlloc = 4
 
 type JoinSels struct {
 	sels [][][]int32
@@ -46,18 +47,12 @@ func (js *JoinSels) InsertSel(k, v int32) {
 	i := k / selsDivideLength
 	j := k % selsDivideLength
 	if len(js.sels) <= int(i) {
-		if i == 0 {
-			js.sels = append(js.sels, make([][]int32, 16))
-		} else {
-			s := make([][]int32, selsDivideLength)
-			js.sels = append(js.sels, s)
+		s := make([][]int32, selsDivideLength)
+		js.sels = append(js.sels, s)
+		var internalArray [selsDivideLength * selsPreAlloc]int32
+		for p := 0; p < selsDivideLength; p++ {
+			js.sels[i][p] = internalArray[p*selsPreAlloc : p*selsPreAlloc : (p+1)*selsPreAlloc]
 		}
-	}
-	if len(js.sels[i]) <= int(j) {
-		js.sels[i] = append(js.sels[i], make([]int32, 0))
-	}
-	if js.sels[i][j] == nil {
-		js.sels[i][j] = make([]int32, 0)
 	}
 	js.sels[i][j] = append(js.sels[i][j], v)
 }
@@ -264,8 +259,8 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 	}
 }
 
-func FinalizeJoinMapMessage(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, pipelineFailed bool, err error) {
-	if pipelineFailed || err != nil {
+func FinalizeJoinMapMessage(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, sendMapSucceed bool) {
+	if !sendMapSucceed {
 		SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag}, mb)
 	}
 }

@@ -29,6 +29,11 @@ import (
 
 const opName = "table_function"
 
+const (
+	FULLTEXT_INDEX_SCAN     = "fulltext_index_scan"
+	FULLTEXT_INDEX_TOKENIZE = "fulltext_index_tokenize"
+)
+
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
@@ -68,7 +73,7 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 			// Now position nextRow, we are ready to call the table function
 			tableFunction.ctr.nextRow = 0
-			if err = tableFunction.ctr.state.start(tableFunction, proc, 0); err != nil {
+			if err = tableFunction.ctr.state.start(tableFunction, proc, 0, analyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -82,7 +87,7 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		if res.Batch.IsDone() {
 			tableFunction.ctr.nextRow++
 			if tableFunction.ctr.nextRow < tableFunction.ctr.inputBatch.RowCount() {
-				if err = tableFunction.ctr.state.start(tableFunction, proc, tableFunction.ctr.nextRow); err != nil {
+				if err = tableFunction.ctr.state.start(tableFunction, proc, tableFunction.ctr.nextRow, analyzer); err != nil {
 					return vm.CancelResult, err
 				}
 			}
@@ -140,6 +145,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
+	case "fulltext_index_scan":
+		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
+	case "fulltext_index_tokenize":
+		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	default:
@@ -174,8 +183,8 @@ func (tableFunction *TableFunction) ApplyArgsEval(inbat *batch.Batch, proc *proc
 	return nil
 }
 
-func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process) error {
-	return tableFunction.ctr.state.start(tableFunction, proc, nthRow)
+func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process, analyzer process.Analyzer) error {
+	return tableFunction.ctr.state.start(tableFunction, proc, nthRow, analyzer)
 }
 
 func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallResult, error) {

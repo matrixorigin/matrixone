@@ -238,6 +238,8 @@ const (
 	ErrCannotCommitOrphan uint16 = 20705
 	// ErrLockConflict lock operation conflict
 	ErrLockConflict uint16 = 20706
+	// ErrLockNeedUpgrade row level lock is too large that need upgrade to table level lock
+	ErrLockNeedUpgrade uint16 = 20707
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -341,7 +343,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
 	ErrLogServiceNotReady:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
-	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
+	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "Unknown database %s"},
 	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
 	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
 	ErrEmptyVector:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
@@ -355,7 +357,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrShortWrite:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
 	ErrInvalidWrite:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
 	ErrShortBuffer:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
-	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "not connect to a database"},
+	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
 	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
@@ -470,6 +472,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
 	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
 	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},

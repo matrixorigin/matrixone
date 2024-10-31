@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,9 +48,10 @@ func MergeCheckpoint(
 	ckpEntries []*checkpoint.CheckpointEntry,
 	bf *bloomfilter.BloomFilter,
 	end *types.TS,
+	client checkpoint.RunnerReader,
 	pool *mpool.MPool,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, err error) {
-	ckpData := logtail.NewCheckpointData(sid, pool)
+) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *logtail.CheckpointData, err error) {
+	ckpData = logtail.NewCheckpointData(sid, pool)
 	datas := make([]*logtail.CheckpointData, 0)
 	deleteFiles = make([]string, 0)
 	for _, ckpEntry := range ckpEntries {
@@ -95,7 +97,6 @@ func MergeCheckpoint(
 		for _, data := range datas {
 			data.Close()
 		}
-		ckpData.Close()
 	}()
 	if len(datas) == 0 {
 		return
@@ -145,13 +146,6 @@ func MergeCheckpoint(
 		ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ckpData.GetObjectBatchs().Vecs[0].Length(); i++ {
 		tid := tableInsertTid[i]
-		{
-			// TODO: remove debug log
-			var objectStats objectio.ObjectStats
-			buf := ckpData.GetObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			logutil.Infof("merge object %v tid is %d", objectStats.ObjectName().String(), tid)
-		}
 		if tableInsertOff[tid] == nil {
 			tableInsertOff[tid] = &tableOffset{
 				offset: i,
@@ -162,13 +156,6 @@ func MergeCheckpoint(
 	}
 	for i := 0; i < ckpData.GetTombstoneObjectBatchs().Vecs[0].Length(); i++ {
 		tid := tableTombstoneTid[i]
-		{
-			// TODO: remove debug log
-			var objectStats objectio.ObjectStats
-			buf := ckpData.GetTombstoneObjectBatchs().GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			logutil.Infof("merge tombstone %v tid is %d", objectStats.ObjectName().String(), tid)
-		}
 		if tableTombstoneOff[tid] == nil {
 			tableTombstoneOff[tid] = &tableOffset{
 				offset: i,
@@ -190,6 +177,7 @@ func MergeCheckpoint(
 	if err != nil {
 		return
 	}
+
 	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
@@ -213,6 +201,11 @@ func MergeCheckpoint(
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(ctx)
+	if err != nil {
+		return
+	}
+	info := strings.Split(name, checkpoint.CheckpointDir+"/")
+	client.AddCheckpointMetaFile(info[1])
 	checkpointEntry = checkpoint.NewCheckpointEntry("", ckpEntries[0].GetStart(), *end, checkpoint.ET_Compacted)
 	checkpointEntry.SetLocation(cnLocation, tnLocation)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())

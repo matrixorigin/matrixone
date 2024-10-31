@@ -6691,7 +6691,8 @@ func TestSnapshotGC(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().DoCheck()
 	assert.Nil(t, err)
 	dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rele2.ID(), types.TS{}, viewSnapshot, db.Catalog)
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, rele2.ID())
+	db.BGCheckpointRunner.GetCheckpointMetaFiles()
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, viewSnapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 	assert.Nil(t, err)
 	objects := make(map[string]struct{})
 	tombstones := make(map[string]struct{})
@@ -7455,7 +7456,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
-	globalCkpInterval := time.Duration(0)
+	globalCkpIntervalTimeout := 10 * time.Second
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.Extra.BlockMaxRows = 10
@@ -7474,7 +7475,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7482,7 +7483,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7501,7 +7502,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpIntervalTimeout, false)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -7885,15 +7886,15 @@ func TestGCCatalog3(t *testing.T) {
 }
 
 func TestForceCheckpoint(t *testing.T) {
+	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
-	err := fault.AddFaultPoint(context.Background(), "tae: flush timeout", ":::", "echo", 0, "mock flush timeout")
+	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout")
 	assert.NoError(t, err)
 	defer func() {
-		err := fault.RemoveFaultPoint(context.Background(), "tae: flush timeout")
+		err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
 		assert.NoError(t, err)
 	}()
-	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -8907,7 +8908,7 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			tae.ForceCheckpoint()
 			tae.ForceCheckpoint()
 			dataObject, tombstoneObject := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
-			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, rel1.ID())
+			ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, "", db.Opts.Fs, snapshot, db.BGCheckpointRunner.GetCheckpointMetaFiles())
 			assert.Nil(t, err)
 			objects := make(map[string]struct{})
 			tombstones := make(map[string]struct{})
@@ -9802,10 +9803,10 @@ func TestMergeBlocks4(t *testing.T) {
 		defer wg.Done()
 		fault.Enable()
 		defer fault.Disable()
-		err := fault.AddFaultPoint(context.Background(), "tae: slow transfer deletes", ":::", "echo", 0, "mock flush timeout")
+		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout")
 		assert.NoError(t, err)
 		defer func() {
-			err := fault.RemoveFaultPoint(context.Background(), "tae: slow transfer deletes")
+			err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
 			assert.NoError(t, err)
 		}()
 		tae.DeleteAll(true)

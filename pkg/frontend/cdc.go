@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -69,7 +70,7 @@ const (
 		`"%d",` + //checkpoint_str
 		`"%t",` + //no_full
 		`"%s",` + //incr_config
-		`"",` + //reserved0
+		`'%s',` + //additional_config
 		`"",` + //reserved1
 		`"",` + //reserved2
 		`"",` + //reserved3
@@ -82,7 +83,8 @@ const (
 		`sink_password, ` +
 		`tables, ` +
 		`filters, ` +
-		`no_full ` +
+		`no_full, ` +
+		`additional_config ` +
 		`from ` +
 		`mo_catalog.mo_cdc_task ` +
 		`where ` +
@@ -190,6 +192,7 @@ func getSqlForNewCdcTask(
 	checkpoint uint64,
 	noFull bool,
 	incrConfig string,
+	additionalConfigStr string,
 ) string {
 	return fmt.Sprintf(insertNewCdcTaskFormat,
 		accId,
@@ -217,6 +220,7 @@ func getSqlForNewCdcTask(
 		checkpoint,
 		noFull,
 		incrConfig,
+		additionalConfigStr,
 	)
 }
 
@@ -356,6 +360,16 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		noFull = true
 	}
 
+	additionalConfig := make(map[string]any)
+	additionalConfig[cdc2.InitSnapshotSplitTxn] = true
+	if cdcTaskOptionsMap[cdc2.InitSnapshotSplitTxn] == "false" {
+		additionalConfig[cdc2.InitSnapshotSplitTxn] = false
+	}
+	additionalConfigBytes, err := json.Marshal(additionalConfig)
+	if err != nil {
+		return err
+	}
+
 	details := &task.Details{
 		//account info that create cdc
 		AccountID: creatorAccInfo.GetTenantID(),
@@ -435,6 +449,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			0,
 			noFull,
 			"",
+			string(additionalConfigBytes),
 		)
 
 		//insert cdc record into the mo_cdc_task
@@ -915,13 +930,13 @@ func RegisterCdcExecutor(
 	cnEngMp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, T task.Task) error {
-		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		ctx1, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseRegisterCdc)
 		defer cancel()
 		tasks, err := ts.QueryDaemonTask(ctx1,
 			taskservice.WithTaskIDCond(taskservice.EQ, T.GetID()),
 		)
 		if err != nil {
-			return err
+			return moerr.AttachCause(ctx1, err)
 		}
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
@@ -962,11 +977,12 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri cdc2.UriInfo
-	tables  cdc2.PatternTuples
-	filters cdc2.PatternTuples
-	startTs types.TS
-	noFull  string
+	sinkUri              cdc2.UriInfo
+	tables               cdc2.PatternTuples
+	filters              cdc2.PatternTuples
+	startTs              types.TS
+	noFull               string
+	initSnapshotSplitTxn bool
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
@@ -1009,6 +1025,8 @@ func NewCdcTask(
 }
 
 func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
+	logutil.Infof("cdc task %s start on cn %s", cdc.cdcTask.TaskName, cdc.cnUUID)
+
 	defer func() {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
@@ -1201,6 +1219,21 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	cdc.startTs = types.TS{}
 	cdc.noFull = noFull
 
+	// additionalConfig
+	additionalConfigStr, err := res.GetString(ctx, 0, 6)
+	if err != nil {
+		return err
+	}
+	additionalConfig := make(map[string]interface{})
+	if err = json.Unmarshal([]byte(additionalConfigStr), &additionalConfig); err != nil {
+		return err
+	}
+
+	cdc.initSnapshotSplitTxn = true
+	if val, ok := additionalConfig[cdc2.InitSnapshotSplitTxn]; ok {
+		cdc.initSnapshotSplitTxn = val.(bool)
+	}
+
 	return nil
 }
 
@@ -1389,6 +1422,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc.sunkWatermarkUpdater,
 		tableDef,
 		cdc.ResetWatermarkForTable,
+		cdc.initSnapshotSplitTxn,
 	)
 	go reader.Run(ctx, cdc.activeRoutine)
 

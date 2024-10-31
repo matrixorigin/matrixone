@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -29,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -126,7 +128,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		writer.StashBatch(proc, bat)
 
-		_, ss, err := writer.SortAndSync(proc)
+		_, ss, err := writer.SortAndSync(proc.Ctx, proc)
 		require.NoError(t, err)
 		require.False(t, ss.IsZero())
 
@@ -144,4 +146,23 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		require.True(t, deletedMask.Contains(uint64(tombstoneRowIds[i].GetRowOffset())))
 	}
+}
+
+func TestXxx1(t *testing.T) {
+	txnOp, closeFunc := client.NewTestTxnOperator(context.Background())
+	defer closeFunc()
+	txnOp.AddWorkspace(&Transaction{})
+
+	ls := &LocalDisttaeDataSource{
+		table: &txnTable{
+			tableName: "mo_increment_columns",
+			db: &txnDatabase{
+				op: txnOp,
+			},
+		},
+	}
+	writes := make([]Entry, 200)
+	writes = append(writes, Entry{typ: INSERT}, Entry{typ: INSERT, bat: batch.EmptyBatch})
+	checkTxnLastInsertRow(ls, writes, 42, batch.EmptyBatch)
+	checkTxnOffsetZero(ls, writes)
 }

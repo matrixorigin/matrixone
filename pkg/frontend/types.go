@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -211,7 +212,7 @@ type ComputationWrapper interface {
 
 	GetColumns(ctx context.Context) ([]interface{}, error)
 
-	Compile(any any, fill func(*batch.Batch) error) (interface{}, error)
+	Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -272,17 +273,21 @@ type PrepareStmt struct {
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
+	Ts      timestamp.Timestamp
 }
 
 /*
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql    = "__++__internal_cmd_field_list"
-	cmdFieldListSqlLen = len(cmdFieldListSql)
-	cloudUserTag       = "cloud_user"
-	cloudNoUserTag     = "cloud_nonuser"
-	saveResultTag      = "save_result"
+	cmdFieldListSql           = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen        = len(cmdFieldListSql)
+	cloudUserTag              = "cloud_user"
+	cloudNoUserTag            = "cloud_nonuser"
+	saveResultTag             = "save_result"
+	validatePasswordPolicyTag = "validate_password.policy"
+	validatePasswordPolicyLow = "low"
+	validatePasswordPolicyMed = "medium"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -462,7 +467,7 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
-	GetConfig(ctx context.Context, dbName, varName string) (any, error)
+	GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSysVars() *SystemVariables
@@ -524,10 +529,10 @@ type FeSession interface {
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
-	GetFPrints() footPrints
-	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
+	EnterRunSql()
+	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
@@ -615,7 +620,7 @@ func (execCtx *ExecCtx) Close() {
 //	FeSession
 //	ExecCtx
 //	batch.Batch
-type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
+type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
@@ -668,7 +673,6 @@ type feSessionImpl struct {
 	uuid         uuid.UUID
 	debugStr     string
 	disableTrace bool
-	fprints      footPrints
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
@@ -691,7 +695,6 @@ func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
-		ses.fprints.addEnter(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
 			ses.txnHandler.txnOp.SetFootPrints(idx, true)
 		}
@@ -700,9 +703,23 @@ func (ses *feSessionImpl) EnterFPrint(idx int) {
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
-		ses.fprints.addExit(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
 			ses.txnHandler.txnOp.SetFootPrints(idx, false)
+		}
+	}
+}
+
+func (ses *feSessionImpl) EnterRunSql() {
+	if ses != nil {
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.EnterRunSql()
+		}
+	}
+}
+func (ses *feSessionImpl) ExitRunSql() {
+	if ses != nil {
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.ExitRunSql()
 		}
 	}
 }
@@ -743,14 +760,6 @@ func (ses *feSessionImpl) Clear() {
 	}
 	ses.ClearAllMysqlResultSet()
 	ses.ClearResultBatches()
-}
-
-func (ses *feSessionImpl) ResetFPrints() {
-	ses.fprints.reset()
-}
-
-func (ses *feSessionImpl) GetFPrints() footPrints {
-	return ses.fprints
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
@@ -986,6 +995,16 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
 	}
 
+	if policy, ok := val.(string); ok && name == validatePasswordPolicyTag {
+		if strings.ToLower(policy) == validatePasswordPolicyLow {
+			// convert to 0
+			val = int64(0)
+		} else if strings.ToLower(policy) == validatePasswordPolicyMed {
+			// convert to 1
+			val = int64(1)
+		}
+	}
+
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
@@ -1146,7 +1165,7 @@ type Property interface {
 type Responser interface {
 	Property
 	RespPreMeta(*ExecCtx, any) error
-	RespResult(*ExecCtx, *batch.Batch) error
+	RespResult(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
 	MysqlRrWr() MysqlRrWr
 	Close()
@@ -1157,7 +1176,7 @@ type MediaReader interface {
 }
 
 type MediaWriter interface {
-	Write(*ExecCtx, *batch.Batch) error
+	Write(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	Close()
 }
 

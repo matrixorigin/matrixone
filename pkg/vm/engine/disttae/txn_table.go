@@ -583,6 +583,7 @@ func (tbl *txnTable) doRanges(
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
+	var part *logtailreplay.PartitionState
 	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
@@ -635,6 +636,19 @@ func (tbl *txnTable) doRanges(
 			)
 		}
 
+		if objectio.RangesInjected(tbl.tableDef.Name) {
+			logutil.Info(
+				"INJECT-TRACE-RANGES",
+				zap.String("name", tbl.tableDef.Name),
+				zap.String("exprs", plan2.FormatExprs(exprs)),
+				zap.Uint64("tbl-id", tbl.tableId),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.String("blocks", blocks.String()),
+				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Error(err),
+			)
+		}
+
 		trace.GetService(sid).AddTxnAction(
 			tbl.db.op,
 			client.RangesEvent,
@@ -659,7 +673,6 @@ func (tbl *txnTable) doRanges(
 	}()
 
 	// get the table's snapshot
-	var part *logtailreplay.PartitionState
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
@@ -996,7 +1009,7 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	for i, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			if attr.Attr.Name != catalog.Row_ID {
+			if !objectio.IsPhysicalAddr(attr.Attr.Name) {
 				defs = append(defs, tbl.defs[i])
 			}
 		}
@@ -1064,7 +1077,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Name: name,
 					}
 				}
-				if attr.Attr.Name == catalog.Row_ID {
+				if objectio.IsPhysicalAddr(attr.Attr.Name) {
 					hasRowId = true
 				}
 				i++
@@ -1169,6 +1182,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			ClusterBy:     clusterByDef,
 			Indexes:       indexes,
 			Version:       tbl.version,
+			DbId:          tbl.GetDBID(ctx),
 		}
 	}
 	return tbl.tableDef
@@ -1402,7 +1416,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 	attrs = append(attrs, &engine.Attribute{
 		IsHidden: true,
 		IsRowId:  true,
-		Name:     catalog.Row_ID,
+		Name:     objectio.PhysicalAddr_Attr,
 		Type:     types.New(types.T_Rowid, 0, 0),
 		Primary:  true,
 	})
@@ -1450,7 +1464,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
-	return tbl.getTxn().dumpBatch(tbl.getTxn().GetSnapshotWriteOffset())
+	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -1524,7 +1538,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) compaction(
+func (tbl *txnTable) compaction(ctx context.Context,
 	compactedBlks map[objectio.ObjectLocation][]int64,
 ) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
 	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
@@ -1552,7 +1566,7 @@ func (tbl *txnTable) compaction(
 		s3writer.StashBatch(tbl.getTxn().proc, bat)
 		bat.Clean(tbl.getTxn().proc.GetMPool())
 	}
-	return s3writer.SortAndSync(tbl.getTxn().proc)
+	return s3writer.SortAndSync(ctx, tbl.getTxn().proc)
 }
 
 func (tbl *txnTable) Delete(
@@ -1562,7 +1576,7 @@ func (tbl *txnTable) Delete(
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
 	//for S3 delete
-	if name != catalog.Row_ID {
+	if !objectio.IsPhysicalAddr(name) {
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
@@ -1783,6 +1797,7 @@ func (tbl *txnTable) BuildReaders(
 			tbl.db.op.SnapshotTS(),
 			expr,
 			ds,
+			engine_util.GetThresholdForReader(newNum),
 		)
 		if err != nil {
 			return nil, err
@@ -1832,6 +1847,11 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			ps)
 		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
@@ -1974,7 +1994,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		return getNonSortedPKSearchFuncByPKVec(keys)
+		return LinearSearchOffsetByValFactory(keys)
 	}
 
 	cacheVectors := containers.NewVectors(1)
@@ -2002,7 +2022,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc([]*vector.Vector{&cacheVectors[0]})
+		sels := searchFunc(&cacheVectors[0])
 		release()
 		if len(sels) > 0 {
 			return true, nil
@@ -2022,12 +2042,17 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
+
+	//snap, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	return false, err
+	//}
 	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
-
 	snap := part.Snapshot()
+
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)
 	defer put.Put()

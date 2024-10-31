@@ -23,6 +23,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,8 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
@@ -106,10 +107,6 @@ func New(
 			},
 		),
 	}
-	e.snapCatalog = &struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}{}
 	e.mu.snapParts = make(map[[2]uint64]*struct {
 		sync.Mutex
 		snaps []*logtailreplay.Partition
@@ -143,16 +140,21 @@ func New(
 }
 
 func (e *Engine) fillDefaults() {
-	if e.insertEntryMaxCount <= 0 {
-		e.insertEntryMaxCount = InsertEntryThreshold
+	if e.config.insertEntryMaxCount <= 0 {
+		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.workspaceThreshold <= 0 {
-		e.workspaceThreshold = WorkspaceThreshold
+	if e.config.workspaceThreshold <= 0 {
+		e.config.workspaceThreshold = WorkspaceThreshold
 	}
+	if e.config.cnTransferTxnLifespanThreshold <= 0 {
+		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
+		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
 
@@ -678,6 +680,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
+			engine_util.GetThresholdForReader(newNum),
 		)
 		if err != nil {
 			return nil, err
@@ -730,6 +733,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
 	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
 }
 
 func (e *Engine) PushClient() *PushClient {

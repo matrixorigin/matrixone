@@ -18,11 +18,13 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPrepareRemote(t *testing.T) {
@@ -64,4 +66,39 @@ func TestReceiverDone(t *testing.T) {
 	bat.SetRowCount(1)
 	sendBatToIndex(d, proc, bat, 0)
 	sendBatToMultiMatchedReg(d, proc, bat, 0)
+}
+
+func Test_waitRemoteRegsReady(t *testing.T) {
+	d := &Dispatch{
+		ctr: &container{},
+		RemoteRegs: []colexec.ReceiveInfo{
+			{},
+		},
+	}
+	proc := testutil.NewProcess()
+	//wait waitNotifyTimeout seconds
+	ret, err := d.waitRemoteRegsReady(proc)
+	assert.Error(t, err)
+	assert.False(t, ret)
+}
+
+func Test_removeIdxReceiver(t *testing.T) {
+	d := &Dispatch{
+		ctr: &container{},
+	}
+
+	w1 := &process.WrapCs{}
+	w2 := &process.WrapCs{}
+	w3 := &process.WrapCs{}
+	d.ctr.remoteReceivers = []*process.WrapCs{w1, w2, w3}
+	d.ctr.remoteRegsCnt = 3
+	d.ctr.aliveRegCnt = 10
+
+	d.ctr.removeIdxReceiver(1)
+
+	require.Equal(t, 9, d.ctr.aliveRegCnt)
+	require.Equal(t, 2, d.ctr.remoteRegsCnt)
+	require.Equal(t, 2, len(d.ctr.remoteReceivers))
+	require.Equal(t, w1, d.ctr.remoteReceivers[0])
+	require.Equal(t, w3, d.ctr.remoteReceivers[1])
 }

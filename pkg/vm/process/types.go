@@ -21,10 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"github.com/hayageek/threadsafe"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -294,6 +296,12 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+
+	// post dml sqls run right after all pipelines finished.
+	PostDmlSqlList *threadsafe.Slice[string]
+
+	// stage cache to avoid to run same stage SQL repeatedly
+	StageCache *threadsafe.Map[string, stage.StageDef]
 }
 
 // Process contains context used in query execution
@@ -448,6 +456,14 @@ func (proc *Process) GetBaseProcessRunningStatus() bool {
 
 func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 	proc.Base.atRuntime = status
+}
+
+func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
+	return proc.Base.PostDmlSqlList
+}
+
+func (proc *Process) GetStageCache() *threadsafe.Map[string, stage.StageDef] {
+	return proc.Base.StageCache
 }
 
 func (si *SessionInfo) GetUser() string {

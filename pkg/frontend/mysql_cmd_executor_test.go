@@ -96,6 +96,8 @@ func Test_mce(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -335,6 +337,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -386,6 +390,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -513,7 +519,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		err = getDataFromPipeline(ses, ec, batchCase1)
+		err = getDataFromPipeline(ses, ec, batchCase1, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2 := func() *batch.Batch {
@@ -526,7 +532,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -555,7 +561,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		convey.So(getDataFromPipeline(ses, ec, nil), convey.ShouldBeNil)
+		convey.So(getDataFromPipeline(ses, ec, nil, nil), convey.ShouldBeNil)
 
 		genBatch := func() *batch.Batch {
 			return allocTestBatch(
@@ -595,11 +601,11 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 	})
@@ -707,6 +713,8 @@ func Test_handleShowVariables(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -895,6 +903,8 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 				txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+				txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+				txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 				txnClient := mock_frontend.NewMockTxnClient(ctrl)
 				txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -1270,6 +1280,52 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 				require.Equal(t, "s1", row[0])
 				require.Equal(t, "addr1", row[1])
 			})
+
+			convey.Convey("filter label sys account", t, func() {
+				ses.mrs = &MysqlResultSet{}
+				cluster := clusterservice.NewMOCluster(
+					sid,
+					nil,
+					0,
+					clusterservice.WithDisableRefresh(),
+					clusterservice.WithServices(
+						[]metadata.CNService{
+							{
+								ServiceID:  "s1",
+								SQLAddress: "addr1",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t1"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s2",
+								SQLAddress: "addr2",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t2"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s3",
+								SQLAddress: "addr3",
+								WorkState:  metadata.WorkState_Working,
+							},
+						},
+						nil,
+					),
+				)
+				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "dump"})
+				proto.connectAttrs = map[string]string{}
+				ec := newTestExecCtx(ctx, ctrl)
+
+				err = handleShowBackendServers(ses, ec)
+				require.NoError(t, err)
+				rs := ses.GetMysqlResultSet()
+				require.Equal(t, uint64(4), rs.GetColumnCount())
+				require.Equal(t, uint64(3), rs.GetRowCount())
+			})
 		},
 	)
 
@@ -1376,6 +1432,8 @@ func Test_ExecRequest(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()

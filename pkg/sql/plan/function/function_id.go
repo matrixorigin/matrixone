@@ -392,6 +392,13 @@ const (
 	BITMAP_COUNT
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
+	LLM_EXTRACT_TEXT
+
+	// fulltext function
+	FULLTEXT_MATCH
+	FULLTEXT_MATCH_SCORE
+
+	LLM_CHUNK
 
 	LLM_EMBEDDING
 
@@ -717,5 +724,11 @@ var functionIdRegister = map[string]int32{
 	"bitmap_count":         BITMAP_COUNT,
 	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
 	"bitmap_or_agg":        BITMAP_OR_AGG,
-	"llm_embedding":        LLM_EMBEDDING,
+
+	// match function
+	"fulltext_match":       FULLTEXT_MATCH,
+	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+  "llm_extract_text": LLM_EXTRACT_TEXT,
+  "llm_chunk":            LLM_CHUNK,
+  "llm_embedding":        LLM_EMBEDDING,
 }

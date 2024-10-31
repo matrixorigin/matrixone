@@ -21,7 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -29,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/stretchr/testify/require"
 )
 
 func CreateTableAndWaitCNApplied(
@@ -64,14 +66,14 @@ func CreateTestDatabase(
 	cn embed.ServiceOperator,
 ) {
 	sql := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseCreateTestDatabase)
 	defer cancel()
 	res, err := sql.Exec(
 		ctx,
 		fmt.Sprintf("create database %s", name),
 		executor.Options{},
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 	res.Close()
 
 	WaitDatabaseCreated(t, name, cn)
@@ -112,9 +114,10 @@ func ExecSQL(
 	sql ...string,
 ) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(
+	ctx, cancel := context.WithTimeoutCause(
 		defines.AttachAccountId(context.Background(), 0),
 		time.Second*60,
+		moerr.CauseExecSQL,
 	)
 	defer cancel()
 
@@ -135,7 +138,7 @@ func ExecSQL(
 		executor.Options{}.WithDatabase(db),
 	)
 
-	require.NoError(t, err, sql)
+	require.NoError(t, moerr.AttachCause(ctx, err), sql)
 	return txnOp.Txn().CommitTS
 }
 
@@ -147,9 +150,10 @@ func ExecSQLWithMinCommittedTS(
 	sql ...string,
 ) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(
+	ctx, cancel := context.WithTimeoutCause(
 		defines.AttachAccountId(context.Background(), 0),
 		time.Second*60,
+		moerr.CauseExecSQLWithMinCommittedTS,
 	)
 	defer cancel()
 
@@ -170,7 +174,7 @@ func ExecSQLWithMinCommittedTS(
 		executor.Options{}.WithDatabase(db).WithMinCommittedTS(min),
 	)
 
-	require.NoError(t, err, sql)
+	require.NoError(t, moerr.AttachCause(ctx, err), sql)
 	return txnOp.Txn().CommitTS
 }
 
@@ -217,7 +221,7 @@ func DBExists(
 	name string,
 	cn embed.ServiceOperator,
 ) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseDBExists)
 	defer cancel()
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
@@ -226,7 +230,7 @@ func DBExists(
 		"show databases",
 		executor.Options{},
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 
 	return HasName(name, res)
 }
@@ -237,7 +241,7 @@ func TableExists(
 	name string,
 	cn embed.ServiceOperator,
 ) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableExists)
 	defer cancel()
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
@@ -246,7 +250,7 @@ func TableExists(
 		"show tables",
 		executor.Options{}.WithDatabase(db),
 	)
-	require.NoError(t, err)
+	require.NoError(t, moerr.AttachCause(ctx, err))
 
 	return HasName(name, res)
 }
@@ -256,7 +260,7 @@ func WaitClusterAppliedTo(
 	c embed.Cluster,
 	ts timestamp.Timestamp,
 ) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseWaitClusterAppliedTo)
 	defer cancel()
 
 	c.ForeachServices(
@@ -266,7 +270,7 @@ func WaitClusterAppliedTo(
 					ctx,
 					ts,
 				)
-				require.NoError(t, err)
+				require.NoError(t, moerr.AttachCause(ctx, err))
 			}
 			return true
 		},

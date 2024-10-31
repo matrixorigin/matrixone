@@ -53,7 +53,7 @@ func handleGetProtocolVersion(proc *process.Process,
 			}
 			return true
 		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseHandleGetProtocolVersion)
 	defer cancel()
 
 	versions := make([]string, 0, len(addrs))
@@ -62,7 +62,7 @@ func handleGetProtocolVersion(proc *process.Process,
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
 		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
-			return Result{}, err
+			return Result{}, moerr.AttachCause(ctx, err)
 		}
 		versions = append(versions, fmt.Sprintf("%s:%d", nodeIds[i], resp.GetProtocolVersion.Version))
 		qt.Release(resp)
@@ -163,13 +163,14 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 			if t.QueryAddress == "" {
 				return true
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseTransferToTN)
 			defer cancel()
 			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
 				Version: version,
 			}
 			resp, err = qt.SendMessage(ctx, addr, req)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		})
 	if err != nil {
@@ -193,10 +194,11 @@ func transferToCN(qt qclient.QueryClient, target string, version int64) (resp *q
 			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
 				Version: version,
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferToCN)
 			defer cancel()
 
 			resp, err = qt.SendMessage(ctx, cn.QueryAddress, req)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		})
 	if err != nil {

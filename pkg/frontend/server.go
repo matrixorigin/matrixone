@@ -26,6 +26,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -221,7 +222,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	tempCtx, tempCancel := context.WithTimeout(ctx, getPu(mo.service).SV.SessionTimeout.Duration)
+	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getPu(mo.service).SV.SessionTimeout.Duration, moerr.CauseHandshake)
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
@@ -263,6 +264,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			ses.Debugf(tempCtx, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
+				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
 					"An error occurred",
 					zap.Error(err))
@@ -274,8 +276,9 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
-				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
+				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					err = moerr.AttachCause(tlsCtx, err)
 					ses.Error(tempCtx,
 						"Error occurred before cancel()",
 						zap.Error(err))
@@ -297,7 +300,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			} else {
 				// client don't ask server to upgrade TLS
 				if err := protocol.Authenticate(tempCtx); err != nil {
-					return err
+					return moerr.AttachCause(tempCtx, err)
 				}
 				protocol.SetBool(TLS_ESTABLISHED, true)
 				protocol.SetBool(ESTABLISHED, true)
@@ -306,13 +309,14 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			ses.Debugf(tempCtx, "handleHandshake")
 			_, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
+				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
 					"Error occurred",
 					zap.Error(err))
 				return err
 			}
 			if err = protocol.Authenticate(tempCtx); err != nil {
-				return err
+				return moerr.AttachCause(tempCtx, err)
 			}
 			protocol.SetBool(ESTABLISHED, true)
 		}

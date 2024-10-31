@@ -854,25 +854,22 @@ func (c *mergePolicyArg) Run() error {
 		if err != nil {
 			return err
 		}
-		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
+		if err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 		if c.stopMerge {
-			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
-			if err != nil {
+			if err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false); err != nil {
 				return err
 			}
 		} else {
 			if c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name) {
-				err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false)
-				if err != nil {
+				if err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false); err != nil {
 					return err
 				}
 			}
@@ -1249,7 +1246,7 @@ func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
 }
 
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
 	defer cancel()
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()

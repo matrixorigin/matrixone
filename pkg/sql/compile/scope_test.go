@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -177,7 +178,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.ReplaceTopCtx(ctx)
 		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
 		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
-		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
+		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch, crs *perfcounter.CounterSet) error {
 			return nil
 		})
 		require.NoError(t1, err)
@@ -496,4 +497,41 @@ func TestRemoveStringBetween(t *testing.T) {
 	for _, c := range cases {
 		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
 	}
+}
+
+type fakeStreamSender2 struct {
+	morpc.Stream
+	number int
+}
+
+func (s *fakeStreamSender2) Close(_ bool) error {
+	s.number++
+	return nil
+}
+
+func TestNotifyMessageClean(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	ff := &fakeStreamSender2{
+		number: 0,
+	}
+	sender := &messageSenderOnClient{
+		streamSender: ff,
+		safeToClose:  true,
+	}
+	// no matter error happens or not, clean method should close the sender.
+	n1 := notifyMessageResult{
+		sender: sender,
+		err:    moerr.NewInternalErrorNoCtx("there is an error."),
+	}
+	n2 := notifyMessageResult{
+		sender: sender,
+		err:    nil,
+	}
+
+	n1.clean(proc)
+	require.Equal(t, 1, ff.number)
+
+	n2.clean(proc)
+	require.Equal(t, 2, ff.number)
 }

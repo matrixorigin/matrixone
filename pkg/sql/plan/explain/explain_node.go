@@ -144,6 +144,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Lock"
 	case plan.Node_APPLY:
 		pname = "CROSS APPLY"
+	case plan.Node_POSTDML:
+		pname = "Post DML"
 	//case plan.Node_MULTI_UPDATE:
 	//	pname = "Multi Update"
 	default:
@@ -211,6 +213,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
+			}
+		case plan.Node_POSTDML:
+			buf.WriteString(" on ")
+			if ndesc.Node.PostDmlCtx != nil && ndesc.Node.PostDmlCtx.Ref != nil {
+				buf.WriteString(ndesc.Node.PostDmlCtx.Ref.GetSchemaName() + "." + ndesc.Node.PostDmlCtx.Ref.GetObjName())
 			}
 		}
 	}
@@ -487,24 +494,28 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 			hashCol = exprImpl.F.Args[0]
 		}
 
-		if shuffleType == plan.ShuffleType_Hash {
-			buf.WriteString(" shuffle: hash(")
-			err := describeExpr(ctx, hashCol, options, buf)
-			if err != nil {
-				return "", err
-			}
-			buf.WriteString(")")
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			buf.WriteString(" shuffle: REUSE")
 		} else {
-			buf.WriteString(" shuffle: range(")
-			err := describeExpr(ctx, hashCol, options, buf)
-			if err != nil {
-				return "", err
+			if shuffleType == plan.ShuffleType_Hash {
+				buf.WriteString(" shuffle: hash(")
+				err := describeExpr(ctx, hashCol, options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			} else {
+				buf.WriteString(" shuffle: range(")
+				err := describeExpr(ctx, hashCol, options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
 			}
-			buf.WriteString(")")
-		}
 
-		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
-			buf.WriteString(" HYBRID ")
+			if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+				buf.WriteString(" HYBRID ")
+			}
 		}
 	}
 

@@ -74,8 +74,55 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
+func (h *Handle) HandleSnapshotRead(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.SnapshotReadReq,
+	resp *cmd_util.SnapshotReadResp,
+) (func(), error) {
+	now := time.Now()
+	defer func() {
+		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
+	}()
+	maxEnd := types.TS{}
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	if maxCheckpoint != nil {
+		maxEnd = maxCheckpoint.GetEnd()
+	}
+	snapshot := types.TimestampToTS(*req.Snapshot)
+	if snapshot.GT(&maxEnd) {
+		resp.Succeed = false
+		return nil, nil
+	}
+	checkpoints, err := checkpoint.ListSnapshotCheckpoint(
+		ctx,
+		"",
+		h.db.Runtime.Fs.Service,
+		snapshot,
+		h.db.BGCheckpointRunner.GetCheckpointMetaFiles())
+	if err != nil {
+		resp.Succeed = false
+		return nil, err
+	}
+	resp.Succeed = true
+	resp.Entries = make([]*cmd_util.CheckpointEntryResp, 0, len(checkpoints))
+	for _, ckp := range checkpoints {
+		start := ckp.GetStart().ToTimestamp()
+		end := ckp.GetEnd().ToTimestamp()
+		resp.Entries = append(resp.Entries, &cmd_util.CheckpointEntryResp{
+			Start:     &start,
+			End:       &end,
+			Location1: ckp.GetLocation(),
+			Location2: ckp.GetTNLocation(),
+			EntryType: int32(ckp.GetType()),
+			Version:   ckp.GetVersion(),
+		})
+	}
+	return nil, nil
+}
+
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *cmd_util.StorageUsageReq, resp *cmd_util.StorageUsageResp_V2) (func(), error) {
+	req *cmd_util.StorageUsageReq, resp *cmd_util.StorageUsageResp_V3) (func(), error) {
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
@@ -94,7 +141,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	usages := memo.GatherAllAccSize()
 	for accId := range usages {
 		if accId != uint64(catalog.System_Account) {
-			usages[accId] += specialSize
+			usages[accId][0] += specialSize
 		}
 	}
 
@@ -102,9 +149,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	for _, id := range req.AccIds {
 		if usages != nil {
 			if size, exist := usages[uint64(id)]; exist {
-				memo.AddReqTrace(uint64(id), size, start, "req")
+				memo.AddReqTrace(uint64(id), size[0], start, "req")
 				resp.AccIds = append(resp.AccIds, int64(id))
-				resp.Sizes = append(resp.Sizes, size)
+				resp.Sizes = append(resp.Sizes, size[0])
+				resp.SnapshotSizes = append(resp.SnapshotSizes, size[1])
 				delete(usages, uint64(id))
 				continue
 			}
@@ -114,9 +162,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for accId, size := range usages {
-		memo.AddReqTrace(uint64(accId), size, start, "oth")
+		memo.AddReqTrace(uint64(accId), size[0], start, "oth")
 		resp.AccIds = append(resp.AccIds, int64(accId))
-		resp.Sizes = append(resp.Sizes, size)
+		resp.Sizes = append(resp.Sizes, size[0])
+		resp.SnapshotSizes = append(resp.SnapshotSizes, size[1])
 	}
 
 	//var notReadyNewAcc []uint64
@@ -124,10 +173,11 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
 	for idx := range newIds {
-		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
+		if size, snapshotSize, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
 			size += specialSize
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
+			resp.SnapshotSizes = append(resp.SnapshotSizes, snapshotSize)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
 		}
 		//else {

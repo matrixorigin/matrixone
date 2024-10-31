@@ -15,14 +15,12 @@
 package fileservice
 
 import (
-	"cmp"
 	"context"
 	"io"
-	"io/fs"
+	"iter"
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -102,50 +100,63 @@ func (d *diskObjectStorage) Exists(ctx context.Context, key string) (bool, error
 	return true, nil
 }
 
-func (d *diskObjectStorage) List(ctx context.Context, prefix string, fn func(isPrefix bool, key string, size int64) (bool, error)) (err error) {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, d.perfCounterSets...)
-
-	dir, prefix := path.Split(prefix)
-
-	f, err := os.Open(filepath.Join(d.path, dir))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+func (d *diskObjectStorage) List(
+	ctx context.Context,
+	prefix string,
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
-		return err
-	}
-	defer f.Close()
 
-	infos, err := f.Readdir(-1)
-	if err != nil {
-		return err
-	}
-	slices.SortFunc(infos, func(a, b fs.FileInfo) int {
-		return cmp.Compare(a.Name(), b.Name())
-	})
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3.List.Add(1)
+		}, d.perfCounterSets...)
 
-	for _, info := range infos {
-		name := info.Name()
-		if strings.HasSuffix(name, ".mofstemp") {
-			continue
+		dir, prefix := path.Split(prefix)
+
+		f, err := os.Open(filepath.Join(d.path, dir))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return
+			}
+			yield(nil, err)
+			return
 		}
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if more, err := fn(info.IsDir(), path.Join(dir, name), info.Size()); err != nil {
-			return err
-		} else if !more {
-			break
+		defer f.Close()
+
+	read:
+		for {
+			infos, err := f.Readdir(256)
+
+			for _, info := range infos {
+				name := info.Name()
+				if strings.HasSuffix(name, ".mofstemp") {
+					continue
+				}
+				if !strings.HasPrefix(name, prefix) {
+					continue
+				}
+				if !yield(&DirEntry{
+					IsDir: info.IsDir(),
+					Name:  path.Join(dir, name),
+					Size:  info.Size(),
+				}, nil) {
+					break read
+				}
+			}
+
+			if err != nil {
+				if err == io.EOF {
+					break read
+				}
+				yield(nil, err)
+				return
+			}
+
 		}
 	}
-
-	return nil
 }
 
 func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (r io.ReadCloser, err error) {

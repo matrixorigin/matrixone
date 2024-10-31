@@ -23,10 +23,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func (ctr *container) removeIdxReceiver(idx int) {
+	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
+	ctr.remoteRegsCnt--
+	ctr.aliveRegCnt--
+}
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
@@ -53,7 +58,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := types.Encode(bat)
+		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -65,9 +70,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			}
 
 			if remove {
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:i], ap.ctr.remoteReceivers[i+1:]...)
-				ap.ctr.remoteRegsCnt--
-				ap.ctr.aliveRegCnt--
+				ap.ctr.removeIdxReceiver(i)
 				if ap.ctr.remoteRegsCnt == 0 {
 					return true, nil
 				}
@@ -79,12 +82,12 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
+func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (err error) {
 	var queryDone bool
 
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex == batIndex {
+		if shuffleIndex == batIndex {
 			queryDone, err = ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
 				return err
@@ -94,18 +97,25 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIn
 		}
 	}
 
-	for _, r := range ap.ctr.remoteReceivers {
+	for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+		r := ap.ctr.remoteReceivers[i]
+
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex == batIndex {
+		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := types.Encode(bat)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
 					err = errEncode
 					break
 				}
-				if _, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
+				if remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
 					err = errSend
 					break
+				} else {
+					if remove {
+						ap.ctr.removeIdxReceiver(i)
+						i--
+					}
 				}
 			}
 		}
@@ -130,20 +140,27 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	return nil
 }
 
-func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 
 	// send to remote first because send to spool will modify the bat.Agg.
-	for _, r := range ap.ctr.remoteReceivers {
+	for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+		r := ap.ctr.remoteReceivers[i]
+
 		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
-				encodeData, errEncode := types.Encode(bat)
+				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 				if errEncode != nil {
 					return errEncode
 				}
-				if _, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
+				} else {
+					if remove {
+						ap.ctr.removeIdxReceiver(i)
+						i--
+					}
 				}
 			}
 		}
@@ -152,7 +169,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	// send to matched local.
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
 			if err != nil || queryDone {
 				return err
@@ -242,7 +259,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := types.Encode(bat)
+	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}
@@ -255,9 +272,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			return false, err
 		} else {
 			if remove {
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
-				ap.ctr.remoteRegsCnt--
-				ap.ctr.aliveRegCnt--
+				ap.ctr.removeIdxReceiver(regIdx)
 				if ap.ctr.remoteRegsCnt == 0 {
 					return true, nil
 				}

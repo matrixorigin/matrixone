@@ -18,8 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"go.uber.org/zap"
 
@@ -58,6 +59,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("error", err.Error()))
 		}
 	}()
+	s.ScopeAnalyzer.Stop()
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
@@ -90,6 +92,76 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	sender.alreadyClose = false
 	err = receiveMessageFromCnServer(s, withoutOutput, sender)
 	return sender, err
+}
+
+// checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
+// once it was sent to other remote node.
+//
+// it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
+func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	var regs = make(map[*process.WaitRegister]struct{})
+	var toScan []*Scope
+	// record which mergeReceivers this scope tree holds.
+	{
+		toScan = append(toScan, s)
+		for len(toScan) > 0 {
+			node := toScan[len(toScan)-1]
+			toScan = toScan[:len(toScan)-1]
+
+			if len(node.PreScopes) > 0 {
+				toScan = append(toScan, node.PreScopes...)
+			}
+
+			for i := range node.Proc.Reg.MergeReceivers {
+				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+			}
+		}
+	}
+
+	// check if there are target channels from other trees.
+	{
+		if len(s.PreScopes) > 0 {
+			toScan = append(toScan, s.PreScopes...)
+		}
+
+		for len(toScan) > 0 {
+			node := toScan[len(toScan)-1]
+			toScan = toScan[:len(toScan)-1]
+
+			if len(node.PreScopes) > 0 {
+				toScan = append(toScan, node.PreScopes...)
+			}
+
+			if node.RootOp.OpType() == vm.Dispatch {
+				t := node.RootOp.(*dispatch.Dispatch)
+				for i := range t.LocalRegs {
+					if _, ok := regs[t.LocalRegs[i]]; !ok {
+						s.Proc.Infof(
+							s.Proc.Ctx,
+							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+							s.Proc.GetTxnOperator().Txn().ID, s)
+
+						return false
+					}
+				}
+				continue
+			}
+			if node.RootOp.OpType() == vm.Connector {
+				t := node.RootOp.(*connector.Connector)
+				if _, ok := regs[t.Reg]; !ok {
+					s.Proc.Infof(
+						s.Proc.Ctx,
+						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+						s.Proc.GetTxnOperator().Txn().ID, s)
+
+					return false
+				}
+				continue
+			}
+		}
+	}
+
+	return true
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
@@ -284,7 +356,7 @@ func newMessageSenderOnClient(
 	}
 
 	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, MaxRpcTime)
+		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
 	} else {
 		sender.ctx = ctx
 	}
@@ -294,7 +366,7 @@ func newMessageSenderOnClient(
 	}
 
 	v2.PipelineMessageSenderCounter.Inc()
-	return sender, err
+	return sender, moerr.AttachCause(ctx, err)
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
@@ -413,7 +485,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
-	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	maxWaitingTime, cancel := context.WithTimeoutCause(context.TODO(), 30*time.Second, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -242,6 +243,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&indexbuild.IndexBuild{},
 		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
+		&postdml.PostDml{
+			PostDmlCtx: &postdml.PostDmlCtx{FullText: &postdml.PostDmlFullTextCtx{}}},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -316,6 +319,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.ShuffleBuild), ShuffleBuild: &pipeline.Shufflebuild{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
+		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
@@ -498,6 +502,12 @@ type fakeTxnOperator struct {
 	client.TxnOperator
 }
 
+func (f fakeTxnOperator) Txn() txn.TxnMeta {
+	return txn.TxnMeta{
+		ID: []byte("test"),
+	}
+}
+
 func (f fakeTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	return txn.CNTxnSnapshot{}, nil
 }
@@ -646,5 +656,104 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		sender.receiveCh = ch
 
 		require.NotNil(t, receiveMessageFromCnServer(s4, false, &sender))
+	}
+}
+
+func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
+	proc := testutil.NewProcess()
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	// a standalone pipeline tree should return true.
+	{
+		// s0, pre: s1, s2
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(2),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = s0.Proc.Reg.MergeReceivers[0]
+		s1.RootOp = op1
+
+		s2 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op2 := dispatch.NewArgument()
+		op2.LocalRegs = []*process.WaitRegister{s0.Proc.Reg.MergeReceivers[1]}
+		s2.RootOp = op2
+
+		s0.PreScopes = append(s0.PreScopes, s1, s2)
+
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// a pipeline holds an invalid dispatch should return false.
+	{
+		// s0, pre: s1
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := dispatch.NewArgument()
+		op1.LocalRegs = []*process.WaitRegister{{}}
+		s1.RootOp = op1
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// a pipeline holds an invalid connector should return false.
+	{
+		// s0, pre: s1
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = &process.WaitRegister{}
+		s1.RootOp = op1
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// depth more than 2.
+	{
+		// s0, pre: s1, pre: s2.
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(1),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = s0.Proc.Reg.MergeReceivers[0]
+		s1.RootOp = op1
+
+		s2 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op2 := connector.NewArgument()
+		op2.Reg = &process.WaitRegister{}
+		s2.RootOp = op2
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+		s1.PreScopes = append(s1.PreScopes, s2)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
 }

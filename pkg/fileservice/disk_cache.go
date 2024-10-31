@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -28,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,6 +69,8 @@ func NewDiskCache(
 		cacheDataAllocator = DefaultCacheDataAllocator()
 	}
 
+	seed := maphash.MakeSeed()
+
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
@@ -85,8 +87,8 @@ func NewDiskCache(
 				return capacity()
 			},
 
-			func(key string) uint8 {
-				return uint8(xxhash.Sum64String(key))
+			func(key string) uint64 {
+				return maphash.String(seed, key)
 			},
 
 			nil,
@@ -597,24 +599,29 @@ func (d *DiskCache) SetFile(
 func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
-) error {
-
+) (err error) {
 	for _, path := range paths {
-		diskPath := d.pathForFile(path)
 		//TODO also delete IOEntry files
-
-		doneUpdate := d.startUpdate(diskPath)
-		defer doneUpdate()
-
-		if err := os.Remove(diskPath); err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
+		if err = d.removeOnePath(path); err != nil {
+			return
 		}
-		d.cache.Delete(diskPath)
 	}
 
-	return nil
+	return
+}
+
+func (d *DiskCache) removeOnePath(path string) (err error) {
+	diskPath := d.pathForFile(path)
+	doneUpdate := d.startUpdate(diskPath)
+	defer doneUpdate()
+	if err = os.Remove(diskPath); err != nil {
+		if !os.IsNotExist(err) {
+			return
+		}
+		err = nil
+	}
+	d.cache.Delete(diskPath)
+	return
 }
 
 func (d *DiskCache) Evict(done chan int64) {

@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -31,6 +33,7 @@ import (
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -41,12 +44,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -111,6 +112,11 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.DataSource.Rel = nil
 		s.DataSource.R = nil
 	}
+
+	if s.ScopeAnalyzer != nil {
+		s.ScopeAnalyzer.Reset()
+	}
+
 	return nil
 }
 
@@ -126,10 +132,16 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 }
 
 // Run read data from storage engine and run the instructions of scope.
+// Note: The prepare time for executing the `scope`.`Run()` method is very short, and no statistics are done
 func (s *Scope) Run(c *Compile) (err error) {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	var p *pipeline.Pipeline
 	defer func() {
-
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
@@ -142,13 +154,15 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}()
 
 	if s.RootOp == nil {
+		//s.ScopeAnalyzer.Stop()
 		// it's a fake scope
 		return nil
 	}
 
 	if s.DataSource == nil {
+		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
-		_, err = p.MergeRun(s.Proc)
+		_, err = p.Run(s.Proc)
 	} else {
 		id := uint64(0)
 		if s.DataSource.TableDef != nil {
@@ -156,7 +170,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.Proc)
+			s.ScopeAnalyzer.Stop()
+			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
@@ -177,7 +192,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 				tag = s.DataSource.node.RecvMsgList[0].MsgTag
 			}
-			_, err = p.Run(s.DataSource.R, tag, s.Proc)
+
+			s.ScopeAnalyzer.Stop()
+			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	select {
@@ -230,6 +247,23 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
+	if c.IsTpQuery() && !c.hasMergeOp {
+		lenPrescopes := len(s.PreScopes)
+		for i := lenPrescopes - 1; i >= 0; i-- {
+			err := s.PreScopes[i].MergeRun(c)
+			if err != nil {
+				return err
+			}
+		}
+		return s.ParallelRun(c)
+	}
+
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
@@ -275,9 +309,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
 		for len(notifyMessageResultReceiveChan) > 0 {
 			result := <-notifyMessageResultReceiveChan
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 		}
 	}()
 
@@ -309,9 +341,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 			if result.err != nil {
 				return result.err
 			}
@@ -326,7 +356,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	if !s.canRemote(c, true) {
+		return s.MergeRun(c)
+	}
+	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
 
@@ -400,9 +439,11 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	}
 
 	if parallelScope == s {
+		//s.ScopeAnalyzer.Stop()
 		return parallelScope.Run(c)
 	}
 
+	s.ScopeAnalyzer.Stop()
 	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
 	err = parallelScope.MergeRun(c)
 	return err
@@ -514,8 +555,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
 			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
 		}
 	}
@@ -564,10 +605,23 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
-		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
+		crs := new(perfcounter.CounterSet)
+		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList, crs)
 		if err != nil {
 			return err
 		}
+
+		ctx := c.proc.GetTopContext()
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
@@ -645,6 +699,16 @@ func (s *Scope) setRootOperator(op vm.Operator) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
+}
+
+// clean do final work for a notifyMessageResult.
+func (r *notifyMessageResult) clean(proc *process.Process) {
+	if r.sender != nil {
+		r.sender.close()
+	}
+	if r.err != nil {
+		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
+	}
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
@@ -728,13 +792,14 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 }
 
 func (s *Scope) replace(c *Compile) error {
+	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
 	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -777,7 +842,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	switch {
-
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
@@ -802,9 +866,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+		ctx := c.proc.Ctx
+		stats := statistic.StatsInfoFromContext(ctx)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
-			c.proc.Ctx,
+			newCtx,
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
@@ -813,6 +881,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 		)
+
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 
 		if err != nil {
 			return
@@ -876,9 +953,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 		var mainRds []engine.Reader
 		var subRds []engine.Reader
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
 			mainRds, err = s.DataSource.Rel.BuildReaders(
-				c.proc.Ctx,
+				newCtx,
 				c.proc,
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
@@ -898,7 +980,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			}
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
-				subRel, err = db.Relation(ctx, relName, c.proc)
+				subRel, err = db.Relation(newCtx, relName, c.proc)
 				if err != nil {
 					return
 				}
@@ -913,7 +995,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				}
 
 				subRds, err = subRel.BuildReaders(
-					ctx,
+					newCtx,
 					c.proc,
 					s.DataSource.FilterExpr,
 					subBlkList,
@@ -928,6 +1010,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				readers = append(readers, subRds...)
 			}
 		}
+
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
 
 	}
 	// just for quick GC.

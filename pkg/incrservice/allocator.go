@@ -19,12 +19,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"go.uber.org/zap"
 )
 
 type allocator struct {
@@ -167,7 +169,7 @@ func (a *allocator) run(ctx context.Context) {
 
 func (a *allocator) doAllocate(act action) {
 	ctx := defines.AttachAccountId(context.Background(), act.accountID)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoAllocate)
 	defer cancel()
 
 	from, to, lastAllocateAt, err := a.store.Allocate(
@@ -176,6 +178,7 @@ func (a *allocator) doAllocate(act action) {
 		act.col,
 		act.count,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"allocate new range",
@@ -191,7 +194,7 @@ func (a *allocator) doAllocate(act action) {
 
 func (a *allocator) doUpdate(act action) {
 	ctx := defines.AttachAccountId(context.Background(), act.accountID)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoUpdate)
 	defer cancel()
 
 	err := a.store.UpdateMinValue(
@@ -200,6 +203,7 @@ func (a *allocator) doUpdate(act action) {
 		act.col,
 		act.minValue,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"update range min value",
