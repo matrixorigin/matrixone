@@ -57,21 +57,24 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
+	cache := NewMemCache(
+		fscache.ConstCapacity(128*1024*1024),
+		nil,
+		nil,
+		"",
+	)
+	defer cache.Close()
+
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
-		fs.caches = append(fs.caches, NewMemCache(
-			fscache.ConstCapacity(128*1024*1024), nil,
-			nil,
-		))
+		fs.caches = append(fs.caches, cache)
 		return fs
 	})
 
 	read := counterSet.FileService.Cache.Memory.Read.Load()
 	hit := counterSet.FileService.Cache.Memory.Hit.Load()
 	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
-	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
-	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
 }
 
 func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
@@ -79,19 +82,20 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
+	cache := NewMemCache(
+		fscache.ConstCapacity(2*1024*1024), nil, nil,
+		"",
+	)
+	defer cache.Close()
+
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
-		fs.caches = append(fs.caches, NewMemCache(
-			fscache.ConstCapacity(2*1024*1024), nil,
-			nil,
-		))
+		fs.caches = append(fs.caches, cache)
 		return fs
 	})
 
 	read := counterSet.FileService.Cache.Memory.Read.Load()
 	hit := counterSet.FileService.Cache.Memory.Hit.Load()
 	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
-	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
-	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
 }

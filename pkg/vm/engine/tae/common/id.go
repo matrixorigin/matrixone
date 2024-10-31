@@ -64,14 +64,6 @@ func (id *ID) SetBlockOffset(blkn uint16) {
 	copy(id.BlockID[types.ObjectBytesSize:], types.EncodeUint16(&blkn))
 }
 
-func (id *ID) AsBlockID() *ID {
-	return &ID{
-		DbID:    id.DbID,
-		TableID: id.TableID,
-		BlockID: id.BlockID,
-	}
-}
-
 func (id *ID) String() string {
 	return fmt.Sprintf("<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.String())
 }
@@ -88,13 +80,4 @@ func (id *ID) ObjectString() string {
 
 func (id *ID) BlockString() string {
 	return fmt.Sprintf("BLK<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.String())
-}
-
-func IDArraryString(ids []ID) string {
-	str := "["
-	for _, id := range ids {
-		str = fmt.Sprintf("%s%s,", str, id.String())
-	}
-	str = fmt.Sprintf("%s]", str)
-	return str
 }

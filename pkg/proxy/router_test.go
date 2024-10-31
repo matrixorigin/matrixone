@@ -22,11 +22,13 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/require"
 )
 
 type mockSQLWorker struct{}
@@ -42,6 +44,9 @@ func (w *mockSQLWorker) GetCNServerByConnID(_ uint32) (*CNServer, error) {
 func TestCNServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	temp := os.TempDir()
+
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 
 	t.Run("error", func(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -244,7 +249,8 @@ func TestRouter_RouteForSys(t *testing.T) {
 
 func TestRouter_SelectByConnID(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
@@ -264,8 +270,11 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	ru := newRouter(nil, re, re.connManager, true)
 
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
-	_, _, err := ru.Connect(cn1, testPacket, nil)
+	frontend.InitServerLevelVars(cn1.uuid)
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
+	sc1, _, err := ru.Connect(cn1, testPacket, nil)
 	require.NoError(t, err)
+	defer sc1.Close()
 
 	cn2, err := ru.SelectByConnID(10)
 	require.NoError(t, err)
@@ -289,6 +298,8 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
 	// Construct backend CN servers.
 	temp := os.TempDir()
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
@@ -348,9 +359,12 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -365,9 +379,12 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -382,9 +399,12 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 3, len(connResult))
@@ -458,8 +478,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -474,8 +495,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -490,8 +512,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 2, len(connResult))
@@ -541,12 +564,18 @@ func TestRouter_Filter(t *testing.T) {
 
 	ru := newRouter(mc, re, newMockSQLWorker(), true)
 
-	cn, err := ru.Route(ctx, "", clientInfo{username: "dump"}, func(s string) bool {
-		return s == addr1
-	})
+	badCNServers := make(map[string]struct{})
+	badCNServers[addr2] = struct{}{}
+	filterFn := func(str string) bool {
+		if _, ok := badCNServers[str]; ok {
+			return true
+		}
+		return false
+	}
+	cn, err := ru.Route(ctx, "", clientInfo{username: "dump"}, filterFn)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
-	require.Equal(t, cn.uuid, "cn2")
+	require.Equal(t, cn.uuid, "cn1")
 }
 
 func TestRouter_RetryableConnect(t *testing.T) {
@@ -622,8 +651,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	require.Equal(t, "cn1", cn.uuid)
 
 	// could not connect to cn3, because of timeout.

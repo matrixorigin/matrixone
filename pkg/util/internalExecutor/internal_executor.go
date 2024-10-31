@@ -82,6 +82,7 @@ type InternalExecResult interface {
 	RowCount() uint64
 	Row(context.Context, uint64) ([]interface{}, error)
 	Value(context.Context, uint64, uint64) (interface{}, error)
+	GetUint64(context.Context, uint64, uint64) (uint64, error)
 	GetFloat64(context.Context, uint64, uint64) (float64, error)
 	GetString(context.Context, uint64, uint64) (string, error)
 }

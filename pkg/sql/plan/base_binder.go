@@ -242,6 +242,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// * should only appear in SELECT clause
 		err = moerr.NewInvalidInput(b.GetContext(), "SELECT clause contains unqualified star")
 
+	case *tree.FullTextMatchExpr:
+		expr, err = b.bindFullTextMatchExpr(exprImpl, depth, isRoot)
 	default:
 		err = moerr.NewNYIf(b.GetContext(), "expr '%+v'", exprImpl)
 	}
@@ -950,15 +952,38 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	funcName := funcRef.ColName()
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
+
+		expr, err := b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
+		if err != nil {
+			return expr, err
+		}
 		if b.ctx.timeTag > 0 {
 			return b.impl.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 		}
-		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
+		return expr, err
 	} else if function.GetFunctionIsWinFunByName(funcName) {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
+
+	args := make([]*Expr, 2+len(astExpr.KeyParts))
+
+	mode := int64(astExpr.Mode)
+	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	args[1] = makePlan2Int64ConstExprWithType(mode)
+	for i, k := range astExpr.KeyParts {
+		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+		args[i+2] = c
+	}
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -1287,6 +1312,19 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// deal with some special function
 	switch name {
+	case "serial":
+		if len(args) == 1 {
+			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
+				for i, subExpr := range listExpr.List.List {
+					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
+					if err != nil {
+						return nil, err
+					}
+					listExpr.List.List[i] = newSubExpr
+				}
+				return args[0], nil
+			}
+		}
 	case "interval":
 		// rewrite interval function to ListExpr, and return directly
 		return &plan.Expr{
@@ -1330,6 +1368,34 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
+	case "mo_win_truncate":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
+		}
+		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
+			Id: int32(types.T_datetime),
+		})
+		if err != nil {
+			return nil, err
+		}
+		args, err = resetDateFunction(ctx, args[0], args[1])
+		if err != nil {
+			return nil, err
+		}
+	case "mo_win_divisor":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, "divisor function need two args", len(args))
+		}
+		a1, a2 := args[0], args[1]
+		args, err = resetIntervalFunction(ctx, a1)
+		if err != nil {
+			return nil, err
+		}
+		args2, err := resetIntervalFunction(ctx, a2)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, args2...)
 	case "adddate", "subdate":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "adddate/subdate function need two args", len(args))
@@ -2055,4 +2121,45 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 		Expr: expr,
 	}
 	return resetDateFunctionArgs(ctx, dateExpr, listExpr)
+}
+
+func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
+	return resetIntervalFunctionArgs(ctx, intervalExpr)
+}
+
+func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
+	firstExpr := intervalExpr.GetList().List[0]
+	secondExpr := intervalExpr.GetList().List[1]
+
+	intervalTypeStr := secondExpr.GetLit().GetSval()
+	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
+	if err != nil {
+		return nil, err
+	}
+
+	intervalTypeInFunction := &plan.Type{
+		Id: int32(types.T_int64),
+	}
+
+	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
+		s := firstExpr.GetLit().GetSval()
+		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
+		if err != nil {
+			return nil, err
+		}
+		return []*Expr{
+			makePlan2Int64ConstExprWithType(returnNum),
+			makePlan2Int64ConstExprWithType(int64(returnType)),
+		}, nil
+	}
+
+	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, *intervalTypeInFunction)
+	if err != nil {
+		return nil, err
+	}
+
+	return []*Expr{
+		numberExpr,
+		makePlan2Int64ConstExprWithType(int64(intervalType)),
+	}, nil
 }

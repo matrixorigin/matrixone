@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -41,13 +39,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
@@ -56,7 +52,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -109,10 +107,6 @@ func New(
 			},
 		),
 	}
-	e.snapCatalog = &struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}{}
 	e.mu.snapParts = make(map[[2]uint64]*struct {
 		sync.Mutex
 		snaps []*logtailreplay.Partition
@@ -146,16 +140,21 @@ func New(
 }
 
 func (e *Engine) fillDefaults() {
-	if e.insertEntryMaxCount <= 0 {
-		e.insertEntryMaxCount = InsertEntryThreshold
+	if e.config.insertEntryMaxCount <= 0 {
+		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.workspaceThreshold <= 0 {
-		e.workspaceThreshold = WorkspaceThreshold
+	if e.config.workspaceThreshold <= 0 {
+		e.config.workspaceThreshold = WorkspaceThreshold
 	}
+	if e.config.cnTransferTxnLifespanThreshold <= 0 {
+		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", e.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.workspaceThreshold),
+		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
+		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
 
@@ -554,43 +553,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.us,
 		nil,
 	)
-
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
-	txn := &Transaction{
-		op:     op,
-		proc:   proc,
-		engine: e,
-		//meta:     op.TxnRef(),
-		idGen:              e.idGen,
-		tnStores:           e.getTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
-		deletedBlocks: &deletedBlocks{
-			offsets: map[types.Blockid][]int64{},
-		},
-		cnBlkId_Pos:          map[types.Blockid]Pos{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		toFreeBatches:        make(map[tableKey][]*batch.Batch),
-		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
-	}
-
-	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)
+	txn.BindTxnOp(op)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil
@@ -667,16 +632,6 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func determineScanType(relData engine.RelData, num int) (scanType int) {
-	scanType = NORMAL
-	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
-		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
-		scanType = LARGE
-	}
-	return
-}
-
 func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
 	p any,
@@ -695,7 +650,7 @@ func (e *Engine) BuildBlockReaders(
 	if blkCnt < num {
 		newNum = blkCnt
 		for i := 0; i < num-blkCnt; i++ {
-			rds = append(rds, new(emptyReader))
+			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
@@ -703,7 +658,6 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
-	scanType := determineScanType(relData, newNum)
 	mod := blkCnt % newNum
 	divide := blkCnt / newNum
 	for i := 0; i < newNum; i++ {
@@ -712,31 +666,31 @@ func (e *Engine) BuildBlockReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds := NewRemoteDataSource(
+		ds := engine_util.NewRemoteDataSource(
 			ctx,
-			proc,
 			fs,
 			ts,
 			shard)
-		rd, err := NewReader(
+		rd, err := engine_util.NewReader(
 			ctx,
-			proc,
-			e,
+			proc.Mp(),
+			e.packerPool,
+			e.fs,
 			def,
 			ts,
 			expr,
 			ds,
+			engine_util.GetThresholdForReader(newNum),
 		)
 		if err != nil {
 			return nil, err
 		}
-		rd.scanType = scanType
 		rds = append(rds, rd)
 	}
 	return rds, nil
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }
@@ -781,6 +735,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
+}
+
 func (e *Engine) PushClient() *PushClient {
 	return &e.pClient
 }
@@ -809,4 +767,8 @@ func (e *Engine) FS() fileservice.FileService {
 
 func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 	return e.packerPool
+}
+
+func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return e.pClient.LatestLogtailAppliedTime()
 }

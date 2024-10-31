@@ -187,17 +187,6 @@ func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory fun
 	return impl
 }
 
-func NewDeltalocCmd(id uint32, cmdType uint16, commonID *common.ID, baseEntry *BaseEntryImpl[*MetadataMVCCNode]) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
-	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
-		ID:       commonID,
-		cmdType:  cmdType,
-		mvccNode: baseEntry.GetLatestNodeLocked(),
-		node:     &BlockNode{},
-	}
-	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
-	return impl
-}
-
 func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*ObjectMVCCNode, *ObjectNode] {
 	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
 		ID:       entry.AsCommonID(),
@@ -256,6 +245,10 @@ func (cmd *EntryCommand[T, N]) ApplyRollback() {
 func (cmd *EntryCommand[T, N]) GetTs() types.TS {
 	ts := cmd.mvccNode.GetPrepare()
 	return ts
+}
+
+func (cmd *EntryCommand[T, N]) GetMVCCNode() *MVCCNode[T] {
+	return cmd.mvccNode
 }
 
 func (cmd *EntryCommand[T, N]) IDString() string {

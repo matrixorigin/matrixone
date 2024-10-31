@@ -22,6 +22,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -38,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"go.uber.org/zap"
 )
 
 type mergeObjectsEntry struct {
@@ -89,8 +91,7 @@ func NewMergeObjectsEntry(
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.collectTs = rt.Now()
-		_, _, ok := fault.TriggerFault("tae: slow transfer deletes")
-		if ok {
+		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}
 		var err error
@@ -184,7 +185,7 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	// for io task, dispatch by round robin, scope can be nil
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
 		// TODO: variable as timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CausePrepareRollback2)
 
 		defer cancel()
 		for _, obj := range entry.createdObjs {
@@ -252,9 +253,9 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	inst = time.Now()
 	defer func() { transfer = time.Since(inst) }()
 
-	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector())
-	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
-	deletesPK := bat.GetVectorByName(catalog.AttrPKVal)
+	rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector())
+	ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector())
+	deletesPK := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 
 	count := len(rowid)
 	transCnt += count
@@ -417,7 +418,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return nil
 	}
 
-	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID()) {
+	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID(), entry.relation.Schema(false).(*catalog.Schema).Name) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
 	}
 	inst1 := time.Now()

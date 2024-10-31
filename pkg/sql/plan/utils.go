@@ -24,13 +24,18 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -39,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1067,21 +1074,32 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// todo: remove this in the future
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
-	if tableDef.Pkey != nil {
-		if colName == tableDef.Pkey.PkeyColName {
-			return 0
-		}
-		pkNames := tableDef.Pkey.Names
-		for i := range pkNames {
-			if pkNames[i] == colName {
-				return i
-			}
-		}
-	}
 	if tableDef.ClusterBy != nil {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+
+	if tableDef.Pkey == nil {
+		// view has no pk
+		logutil.Warn("GetSortOrderByName table has no PK",
+			zap.String("dbName", tableDef.DbName),
+			zap.String("tableName", tableDef.Name),
+			zap.String("relKind", tableDef.TableType))
+		return -1
+	}
+
+	if catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return -1
+	}
+
+	if colName == tableDef.Pkey.PkeyColName {
+		return 0
+	}
+	pkNames := tableDef.Pkey.Names
+	for i := range pkNames {
+		if pkNames[i] == colName {
+			return i
+		}
 	}
 	return -1
 }
@@ -1089,20 +1107,6 @@ func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	colName := tableDef.Cols[colPos].Name
 	return GetSortOrderByName(tableDef, colName)
-}
-
-func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
-	newExprs := DeepCopyExprList(exprs)
-	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
-		if err != nil {
-			return nil, err
-		}
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
-	}
-	return newExprs, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
@@ -1184,11 +1188,11 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return expr, nil
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{bat})
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
-	defer vec.Free(proc.Mp())
+	defer free()
 
 	if isVec {
 		data, err := vec.MarshalBinary()
@@ -1480,7 +1484,7 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	return fpath
 }
 
-func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
+func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 
 	param.ScanType = tree.S3
 	param.S3Param = &tree.S3Parameter{}
@@ -1489,11 +1493,11 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 		return moerr.NewBadConfig(param.Ctx, "S3 URL Query does not support in ExternParam")
 	}
 
-	if s.Url.Scheme != function.S3_PROTOCOL {
+	if s.Url.Scheme != stage.S3_PROTOCOL {
 		return moerr.NewBadConfig(param.Ctx, "URL protocol is not S3")
 	}
 
-	bucket, prefix, _, err := function.ParseS3Url(s.Url)
+	bucket, prefix, _, err := stage.ParseS3Url(s.Url)
 	if err != nil {
 		return err
 	}
@@ -1503,28 +1507,28 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	param.Filepath = prefix
 
 	// mandatory
-	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
+	param.S3Param.APIKey, found = s.GetCredentials(stage.PARAMKEY_AWS_KEY_ID, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_KEY_ID)
 	}
-	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
+	param.S3Param.APISecret, found = s.GetCredentials(stage.PARAMKEY_AWS_SECRET_KEY, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
-	}
-
-	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
-	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_SECRET_KEY)
 	}
 
-	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
+	param.S3Param.Region, found = s.GetCredentials(stage.PARAMKEY_AWS_REGION, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_REGION)
+	}
+
+	param.S3Param.Endpoint, found = s.GetCredentials(stage.PARAMKEY_ENDPOINT, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_ENDPOINT)
 	}
 
 	// optional
-	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
-	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
+	param.S3Param.Provider, _ = s.GetCredentials(stage.PARAMKEY_PROVIDER, stage.S3_PROVIDER_AMAZON)
+	param.CompressType, _ = s.GetCredentials(stage.PARAMKEY_COMPRESSION, "auto")
 
 	for i := 0; i < len(param.Option); i += 2 {
 		switch strings.ToLower(param.Option[i]) {
@@ -1562,11 +1566,11 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 
 	fpath := GetFilePathFromParam(param)
 
-	if !strings.HasPrefix(fpath, function.STAGE_PROTOCOL+"://") {
+	if !strings.HasPrefix(fpath, stage.STAGE_PROTOCOL+"://") {
 		return InitInfileParam(param)
 	}
 
-	s, err := function.UrlToStageDef(fpath, proc)
+	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
 		return err
 	}
@@ -1575,9 +1579,9 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return moerr.NewBadConfig(param.Ctx, "Invalid URL: query not supported in ExternParam")
 	}
 
-	if s.Url.Scheme == function.S3_PROTOCOL {
+	if s.Url.Scheme == stage.S3_PROTOCOL {
 		return InitStageS3Param(param, s)
-	} else if s.Url.Scheme == function.FILE_PROTOCOL {
+	} else if s.Url.Scheme == stage.FILE_PROTOCOL {
 
 		err := InitInfileParam(param)
 		if err != nil {
@@ -1598,9 +1602,6 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
-			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
-		}
 		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
@@ -1661,11 +1662,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			if err != nil {
 				return nil, nil, err
 			}
-			entries, err := fs.List(param.Ctx, readPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range fs.List(param.Ctx, readPath) {
+				if err != nil {
+					return nil, nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}
@@ -1898,6 +1898,10 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	return expr
 // }
 
+func ExprType2Type(typ *plan.Type) types.Type {
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
+
 func FormatExprs(exprs []*plan.Expr) string {
 	var w bytes.Buffer
 	for _, expr := range exprs {
@@ -1933,6 +1937,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
 	case *plan.Expr_Vec:
 		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
+	case *plan.Expr_Fold:
+		out.WriteString(fmt.Sprintf("%sExpr_Fold(id=%d)", prefix, t.Fold.Id))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
@@ -2156,6 +2162,31 @@ func MakeFalseExpr() *Expr {
 	}
 }
 
+func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
+	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok {
+		panic("fail to convert runtime filter to composite primary key!")
+	}
+	col := expr.GetCol()
+	col.ColPos = cpkeyIdx
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: true,
+	}
+}
+
+func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        serialExpr,
+		MatchPrefix: matchPrefix,
+	}
+}
+
 func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
@@ -2178,6 +2209,40 @@ func MakeIntervalExpr(num int64, str string) *Expr {
 			},
 		},
 	}
+}
+
+func GetColExpr(typ Type, relpos int32, colpos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relpos,
+				ColPos: colpos,
+			},
+		},
+	}
+}
+
+func MakeSerialExtractExpr(ctx context.Context, fromExpr *Expr, origType Type, serialIdx int64) (*Expr, error) {
+	return BindFuncExprImplByPlanExpr(ctx, "serial_extract", []*plan.Expr{
+		fromExpr,
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: serialIdx},
+				},
+			},
+		},
+		{
+			Typ: origType,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{},
+			},
+		},
+	})
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
@@ -2333,4 +2398,298 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 		return true
 	}
 	return false
+}
+
+func containGrouping(expr *Expr) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containGrouping(arg)
+		}
+		ret = ret || (exprImpl.F.Func.ObjName == "grouping")
+	case *plan.Expr_Col:
+		ret = false
+	}
+
+	return ret
+}
+
+func checkGrouping(ctx context.Context, expr *Expr) error {
+	if containGrouping(expr) {
+		return moerr.NewSyntaxError(ctx, "aggregate function grouping not allowed in WHERE clause")
+	}
+	return nil
+}
+
+// a > current_time() + 1 and b < ? + c and d > ? + 2
+// =>
+// a > foldVal1 and b < foldVal2 + c and d > foldVal3
+func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.ExpressionExecutor) (bool, error) {
+	allCanFold := true
+	var err error
+
+	fn := expr.GetF()
+	if fn == nil {
+		switch expr.Expr.(type) {
+		case *plan.Expr_List:
+			return true, nil
+		case *plan.Expr_Col:
+			return false, nil
+		case *plan.Expr_Vec:
+			return false, nil
+		default:
+			return true, nil
+		}
+	}
+
+	overloadID := fn.Func.GetObj()
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+	if !exists {
+		panic("ReplaceFoldVal: function not exist")
+	}
+	if f.IsAgg() || f.IsWin() {
+		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	argFold := make([]bool, len(fn.Args))
+	for i := range fn.Args {
+		argFold[i], err = ReplaceFoldExpr(proc, fn.Args[i], exes)
+		if err != nil {
+			return false, err
+		}
+		if !argFold[i] {
+			allCanFold = false
+		}
+	}
+
+	if allCanFold {
+		return true, nil
+	} else {
+		for i, canFold := range argFold {
+			if canFold {
+				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if err != nil {
+					return false, err
+				}
+				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
+					continue
+				}
+
+				exprExecutor, err := colexec.NewExpressionExecutor(proc, fn.Args[i])
+				if err != nil {
+					return false, err
+				}
+				newID := len(*exes)
+				*exes = append(*exes, exprExecutor)
+
+				fn.Args[i] = &plan.Expr{
+					Typ: fn.Args[i].Typ,
+					Expr: &plan.Expr_Fold{
+						Fold: &plan.FoldVal{
+							Id: int32(newID),
+						},
+					},
+					AuxId:       fn.Args[i].AuxId,
+					Ndv:         fn.Args[i].Ndv,
+					Selectivity: fn.Args[i].Selectivity,
+				}
+
+			}
+		}
+		return false, nil
+	}
+}
+
+func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.ExpressionExecutor) (err error) {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		var vec *vector.Vector
+		idx := int(ef.Fold.Id)
+		if idx >= len(*executors) {
+			panic("EvalFoldVal: fold id not exist")
+		}
+		exe := (*executors)[idx]
+		var data []byte
+		var err error
+
+		if _, ok := exe.(*colexec.ListExpressionExecutor); ok {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
+			vec.InplaceSortAndCompact()
+			data, err = vec.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			ef.Fold.IsConst = false
+		} else {
+			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			if err != nil {
+				return err
+			}
+			data, _ = getConstantBytes(vec, false, 0)
+			ef.Fold.IsConst = true
+		}
+		ef.Fold.Data = data
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			err = EvalFoldExpr(proc, ef.F.Args[i], executors)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func HasFoldExprForList(exprs []*Expr) bool {
+	for _, e := range exprs {
+		hasFoldExpr := HasFoldValExpr(e)
+		if hasFoldExpr {
+			return true
+		}
+	}
+	return false
+}
+
+func HasFoldValExpr(expr *Expr) bool {
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_Fold:
+		return true
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			hasFoldExpr := HasFoldValExpr(ef.F.Args[i])
+			if hasFoldExpr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte, can bool) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
+		return
+	}
+	can = true
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		val := vector.MustFixedColNoTypeCheck[bool](vec)[row]
+		ret = types.EncodeBool(&val)
+
+	case types.T_bit:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_int8:
+		val := vector.MustFixedColNoTypeCheck[int8](vec)[row]
+		ret = types.EncodeInt8(&val)
+
+	case types.T_int16:
+		val := vector.MustFixedColNoTypeCheck[int16](vec)[row]
+		ret = types.EncodeInt16(&val)
+
+	case types.T_int32:
+		val := vector.MustFixedColNoTypeCheck[int32](vec)[row]
+		ret = types.EncodeInt32(&val)
+
+	case types.T_int64:
+		val := vector.MustFixedColNoTypeCheck[int64](vec)[row]
+		ret = types.EncodeInt64(&val)
+
+	case types.T_uint8:
+		val := vector.MustFixedColNoTypeCheck[uint8](vec)[row]
+		ret = types.EncodeUint8(&val)
+
+	case types.T_uint16:
+		val := vector.MustFixedColNoTypeCheck[uint16](vec)[row]
+		ret = types.EncodeUint16(&val)
+
+	case types.T_uint32:
+		val := vector.MustFixedColNoTypeCheck[uint32](vec)[row]
+		ret = types.EncodeUint32(&val)
+
+	case types.T_uint64:
+		val := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		ret = types.EncodeUint64(&val)
+
+	case types.T_float32:
+		val := vector.MustFixedColNoTypeCheck[float32](vec)[row]
+		ret = types.EncodeFloat32(&val)
+
+	case types.T_float64:
+		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
+		ret = types.EncodeFloat64(&val)
+
+	case types.T_varchar, types.T_char,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_json:
+		if !transAll {
+			can = false
+			return
+		}
+		ret = []byte(vec.GetStringAt(int(row)))
+
+	case types.T_timestamp:
+		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row]
+		ret = types.EncodeTimestamp(&val)
+
+	case types.T_date:
+		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[row]
+		ret = types.EncodeDate(&val)
+
+	case types.T_time:
+		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[row]
+		ret = types.EncodeTime(&val)
+
+	case types.T_datetime:
+		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row]
+		ret = types.EncodeDatetime(&val)
+
+	case types.T_enum:
+		if !transAll {
+			can = false
+			return
+		}
+		val := vector.MustFixedColNoTypeCheck[types.Enum](vec)[row]
+		ret = types.EncodeEnum(&val)
+
+	case types.T_decimal64:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+		ret = types.EncodeDecimal64(&val)
+
+	case types.T_decimal128:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
+		ret = types.EncodeDecimal128(&val)
+
+	case types.T_uuid:
+		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row]
+		ret = types.EncodeUuid(&val)
+
+	default:
+		can = false
+	}
+
+	return
+}
+
+func getOffsetFromUTC() string {
+	now := time.Now()
+	_, localOffset := now.Zone()
+	return offsetToString(localOffset)
+}
+
+func offsetToString(offset int) string {
+	hours := offset / 3600
+	minutes := (offset % 3600) / 60
+	if hours < 0 {
+		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
+	}
+	return fmt.Sprintf("+%02d:%02d", hours, minutes)
 }

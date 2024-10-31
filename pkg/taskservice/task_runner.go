@@ -22,11 +22,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/zap"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 // RunnerOption option for create task runner
@@ -119,6 +121,18 @@ func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
 	}
 }
 
+func WithHaKeeperClient(getClient func() util.HAKeeperClient) RunnerOption {
+	return func(r *taskRunner) {
+		r.getClient = getClient
+	}
+}
+
+func WithCnUUID(uuid string) RunnerOption {
+	return func(r *taskRunner) {
+		r.cnUUID = uuid
+	}
+}
+
 type taskRunner struct {
 	logger       *zap.Logger
 	runnerID     string
@@ -167,6 +181,9 @@ type taskRunner struct {
 		heartbeatInterval time.Duration
 		heartbeatTimeout  time.Duration
 	}
+
+	getClient func() util.HAKeeperClient
+	cnUUID    string
 }
 
 // NewTaskRunner new task runner. The TaskRunner can be created by CN nodes and pull tasks from TaskService to
@@ -337,14 +354,14 @@ func (r *taskRunner) fetch(ctx context.Context) {
 }
 
 func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), r.options.fetchTimeout, moerr.CauseDoFetch)
 	tasks, err := r.service.QueryAsyncTask(ctx,
 		WithTaskStatusCond(task.TaskStatus_Running),
 		WithLimitCond(r.options.queryLimit),
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	newTasks := tasks[:0]
 	r.runningTasks.Lock()

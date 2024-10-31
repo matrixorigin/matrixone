@@ -21,10 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"github.com/hayageek/threadsafe"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -294,6 +296,12 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+
+	// post dml sqls run right after all pipelines finished.
+	PostDmlSqlList *threadsafe.Slice[string]
+
+	// stage cache to avoid to run same stage SQL repeatedly
+	StageCache *threadsafe.Map[string, stage.StageDef]
 }
 
 // Process contains context used in query execution
@@ -308,9 +316,6 @@ type Process struct {
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context
 	Cancel context.CancelFunc
-
-	// TODO: move to dispatch operator.
-	DispatchNotifyCh chan *WrapCs
 }
 
 type sqlHelper interface {
@@ -319,6 +324,7 @@ type sqlHelper interface {
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
+// WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
 	ReceiverDone bool
@@ -327,6 +333,11 @@ type WrapCs struct {
 	Cs           morpc.ClientSession
 	Err          chan error
 }
+
+// RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
+//
+// remote run Server will use this channel to send information to dispatch operator.
+type RemotePipelineInformationChannel chan *WrapCs
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
 	return proc.Base.messageBoard
@@ -368,20 +379,13 @@ func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.Base.valueScanBatch[key]
-	if ok {
-		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
-		return bat
-		// delete(proc.valueScanBatch, key)
-	}
-	return bat
+	return proc.Base.valueScanBatch[key]
 }
 
 func (proc *Process) CleanValueScanBatchs() {
 	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bat.SetCnt(1)
 			bat.Clean(mp)
 		}
 		// todo: why not remake the map after all clean ?
@@ -452,6 +456,14 @@ func (proc *Process) GetBaseProcessRunningStatus() bool {
 
 func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 	proc.Base.atRuntime = status
+}
+
+func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
+	return proc.Base.PostDmlSqlList
+}
+
+func (proc *Process) GetStageCache() *threadsafe.Map[string, stage.StageDef] {
+	return proc.Base.StageCache
 }
 
 func (si *SessionInfo) GetUser() string {

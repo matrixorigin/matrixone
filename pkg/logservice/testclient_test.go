@@ -64,4 +64,12 @@ func TestTestClient(t *testing.T) {
 	assert.Equal(t, 2, len(recs))
 	assert.Equal(t, rec1.Payload(), recs[0].Payload())
 	assert.Equal(t, rec2.Payload(), recs[1].Payload())
+
+	client3 := NewStandbyClientWithRetry(ctx, "", ccfg)
+	defer client3.Close()
+
+	//let ValidateStandbyClient return error
+	ccfg.LogShardID = 0
+	client4 := NewStandbyClientWithRetry(ctx, "", ccfg)
+	assert.Nil(t, client4)
 }

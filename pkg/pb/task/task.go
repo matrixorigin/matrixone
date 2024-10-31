@@ -62,6 +62,8 @@ func detailsType(d isDetails_Details) (TaskType, error) {
 	switch d := d.(type) {
 	case *Details_Connector:
 		return TaskType_TypeKafkaSinkConnector, nil
+	case *Details_CreateCdc:
+		return TaskType_CreateCdc, nil
 	case *Details_Retention:
 		return TaskType_TypeRetention, nil
 	default:

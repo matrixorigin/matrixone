@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 // +--------+---------+----------+----------+------------+
@@ -34,17 +36,11 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_TID            = "table_id"
-	SnapshotAttr_DBID           = "db_id"
-	ObjectAttr_ID               = "id"
-	ObjectAttr_CreateAt         = "create_at"
-	ObjectAttr_SegNode          = "seg_node"
-	SnapshotAttr_BlockMaxRow    = "block_max_row"
-	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
-	SnapshotAttr_SchemaExtra    = "schema_extra"
-	ObjectAttr_ObjectStats      = "object_stats"
-	EntryNode_CreateAt          = "create_at"
-	EntryNode_DeleteAt          = "delete_at"
+	SnapshotAttr_TID       = "table_id"
+	SnapshotAttr_DBID      = "db_id"
+	ObjectAttr_ObjectStats = "object_stats"
+	EntryNode_CreateAt     = "create_at"
+	EntryNode_DeleteAt     = "delete_at"
 )
 
 type DataFactory interface {
@@ -127,12 +123,54 @@ func (catalog *Catalog) InitSystemDB() {
 }
 
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
-	logutil.Infof("GC Catalog %v", ts.ToString())
+	if ts.LT(&catalog.gcTS) {
+		logutil.Error(
+			"GC-Catalog-Error",
+			zap.String("last", catalog.gcTS.ToString()),
+			zap.String("curr", ts.ToString()),
+		)
+		return
+	}
+	if ts.EQ(&catalog.gcTS) {
+		return
+	}
+
+	start := time.Now()
+
+	var (
+		err error
+
+		dbCnt, tblCnt, objCnt, tombCnt int
+	)
+
+	logutil.Info(
+		"GC-Catalog-Start",
+		zap.String("last", catalog.gcTS.ToString()),
+		zap.String("curr", ts.ToString()),
+	)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"GC-Catalog-Done",
+			zap.String("curr", ts.ToString()),
+			zap.Int("db-cnt", dbCnt),
+			zap.Int("tbl-cnt", tblCnt),
+			zap.Int("obj-cnt", objCnt),
+			zap.Int("tomb-cnt", tombCnt),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
+		)
+	}()
+
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
 		needGC := d.DeleteBefore(ts)
 		if needGC {
 			catalog.RemoveDBEntry(d)
+			dbCnt++
 		}
 		return nil
 	}
@@ -141,6 +179,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		if needGC {
 			db := te.db
 			db.RemoveEntry(te)
+			tblCnt++
 		}
 		return nil
 	}
@@ -149,6 +188,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		if needGC {
 			tbl := se.table
 			tbl.RemoveEntry(se)
+			objCnt++
 		}
 		return nil
 	}
@@ -157,12 +197,12 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		if needGC {
 			tbl := obj.table
 			tbl.RemoveEntry(obj)
+			tombCnt++
 		}
 		return nil
 	}
-	err := catalog.RecurLoop(&processor)
-	if err != nil {
-		panic(err)
+	if err = catalog.RecurLoop(&processor); err != nil {
+		return
 	}
 	catalog.gcTS = ts
 }
@@ -248,8 +288,10 @@ func (catalog *Catalog) RemoveDBEntry(database *DBEntry) error {
 		logutil.Warnf("system db cannot be removed")
 		return moerr.NewTAEErrorNoCtx("not permitted")
 	}
-	logutil.Info("[Catalog]", common.OperationField("remove"),
-		common.OperandField(database.String()))
+	logutil.Info(
+		"Catalog-Trace-RM-DB",
+		zap.String("db", database.String()),
+	)
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.ID]; !ok {
@@ -302,7 +344,11 @@ func (catalog *Catalog) CreateDBEntry(name, createSql, datTyp string, txn txnif.
 	return catalog.CreateDBEntryWithID(name, createSql, datTyp, id, txn)
 }
 
-func (catalog *Catalog) CreateDBEntryWithID(name, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) (*DBEntry, error) {
+func (catalog *Catalog) CreateDBEntryWithID(
+	name, createSql, datTyp string,
+	id uint64,
+	txn txnif.AsyncTxn,
+) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
 	defer catalog.Unlock()

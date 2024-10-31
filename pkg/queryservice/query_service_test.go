@@ -51,6 +51,7 @@ func testCreateQueryService(t *testing.T) QueryService {
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices([]metadata.CNService{{}}, nil))
 	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+	defer cluster.Close()
 	address := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	err := os.RemoveAll(address[7:])
 	assert.NoError(t, err)
@@ -182,6 +183,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 					ServiceID:    cn.ServiceID,
 					QueryAddress: address,
 				}}, nil))
+			defer cluster.Close()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 
 			sm := NewSessionManager()
@@ -479,6 +481,71 @@ func TestRequestMultipleCn(t *testing.T) {
 				},
 				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 					assert.Nil(t, err)
+					return true
+				},
+			},
+		}
+
+		//////
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				tt.wantErr(t,
+					RequestMultipleCn(ctx,
+						[]string{addr},
+						cli,
+						tt.args.genRequest,
+						tt.args.handleValidResponse,
+						tt.args.handleInvalidResponse),
+					fmt.Sprintf("RequestMultipleCn(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.nodes, tt.args.qs, tt.args.genRequest != nil, tt.args.handleValidResponse != nil, tt.args.handleInvalidResponse != nil))
+			})
+		}
+	})
+
+}
+
+func TestRequestMultipleCn2(t *testing.T) {
+	type args struct {
+		ctx                   context.Context
+		nodes                 []string
+		qs                    QueryService
+		genRequest            func() *pb.Request
+		handleValidResponse   func(string, *pb.Response)
+		handleInvalidResponse func(string)
+	}
+
+	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
+		cancel()
+
+		//////
+
+		tests := []struct {
+			name    string
+			args    args
+			wantErr assert.ErrorAssertionFunc
+		}{
+			{
+				name: "context timeout",
+				args: args{
+					ctx:   context.Background(),
+					nodes: []string{},
+					qs:    nil,
+					genRequest: func() *pb.Request {
+						req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+						req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+						return req
+					},
+					handleValidResponse: func(nodeAddr string, rsp *pb.Response) {
+						if rsp != nil && rsp.GetCacheInfoResponse != nil {
+							assert.GreaterOrEqual(t, len(rsp.GetCacheInfoResponse.GetCacheInfoList()), 1)
+						}
+					},
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.Error(t, err)
 					return true
 				},
 			},

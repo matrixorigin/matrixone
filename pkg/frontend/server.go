@@ -26,6 +26,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -53,6 +54,7 @@ type MOServer struct {
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
+	service   string
 }
 
 // Server interface is for mock MOServer
@@ -87,7 +89,7 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
 	mo.startListener()
-	setMoServerStarted(true)
+	setMoServerStarted(mo.service, true)
 	return nil
 }
 
@@ -113,11 +115,9 @@ func (mo *MOServer) Stop() error {
 	logutil.Debug("application listener closed")
 	mo.wg.Wait()
 
-	for s := range mo.rm.clients {
-		if err := s.Close(); err != nil {
-			return err
-		}
-	}
+	mo.rm.cancelCtx()
+	mo.rm.killNetConns()
+
 	logutil.Debug("application stopped")
 	return nil
 }
@@ -136,15 +136,25 @@ func (mo *MOServer) startListener() {
 
 	for _, listener := range mo.listeners {
 		mo.wg.Add(1)
-		go mo.startAccept(listener)
+		go mo.startAccept(mo.rm.ctx, listener)
 	}
 }
 
-func (mo *MOServer) startAccept(listener net.Listener) {
+func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 	defer mo.wg.Done()
 
 	var tempDelay time.Duration
+	quit := false
 	for {
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+
+		}
+		if quit {
+			break
+		}
 		conn, err := listener.Accept()
 		if err != nil {
 
@@ -164,11 +174,10 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 		}
 		tempDelay = 0
 
-		go mo.handleConn(conn)
-
+		go mo.handleConn(ctx, conn)
 	}
 }
-func (mo *MOServer) handleConn(conn net.Conn) {
+func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
 	defer func() {
@@ -181,7 +190,7 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 		}
 	}()
 
-	rs, err = NewIOSession(conn, mo.pu)
+	rs, err = NewIOSession(conn, mo.pu, mo.service)
 	if err != nil {
 		logutil.Error("NewIOSession error", zap.Error(err))
 		return
@@ -196,11 +205,11 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
-	mo.handleLoop(rs)
+	mo.handleLoop(ctx, rs)
 }
 
-func (mo *MOServer) handleLoop(rs *Conn) {
-	if err := mo.handleMessage(rs); err != nil {
+func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
+	if err := mo.handleMessage(ctx, rs); err != nil {
 		logutil.Error("handle session failed", zap.Error(err))
 	}
 }
@@ -213,7 +222,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getPu(mo.service).SV.SessionTimeout.Duration, moerr.CauseHandshake)
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
@@ -255,6 +264,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			ses.Debugf(tempCtx, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
+				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
 					"An error occurred",
 					zap.Error(err))
@@ -266,8 +276,9 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
-				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
+				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					err = moerr.AttachCause(tlsCtx, err)
 					ses.Error(tempCtx,
 						"Error occurred before cancel()",
 						zap.Error(err))
@@ -289,7 +300,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			} else {
 				// client don't ask server to upgrade TLS
 				if err := protocol.Authenticate(tempCtx); err != nil {
-					return err
+					return moerr.AttachCause(tempCtx, err)
 				}
 				protocol.SetBool(TLS_ESTABLISHED, true)
 				protocol.SetBool(ESTABLISHED, true)
@@ -298,13 +309,14 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			ses.Debugf(tempCtx, "handleHandshake")
 			_, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
+				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
 					"Error occurred",
 					zap.Error(err))
 				return err
 			}
 			if err = protocol.Authenticate(tempCtx); err != nil {
-				return err
+				return moerr.AttachCause(tempCtx, err)
 			}
 			protocol.SetBool(ESTABLISHED, true)
 		}
@@ -337,57 +349,73 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-var globalRtMgr atomic.Value
-var globalPu atomic.Value
-var globalAicm atomic.Value
-var moServerStarted atomic.Bool
-var globalSessionAlloc atomic.Value
+var serverVarsMap sync.Map
 
-func getGlobalSessionAlloc() *SessionAllocator {
-	return globalSessionAlloc.Load().(*SessionAllocator)
+func init() {
+	InitServerLevelVars("")
 }
 
-func setGlobalSessionAlloc(s *SessionAllocator) {
-	globalSessionAlloc.Store(s)
+func getServerLevelVars(service string) *ServerLevelVariables {
+	//always there
+	ret, _ := serverVarsMap.Load(service)
+	return ret.(*ServerLevelVariables)
 }
 
-func setGlobalRtMgr(rtMgr *RoutineManager) {
-	globalRtMgr.Store(rtMgr)
+func InitServerLevelVars(service string) {
+	serverVarsMap.LoadOrStore(service, &ServerLevelVariables{})
+	getServerLevelVars(service)
 }
 
-func getGlobalRtMgr() *RoutineManager {
-	v := globalRtMgr.Load()
+func getSessionAlloc(service string) Allocator {
+	return getServerLevelVars(service).sessionAlloc.Load().(Allocator)
+}
+
+func setSessionAlloc(service string, s Allocator) {
+	getServerLevelVars(service).sessionAlloc.Store(s)
+}
+
+func SetSessionAlloc(service string, s Allocator) {
+	setSessionAlloc(service, s)
+}
+
+func setRtMgr(service string, rtMgr *RoutineManager) {
+	getServerLevelVars(service).RtMgr.Store(rtMgr)
+}
+
+func getRtMgr(service string) *RoutineManager {
+	v := getServerLevelVars(service).RtMgr.Load()
 	if v != nil {
 		return v.(*RoutineManager)
 	}
 	return nil
 }
 
-func setGlobalPu(pu *config.ParameterUnit) {
-	globalPu.Store(pu)
+func setPu(service string, pu *config.ParameterUnit) {
+	getServerLevelVars(service).Pu.Store(pu)
 }
 
-func getGlobalPu() *config.ParameterUnit {
-	return globalPu.Load().(*config.ParameterUnit)
+func getPu(service string) *config.ParameterUnit {
+	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
 }
 
-func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
-	globalAicm.Store(aicm)
+func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
+	getServerLevelVars(service).Aicm.Store(aicm)
 }
 
-func getGlobalAic() *defines.AutoIncrCacheManager {
-	if globalAicm.Load() != nil {
-		return globalAicm.Load().(*defines.AutoIncrCacheManager)
+func getAicm(service string) *defines.AutoIncrCacheManager {
+	ret := getServerLevelVars(service).Aicm
+	if ret.Load() != nil {
+		return ret.Load().(*defines.AutoIncrCacheManager)
 	}
 	return nil
 }
 
-func MoServerIsStarted() bool {
-	return moServerStarted.Load()
+func MoServerIsStarted(service string) bool {
+	return getServerLevelVars(service).moServerStarted.Load()
 }
 
-func setMoServerStarted(b bool) {
-	moServerStarted.Store(b)
+func setMoServerStarted(service string, b bool) {
+	getServerLevelVars(service).moServerStarted.Store(b)
 }
 
 func NewMOServer(
@@ -397,14 +425,19 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
-	setGlobalPu(pu)
-	setGlobalAicm(aicm)
-	setGlobalSessionAlloc(NewSessionAllocator(pu))
-	rm, err := NewRoutineManager(ctx)
+	service := ""
+	if baseService != nil {
+		service = baseService.ID()
+	}
+	InitServerLevelVars(service)
+	setPu(service, pu)
+	setAicm(service, aicm)
+	setSessionAlloc(service, NewSessionAllocator(pu))
+	rm, err := NewRoutineManager(ctx, service)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	setGlobalRtMgr(rm)
+	setRtMgr(service, rm)
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
@@ -418,6 +451,7 @@ func NewMOServer(
 		readTimeout: pu.SV.SessionTimeout.Duration,
 		pu:          pu,
 		handler:     rm.Handler,
+		service:     service,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -435,8 +469,17 @@ func NewMOServer(
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs *Conn) error {
+func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
+	quit := false
 	for {
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+		}
+		if quit {
+			break
+		}
 		err := mo.handleRequest(rs)
 		if err != nil {
 			if err == io.EOF {
@@ -448,6 +491,7 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 			return err
 		}
 	}
+	return nil
 }
 
 func (mo *MOServer) handleRequest(rs *Conn) error {

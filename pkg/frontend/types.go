@@ -19,9 +19,10 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -178,6 +180,13 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPShowPublications
+	FPCreateCDC
+	FPPauseCDC
+	FPDropCDC
+	FPRestartCDC
+	FPResumeCDC
+	FPShowCDC
 )
 
 type (
@@ -203,7 +212,7 @@ type ComputationWrapper interface {
 
 	GetColumns(ctx context.Context) ([]interface{}, error)
 
-	Compile(any any, fill func(*batch.Batch) error) (interface{}, error)
+	Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -264,17 +273,21 @@ type PrepareStmt struct {
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
+	Ts      timestamp.Timestamp
 }
 
 /*
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql    = "__++__internal_cmd_field_list"
-	cmdFieldListSqlLen = len(cmdFieldListSql)
-	cloudUserTag       = "cloud_user"
-	cloudNoUserTag     = "cloud_nonuser"
-	saveResultTag      = "save_result"
+	cmdFieldListSql           = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen        = len(cmdFieldListSql)
+	cloudUserTag              = "cloud_user"
+	cloudNoUserTag            = "cloud_nonuser"
+	saveResultTag             = "save_result"
+	validatePasswordPolicyTag = "validate_password.policy"
+	validatePasswordPolicyLow = "low"
+	validatePasswordPolicyMed = "medium"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -332,6 +345,7 @@ type BackgroundExec interface {
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
 	Clear()
+	Service() string
 }
 
 var _ BackgroundExec = &backExec{}
@@ -363,7 +377,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.SetCnt(1)
 		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
 	}
@@ -391,28 +404,42 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 }
 
-var _ buf.Allocator = &SessionAllocator{}
+type Allocator interface {
+	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
+	// be expanded in use.
+	Alloc(capacity int) ([]byte, error)
+	// Free the allocated memory
+	Free([]byte)
+}
+
+var _ Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
 	allocator *malloc.ManagedAllocator[malloc.Allocator]
 }
 
-func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 	// default
 	allocator := malloc.GetDefault(nil)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounter.WithLabelValues("session-allocate"),
+		metric.MallocGauge.WithLabelValues("session-inuse"),
+		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+	)
+	return allocator
+})
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	// base
+	allocator := baseSessionAllocator()
 	// size bounded
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
 		uint64(pu.SV.GuestMmuLimitation),
 		nil,
-	)
-	// with metrics
-	allocator = malloc.NewMetricsAllocator(
-		allocator,
-		metric.MallocCounterSessionAllocateBytes,
-		metric.MallocGaugeSessionInuseBytes,
-		metric.MallocCounterSessionAllocateObjects,
-		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
 		// managed
@@ -440,7 +467,7 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
-	GetConfig(ctx context.Context, dbName, varName string) (any, error)
+	GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSysVars() *SystemVariables
@@ -502,10 +529,10 @@ type FeSession interface {
 	Close()
 	Clear()
 	getCachedPlan(sql string) *cachedPlan
-	GetFPrints() footPrints
-	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
+	EnterRunSql()
+	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
@@ -593,7 +620,7 @@ func (execCtx *ExecCtx) Close() {
 //	FeSession
 //	ExecCtx
 //	batch.Batch
-type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
+type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
@@ -646,7 +673,6 @@ type feSessionImpl struct {
 	uuid         uuid.UUID
 	debugStr     string
 	disableTrace bool
-	fprints      footPrints
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
@@ -656,6 +682,11 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
+	service     string
+}
+
+func (ses *feSessionImpl) GetService() string {
+	return ses.service
 }
 
 func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
@@ -664,18 +695,31 @@ func (ses *feSessionImpl) GetMySQLParser() *mysql.MySQLParser {
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
 	if ses != nil {
-		ses.fprints.addEnter(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, true)
 		}
 	}
 }
 
 func (ses *feSessionImpl) ExitFPrint(idx int) {
 	if ses != nil {
-		ses.fprints.addExit(idx)
 		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.SetFootPrints(ses.fprints.prints[:])
+			ses.txnHandler.txnOp.SetFootPrints(idx, false)
+		}
+	}
+}
+
+func (ses *feSessionImpl) EnterRunSql() {
+	if ses != nil {
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.EnterRunSql()
+		}
+	}
+}
+func (ses *feSessionImpl) ExitRunSql() {
+	if ses != nil {
+		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
+			ses.txnHandler.txnOp.ExitRunSql()
 		}
 	}
 }
@@ -686,12 +730,10 @@ func (ses *feSessionImpl) Close() {
 	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
-		ses.txnHandler = nil
+		ses.txnHandler.Close()
 	}
 	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.execCtx = nil
-		ses.txnCompileCtx.snapshot = nil
-		ses.txnCompileCtx.views = nil
+		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
@@ -718,14 +760,6 @@ func (ses *feSessionImpl) Clear() {
 	}
 	ses.ClearAllMysqlResultSet()
 	ses.ClearResultBatches()
-}
-
-func (ses *feSessionImpl) ResetFPrints() {
-	ses.fprints.reset()
-}
-
-func (ses *feSessionImpl) GetFPrints() footPrints {
-	return ses.fprints
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
@@ -961,6 +995,16 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
 	}
 
+	if policy, ok := val.(string); ok && name == validatePasswordPolicyTag {
+		if strings.ToLower(policy) == validatePasswordPolicyLow {
+			// convert to 0
+			val = int64(0)
+		} else if strings.ToLower(policy) == validatePasswordPolicyMed {
+			// convert to 1
+			val = int64(1)
+		}
+	}
+
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
@@ -1121,7 +1165,7 @@ type Property interface {
 type Responser interface {
 	Property
 	RespPreMeta(*ExecCtx, any) error
-	RespResult(*ExecCtx, *batch.Batch) error
+	RespResult(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	RespPostMeta(*ExecCtx, any) error
 	MysqlRrWr() MysqlRrWr
 	Close()
@@ -1132,7 +1176,7 @@ type MediaReader interface {
 }
 
 type MediaWriter interface {
-	Write(*ExecCtx, *batch.Batch) error
+	Write(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
 	Close()
 }
 
@@ -1142,6 +1186,7 @@ type MysqlReader interface {
 	Property
 	Read() ([]byte, error)
 	ReadLoadLocalPacket() ([]byte, error)
+	FreeLoadLocal()
 	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
@@ -1211,4 +1256,14 @@ type CsvWriter interface {
 // MemWriter write batch into memory pool
 type MemWriter interface {
 	MediaWriter
+}
+
+// ServerLevelVariables holds the variables are shared in single frontend mo server instance.
+// these variables should be initialized at the server startup.
+type ServerLevelVariables struct {
+	RtMgr           atomic.Value
+	Pu              atomic.Value
+	Aicm            atomic.Value
+	moServerStarted atomic.Bool
+	sessionAlloc    atomic.Value
 }

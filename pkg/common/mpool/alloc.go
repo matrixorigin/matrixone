@@ -16,10 +16,23 @@ package mpool
 
 import (
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
-	bs := make([]byte, requiredSpaceWithoutHeader+kMemHdrSz)
+func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool, offHeap bool) []byte {
+	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
+	var bs []byte
+	var err error
+	if offHeap {
+		bs, err = allocator().Allocate(uint64(allocateSize), malloc.NoHints)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		bs = make([]byte, allocateSize)
+	}
+
 	hdr := unsafe.Pointer(&bs[0])
 	pHdr := (*memHdr)(hdr)
 	pHdr.poolId = mp.id
@@ -29,5 +42,6 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	if mp.details != nil {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
+	pHdr.offHeap = offHeap
 	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }

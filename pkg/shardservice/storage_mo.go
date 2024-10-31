@@ -20,8 +20,13 @@ import (
 	"fmt"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -55,6 +60,7 @@ var (
 )
 
 type storage struct {
+	logger   *log.MOLogger
 	clock    clock.Clock
 	executor executor.SQLExecutor
 	waiter   client.TimestampWaiter
@@ -63,6 +69,7 @@ type storage struct {
 }
 
 func NewShardStorage(
+	sid string,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
 	waiter client.TimestampWaiter,
@@ -75,13 +82,14 @@ func NewShardStorage(
 		waiter:   waiter,
 		handles:  handles,
 		engine:   engine,
+		logger:   runtime.ServiceRuntime(sid).Logger().Named("shardservice"),
 	}
 }
 
 func (s *storage) Get(
 	table uint64,
 ) (uint64, pb.ShardsMetadata, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseGet)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -96,6 +104,7 @@ func (s *storage) Get(
 				shardTableID,
 				txn,
 				&metadata,
+				s.logger,
 			); err != nil {
 				return err
 			}
@@ -124,6 +133,7 @@ func (s *storage) Get(
 					shardTableID,
 					txn,
 					&metadata,
+					s.logger,
 				); err != nil {
 					return err
 				}
@@ -142,7 +152,7 @@ func (s *storage) Get(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return 0, pb.ShardsMetadata{}, err
+		return 0, pb.ShardsMetadata{}, moerr.AttachCause(ctx, err)
 	}
 	if metadata.IsEmpty() {
 		shardTableID = 0
@@ -155,7 +165,7 @@ func (s *storage) GetChanged(
 	applyDeleted func(uint64),
 	applyChanged func(uint64),
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseGetChanged)
 	defer cancel()
 
 	targets := make([]string, 0, len(tables))
@@ -165,13 +175,14 @@ func (s *storage) GetChanged(
 
 	current := make(map[uint64]uint32)
 	now, _ := s.clock.Now()
+	sql := getCheckMetadataSQL(targets)
 	err := s.executor.ExecTxn(
 		ctx,
 		func(
 			txn executor.TxnExecutor,
 		) error {
 			res, err := txn.Exec(
-				getCheckMetadataSQL(targets),
+				sql,
 				executor.StatementOption{},
 			)
 			if err != nil {
@@ -197,8 +208,14 @@ func (s *storage) GetChanged(
 		executor.Options{}.WithMinCommittedTS(now),
 	)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
+
+	s.logger.Info("get sharding metadata",
+		zap.String("sql", sql),
+		zap.Any("current", current),
+		zap.String("ts", now.DebugString()),
+	)
 
 	for table, version := range tables {
 		new, ok := current[table]
@@ -281,6 +298,7 @@ func (s *storage) Delete(
 				table,
 				txn,
 				&metadata,
+				s.logger,
 			); err != nil {
 				return err
 			}
@@ -338,12 +356,13 @@ func (s *storage) Read(
 func (s *storage) Unsubscribe(
 	tables ...uint64,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultTimeout, moerr.CauseUnsubscribe)
 	defer cancel()
 
 	var err error
 	for _, tid := range tables {
 		if e := s.engine.UnsubscribeTable(ctx, 0, tid); e != nil {
+			e = moerr.AttachCause(ctx, e)
 			err = errors.Join(err, e)
 		}
 	}
@@ -354,12 +373,17 @@ func readMetadata(
 	table uint64,
 	txn executor.TxnExecutor,
 	metadata *pb.ShardsMetadata,
+	logger *log.MOLogger,
 ) error {
 	res, err := txn.Exec(
 		getMetadataSQL(table),
 		executor.StatementOption{},
 	)
 	if err != nil {
+		logger.Error("read shard metadata failed",
+			zap.Uint64("table", table),
+			zap.Error(err),
+		)
 		return err
 	}
 	defer res.Close()
@@ -377,7 +401,10 @@ func readMetadata(
 			return false
 		},
 	)
-
+	logger.Info("read shard metadata",
+		zap.Uint64("table", table),
+		zap.Stringer("metadata", metadata),
+	)
 	return nil
 }
 

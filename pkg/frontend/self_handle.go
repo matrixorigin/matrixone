@@ -19,6 +19,8 @@ import (
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+	ses.EnterRunSql()
+	defer ses.ExitRunSql()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
@@ -41,19 +43,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
-		var uniqueCheckOnAuto string
 		dbName := st.Name.Compare()
 		//use database
-		err = handleChangeDB(ses, execCtx, dbName)
-		if err != nil {
-			return
-		}
-
-		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
-		if err != nil {
-			return
-		}
-		ses.SetConfig(dbName, "unique_check_on_autoincr", uniqueCheckOnAuto)
+		return handleChangeDB(ses, execCtx, dbName)
 	case *tree.MoDump:
 
 		//dump
@@ -198,8 +190,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.ShowPublications:
-		//ses.EnterFPrint(32)
-		//defer ses.ExitFPrint(32)
+		ses.EnterFPrint(FPShowPublications)
+		defer ses.ExitFPrint(FPShowPublications)
 		if err = handleShowPublications(ses, execCtx, st); err != nil {
 			return
 		}
@@ -462,11 +454,57 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		defer ses.ExitFPrint(FPSetConnectionID)
 		ses.SetConnectionID(st.ConnectionID)
 	case *tree.CreateCDC:
+		ses.EnterFPrint(FPCreateCDC)
+		defer ses.ExitFPrint(FPCreateCDC)
+		if err = handleCreateCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.PauseCDC:
+		ses.EnterFPrint(FPPauseCDC)
+		defer ses.ExitFPrint(FPPauseCDC)
+		if err = handlePauseCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.DropCDC:
+		ses.EnterFPrint(FPDropCDC)
+		defer ses.ExitFPrint(FPDropCDC)
+		if err = handleDropCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.RestartCDC:
+		ses.EnterFPrint(FPRestartCDC)
+		defer ses.ExitFPrint(FPRestartCDC)
+		if err = handleRestartCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ResumeCDC:
+		ses.EnterFPrint(FPResumeCDC)
+		defer ses.ExitFPrint(FPResumeCDC)
+		if err = handleResumeCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowCDC:
+		ses.EnterFPrint(FPShowCDC)
+		defer ses.ExitFPrint(FPShowCDC)
+		if err = handleShowCdc(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowLogserviceReplicas:
+		if err = handleShowLogserviceReplicas(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.ShowLogserviceStores:
+		if err = handleShowLogserviceStores(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.ShowLogserviceSettings:
+		if err = handleShowLogserviceSettings(execCtx, ses); err != nil {
+			return
+		}
+	case *tree.SetLogserviceSettings:
+		if err = handleSetLogserviceSettings(execCtx, ses, st); err != nil {
+			return
+		}
 	}
 	return
 }

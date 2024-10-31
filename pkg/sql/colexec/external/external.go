@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pierrec/lz4/v4"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -47,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -58,7 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/pierrec/lz4/v4"
 )
 
 var (
@@ -122,7 +124,6 @@ func (external *External) Prepare(proc *process.Process) error {
 		}
 		param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
 		param.IgnoreLine = param.IgnoreLineTag
-		param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	}
 
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
@@ -148,7 +149,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		}
 	}
 	if external.ctr.buf == nil {
-		external.ctr.buf = batch.New(false, param.Attrs)
+		external.ctr.buf = batch.New(param.Attrs)
 		var flag bool
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -202,7 +203,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
-	err = scanFileData(ctx, param, proc, external.ctr.buf)
+	err = scanFileData(ctx, param, proc, external.ctr.buf, analyzer)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
@@ -265,10 +266,8 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	bat = &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Cnt:   1,
 	}
 
-	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
@@ -281,13 +280,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(getAccountCol(fileList[j]))
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, getAccountCol(fileList[j]), mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
@@ -298,13 +294,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			}
 
 			for j := 0; j < len(fileList); j++ {
-				buf.WriteString(fileList[j])
-				bs := buf.Bytes()
-				if err = vector.SetBytesAt(bat.Vecs[i], j, bs, mp); err != nil {
+				if err = vector.SetStringAt(bat.Vecs[i], j, fileList[j], mp); err != nil {
 					bat.Clean(mp)
 					return nil, err
 				}
-				buf.Reset()
 			}
 		}
 	}
@@ -493,13 +486,13 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 	csvReader, err := newReaderWithParam(&ExternalParam{
 		ExParamConst: ExParamConst{Extern: param},
 		ExParam:      ExParam{reader: io.NopCloser(bufR)},
-	}, true)
+	})
 	if err != nil {
 		return 0, err
 	}
 	var fields []csvparser.Field
 	for {
-		fields, err = csvReader.Read()
+		fields, err = csvReader.Read(fields)
 		if err != nil {
 			return 0, err
 		}
@@ -857,7 +850,7 @@ func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
-		if param.Extern.ExtTab {
+		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
 			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
@@ -893,49 +886,6 @@ func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparse
 	return nil
 }
 
-func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process, bat *batch.Batch) error {
-	var err error
-	if err = initBatch(plh.batchSize, proc, bat); err != nil {
-		return err
-	}
-
-	unexpectEOF := false
-	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
-		line := plh.moCsvLineArray[rowIdx]
-		if param.Extern.Format == tree.JSONLINE {
-			line, err = transJson2Lines(proc.Ctx, line[0].Val, param.Attrs, param.Cols, param.Extern.JsonData, param)
-			if err != nil {
-				if errors.Is(err, io.ErrUnexpectedEOF) {
-					logutil.Infof("unexpected EOF, wait for next batch")
-					unexpectEOF = true
-					continue
-				}
-				return err
-			}
-			plh.moCsvLineArray[rowIdx] = line
-		}
-
-		if err = checkLineValid(param, proc, line, rowIdx); err != nil {
-			return err
-		}
-
-		if err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool()); err != nil {
-			return err
-		}
-	}
-
-	n := bat.Vecs[0].Length()
-	if unexpectEOF && n > 0 {
-		n--
-		for i := 0; i < bat.VectorCount(); i++ {
-			vec := bat.GetVector(int32(i))
-			vec.SetLength(n)
-		}
-	}
-	bat.SetRowCount(n)
-	return nil
-}
-
 // getMOCSVReader get file reader from external file
 func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error
@@ -948,20 +898,18 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 		return nil, err
 	}
 
-	csvReader, err := newReaderWithParam(param, false)
+	csvReader, err := newReaderWithParam(param)
 	if err != nil {
 		return nil, err
 	}
 	plh := &ParseLineHandler{
-		csvReader:      csvReader,
-		moCsvLineArray: param.MoCsvLineArray,
+		csvReader: csvReader,
 	}
 	return plh, nil
 }
 
 func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
 	var err error
-	var cnt int
 	_, span := trace.Start(ctx, "scanCsvFile")
 	defer span.End()
 	if param.plh == nil {
@@ -972,42 +920,13 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 
-	plh := param.plh
-	finish := false
-	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
-	if err != nil {
-		logutil.Errorf("read external file meet error: %s", err.Error())
+	if err := makeBatchRows(param, proc, bat); err != nil {
 		return err
 	}
-
-	if finish {
-		err := param.reader.Close()
-		if err != nil {
-			logutil.Errorf("close file failed. err:%v", err)
-		}
-		param.plh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
-	}
-	if param.IgnoreLine != 0 {
-		if !param.Extern.Parallel || param.FileOffset[0] == 0 {
-			if cnt >= param.IgnoreLine {
-				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
-				cnt -= param.IgnoreLine
-				plh.moCsvLineArray = append(plh.moCsvLineArray, make([][]csvparser.Field, param.IgnoreLine)...)
-				param.IgnoreLine = 0
-			} else {
-				param.IgnoreLine -= cnt
-				cnt = 0
-			}
-		}
-	}
-	plh.batchSize = cnt
-	return getBatchData(param, plh, proc, bat)
+	return nil
 }
 
+// note: getBatchFromZonemapFile will access Fileservice
 func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) (err error) {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
@@ -1049,6 +968,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
+	// note: getBatchFromZonemapFile will access Fileservice
 	tmpBat, release, err = objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
 	if err != nil {
 		return err
@@ -1135,7 +1055,8 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, bat *batch.Batch) error {
 	var err error
-	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
+	// note: LoadAllBlocks will access Fileservice,must user `ctx` as paramenter
+	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(ctx, proc.GetMPool())
 	if err != nil {
 		return err
 	}
@@ -1148,19 +1069,25 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 			param.Zoneparam.offset++
 		}
 	}
+	// note: getBatchFromZonemapFile will access Fileservice, must user `ctx` as paramenter
 	return getBatchFromZonemapFile(ctx, param, proc, objectReader, bat)
 }
 
-func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
+func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
 	var err error
 	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return err
 	}
 
-	if err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader, bat); err != nil {
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	// getZonemapBatch will access Fileservice
+	if err := getZonemapBatch(newCtx, param, proc, param.Filter.blockReader, bat); err != nil {
 		return err
 	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		param.Filter.blockReader = nil
@@ -1176,9 +1103,9 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 }
 
 // scanFileData read batch data from external file
-func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	if param.Extern.QueryResult {
-		return scanZonemapFile(ctx, param, proc, bat)
+func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch, analyzer process.Analyzer) error {
+	if param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN) {
+		return scanZonemapFile(ctx, param, proc, bat, analyzer)
 	}
 	if param.Extern.Format == tree.PARQUET {
 		return scanParquetFile(ctx, param, proc, bat)
@@ -1318,9 +1245,6 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	if param.Extern.ExtTab {
-		return line[param.Name2ColIndex[strings.ToLower(colName)]]
-	}
 	return line[param.TbColToDataCol[strings.ToLower(colName)]]
 }
 
@@ -1368,8 +1292,6 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {
-	var buf bytes.Buffer
-
 	colName := param.Attrs[colIdx]
 	vec := bat.Vecs[colIdx]
 
@@ -1393,14 +1315,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		nulls.Add(vec.GetNulls(), uint64(rowIdx))
 		return nil
 	}
+
 	if param.ParallelLoad {
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 		return nil
 	}
 
@@ -1429,7 +1349,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.SetFixedAtNoTypeCheck(vec, rowIdx, val); err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_int8:
 		d, err := strconv.ParseInt(field.Val, 10, 8)
 		if err == nil {
@@ -1633,14 +1552,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		// XXX Memory accounting?
-		buf.WriteString(field.Val)
-		bs := buf.Bytes()
-		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		err := vector.SetStringAt(vec, rowIdx, field.Val, mp)
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float32:
 		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
 		if err != nil {
@@ -1650,7 +1565,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_array_float64:
 		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
 		if err != nil {
@@ -1660,7 +1574,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			return err
 		}
-		buf.Reset()
 	case types.T_json:
 		var jsonBytes []byte
 		if param.Extern.Format != tree.CSV {
@@ -1793,30 +1706,107 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 // A successful call returns err == nil, not err == io.EOF. Because ReadAll is
 // defined to read until EOF, it does not treat an end of file as an error to be
 // reported.
-func readCountStringLimitSize(r *csvparser.CSVParser, ctx context.Context, size uint64, records [][]csvparser.Field) (int, bool, error) {
+
+func makeBatchRows(param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
+	ctx := proc.Ctx
+	size := param.maxBatchSize
+	r := param.plh.csvReader
 	var curBatchSize uint64 = 0
+	var finish bool
+	var cnt int
+	var err error
+	var row []csvparser.Field
+	var unexpectEOF bool
+
+	// todo, batchSize now use OneBatchMaxRow, change to append row to vector?
+	if err = initBatch(OneBatchMaxRow, proc, bat); err != nil {
+		return err
+	}
+
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
 		case <-ctx.Done():
-			return i, true, nil
+			finish = true
 		default:
 		}
-		record, err := r.Read()
-		if err != nil {
-			if err == io.EOF {
-				return i, true, nil
+		if !finish {
+			row, err = r.Read(r.LastRow)
+			r.LastRow = row
+			if err != nil {
+				if err == io.EOF {
+					finish = true
+				} else {
+					return err
+				}
 			}
-			return i, true, err
 		}
-		records[i] = record
-		for j := 0; j < len(record); j++ {
-			curBatchSize += uint64(len(record[j].Val))
+
+		if finish {
+			err := param.reader.Close()
+			if err != nil {
+				logutil.Errorf("close file failed. err:%v", err)
+				return err
+			}
+			param.plh = nil
+			param.Fileparam.FileFin++
+			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+				param.Fileparam.End = true
+			}
+			break
 		}
+
+		if param.IgnoreLine > 0 {
+			if !param.Extern.Parallel || param.FileOffset[0] == 0 {
+				param.IgnoreLine--
+				i--
+				continue
+			}
+		}
+
+		for j := 0; j < len(row); j++ {
+			curBatchSize += uint64(len(row[j].Val))
+		}
+		cnt++
+
+		rowIdx := i
+		if param.Extern.Format == tree.JSONLINE {
+			row, err = transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData, param)
+			if err != nil {
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					logutil.Infof("unexpected EOF, wait for next batch")
+					unexpectEOF = true
+					continue
+				}
+				return err
+			}
+		}
+
+		if err = checkLineValid(param, proc, row, rowIdx); err != nil {
+			return err
+		}
+
+		if err = getOneRowData(bat, row, rowIdx, param, proc.GetMPool()); err != nil {
+			return err
+		}
+
 		if curBatchSize >= size {
-			return i + 1, false, nil
+			break
 		}
 	}
-	return OneBatchMaxRow, false, nil
+
+	for i := range bat.Vecs {
+		bat.Vecs[i].SetLength(cnt)
+	}
+	n := bat.Vecs[0].Length()
+	if unexpectEOF && n > 0 {
+		n--
+		for i := 0; i < bat.VectorCount(); i++ {
+			vec := bat.GetVector(int32(i))
+			vec.SetLength(n)
+		}
+	}
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return nil
 }
 
 func loadFormatIsValid(param *tree.ExternParam) bool {

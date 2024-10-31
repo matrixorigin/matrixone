@@ -183,6 +183,11 @@ func (s *service) Create(
 			client.ClosedEvent,
 			func(txn client.TxnEvent) {
 				if txn.Committed() {
+					s.logger.Info("sharding table created",
+						zap.Uint64("table", table),
+						zap.String("committed", txn.Txn.CommitTS.DebugString()),
+					)
+
 					// The callback here is not guaranteed to execute after the transaction has
 					// already committed.
 					// The creation will lazy execute in Read.
@@ -230,9 +235,14 @@ func (s *service) Delete(
 
 func (s *service) HasLocalReplica(
 	tableID, shardID uint64,
-) bool {
+) (bool, error) {
+	r, err := s.getShards(tableID)
+	if err != nil {
+		return false, err
+	}
+
 	has := false
-	s.getReadCache().selectShards(
+	r.selectShards(
 		tableID,
 		func(
 			metadata pb.ShardsMetadata,
@@ -251,15 +261,20 @@ func (s *service) HasLocalReplica(
 			return !has
 		},
 	)
-	return has
+	return has, nil
 }
 
 func (s *service) HasAllLocalReplicas(
 	tableID uint64,
-) bool {
+) (bool, error) {
+	r, err := s.getShards(tableID)
+	if err != nil {
+		return false, err
+	}
+
 	total := 0
 	local := 0
-	s.getReadCache().selectShards(
+	r.selectShards(
 		tableID,
 		func(
 			metadata pb.ShardsMetadata,
@@ -275,7 +290,7 @@ func (s *service) HasAllLocalReplicas(
 			return true
 		},
 	)
-	return total > 0 && total == local
+	return total > 0 && total == local, nil
 }
 
 func (s *service) GetShardInfo(
@@ -316,7 +331,32 @@ func (s *service) GetShardInfo(
 	return 0, 0, false, nil
 }
 
+func (s *service) GetTableShards(table uint64) (pb.ShardsMetadata, []pb.TableShard, error) {
+	_, metadata, err := s.storage.Get(table)
+	if err != nil {
+		return pb.ShardsMetadata{}, nil, err
+	}
+	if metadata.Policy == pb.Policy_None {
+		return pb.ShardsMetadata{}, nil, moerr.NewNotSupportedNoCtx("none policy cannot call GetTableShards")
+	}
+
+	req := s.remote.pool.AcquireRequest()
+	req.RPCMethod = pb.Method_GetShards
+	req.GetShards.ID = table
+	req.GetShards.Metadata = metadata
+
+	resp, err := s.send(req)
+	if err != nil {
+		return pb.ShardsMetadata{}, nil, err
+	}
+	defer s.remote.pool.ReleaseResponse(resp)
+	return metadata, resp.GetShards.Shards, nil
+}
+
 func (s *service) ReplicaCount() int64 {
+	if s == nil || !s.cfg.Enable {
+		return 0
+	}
 	return int64(s.cache.allocate.Load().replicasCount(nil))
 }
 
@@ -353,28 +393,6 @@ func (s *service) getShards(
 	s.cache.Lock()
 	defer s.cache.Unlock()
 
-	fn := func() (pb.ShardsMetadata, []pb.TableShard, error) {
-		_, metadata, err := s.storage.Get(table)
-		if err != nil {
-			return pb.ShardsMetadata{}, nil, err
-		}
-		if metadata.Policy == pb.Policy_None {
-			panic("none policy cannot call GetShards")
-		}
-
-		req := s.remote.pool.AcquireRequest()
-		req.RPCMethod = pb.Method_GetShards
-		req.GetShards.ID = table
-		req.GetShards.Metadata = metadata
-
-		resp, err := s.send(req)
-		if err != nil {
-			return pb.ShardsMetadata{}, nil, err
-		}
-		defer s.remote.pool.ReleaseResponse(resp)
-		return metadata, resp.GetShards.Shards, nil
-	}
-
 OUT:
 	for {
 		cache := s.getReadCache()
@@ -382,7 +400,7 @@ OUT:
 			return cache, nil
 		}
 
-		metadata, shards, err := fn()
+		metadata, shards, err := s.GetTableShards(table)
 		if err != nil || len(shards) == 0 {
 			s.logger.Error("failed to get table shards",
 				zap.Error(err),
@@ -402,6 +420,11 @@ OUT:
 		cache = cache.clone()
 		cache.addShards(table, metadata, shards)
 		s.cache.read.Store(cache)
+		s.logger.Info("add read cache",
+			zap.Uint64("table", table),
+			zap.String("metadata", metadata.String()),
+			zap.Int("shards", len(shards)),
+		)
 		return cache, nil
 	}
 }
@@ -476,12 +499,20 @@ func (s *service) doTask(
 			v2.ReplicaCountGauge.Set(float64(s.cache.allocate.Load().replicasCount(nil)))
 			timer.Reset(s.cfg.HeartbeatDuration.Duration)
 		case table := <-s.createC:
+			s.logger.Info(
+				"handle create table",
+				zap.Uint64("table", table),
+			)
 			if err := s.handleCreateTable(table); err != nil {
 				s.logger.Error("failed to create table shards",
 					zap.Uint64("table", table),
 					zap.Error(err))
 			}
 		case table := <-s.deleteC:
+			s.logger.Info(
+				"handle delete table",
+				zap.Uint64("table", table),
+			)
 			if err := s.handleDeleteTable(table); err != nil {
 				s.logger.Error("failed to delete table shards",
 					zap.Uint64("table", table),
@@ -704,12 +735,20 @@ func (s *service) handleCheckChanged() error {
 	return s.storage.GetChanged(
 		m,
 		func(deleted uint64) {
+			s.logger.Info(
+				"found table deleted",
+				zap.Uint64("table", deleted),
+			)
 			select {
 			case s.deleteC <- deleted:
 			default:
 			}
 		},
 		func(changed uint64) {
+			s.logger.Info(
+				"found table changed",
+				zap.Uint64("table", changed),
+			)
 			select {
 			case s.createC <- changed:
 			default:
@@ -733,7 +772,8 @@ func (s *service) maybeRemoveReadCache(
 	err error,
 ) {
 	if moerr.IsMoErrCode(err, moerr.ErrReplicaNotFound) ||
-		moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch) {
+		moerr.IsMoErrCode(err, moerr.ErrReplicaNotMatch) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		s.removeReadCache(table)
 	}
 }
@@ -897,7 +937,7 @@ func (c *readCache) selectShards(
 ) {
 	sc, ok := c.shards[tableID]
 	if !ok {
-		panic("shards is empty")
+		return
 	}
 
 	for _, shard := range sc.shards {

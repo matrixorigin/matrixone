@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"go.uber.org/zap"
 	"math"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -202,14 +203,6 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	}
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
-	return block, nil
-}
-
-func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error) {
-	denseSeqnums := NewSeqnums(nil)
-	denseSeqnums.InitWithColCnt(len(batch.Vecs))
-	block := NewBlock(denseSeqnums)
-	w.AddTombstone(block, batch, denseSeqnums)
 	return block, nil
 }
 
@@ -590,26 +583,12 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 	}()
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
-	_, err = fileservice.DoWithRetry(
-		"ObjectSync",
-		func() (int, error) {
-			return 0, w.object.fs.Write(ctx, w.buffer.GetData())
-		},
-		64,
-		fileservice.IsRetryableError,
-	)
+	err = w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err
 		}
-		_, err = fileservice.DoWithRetry(
-			"ObjectSync",
-			func() (int, error) {
-				return 0, w.object.fs.Write(ctx, w.buffer.GetData())
-			},
-			64,
-			fileservice.IsRetryableError,
-		)
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
 
 	if err != nil {
@@ -693,18 +672,6 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	defer w.Unlock()
 
 	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
-}
-
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
-	w.Lock()
-	defer w.Unlock()
-	if w.tombstonesColmeta == nil {
-		w.tombstonesColmeta = make([]ColumnMeta, len(bat.Vecs))
-	}
-	for i := range w.tombstonesColmeta {
-		w.tombstonesColmeta[i] = BuildObjectColumnMeta()
-	}
-	return w.addBlock(&w.blocks[SchemaTombstone], blockMeta, bat, seqnums)
 }
 
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {

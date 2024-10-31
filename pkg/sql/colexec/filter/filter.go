@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,30 +45,19 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
-	if filter.exeExpr == nil && filter.E == nil {
-		return nil
+	if len(filter.ctr.executors) == 0 && filter.E != nil {
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
 	}
 
-	var filterExpr *plan.Expr
-	if filter.exeExpr == nil {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
+	if filter.ctr.allExecutors == nil {
+		filter.ctr.allExecutors = make([]colexec.ExpressionExecutor, 0, len(filter.ctr.runtimeExecutors)+len(filter.ctr.executors))
 	} else {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
+		filter.ctr.allExecutors = filter.ctr.allExecutors[:0]
 	}
-	if err != nil {
-		return err
-	}
-	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
-	return err
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.runtimeExecutors...)
+	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.executors...)
 
-	// if len(filter.ctr.executors) == 0 {
-	// 	if filter.exeExpr == nil {
-	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
-	// 	} else {
-	// 		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
-	// 	}
-	// }
-	// return err
+	return err
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
@@ -86,18 +74,19 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, err
 	}
 
-	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.executors) == 0 {
+	if inputResult.Batch == nil || inputResult.Batch.IsEmpty() || inputResult.Batch.Last() || len(filter.ctr.allExecutors) == 0 {
 		return inputResult, nil
 	}
 
 	filterBat := inputResult.Batch
 	var sels []int64
-	for i := range filter.ctr.executors {
+	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
 		}
 
-		vec, err := filter.ctr.executors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
+		var vec *vector.Vector
+		vec, err = filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -111,15 +100,22 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
-		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		if filter.ctr.bs == nil {
+			filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		} else {
+			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, filter.ctr.bs)
+			if !ok {
+				filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			}
+		}
+		bs := filter.ctr.bs
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
+				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
 				if err != nil {
 					return vm.CancelResult, err
 				}
-				filterBat.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -144,11 +140,10 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			if len(sels) != filterBat.RowCount() {
-				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
+				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
 				if err != nil {
 					return vm.CancelResult, err
 				}
-				filterBat.Shrink(sels, false)
 			}
 		}
 	}
@@ -169,18 +164,35 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func tryDupBatch(ctr *container, proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, sels []int64) (*batch.Batch, error) {
+	if len(sels) == 0 {
+		return batch.EmptyBatch, nil
+	}
 	if bat == ctr.buf {
-		return bat, nil
-	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	//copy input.Batch to ctr.buf
-	var err error
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), bat)
-	if err != nil {
-		return nil, err
+		ctr.buf.Shrink(sels, false)
+	} else {
+		if ctr.buf == nil {
+			ctr.buf = batch.NewWithSize(len(bat.Vecs))
+			ctr.buf.SetAttributes(bat.Attrs)
+			ctr.buf.Recursive = bat.Recursive
+			for j, vec := range bat.Vecs {
+				typ := *bat.GetVector(int32(j)).GetType()
+				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
+				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
+			}
+			ctr.buf.SetRowCount(bat.RowCount())
+			ctr.buf.ShuffleIDX = bat.ShuffleIDX
+			err := ctr.buf.PreExtend(proc.Mp(), len(sels))
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
+		err := ctr.buf.Union(bat, sels, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return ctr.buf, nil
 }

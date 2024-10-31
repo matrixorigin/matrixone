@@ -34,6 +34,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -590,41 +591,24 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
-		fs := proc.GetFileService()
 
-		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
 			return err
 		}
 
-		err = func() error {
-			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
-			if err != nil {
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-
-			defer r.Close()
-
-			fileBytes, err := io.ReadAll(r)
-			if err != nil {
-				return err
-			}
-
-			if len(fileBytes) == 0 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				return nil
-			}
-
-			if err = rs.AppendBytes(fileBytes, false); err != nil {
-				return err
-			}
-
 			return nil
-		}()
+		}
 
-		if err != nil {
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
 	}
@@ -647,7 +631,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		moUrl, _, err := ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
@@ -662,7 +646,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		content := util.UnsafeBytesToString(_content)
 
 		err = func() error {
-			writer, err := NewFileServiceWriter(moUrl, proc)
+			writer, err := dl.NewWriter(proc)
 			if err != nil {
 				return err
 			}
@@ -829,6 +813,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	scale := ivecs[0].GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
+	}, selectList)
+}
+
+func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
+		return v.ToDatetime(time.Local).ToTime(scale)
 	}, selectList)
 }
 
@@ -1365,7 +1356,7 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return proc.GetSessionInfo().LastInsertID
+		return proc.GetLastInsertID()
 	})
 }
 
@@ -1786,6 +1777,29 @@ func LastDay(
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func GroupingFunc(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := 0; i < length; i++ {
+		var ans int64 = 0
+		power := 0
+		for j := len(parameters) - 1; j >= 0; j-- {
+			rollup := parameters[j].GetGrouping()
+			isRollup := rollup.Contains(uint64(i))
+			if isRollup {
+				ans += 1 << power
+			}
+			power++
+		}
+		rs.AppendMustValue(ans)
 	}
 	return nil
 }

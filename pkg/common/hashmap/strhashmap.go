@@ -85,10 +85,6 @@ func (m *StrHashMap) Size() int64 {
 	return m.hashMap.Size()
 }
 
-func (m *StrHashMap) Cardinality() uint64 {
-	return m.hashMap.Cardinality()
-}
-
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
@@ -114,6 +110,12 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 // for one col, just give the value bytes
 func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, start int, lenCols int) {
 	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -128,8 +130,14 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 	}
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
+			gsp := vec.GetGrouping()
 			for i := 0; i < n; i++ {
 				bytes := vec.GetBytesAt(i + start)
+				hasGrouping := gsp.Contains(uint64(i + start))
+				if hasGrouping {
+					keys[i] = append(keys[i], byte(2))
+					continue
+				}
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// this is not null value
 				keys[i] = append(keys[i], 0)
@@ -152,10 +160,14 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 		}
 	} else {
 		nsp := vec.GetNulls()
+		rsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
 			hasNull := nsp.Contains(uint64(i + start))
+			hasGrouping := rsp.Contains(uint64(i + start))
 			if itr.mp.hasNull {
-				if hasNull {
+				if hasGrouping {
+					keys[i] = append(keys[i], byte(2))
+				} else if hasNull {
 					keys[i] = append(keys[i], byte(1))
 				} else {
 					bytes := vec.GetBytesAt(i + start)
@@ -187,6 +199,12 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 
 func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
 	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -229,10 +247,14 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		}
 	} else {
 		nsp := vec.GetNulls()
+		gsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
 			isNull := nsp.Contains(uint64(i + start))
+			isGrouping := gsp.Contains(uint64(i + start))
 			if itr.mp.hasNull {
-				if isNull {
+				if isGrouping {
+					keys[i] = append(keys[i], 2)
+				} else if isNull {
 					keys[i] = append(keys[i], 1)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]

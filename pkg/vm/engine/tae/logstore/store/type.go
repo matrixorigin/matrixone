@@ -33,6 +33,7 @@ type Store interface {
 	GetSynced(gid uint32) (lsn uint64)
 	GetPendding(gid uint32) (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
+	GetTruncated() uint64
 
 	Replay(h ApplyHandle) error
 	Close() error

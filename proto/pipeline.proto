@@ -114,6 +114,7 @@ message Group {
   uint64 preAllocSize = 7;
   bytes PartialResults = 8;
   repeated uint32 PartialResultTypes = 9;
+  repeated bool grouping_flag = 10;
 }
 
 message Insert{
@@ -128,6 +129,15 @@ message Insert{
   int32 partition_idx = 8;
   bool is_end         = 9;
   plan.TableDef table_def = 10;
+}
+
+message MultiUpdate {
+  uint64 affected_rows = 1;
+  bool ToWriteS3 = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
+  map<string,int32> SegmentMap = 5;
+  repeated plan.UpdateCtx update_ctx = 6;
 }
 
 message Array{
@@ -168,6 +178,18 @@ message PreInsert {
   plan.Expr cluster_by_expr  = 9;
 }
 
+message PostDml {
+  // PostDmlCtx
+  plan.ObjectRef ref = 1;
+  bool add_affected_rows = 2;
+  int32 primary_key_idx = 3;
+  string primary_key_name = 4;
+  bool is_delete = 5;
+  bool is_insert = 6;
+  bool is_delete_without_filters = 7;
+  plan.PostDmlFullTextCtx full_text = 8;
+}
+
 message LockTarget {
   uint64 table_id           	  = 1;
   int32 primary_col_idx_in_bat  = 2;
@@ -181,7 +203,6 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
-  bool                block   = 2;
 }
 
 message PreInsertUnique {
@@ -492,6 +513,8 @@ message Instruction{
   HashBuild hash_build = 48;
   Shufflebuild shuffle_build = 49;
   Indexbuild index_build = 50;
+  Apply apply = 51;
+  PostDml post_dml = 52;
 }
 
 message AnalysisList {
@@ -609,4 +632,11 @@ message UuidToRegIdx {
   int32 idx = 1;
   bytes uuid = 2;
   string from_addr = 3;
+}
+
+message Apply{
+  int32 apply_type = 1;
+  repeated int32 rel_list = 2;
+  repeated int32 col_list = 3;
+  repeated plan.Type types = 4 [(gogoproto.nullable) = false];
 }

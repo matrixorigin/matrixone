@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -86,6 +88,10 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	panic("not supported in internal sql executor")
 }
@@ -111,11 +117,81 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
-	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+
+	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(ctx, true)
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	tableDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range tableDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+			break
+		}
+	}
+	var statsInfo *pb.StatsInfo
+	stats := statistic.StatsInfoFromContext(ctx)
+	// This is a partition table.
+	if partitionInfo != nil {
+		crs := new(perfcounter.CounterSet)
+		statsInfo = plan.NewStatsInfo()
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			parCtx, parTable, err := c.getRelation(dbName, partitionTable, snapshot)
+			if err != nil {
+				return nil, err
+			}
+			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
+			parStats, err := parTable.Stats(newParCtx, true)
+			if err != nil {
+				return nil, err
+			}
+			statsInfo.Merge(parStats)
+		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+	} else {
+		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+
+		statsInfo, err = table.Stats(newCtx, true)
+		if err != nil {
+			return nil, err
+		}
+
+		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
+			List:      crs.FileService.S3.List.Load(),
+			Head:      crs.FileService.S3.Head.Load(),
+			Put:       crs.FileService.S3.Put.Load(),
+			Get:       crs.FileService.S3.Get.Load(),
+			Delete:    crs.FileService.S3.Delete.Load(),
+			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+		})
+	}
+	return statsInfo, nil
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -181,7 +257,7 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) 
 	return databaseId, nil
 }
 
-func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+func (c *compilerContext) GetConfig(varName, dbName, tblName string) (string, error) {
 	switch varName {
 	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
 	case "unique_check_on_autoincr":
@@ -330,7 +406,8 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
-	snapshot *plan.Snapshot) (context.Context, engine.Relation, error) {
+	snapshot *plan.Snapshot,
+) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil, err

@@ -73,7 +73,7 @@ func (obj *object) Pin() *common.PinnedItem[*object] {
 
 func (obj *object) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	creatTS := obj.meta.Load().GetCreatedAt()
-	return creatTS.Less(&ts)
+	return creatTS.LT(&ts)
 }
 
 func (obj *object) GetDuplicatedRows(
@@ -143,7 +143,5 @@ func (obj *object) EstimateMemSize() (int, int) {
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {
-	stats := obj.meta.Load().GetObjectStats()
-	fileRows := uint64(stats.Rows())
-	return fileRows
+	return uint64(obj.meta.Load().Rows())
 }

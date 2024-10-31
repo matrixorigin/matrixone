@@ -20,11 +20,9 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
 
@@ -57,10 +55,12 @@ type tableOffset struct {
 }
 
 type BackupDeltaLocDataSource struct {
-	ctx context.Context
-	fs  fileservice.FileService
-	ts  types.TS
-	ds  map[string]*objData
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         types.TS
+	ds         map[string]*objData
+	tombstones []objectio.ObjectStats
+	needShrink bool
 }
 
 func NewBackupDeltaLocDataSource(
@@ -70,11 +70,18 @@ func NewBackupDeltaLocDataSource(
 	ds map[string]*objData,
 ) *BackupDeltaLocDataSource {
 	return &BackupDeltaLocDataSource{
-		ctx: ctx,
-		fs:  fs,
-		ts:  ts,
-		ds:  ds,
+		ctx:        ctx,
+		fs:         fs,
+		ts:         ts,
+		ds:         ds,
+		needShrink: true,
 	}
+}
+
+func (d *BackupDeltaLocDataSource) SetTS(
+	ts types.TS,
+) {
+	d.ts = ts
 }
 
 func (d *BackupDeltaLocDataSource) Next(
@@ -95,13 +102,12 @@ func (d *BackupDeltaLocDataSource) Close() {
 
 func (d *BackupDeltaLocDataSource) ApplyTombstones(
 	_ context.Context,
-	_ objectio.Blockid,
+	_ *objectio.Blockid,
 	_ []int64,
 	_ engine.TombstoneApplyPolicy,
 ) ([]int64, error) {
 	panic("Not Support ApplyTombstones")
 }
-
 func (d *BackupDeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	panic("Not Support order by")
 }
@@ -125,14 +131,26 @@ func ForeachTombstoneObject(
 			}
 		}
 	}
+	return nil
+}
 
+func buildDS(
+	onTombstone func(tombstone objectio.ObjectStats) (next bool, err error),
+	ds []objectio.ObjectStats,
+) error {
+	for _, d := range ds {
+		if next, err := onTombstone(d); !next || err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func GetTombstonesByBlockId(
-	bid objectio.Blockid,
-	deleteMask *nulls.Nulls,
+	bid *objectio.Blockid,
+	deleteMask *objectio.Bitmap,
 	scanOp func(func(tombstone *objData) (bool, error)) error,
+	needShrink bool,
 ) (err error) {
 
 	onTombstone := func(oData *objData) (bool, error) {
@@ -149,7 +167,7 @@ func GetTombstonesByBlockId(
 
 		for idx := 0; idx < int(obj.BlkCnt()); idx++ {
 			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](oData.data[idx].Vecs[0])
-			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, &bid)
+			start, end := blockio.FindStartEndOfBlockFromSortedRowids(rowids, bid)
 			if start == end {
 				continue
 			}
@@ -162,7 +180,9 @@ func GetTombstonesByBlockId(
 
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
-			oData.data[idx].Shrink(deleteRows, true)
+			if needShrink {
+				oData.data[idx].Shrink(deleteRows, true)
+			}
 		}
 		return true, nil
 	}
@@ -172,25 +192,77 @@ func GetTombstonesByBlockId(
 }
 
 func (d *BackupDeltaLocDataSource) GetTombstones(
-	_ context.Context, bid objectio.Blockid,
-) (deletedRows *nulls.Nulls, err error) {
-	deletedRows = &nulls.Nulls{}
-	deletedRows.InitWithSize(8192)
-
+	ctx context.Context, bid *objectio.Blockid,
+) (deletedRows objectio.Bitmap, err error) {
+	// PXU TODO: temp use GetNoReuseBitmap here
+	deletedRows = objectio.GetNoReuseBitmap()
+	if len(d.tombstones) > 0 {
+		if err = buildDS(
+			func(tombstone objectio.ObjectStats) (bool, error) {
+				if !tombstone.ZMIsEmpty() {
+					objZM := tombstone.SortKeyZoneMap()
+					if skip := !objZM.PrefixEq(bid[:]); skip {
+						return true, nil
+					}
+				}
+				name := tombstone.ObjectName()
+				logutil.Infof("[GetSnapshot] tombstone object %v", name.String())
+				bat, _, err := blockio.LoadOneBlock(ctx, d.fs, tombstone.ObjectLocation(), objectio.SchemaData)
+				if err != nil {
+					return false, err
+				}
+				if !tombstone.GetCNCreated() {
+					deleteRow := make([]int64, 0)
+					for v := 0; v < bat.Vecs[0].Length(); v++ {
+						var commitTs types.TS
+						err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
+						if err != nil {
+							return false, err
+						}
+						if commitTs.GT(&d.ts) {
+							logutil.Debugf("delete row %v, commitTs %v, location %v",
+								v, commitTs.ToString(), name.String())
+						} else {
+							deleteRow = append(deleteRow, int64(v))
+						}
+					}
+					if len(deleteRow) != bat.Vecs[0].Length() {
+						bat.Shrink(deleteRow, false)
+					}
+				}
+				d.ds[name.String()] = &objData{
+					stats:      &tombstone,
+					dataType:   objectio.SchemaData,
+					sortKey:    uint16(math.MaxUint16),
+					data:       make([]*batch.Batch, 0),
+					appendable: true,
+				}
+				d.ds[name.String()].data = append(d.ds[name.String()].data, bat)
+				return true, nil
+			},
+			d.tombstones,
+		); err != nil {
+			deletedRows.Release()
+			return
+		}
+	}
 	scanOp := func(onTombstone func(tombstone *objData) (bool, error)) (err error) {
 		return ForeachTombstoneObject(onTombstone, d.ds)
 	}
 
-	if err := GetTombstonesByBlockId(
+	if err = GetTombstonesByBlockId(
 		bid,
-		deletedRows,
-		scanOp); err != nil {
-		return nil, err
+		&deletedRows,
+		scanOp,
+		d.needShrink,
+	); err != nil {
+		deletedRows.Release()
+		return
 	}
 	return
 }
 
-func getCheckpointData(
+func GetCheckpointData(
 	ctx context.Context,
 	sid string,
 	fs fileservice.FileService,
@@ -265,7 +337,7 @@ func trimTombstoneData(
 			if err != nil {
 				return err
 			}
-			if commitTs.Greater(&ts) {
+			if commitTs.GT(&ts) {
 				logutil.Debugf("delete row %v, commitTs %v, location %v",
 					v, commitTs.ToString(), (*objectsData)[name].stats.ObjectLocation().String())
 			} else {
@@ -318,7 +390,7 @@ func LoadCheckpointEntriesFromKey(
 	baseTS *types.TS,
 ) ([]*objectio.BackupObject, *CheckpointData, error) {
 	locations := make([]*objectio.BackupObject, 0)
-	data, err := getCheckpointData(ctx, sid, fs, location, version)
+	data, err := GetCheckpointData(ctx, sid, fs, location, version)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -358,7 +430,7 @@ func LoadCheckpointEntriesFromKey(
 			DropTS:   deletedAt,
 		}
 		if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-			(createAt.GreaterEq(baseTS) || commitAt.GreaterEq(baseTS))) {
+			(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -384,7 +456,7 @@ func LoadCheckpointEntriesFromKey(
 			CrateTS:  commitTS,
 		}
 		if baseTS.IsEmpty() ||
-			(!baseTS.IsEmpty() && commitTS.GreaterEq(baseTS)) {
+			(!baseTS.IsEmpty() && commitTS.GE(baseTS)) {
 			bo.NeedCopy = true
 		}
 		locations = append(locations, bo)
@@ -428,7 +500,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}()
 	phaseNumber = 1
 	// Load checkpoint
-	data, err := getCheckpointData(ctx, sid, fs, loc, version)
+	data, err := GetCheckpointData(ctx, sid, fs, loc, version)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -459,13 +531,13 @@ func ReWriteCheckpointAndBlockFromKey(
 			commitTS := objInfoCommit.Get(i).(types.TS)
 			createAt := objInfoCreate.Get(i).(types.TS)
 			tid := objInfoTid.Get(i).(uint64)
-			if commitTS.Less(&ts) {
+			if commitTS.LT(&ts) {
 				panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 			}
 			if deleteAt.IsEmpty() {
 				continue
 			}
-			if createAt.GreaterEq(&ts) {
+			if createAt.GE(&ts) {
 				panic(any(fmt.Sprintf("createAt equal to ts: %v-%v", createAt.ToString(), ts.ToString())))
 			}
 			addObjectToObjectData(stats, appendable, i, tid, dataType, od)
@@ -562,14 +634,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		objectsData,
 		func(oData *objData, writer *blockio.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, tombstonesData)
-			location := oData.stats.ObjectLocation()
-			name := oData.stats.ObjectName()
-			metaLoc := objectio.BuildLocation(name, location.Extent(), 0, uint16(0))
-			blk := objectio.BlockInfo{
-				BlockID: *objectio.BuildObjectBlockid(name, uint16(0)),
-				MetaLoc: objectio.ObjectLocation(metaLoc),
-			}
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, ts, fs)
+			blk := oData.stats.ConstructBlockInfo(uint16(0))
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
 			if err != nil {
 				return true, err
 			}
@@ -607,9 +673,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					zap.Uint64("tid", oData.tid))
 				return true, nil
 			}
-			writer.SetDataType(objectio.SchemaTombstone)
+			writer.SetTombstone()
 			writer.SetPrimaryKeyWithType(
-				uint16(catalog.TombstonePrimaryKeyIdx),
+				uint16(objectio.TombstonePrimaryKeyIdx),
 				index.HBF,
 				index.ObjectPrefixFn,
 				index.BlockPrefixFn,

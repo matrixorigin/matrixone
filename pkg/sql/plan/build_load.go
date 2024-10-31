@@ -20,20 +20,21 @@ import (
 	"io"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
-	LoadParallelMinSize = 1 << 20
+	LoadParallelMinSize = int(colexec.WriteS3Threshold)
+	LoadWriteS3MinSize  = 1 << 20
 )
 
 func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
@@ -108,7 +109,7 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 	}
 }
 
-func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow bool) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -158,7 +159,7 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser, reuseRow 
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false, reuseRow)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
@@ -186,12 +187,14 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
 
-	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR), true)
+	csvReader, err := newReaderWithParam(param, io.NopCloser(bufR))
 	if err != nil {
 		return 0, err
 	}
+
+	var lastRow []csvparser.Field
 	for skipLines > 0 {
-		_, err = csvReader.Read()
+		lastRow, err = csvReader.Read(lastRow)
 		if err != nil {
 			if err == io.EOF {
 				param.Tail.IgnoredLines = 0
@@ -230,13 +233,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
-
-	tableDef.Name2ColIndex = map[string]int32{}
-	for i, col := range tableDef.Cols {
-		if col.Name != catalog.FakePrimaryKeyColName {
-			tableDef.Name2ColIndex[col.Name] = int32(i)
-		}
-	}
 	originTableDef := tableDef
 	// load with columnlist will copy a new tableDef
 	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
@@ -248,9 +244,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	if stmt.Param.FileSize < LoadParallelMinSize {
-		stmt.Param.Parallel = false
-	}
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
 	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
@@ -261,11 +254,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.FileStartOff = offset
 	}
 
-	if stmt.Param.FileSize-offset < LoadParallelMinSize {
+	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
 	}
 
-	stmt.Param.LoadFile = true
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
@@ -303,7 +295,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:           int32(stmt.Param.ScanType),
+			Type:           int32(plan.ExternType_LOAD),
+			LoadType:       int32(stmt.Param.ScanType),
 			Data:           stmt.Param.Data,
 			Format:         stmt.Param.Format,
 			IgnoredLines:   uint64(stmt.Param.Tail.IgnoredLines),
@@ -328,10 +321,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
-	inlineDataSize := unsafe.Sizeof(stmt.Param.Data)
+	inlineDataSize := strings.Count(stmt.Param.Data, "")
 	builder.qry.LoadWriteS3 = true
 
-	if noCompress && (stmt.Param.FileSize-offset < LoadParallelMinSize || inlineDataSize < LoadParallelMinSize) {
+	if noCompress && ((stmt.Param.ScanType == tree.INLINE && inlineDataSize < LoadWriteS3MinSize) || (stmt.Param.ScanType != tree.INLINE && stmt.Param.FileSize-offset < int64(LoadWriteS3MinSize))) {
 		builder.qry.LoadWriteS3 = false
 	}
 
@@ -424,7 +417,6 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		return "", moerr.NewInternalError(ctx.GetContext(), err.Error())
 	}
-	param.Init = true
 	return param.Filepath, nil
 }
 

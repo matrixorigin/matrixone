@@ -74,6 +74,8 @@ var (
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
 	aggrCntCol   = table.Int64Column("aggr_count", "the number of statements aggregated")
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
+	connIdCol    = table.Int64Column("connection_id", "connection id")
+	cuCol        = table.ValueColumnWithPrec("cu", "cu cost", 4)
 
 	SingleStatementTable = &table.Table{
 		Account:  table.AccountSys,
@@ -108,9 +110,12 @@ var (
 			sqlTypeCol,
 			aggrCntCol,
 			resultCntCol,
+			// mo 2.0
+			connIdCol,
+			cuCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{reqAtCol},
+		ClusterBy:        []table.Column{accountCol, reqAtCol},
 		// Engine
 		Engine:        table.NormalTableEngine,
 		Comment:       "record each statement and stats info" + catalog.MO_COMMENT_NO_DEL_HINT,

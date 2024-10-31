@@ -30,12 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -104,12 +107,9 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 		return lockOp.GetChildren(0).Call(proc)
 	}
 
-	if !lockOp.block {
-		return callNonBlocking(proc, lockOp)
-	}
-
-	// Waring: callBlocking only for `select for update` statement
-	return callBlocking(proc, lockOp, lockOp.GetIsFirst(), lockOp.GetIsLast())
+	// for the case like `select for update`, need to lock whole batches before send it to next operator
+	// currently, this is implemented by blocking a output operator below, instead of calling func callBlocking
+	return callNonBlocking(proc, lockOp)
 }
 
 func callNonBlocking(
@@ -127,95 +127,17 @@ func callNonBlocking(
 	if result.Batch == nil {
 		return result, lockOp.ctr.retryError
 	}
-	bat := result.Batch
-	if bat.IsEmpty() {
+	if result.Batch.IsEmpty() {
 		analyzer.Output(result.Batch)
 		return result, err
 	}
 
-	if err = performLock(bat, proc, lockOp, analyzer); err != nil {
+	if err = performLock(result.Batch, proc, lockOp, analyzer); err != nil {
 		return result, err
 	}
 
 	analyzer.Output(result.Batch)
 	return result, nil
-}
-
-func callBlocking(
-	proc *process.Process,
-	lockOp *LockOp,
-	isFirst bool,
-	_ bool) (vm.CallResult, error) {
-	analyzer := lockOp.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
-	result := vm.NewCallResult()
-	if lockOp.ctr.step == stepLock {
-		for {
-			bat, err := lockOp.getBatch(proc, analyzer, isFirst)
-			if err != nil {
-				return result, err
-			}
-
-			// no input batch any more, means all lock performed.
-			if bat == nil {
-				lockOp.ctr.step = stepDownstream
-				if len(lockOp.ctr.cachedBatches) == 0 {
-					lockOp.ctr.step = stepEnd
-				}
-				break
-			}
-
-			// skip empty batch
-			if bat.IsEmpty() {
-				continue
-			}
-
-			if err = performLock(bat, proc, lockOp, analyzer); err != nil {
-				return result, err
-			}
-
-			// blocking lock node. Never pass the input batch into downstream operators before
-			// all lock are performed.
-			appendBat, err := bat.Dup(proc.GetMPool())
-			if err != nil {
-				return result, err
-			}
-			analyzer.Alloc(int64(appendBat.Size()))
-			lockOp.ctr.cachedBatches = append(lockOp.ctr.cachedBatches, appendBat)
-		}
-	}
-
-	if lockOp.ctr.step == stepDownstream {
-		if lockOp.ctr.retryError != nil {
-			lockOp.ctr.step = stepEnd
-			return result, lockOp.ctr.retryError
-		}
-
-		if len(lockOp.ctr.cachedBatches) == 0 {
-			lockOp.ctr.step = stepEnd
-		} else {
-			if lockOp.ctr.buf != nil {
-				lockOp.ctr.buf.Clean(proc.Mp())
-				lockOp.ctr.buf = nil
-			}
-			lockOp.ctr.buf = lockOp.ctr.cachedBatches[0]
-			lockOp.ctr.cachedBatches = lockOp.ctr.cachedBatches[1:]
-			result.Batch = lockOp.ctr.buf
-			analyzer.Output(result.Batch)
-			return result, nil
-		}
-	}
-
-	if lockOp.ctr.step == stepEnd {
-		result.Status = vm.ExecStop
-		lockOp.cleanCachedBatch(proc)
-		analyzer.Output(result.Batch)
-		return result, lockOp.ctr.retryError
-	}
-
-	panic("BUG")
 }
 
 func performLock(
@@ -327,13 +249,28 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		nil,
 		tableID,
 		proc,
@@ -343,6 +280,7 @@ func LockTable(
 	if err != nil {
 		return err
 	}
+
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
 		if !defChanged {
@@ -373,6 +311,21 @@ func LockRows(
 	parker := types.NewPacker()
 	defer parker.Close()
 
+	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	analyzer := process.NewTempAnalyzer()
+	defer func() {
+		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
+		stats.AddPreRunOnceWaitLockDuration(waitLockTime)
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      analyzer.GetOpStats().S3List,
+			Head:      analyzer.GetOpStats().S3Head,
+			Put:       analyzer.GetOpStats().S3Put,
+			Get:       analyzer.GetOpStats().S3Get,
+			Delete:    analyzer.GetOpStats().S3Delete,
+			DeleteMul: analyzer.GetOpStats().S3DeleteMul,
+		})
+	}()
+
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
@@ -382,7 +335,7 @@ func LockRows(
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
-		nil,
+		analyzer,
 		rel,
 		tableID,
 		proc,
@@ -440,7 +393,7 @@ func doLock(
 		0,
 		nil)
 
-	//in this case:
+	// in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
 	// insert into t1 values (1,1,null);
 	// update t1 set b = b+1 where a = 1;
@@ -501,19 +454,19 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
-	var err error
-	var result lock.Result
-	for {
-		result, err = lockService.Lock(
-			ctx,
-			tableID,
-			rows,
-			txn.ID,
-			options)
-		if !canRetryLock(table, txnOp, err) {
-			break
-		}
-	}
+	result, err := lockWithRetry(
+		ctx,
+		lockService,
+		table,
+		rows,
+		txn.ID,
+		options,
+		txnOp,
+		fetchFunc,
+		vec,
+		opts,
+		pkType,
+	)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -569,7 +522,7 @@ func doLock(
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		// wait last committed logtail applied
+		// wait last committed logtail applied, (IO wait not related to FileService)
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
@@ -583,7 +536,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, analyzer, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -639,6 +592,70 @@ func doLock(
 }
 
 const defaultWaitTimeOnRetryLock = time.Second
+
+func lockWithRetry(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	txnOp client.TxnOperator,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	var result lock.Result
+	var err error
+
+	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
+	if !canRetryLock(tableID, txnOp, err) {
+		return result, err
+	}
+
+	for {
+		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
+		if !canRetryLock(tableID, txnOp, err) {
+			break
+		}
+	}
+
+	return result, err
+}
+
+func LockWithMayUpgrade(
+	ctx context.Context,
+	lockService lockservice.LockService,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+	fetchFunc FetchLockRowsFunc,
+	vec *vector.Vector,
+	opts LockOptions,
+	pkType types.Type,
+) (lock.Result, error) {
+	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+
+	// if return ErrLockNeedUpgrade, manually upgrade the lock and retry
+	logutil.Infof("Trying to upgrade lock level due to too many row level locks for txn %s", txnID)
+	opts = opts.WithLockTable(true, false)
+	_, nrows, ng := fetchFunc(
+		vec,
+		opts.parker,
+		pkType,
+		opts.maxCountPerLock,
+		opts.lockTable,
+		opts.filter,
+		opts.filterCols,
+	)
+	options.Granularity = ng
+	return lockService.Lock(ctx, tableID, nrows, txnID, options)
+}
 
 func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
@@ -734,20 +751,6 @@ func NewArgumentByEngine(engine engine.Engine) *LockOp {
 	lock := reuse.Alloc[LockOp](nil)
 	lock.engine = engine
 	return lock
-}
-
-// Block return if lock operator is a blocked node.
-func (lockOp *LockOp) Block() bool {
-	return lockOp.block
-}
-
-// SetBlock set the lock op is blocked. If true lock op will block the current pipeline, and cache
-// all input batches. And wait for all the input's batch to be locked before outputting the cached batch
-// to the downstream operator. E.g. select for update, only we get all lock result, then select can be
-// performed, otherwise, if we need retry in RC mode, we may get wrong result.
-func (lockOp *LockOp) SetBlock(block bool) *LockOp {
-	lockOp.block = block
-	return lockOp
 }
 
 // AddLockTarget add lock targets
@@ -888,27 +891,13 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.resetParker()
-	lockOp.cleanCachedBatch(proc)
 	lockOp.ctr.retryError = nil
-	lockOp.ctr.step = stepLock
 	lockOp.ctr.defChanged = false
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
-	lockOp.cleanCachedBatch(proc)
-}
-
-func (lockOp *LockOp) cleanCachedBatch(proc *process.Process) {
-	for _, bat := range lockOp.ctr.cachedBatches {
-		bat.Clean(proc.Mp())
-	}
-	lockOp.ctr.cachedBatches = nil
-	if lockOp.ctr.buf != nil {
-		lockOp.ctr.buf.Clean(proc.Mp())
-		lockOp.ctr.buf = nil
-	}
 }
 
 func (lockOp *LockOp) resetParker() {
@@ -922,25 +911,6 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
-}
-
-func (lockOp *LockOp) getBatch(
-	proc *process.Process,
-	analyzer process.Analyzer,
-	isFirst bool) (*batch.Batch, error) {
-	fn := lockOp.ctr.batchFetchFunc
-	if fn == nil {
-		fn = lockOp.GetChildren(0).Call
-	}
-
-	beforeChildrenCall := time.Now()
-	input, err := fn(proc)
-	analyzer.ChildrenCallStop(beforeChildrenCall)
-	if err != nil {
-		return nil, err
-	}
-	analyzer.Input(input.Batch)
-	return input.Batch, nil
 }
 
 func getRowsFilter(
@@ -959,6 +929,7 @@ func getRowsFilter(
 func hasNewVersionInRange(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -979,13 +950,24 @@ func hasNewVersionInRange(
 			return false, err
 		}
 	}
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	defer func() {
+		if analyzer != nil {
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+		}
+	}()
+
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, vec)
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
 		analyzer.WaitStop(start)
+		analyzer.AddWaitLockTime(start)
 	}
 }

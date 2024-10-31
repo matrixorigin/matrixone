@@ -40,7 +40,7 @@ const (
 type container struct {
 	state int
 
-	bloomFilter   *bloomfilter.BloomFilter
+	bloomFilter   bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
 
 	// buildCnt     int
@@ -107,7 +107,9 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 }
 
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	runtimeSucceed := fuzzyFilter.ctr.state > HandleRuntimeFilter
+
+	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
 	ctr.collisionCnt = 0
@@ -122,16 +124,11 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 		ctr.roaringFilter.b.Clear()
 	}
 
-	if ctr.bloomFilter != nil {
-		ctr.bloomFilter.Reset()
-	}
+	ctr.bloomFilter.Reset()
 }
 
 func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if fuzzyFilter.ctr.bloomFilter != nil {
-		fuzzyFilter.ctr.bloomFilter.Clean()
-		fuzzyFilter.ctr.bloomFilter = nil
-	}
+	fuzzyFilter.ctr.bloomFilter.Clean()
 	if fuzzyFilter.ctr.roaringFilter != nil {
 		fuzzyFilter.ctr.roaringFilter = nil
 	}

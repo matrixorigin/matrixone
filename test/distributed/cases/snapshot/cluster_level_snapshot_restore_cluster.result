@@ -443,8 +443,11 @@ show tables;
 Tables_in_mo_catalog
 mo_account
 mo_cache
+mo_cdc_task
+mo_cdc_watermark
 mo_columns
 mo_configurations
+mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes
@@ -498,10 +501,10 @@ function_id    name    owner    args    rettype    body    language    db    def
 drop database test01;
 use test02;
 select * from v01;
-invalid database test01
+Unknown database test01
 use test03;
 select * from v02;
-invalid database test01
+Unknown database test01
 use udf_db;
 drop function `addab`(x int, y int);
 use udf_db2;
@@ -552,8 +555,11 @@ show tables;
 Tables_in_mo_catalog
 mo_account
 mo_cache
+mo_cdc_task
+mo_cdc_watermark
 mo_columns
 mo_configurations
+mo_data_key
 mo_database
 mo_foreign_keys
 mo_indexes

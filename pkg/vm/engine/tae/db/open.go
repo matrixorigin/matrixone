@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,9 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -60,13 +63,19 @@ func fillRuntimeOptions(opts *options.Options) {
 	if opts.MergeCfg.CNStandaloneTake {
 		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
+	if opts.MergeCfg.DisableZMBasedMerge {
+		common.RuntimeDisableZMBasedMerge.Store(true)
+	}
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
-	logutil.Info("open-tae", common.OperationField("Start"),
-		common.OperandField("open"))
+	logutil.Info(
+		"open-tae",
+		common.OperationField("Start"),
+		common.OperandField("open"),
+	)
 	totalTime := time.Now()
 
 	if err != nil {
@@ -76,10 +85,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
-		logutil.Info("open-tae", common.OperationField("End"),
+		logutil.Info(
+			"open-tae", common.OperationField("End"),
 			common.OperandField("open"),
 			common.AnyField("cost", time.Since(totalTime)),
-			common.AnyField("err", err))
+			common.AnyField("err", err),
+		)
 	}()
 
 	opts = opts.FillDefaults(dirname)
@@ -87,8 +98,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	wbuf := &bytes.Buffer{}
 	werr := toml.NewEncoder(wbuf).Encode(opts)
-	logutil.Info("open-tae", common.OperationField("Config"),
-		common.AnyField("toml", wbuf.String()), common.ErrorField(werr))
+	logutil.Info(
+		"open-tae",
+		common.OperationField("Config"),
+		common.AnyField("toml", wbuf.String()),
+		common.ErrorField(werr),
+	)
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
@@ -107,9 +122,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
-	transferTable, e := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
-	if e != nil {
-		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", e))
+	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
+	if err != nil {
+		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
 	}
 
 	switch opts.LogStoreT {
@@ -175,23 +190,53 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
+	ckpReplayer := db.BGCheckpointRunner.Replay(dataFactory)
+	if err = ckpReplayer.ReadCkpFiles(); err != nil {
+		panic(err)
+	}
+
+	// 1. replay three tables objectlist
+	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist()
 	if err != nil {
 		panic(err)
 	}
-	logutil.Info("open-tae", common.OperationField("replay"),
+
+	var txn txnif.AsyncTxn
+	{
+		// create a txn manually
+		txnIdAlloc := common.NewTxnIDAllocator()
+		store := txnStoreFactory()
+		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
+		store.BindTxn(txn)
+	}
+	// 2. replay all table Entries
+	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
+		panic(err)
+	}
+
+	// 3. replay other tables' objectlist
+	if err = ckpReplayer.ReplayObjectlist(); err != nil {
+		panic(err)
+	}
+	logutil.Info(
+		"open-tae",
+		common.OperationField("replay"),
 		common.OperandField("checkpoints"),
 		common.AnyField("cost", time.Since(now)),
-		common.AnyField("checkpointed", checkpointed.ToString()))
+		common.AnyField("checkpointed", checkpointed.ToString()),
+	)
 
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
 
 	// checkObjectState(db)
-	logutil.Info("open-tae", common.OperationField("replay"),
+	logutil.Info(
+		"open-tae",
+		common.OperationField("replay"),
 		common.OperandField("wal"),
-		common.AnyField("cost", time.Since(now)))
+		common.AnyField("cost", time.Since(now)),
+	)
 
 	db.DBLocker, dbLocker = dbLocker, nil
 
@@ -207,15 +252,23 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	cleaner := gc2.NewCheckpointCleaner(opts.Ctx, opts.SID, fs, db.BGCheckpointRunner, opts.GCCfg.DisableGC)
-	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
+	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
+	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
+		opts.SID, fs, db.BGCheckpointRunner,
+		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
+		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
+		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),
+		gc2.WithGCProbility(opts.GCCfg.GCProbility),
+		gc2.WithCheckOption(opts.GCCfg.CheckGC),
+		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
-			return !endTS.GreaterEq(&ts)
-		}, gc2.CheckerKeyTTL)
+			return !endTS.GE(&ts)
+		}, cmd_util.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	// Init gc manager at last
@@ -225,7 +278,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.TransferInterval,
 			func(_ context.Context) (err error) {
-				db.Runtime.PrintVectorPoolUsage()
+				db.Runtime.PoolUsageReport()
 				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)
 				transferTable.RunTTL()
 				return
@@ -245,11 +298,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CheckpointCfg.DisableGCCheckpoint {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCByTS(ctx, consumed.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark)
 			}),
 		gc.WithCronJob(
 			"catalog-gc",
@@ -258,11 +311,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(
@@ -270,7 +323,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
 				logutil.Info(db.Runtime.ExportLogtailStats())
-				ckp := db.BGCheckpointRunner.MaxCheckpoint()
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 				if ckp != nil {
 					// use previous end to gc logtail
 					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here

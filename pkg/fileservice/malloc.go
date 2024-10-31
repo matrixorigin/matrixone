@@ -42,10 +42,10 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 	// with metrics
 	allocator = malloc.NewMetricsAllocator(
 		allocator,
-		metric.MallocCounterMemoryCacheAllocateBytes,
-		metric.MallocGaugeMemoryCacheInuseBytes,
-		metric.MallocCounterMemoryCacheAllocateObjects,
-		metric.MallocGaugeMemoryCacheInuseObjects,
+		metric.MallocCounter.WithLabelValues("memory-cache-allocate"),
+		metric.MallocGauge.WithLabelValues("memory-cache-inuse"),
+		metric.MallocCounter.WithLabelValues("memory-cache-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("memory-cache-inuse-objects"),
 	)
 	// decorate
 	allocator = decorateAllocator(allocator)
@@ -57,10 +57,10 @@ var ioAllocator = sync.OnceValue(func() malloc.Allocator {
 	// with metrics
 	allocator = malloc.NewMetricsAllocator(
 		allocator,
-		metric.MallocCounterIOAllocateBytes,
-		metric.MallocGaugeIOInuseBytes,
-		metric.MallocCounterIOAllocateObjects,
-		metric.MallocGaugeIOInuseObjects,
+		metric.MallocCounter.WithLabelValues("io-allocate"),
+		metric.MallocGauge.WithLabelValues("io-inuse"),
+		metric.MallocCounter.WithLabelValues("io-allocate-objects"),
+		metric.MallocGauge.WithLabelValues("io-inuse-objects"),
 	)
 	// decorate
 	allocator = decorateAllocator(allocator)

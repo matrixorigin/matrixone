@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -95,24 +94,24 @@ func Test_mce(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
+		tConn := &testConn{}
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(tConn, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
@@ -245,7 +244,7 @@ func Test_mce(t *testing.T) {
 
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		pu.SV.SkipCheckPrivilege = true
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
@@ -336,30 +335,28 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
 		}
-		setGlobalPu(pu)
+		setPu("", pu)
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -391,24 +388,22 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -477,18 +472,14 @@ func Test_getDataFromPipeline(t *testing.T) {
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -528,7 +519,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		err = getDataFromPipeline(ses, ec, batchCase1)
+		err = getDataFromPipeline(ses, ec, batchCase1, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2 := func() *batch.Batch {
@@ -541,7 +532,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -553,18 +544,14 @@ func Test_getDataFromPipeline(t *testing.T) {
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
@@ -574,7 +561,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
-		convey.So(getDataFromPipeline(ses, ec, nil), convey.ShouldBeNil)
+		convey.So(getDataFromPipeline(ses, ec, nil, nil), convey.ShouldBeNil)
 
 		genBatch := func() *batch.Batch {
 			return allocTestBatch(
@@ -614,11 +601,11 @@ func Test_getDataFromPipeline(t *testing.T) {
 			return bat
 		}()
 
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
-		err = getDataFromPipeline(ses, ec, batchCase2)
+		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 	})
@@ -689,7 +676,7 @@ func Test_typeconvert(t *testing.T) {
 }
 
 func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Batch {
-	batchData := batch.New(true, attrName)
+	batchData := batch.New(attrName)
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
@@ -726,22 +713,20 @@ func Test_handleShowVariables(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		pu.StorageEngine = eng
 		pu.TxnClient = txnClient
@@ -815,18 +800,14 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
@@ -920,24 +901,22 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 				txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 				txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 				txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-				txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+				txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+				txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 				txnClient := mock_frontend.NewMockTxnClient(ctrl)
 				txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-				clientConn, serverConn := net.Pipe()
-				defer clientConn.Close()
-				defer serverConn.Close()
-				go startConsumeRead(clientConn)
 				sv, err := getSystemVariables("test/system_vars_config.toml")
 				if err != nil {
 					t.Error(err)
 				}
 				pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 				pu.SV.SkipCheckUser = true
-				setGlobalPu(pu)
-				ioses, err := NewIOSession(serverConn, pu)
+				setPu("", pu)
+				ioses, err := NewIOSession(&testConn{}, pu, "")
 				convey.So(err, convey.ShouldBeNil)
 				pu.StorageEngine = eng
 				pu.TxnClient = txnClient
@@ -1097,21 +1076,19 @@ func TestProcessLoadLocal(t *testing.T) {
 		proc.Base.LoadLocalReader, writer = io.Pipe()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
+		tConn := &testConn{}
 		pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
 			{Length: 5, Payload: []byte("world"), SequenceID: 2},
 			{Length: 0, Payload: []byte(""), SequenceID: 3}}
-		go writeExceptResult(clientConn, pkts)
+		writeExceptResult(tConn, pkts)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -1134,7 +1111,7 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer)
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
@@ -1200,18 +1177,14 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 			eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 			txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
-			clientConn, serverConn := net.Pipe()
-			defer clientConn.Close()
-			defer serverConn.Close()
-			go startConsumeRead(clientConn)
 			sv, err := getSystemVariables("test/system_vars_config.toml")
 			if err != nil {
 				t.Error(err)
 			}
 			pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 			pu.SV.SkipCheckUser = true
-			setGlobalPu(pu)
-			ioses, err := NewIOSession(serverConn, pu)
+			setPu("", pu)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
 			if err != nil {
 				t.Error(err)
 			}
@@ -1245,6 +1218,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 					),
 				)
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				defer cluster.Close()
 				ses.SetTenantInfo(&TenantInfo{Tenant: "t1"})
 				proto.connectAttrs = map[string]string{}
 				ec := newTestExecCtx(ctx, ctrl)
@@ -1305,6 +1279,52 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "s1", row[0])
 				require.Equal(t, "addr1", row[1])
+			})
+
+			convey.Convey("filter label sys account", t, func() {
+				ses.mrs = &MysqlResultSet{}
+				cluster := clusterservice.NewMOCluster(
+					sid,
+					nil,
+					0,
+					clusterservice.WithDisableRefresh(),
+					clusterservice.WithServices(
+						[]metadata.CNService{
+							{
+								ServiceID:  "s1",
+								SQLAddress: "addr1",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t1"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s2",
+								SQLAddress: "addr2",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t2"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s3",
+								SQLAddress: "addr3",
+								WorkState:  metadata.WorkState_Working,
+							},
+						},
+						nil,
+					),
+				)
+				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "dump"})
+				proto.connectAttrs = map[string]string{}
+				ec := newTestExecCtx(ctx, ctrl)
+
+				err = handleShowBackendServers(ses, ec)
+				require.NoError(t, err)
+				rs := ses.GetMysqlResultSet()
+				require.Equal(t, uint64(4), rs.GetColumnCount())
+				require.Equal(t, uint64(3), rs.GetRowCount())
 			})
 		},
 	)
@@ -1412,6 +1432,8 @@ func Test_ExecRequest(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -1429,18 +1451,14 @@ func Test_ExecRequest(t *testing.T) {
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 
-		clientConn, serverConn := net.Pipe()
-		defer clientConn.Close()
-		defer serverConn.Close()
-		go startConsumeRead(clientConn)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 

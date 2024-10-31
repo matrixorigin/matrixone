@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -48,7 +49,7 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
-	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), ctr.localRegsCnt)
+	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
@@ -169,18 +170,19 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(dispatch.RemoteRegs)
 	for cnt > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
+		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), waitNotifyTimeout, moerr.CauseWaitRemoteRegsReady)
 		select {
 		case <-timeoutCtx.Done():
+			err := moerr.AttachCause(timeoutCtx, moerr.NewInternalErrorNoCtx("wait notify message timeout"))
 			timeoutCancel()
-			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+			return false, err
 
 		case <-proc.Ctx.Done():
 			timeoutCancel()
 			dispatch.ctr.prepared = true
 			return true, nil
 
-		case csinfo := <-proc.DispatchNotifyCh:
+		case csinfo := <-dispatch.ctr.remoteInfo:
 			timeoutCancel()
 			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, csinfo)
 			cnt--
@@ -195,11 +197,12 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	dispatch.ctr.isRemote = true
 	dispatch.ctr.remoteReceivers = make([]*process.WrapCs, 0, dispatch.ctr.remoteRegsCnt)
 	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
 	for i, rr := range dispatch.RemoteRegs {
 		if dispatch.FuncId == ShuffleToAllFunc {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
-		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
 			return err
 		}
 	}

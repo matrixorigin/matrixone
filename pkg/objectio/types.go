@@ -40,13 +40,25 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int64
+type ReadFilterSearchFuncType func(*vector.Vector) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+}
+
+func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
+	if (f.HasFakePK || !isSortedBlk) && f.UnSortedSearchFunc != nil {
+		return f.UnSortedSearchFunc
+	}
+
+	if isSortedBlk && f.SortedSearchFunc != nil {
+		return f.SortedSearchFunc
+	}
+
+	return nil
 }
 
 type WriteOptions struct {

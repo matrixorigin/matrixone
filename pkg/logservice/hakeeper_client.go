@@ -21,13 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -48,6 +49,8 @@ type basicHAKeeperClient interface {
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// GetClusterState queries the cluster state
 	GetClusterState(ctx context.Context) (pb.CheckerState, error)
+	// CheckLogServiceHealth checks if the log-service is healthy or not.
+	CheckLogServiceHealth(ctx context.Context) error
 }
 
 // ClusterHAKeeperClient used to get cluster detail
@@ -61,6 +64,10 @@ type CNHAKeeperClient interface {
 	BRHAKeeperClient
 	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
+	// UpdateNonVotingReplicaNum updates the non-voting-replica-num which is stores in HAKeeper.
+	UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error
+	// UpdateNonVotingLocality updates the non-voting-locality which is stores in HAKeeper.
+	UpdateNonVotingLocality(ctx context.Context, locality pb.Locality) error
 }
 
 // TNHAKeeperClient is the HAKeeper client used by a TN store.
@@ -110,6 +117,15 @@ var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
+func NewClusterHAKeeperClient(
+	ctx context.Context, sid string, cfg HAKeeperClientConfig,
+) (ClusterHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
@@ -150,6 +166,43 @@ func NewLogHAKeeperClient(
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
+// NewLogHAKeeperClientWithRetry creates a HAKeeper client with retry.
+func NewLogHAKeeperClientWithRetry(
+	ctx context.Context, sid string, cfg HAKeeperClientConfig,
+) ClusterHAKeeperClient {
+	var c ClusterHAKeeperClient
+	createFn := func() error {
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewLogHAKeeperClientWithRetry)
+		defer cancel()
+		client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
+		if err != nil {
+			err = moerr.AttachCause(ctx, err)
+			logutil.Errorf("failed to create HAKeeper client: %v", err)
+			return err
+		}
+		c = client
+		return nil
+	}
+	timer := time.NewTimer(time.Minute * 2)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-timer.C:
+			panic("failed to create HAKeeper client")
+
+		default:
+			if err := createFn(); err != nil {
+				time.Sleep(time.Second * 3)
+				continue
+			}
+			return c
+		}
+	}
 }
 
 // NewProxyHAKeeperClient creates a HAKeeper client to be used by a proxy service.
@@ -220,6 +273,39 @@ func (c *managedHAKeeperClient) Close() error {
 		return nil
 	}
 	return c.mu.client.close()
+}
+
+// CheckLogServiceHealth implements the ClusterHAKeeperClient interface.
+func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		details, err := c.getClient().getClusterDetails(ctx)
+		if err != nil {
+			if c.isRetryableError(err) {
+				c.resetClient()
+				continue
+			}
+			return err
+		}
+		if len(details.TNStores) == 0 {
+			// there are no tn stores yet.
+			return nil
+		}
+		var err1 error
+		for _, tnStore := range details.TNStores {
+			for _, shard := range tnStore.Shards {
+				err1 = firstError(err1, c.getClient().checkLogServiceHealth(
+					ctx,
+					pb.CheckHealth{
+						ShardID: shard.ShardID,
+					},
+				))
+			}
+		}
+		return err1
+	}
 }
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -510,6 +596,40 @@ func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, erro
 	}
 }
 
+// UpdateNonVotingReplicaNum implements the CNHAKeeperClient interface.
+func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().updateNonVotingReplicaNum(ctx, num)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// UpdateNonVotingLocality implements the CNHAKeeperClient interface.
+func (c *managedHAKeeperClient) UpdateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().updateNonVotingLocality(ctx, locality)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper)
 }
@@ -708,6 +828,21 @@ func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, 
 	return *resp.CheckerState, nil
 }
 
+func (c *hakeeperClient) checkLogServiceHealth(ctx context.Context, checkHealth pb.CheckHealth) error {
+	req := pb.Request{
+		Method:      pb.CHECK_HEALTH,
+		CheckHealth: &checkHealth,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	if resp.ErrorCode != 0 {
+		return moerr.NewInternalError(ctx, resp.ErrorMessage)
+	}
+	return nil
+}
+
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
@@ -831,6 +966,30 @@ func (c *hakeeperClient) sendProxyHeartbeat(ctx context.Context, hb pb.ProxyHear
 		return pb.CommandBatch{}, err
 	}
 	return cb, nil
+}
+
+func (c *hakeeperClient) updateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+	req := pb.Request{
+		Method:              pb.UPDATE_NON_VOTING_REPLICA_NUM,
+		NonVotingReplicaNum: num,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) updateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+	req := pb.Request{
+		Method:            pb.UPDATE_NON_VOTING_LOCALITY,
+		NonVotingLocality: &locality,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {

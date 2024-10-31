@@ -19,11 +19,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"go.uber.org/zap"
 )
 
 type allocator struct {
@@ -59,12 +62,13 @@ func (a *allocator) allocate(
 	tableID uint64,
 	key string,
 	count int,
-	txnOp client.TxnOperator) (uint64, uint64, error) {
+	txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
 	c := make(chan struct{})
 	//UT test find race here
 	var from, to atomic.Uint64
 	var err error
 	var err2 atomic.Value
+	var lastAllocateAt timestamp.Timestamp
 	err = a.asyncAllocate(
 		ctx,
 		tableID,
@@ -73,11 +77,15 @@ func (a *allocator) allocate(
 		txnOp,
 		func(
 			v1, v2 uint64,
+			allocatedAt timestamp.Timestamp,
 			e error) {
 			from.Store(v1)
 			to.Store(v2)
 			if e != nil {
 				err2.Store(e)
+			}
+			if !allocatedAt.IsEmpty() {
+				lastAllocateAt = allocatedAt
 			}
 			close(c)
 		})
@@ -85,10 +93,10 @@ func (a *allocator) allocate(
 		err = err2.Load().(error)
 	}
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, timestamp.Timestamp{}, err
 	}
 	<-c
-	return from.Load(), to.Load(), err
+	return from.Load(), to.Load(), lastAllocateAt, err
 }
 
 func (a *allocator) asyncAllocate(
@@ -97,7 +105,7 @@ func (a *allocator) asyncAllocate(
 	col string,
 	count int,
 	txnOp client.TxnOperator,
-	apply func(uint64, uint64, error)) error {
+	apply func(uint64, uint64, timestamp.Timestamp, error)) error {
 	accountId, err := getAccountID(ctx)
 	if err != nil {
 		return err
@@ -161,15 +169,16 @@ func (a *allocator) run(ctx context.Context) {
 
 func (a *allocator) doAllocate(act action) {
 	ctx := defines.AttachAccountId(context.Background(), act.accountID)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoAllocate)
 	defer cancel()
 
-	from, to, err := a.store.Allocate(
+	from, to, lastAllocateAt, err := a.store.Allocate(
 		ctx,
 		act.tableID,
 		act.col,
 		act.count,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"allocate new range",
@@ -180,12 +189,12 @@ func (a *allocator) doAllocate(act action) {
 			zap.Error(err))
 	}
 
-	act.applyAllocate(from, to, err)
+	act.applyAllocate(from, to, lastAllocateAt, err)
 }
 
 func (a *allocator) doUpdate(act action) {
 	ctx := defines.AttachAccountId(context.Background(), act.accountID)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoUpdate)
 	defer cancel()
 
 	err := a.store.UpdateMinValue(
@@ -194,6 +203,7 @@ func (a *allocator) doUpdate(act action) {
 		act.col,
 		act.minValue,
 		act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"update range min value",
@@ -223,7 +233,7 @@ type action struct {
 	col           string
 	count         int
 	minValue      uint64
-	applyAllocate func(uint64, uint64, error)
+	applyAllocate func(uint64, uint64, timestamp.Timestamp, error)
 	applyUpdate   func(error)
 }
 

@@ -15,6 +15,8 @@
 package batch
 
 import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +48,19 @@ func init() {
 func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := tc.bat.MarshalBinary()
+		require.NoError(t, err)
+
+		rbat := new(Batch)
+		err = rbat.UnmarshalBinary(data)
+		require.NoError(t, err)
+		for i, vec := range rbat.Vecs {
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
+		}
+	}
+
+	var buf bytes.Buffer
+	for _, tc := range tcs {
+		data, err := tc.bat.MarshalBinaryWithBuffer(&buf)
 		require.NoError(t, err)
 
 		rbat := new(Batch)
@@ -124,5 +139,41 @@ func newBatch(ts []types.Type, rows int) *Batch {
 			bat.Vecs[i] = vec
 		}
 	}
+
+	aggexec.RegisterGroupConcatAgg(0, ",")
+	agg0 := aggexec.MakeAgg(aggexec.NewSimpleAggMemoryManager(mp), 0, false, []types.Type{types.T_varchar.ToType()}...)
+	bat.Aggs = []aggexec.AggFuncExec{agg0}
+	bat.Attrs = []string{"1"}
 	return bat
+}
+
+func TestBatch_UnionOne(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	bat1 := NewWithSize(2)
+	bat1.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	bat2 := NewWithSize(2)
+	bat2.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	for i := 0; i < 100; i++ {
+		vector.AppendFixed[int32](bat2.Vecs[0], int32(i), false, mp)
+		vector.AppendFixed[int32](bat2.Vecs[1], int32(i*2), false, mp)
+	}
+	bat2.SetRowCount(bat2.Vecs[0].Length())
+
+	for i := 0; i < bat2.RowCount(); i++ {
+		require.Nil(t, bat1.UnionOne(bat2, int64(i), mp))
+	}
+
+	require.Equal(t, bat1.RowCount(), bat2.RowCount())
+	row1 := vector.MustFixedColNoTypeCheck[int32](bat1.Vecs[0])
+	row2 := vector.MustFixedColNoTypeCheck[int32](bat2.Vecs[0])
+	require.Equal(t, row1, row2)
+
+	row1 = vector.MustFixedColNoTypeCheck[int32](bat1.Vecs[1])
+	row2 = vector.MustFixedColNoTypeCheck[int32](bat2.Vecs[1])
+	require.Equal(t, row1, row2)
 }

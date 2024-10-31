@@ -20,10 +20,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/robfig/cron/v3"
 )
 
 type taskService struct {
@@ -217,6 +218,25 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 
 func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
 	return s.store.QueryDaemonTask(ctx, conds...)
+}
+
+func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	now := time.Now()
+
+	dt := task.DaemonTask{
+		Metadata:   metadata,
+		TaskType:   details.Type(),
+		TaskStatus: task.TaskStatus_Created,
+		Details:    details,
+		CreateAt:   now,
+		UpdateAt:   now,
+	}
+
+	return s.store.AddCdcTask(ctx, dt, callback)
+}
+
+func (s *taskService) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conds ...Condition) (int, error) {
+	return s.store.UpdateCdcTask(ctx, targetStatus, callback, conds...)
 }
 
 func (s *taskService) Close() error {

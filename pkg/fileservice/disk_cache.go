@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -28,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,6 +57,7 @@ func NewDiskCache(
 	perfCounterSets []*perfcounter.CounterSet,
 	asyncLoad bool,
 	cacheDataAllocator CacheDataAllocator,
+	name string,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -68,16 +69,28 @@ func NewDiskCache(
 		cacheDataAllocator = DefaultCacheDataAllocator()
 	}
 
+	seed := maphash.MakeSeed()
+
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
 		perfCounterSets:    perfCounterSets,
 
 		cache: fifocache.New(
-			capacity,
-			func(key string) uint8 {
-				return uint8(xxhash.Sum64String(key))
+
+			func() int64 {
+				// read from global size hint
+				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+					return n
+				}
+				// fallback
+				return capacity()
 			},
+
+			func(key string) uint64 {
+				return maphash.String(seed, key)
+			},
+
 			nil,
 			nil,
 			func(path string, _ struct{}) {
@@ -101,6 +114,10 @@ func NewDiskCache(
 		go ret.loadCache()
 	} else {
 		ret.loadCache()
+	}
+
+	if name != "" {
+		allDiskCaches.Store(ret, name)
 	}
 
 	return ret, nil
@@ -582,24 +599,29 @@ func (d *DiskCache) SetFile(
 func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
-) error {
-
+) (err error) {
 	for _, path := range paths {
-		diskPath := d.pathForFile(path)
 		//TODO also delete IOEntry files
-
-		doneUpdate := d.startUpdate(diskPath)
-		defer doneUpdate()
-
-		if err := os.Remove(diskPath); err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
+		if err = d.removeOnePath(path); err != nil {
+			return
 		}
-		d.cache.Delete(diskPath)
 	}
 
-	return nil
+	return
+}
+
+func (d *DiskCache) removeOnePath(path string) (err error) {
+	diskPath := d.pathForFile(path)
+	doneUpdate := d.startUpdate(diskPath)
+	defer doneUpdate()
+	if err = os.Remove(diskPath); err != nil {
+		if !os.IsNotExist(err) {
+			return
+		}
+		err = nil
+	}
+	d.cache.Delete(diskPath)
+	return
 }
 
 func (d *DiskCache) Evict(done chan int64) {
@@ -611,4 +633,8 @@ func fileSize(info fs.FileInfo) int64 {
 		return int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
 	}
 	return info.Size()
+}
+
+func (d *DiskCache) Close() {
+	allDiskCaches.Delete(d)
 }

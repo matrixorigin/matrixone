@@ -18,8 +18,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -48,7 +51,7 @@ type FileService interface {
 	ReadCache(ctx context.Context, vector *IOVector) error
 
 	// List lists sub-entries in a dir
-	List(ctx context.Context, dirPath string) ([]DirEntry, error)
+	List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error]
 
 	// Delete deletes multi file
 	// returns ErrFileNotFound if requested file not found
@@ -153,6 +156,8 @@ func (i IOEntry) String() string {
 
 type CacheDataAllocator interface {
 	AllocateCacheData(size int) fscache.Data
+	AllocateCacheDataWithHint(size int, hints malloc.Hints) fscache.Data
+	CopyToCacheData([]byte) fscache.Data
 }
 
 // DirEntry is a file or dir

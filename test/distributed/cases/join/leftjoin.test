@@ -19,7 +19,6 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 select mo_ctl('dn', 'flush', 'd1.t2');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t3');
-select Sleep(5);
 -- @separator:table
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
 -- @separator:table
@@ -33,9 +32,7 @@ explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
 -- @separator:table
 explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
 -- @separator:table
--- @bvt:issue#15201
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
--- @bvt:issue
 -- @separator:table
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
 drop table if exists parameters;

@@ -49,11 +49,21 @@ type Location []byte
 
 func BuildLocation(name ObjectName, extent Extent, rows uint32, id uint16) Location {
 	var location [LocationLen]byte
-	copy(location[:ObjectNameLen], name)
-	copy(location[ExtentOff:ExtentOff+ExtentSize], extent)
-	copy(location[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
-	copy(location[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint16(&id))
-	return unsafe.Slice((*byte)(unsafe.Pointer(&location)), LocationLen)
+	BuildLocationTo(name, extent, rows, id, location[:])
+	return location[:]
+}
+
+func BuildLocationTo(
+	name ObjectName,
+	extent Extent,
+	rows uint32,
+	id uint16,
+	toLoc []byte,
+) {
+	copy((toLoc)[:ObjectNameLen], name)
+	copy((toLoc)[ExtentOff:ExtentOff+ExtentSize], extent)
+	copy((toLoc)[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
+	copy((toLoc)[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint16(&id))
 }
 
 func NewRandomLocation(id uint16, rows uint32) Location {

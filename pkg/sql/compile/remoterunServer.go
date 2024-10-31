@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -97,10 +98,10 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
 
 	// how to handle the *pipeline.Message.
-	if receiver.needNotReply {
-		err = handlePipelineMessage(&receiver)
-	} else {
-		if err = handlePipelineMessage(&receiver); err != nil {
+	err = handlePipelineMessage(&receiver)
+	if receiver.messageTyp != pipeline.Method_StopSending {
+		// stop message only close a running pipeline, there is no need to reply the finished-message.
+		if err != nil {
 			err = receiver.sendError(err)
 		} else {
 			err = receiver.sendEndMessage()
@@ -124,7 +125,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid, HandleNotifyTimeout)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -140,13 +141,14 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		// todo : the timeout should be removed.
 		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+		timeLimit, cancel := context.WithTimeoutCause(context.TODO(), HandleNotifyTimeout, moerr.CauseHandlePipelineMessage)
 
 		succeed := false
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
-		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			err = moerr.AttachCause(timeLimit, err)
+		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
 		case <-dispatchProc.Ctx.Done():
@@ -179,7 +181,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		s = appendWriteBackOperator(runCompile, s)
+		if !receiver.needNotReply {
+			s = appendWriteBackOperator(runCompile, s)
+		}
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
@@ -191,11 +195,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
-			return err
-		}
+		GetCompileService().recordRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
 		defer func() {
-			_, _ = GetCompileService().removeRunningCompile(runCompile)
+			GetCompileService().removeRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
 		err = s.MergeRun(runCompile)
@@ -374,14 +376,13 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.SetPrepareParams(pHelper.prepareParams)
-	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
@@ -391,7 +392,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
-	c.fill = func(b *batch.Batch) error {
+	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
 		return receiver.sendBatch(b)
 	}
 
@@ -521,32 +522,32 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
-	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-	var opProc *process.Process
-	var ok bool
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	tout, tcancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseGetProcByUuid)
 
 	for {
 		select {
-		case <-getCtx.Done():
+		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
+			tcancel()
+			return nil, nil, err
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			getCancel()
-			return nil, nil
+			tcancel()
+			return nil, nil, nil
 
 		default:
-			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
-				// it's bad to call the Gosched() here.
-				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
-				runtime.Gosched()
-			} else {
-				getCancel()
-				return opProc, nil
+			dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
+			if ok {
+				tcancel()
+				return dispatchProc, notifyChannel, nil
 			}
+
+			// it's very bad to call the runtime.Gosched() here.
+			// get a process receive channel first, and listen to it may be a better way.
+			runtime.Gosched()
 		}
 	}
 }

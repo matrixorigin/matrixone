@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"iter"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -398,59 +399,63 @@ func (l *LocalETLFS) PrefetchFile(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-
-	path, err := ParsePathAtService(dirPath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-
-	f, err := os.Open(nativePath)
-	if os.IsNotExist(err) {
-		err = nil
-		return
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	entries, err := f.ReadDir(-1)
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
+func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		select {
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return
+		default:
 		}
-		info, err := entry.Info()
+
+		path, err := ParsePathAtService(dirPath, l.name)
 		if err != nil {
-			return nil, err
+			yield(nil, err)
+			return
 		}
-		isDir, err := entryIsDir(nativePath, name, info)
+		nativePath := l.toNativeFilePath(path.File)
+
+		f, err := os.Open(nativePath)
+		if os.IsNotExist(err) {
+			return
+		}
 		if err != nil {
-			return nil, err
+			yield(nil, err)
+			return
 		}
-		ret = append(ret, DirEntry{
-			Name:  name,
-			IsDir: isDir,
-			Size:  info.Size(),
-		})
+		defer f.Close()
+
+		entries, err := f.ReadDir(-1)
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			isDir, err := entryIsDir(nativePath, name, info)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if !yield(&DirEntry{
+				Name:  name,
+				IsDir: isDir,
+				Size:  info.Size(),
+			}, nil) {
+				break
+			}
+		}
+
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
 	}
-
-	sort.Slice(ret, func(i, j int) bool {
-		return ret[i].Name < ret[j].Name
-	})
-
-	if err != nil {
-		return ret, err
-	}
-
-	return
 }
 
 func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {

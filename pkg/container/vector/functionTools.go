@@ -87,6 +87,44 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 	}
 }
 
+func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	if v.IsConstNull() {
+		r, ok := f.(*FunctionParameterScalarNull[T])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		return true
+	}
+	cols := MustFixedColWithTypeCheck[T](v)
+	if v.IsConst() {
+		r, ok := f.(*FunctionParameterScalar[T])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		r.scalarValue = cols[0]
+		return true
+	}
+	if !v.nsp.IsEmpty() {
+		r, ok := f.(*FunctionParameterNormal[T])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		r.values = cols
+		r.nullMap = v.GetNulls().GetBitmap()
+		return true
+	}
+	r, ok := f.(*FunctionParameterWithoutNull[T])
+	if !ok {
+		return false
+	}
+	r.sourceVector = v
+	r.values = cols
+	return true
+}
+
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
 	t := v.GetType()
 	if v.IsConstNull() {
@@ -136,6 +174,68 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		strValues:    cols,
 		area:         v.area,
 	}
+}
+
+func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
+	if v.IsConstNull() {
+		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		return true
+	}
+	var cols []types.Varlena
+	ToSliceNoTypeCheck(v, &cols)
+	if v.IsConst() {
+		r, ok := f.(*FunctionParameterScalar[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		r.scalarValue = cols[0]
+		r.scalarStr = cols[0].GetByteSlice(v.area)
+		return true
+	}
+
+	if !v.nsp.IsEmpty() {
+		if len(v.area) == 0 {
+			r, ok := f.(*FunctionParameterNormalSpecial1[types.Varlena])
+			if !ok {
+				return false
+			}
+			r.sourceVector = v
+			r.strValues = cols
+			r.nullMap = v.GetNulls().GetBitmap()
+			return true
+		}
+		r, ok := f.(*FunctionParameterNormal[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		r.strValues = cols
+		r.area = v.area
+		r.nullMap = v.GetNulls().GetBitmap()
+		return true
+	}
+	if len(v.area) == 0 {
+		r, ok := f.(*FunctionParameterWithoutNullSpecial1[types.Varlena])
+		if !ok {
+			return false
+		}
+		r.sourceVector = v
+		r.strValues = cols
+		return true
+	}
+	r, ok := f.(*FunctionParameterWithoutNull[types.Varlena])
+	if !ok {
+		return false
+	}
+	r.sourceVector = v
+	r.strValues = cols
+	r.area = v.area
+	return true
 }
 
 // FunctionParameterNormal is a wrapper of normal vector which
@@ -344,10 +444,44 @@ func (p *FunctionParameterScalarNull[T]) WithAnyNullValue() bool {
 }
 
 type FunctionResultWrapper interface {
+	OptFunctionResultWrapper
+
 	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+}
+
+type reusableParameterWrapper interface{}
+
+type OptFunctionResultWrapper interface {
+	UseOptFunctionParamFrame(paramCount int)
+	getConvenientParamList() []reusableParameterWrapper
+}
+
+func OptGetParamFromWrapper[ParamType types.FixedSizeTExceptStrType](
+	wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[ParamType] {
+	ws := wrapper.getConvenientParamList()
+
+	if fr, ok := ws[idx].(FunctionParameterWrapper[ParamType]); ok && ReuseFunctionFixedTypeParameter(src, fr) {
+		return fr
+	}
+
+	fr := GenerateFunctionFixedTypeParameter[ParamType](src)
+	ws[idx] = fr
+	return fr
+}
+
+func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[types.Varlena] {
+	ws := wrapper.getConvenientParamList()
+
+	if fr, ok := ws[idx].(FunctionParameterWrapper[types.Varlena]); ok && ReuseFunctionStrParameter(src, fr) {
+		return fr
+	}
+
+	fr := GenerateFunctionStrParameter(src)
+	ws[idx] = fr
+	return fr
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -360,6 +494,12 @@ type FunctionResult[T types.FixedSizeT] struct {
 	isVarlena bool
 	cols      []T
 	length    uint64
+
+	//  convenientParam save parameter wrappers for easy getting row values.
+	//
+	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
+	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
+	convenientParam []reusableParameterWrapper
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -385,9 +525,19 @@ func newResultFunc[T types.FixedSizeT](
 	return f
 }
 
+func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
+	if fr.convenientParam == nil {
+		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	}
+}
+
+func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper {
+	return fr.convenientParam
+}
+
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = NewVec(fr.typ)
+		fr.vec = NewOffHeapVecWithType(fr.typ)
 	}
 
 	oldLength := fr.vec.Length()
@@ -510,16 +660,11 @@ func (fr *FunctionResult[T]) Free() {
 		fr.vec.Free(fr.mp)
 		fr.vec = nil
 	}
+	fr.convenientParam = nil
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
-
-	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		// IF STRING type.
-		return newResultFunc[types.Varlena](typ, mp)
-	case types.T_json:
+	if typ.IsVarlen() {
 		return newResultFunc[types.Varlena](typ, mp)
 	}
 

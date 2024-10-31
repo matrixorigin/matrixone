@@ -17,9 +17,10 @@ package disttae
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/stretchr/testify/require"
 )
 
 // should ensure that subscribe and unsubscribe methods are effective.
@@ -31,6 +32,7 @@ func TestSubscribedTable(t *testing.T) {
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{
 			logtailUpdate: newLogtailUpdate(),
+			waitKeeper:    newWaitKeeper(),
 		},
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))

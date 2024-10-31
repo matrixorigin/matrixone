@@ -136,6 +136,9 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		return
 	}
 	head := objectio.DecodeIOEntryHeader(payload)
+	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
+		return
+	}
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
 	txnCmd := entry.(*txnbase.TxnCmd)
@@ -164,7 +167,7 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 }
 
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
-	if ts.Greater(&replayer.maxTs) {
+	if ts.GT(&replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -186,7 +189,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	// If WAL entry splits, they share same prepareTS
-	if txnCmd.PrepareTS.Less(&replayer.maxTs) {
+	if txnCmd.PrepareTS.LT(&replayer.maxTs) {
 		return
 	}
 	replayer.applyCount++

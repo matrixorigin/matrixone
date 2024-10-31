@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,14 +31,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var _ engine.Database = new(txnDatabase)
@@ -158,6 +162,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		item,
 		p,
 		shardservice.GetService(p.GetService()),
+		txn.engine,
 	)
 	if err != nil {
 		return nil, err
@@ -221,17 +226,31 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+
+	rmFault := func() {}
+
+	if objectio.Debug19524Injected() {
+		if rmFault, err = objectio.InjectRanges(
+			ctx,
+			catalog.MO_TABLES,
+		); err != nil {
+			return nil, err
+		}
+	}
 	res, err := execReadSql(ctx, db.op, sql, true)
+	rmFault()
 	if err != nil {
 		return nil, err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
-		logutil.Error("FIND_TABLE deleteTableError",
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
 			zap.String("sql", sql),
+			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
 			zap.Uint64("tid", rel.GetTableID(ctx)),
 			zap.String("workspace", db.getTxn().PPString()))
@@ -363,6 +382,7 @@ func (db *txnDatabase) createWithID(
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.eng = txn.engine
 
 	{ // prepare table information
 		// 2.1 prepare basic table information
@@ -370,7 +390,7 @@ func (db *txnDatabase) createWithID(
 		tbl.tableName = name
 		tbl.tableId = tableId
 		tbl.accountId = accountId
-		tbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{tableId}))
+		tbl.extraInfo = &api.SchemaExtra{}
 		for _, def := range defs {
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
@@ -382,6 +402,8 @@ func (db *txnDatabase) createWithID(
 						tbl.relKind = property.Value
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value
+					case catalog.PropSchemaExtra:
+						tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
 					default:
 					}
 				}
@@ -398,6 +420,13 @@ func (db *txnDatabase) createWithID(
 					return err
 				}
 			}
+		}
+		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)
+		if tbl.extraInfo.BlockMaxRows == 0 {
+			tbl.extraInfo.BlockMaxRows = options.DefaultBlockMaxRows
+		}
+		if tbl.extraInfo.ObjectMaxBlocks == 0 {
+			tbl.extraInfo.ObjectMaxBlocks = uint32(options.DefaultBlocksPerObject)
 		}
 		// 2.2 prepare columns related information
 		tbl.primaryIdx = -1
@@ -440,6 +469,7 @@ func (db *txnDatabase) createWithID(
 			Viewdef:       tbl.viewdef,
 			Constraint:    tbl.constraint,
 			Version:       tbl.version,
+			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {
@@ -449,13 +479,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		tbl.rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, 0)
 	}
 
 	{ // 4. Write create column batch
@@ -467,15 +496,12 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		rowidVec, err := txn.WriteBatch(
+		_, err = txn.WriteBatch(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)
 			return err
-		}
-		for i := 0; i < rowidVec.Length(); i++ {
-			tbl.rowids = append(tbl.rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](rowidVec, i))
 		}
 	}
 
@@ -485,8 +511,12 @@ func (db *txnDatabase) createWithID(
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
-	defs []engine.TableDef) engine.Relation {
+func (db *txnDatabase) openSysTable(
+	p *process.Process,
+	id uint64,
+	name string,
+	defs []engine.TableDef,
+) engine.Relation {
 	item := &cache.TableItem{
 		AccountId:  catalog.System_Account,
 		DatabaseId: catalog.MO_CATALOG_ID,
@@ -507,17 +537,11 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		defs:          defs,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
+		tableDef:      item.TableDef,
+		constraint:    item.Constraint,
 		clusterByIdx:  -1,
+		eng:           db.getTxn().engine,
 	}
-	switch name {
-	case catalog.MO_DATABASE:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoDatabaseConstraint
-	case catalog.MO_TABLES:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoTableConstraint
-	case catalog.MO_COLUMNS:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
-	}
-	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)
 	return tbl
 }
@@ -525,7 +549,8 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 func (db *txnDatabase) loadTableFromStorage(
 	ctx context.Context,
 	accountID uint32,
-	name string) (tableitem *cache.TableItem, err error) {
+	name string,
+) (tableitem *cache.TableItem, err error) {
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
