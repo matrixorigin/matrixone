@@ -271,6 +271,12 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if expr.vec != nil {
+		return expr.vec, nil
+	}
+	if expr.null != nil {
+		return expr.null, nil
+	}
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -644,7 +650,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
-	expr.folded.reset(expr.m)
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {
