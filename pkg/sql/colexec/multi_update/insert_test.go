@@ -115,6 +115,23 @@ func TestInsertS3PartitionTable(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestFlushS3Info(t *testing.T) {
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := false
+
+	_, ctrl, proc := prepareTestCtx(t, true)
+	eng := prepareTestEng(ctrl)
+
+	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey, isPartition)
+
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	action := UpdateFlushS3Info
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action)
+
+	runTestCases(t, proc, []*testCase{retCase})
+}
+
 // ----- util function ----
 func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
@@ -257,4 +274,32 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	}
 
 	return updateCtxs
+}
+
+func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
+	inserBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey, isPartition)
+	retBat := batch.NewWithSize(6)
+	action := uint8(actionInsert)
+
+	retBat.Vecs[0] = testutil.NewUInt8Vector(5, types.T_uint8.ToType(), mp, false, []uint8{action, action, action, action, action})
+	retBat.Vecs[1] = testutil.NewUInt16Vector(5, types.T_uint16.ToType(), mp, false, []uint16{0, 0, 0, 0, 0})       //idx
+	retBat.Vecs[2] = testutil.NewUInt16Vector(5, types.T_uint16.ToType(), mp, false, []uint16{0, 0, 0, 0, 0})       //partIdx
+	retBat.Vecs[3] = vector.NewVec(types.T_uint64.ToType())                                                         //rowCount
+	retBat.Vecs[4] = testutil.NewStringVector(5, types.T_varchar.ToType(), mp, false, []string{"", "", "", "", ""}) //name
+	retBat.Vecs[5] = vector.NewVec(types.T_text.ToType())                                                           //batch bytes
+
+	totalRowCount := 0
+	for _, bat := range inserBats {
+		totalRowCount += bat.RowCount()
+		_ = vector.AppendFixed(retBat.Vecs[3], bat.RowCount(), false, mp)
+
+		val, _ := bat.MarshalBinary()
+		_ = vector.AppendBytes(retBat.Vecs[5], val, false, mp)
+
+		bat.Clean(mp)
+	}
+	inserBats = nil
+
+	retBat.SetRowCount(retBat.Vecs[0].Length())
+	return []*batch.Batch{retBat}, uint64(totalRowCount)
 }
