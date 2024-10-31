@@ -1782,7 +1782,12 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if tbl.tableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: readers for dirty blocks %v", len(rds0))
+			for i, rd := range rds0 {
+				logutil.Infof("debug defect_history: total merge reader cnt:%d, merge-reader-%d:%d",
+					len(rds0),
+					i,
+					rd.BlkCnt())
+			}
 		}
 
 		for i, rd := range rds0 {
@@ -1794,6 +1799,17 @@ func (tbl *txnTable) NewReader(
 			if err != nil {
 				return nil, err
 			}
+
+			if tbl.tableDef.Name == "defect_history" {
+				//mergeRds := ""
+				for i, rd := range rds0 {
+					logutil.Infof("debug defect_history:total blk reader cnt:%d, block-reader-%d:%d",
+						len(rds0),
+						i,
+						rd.BlkCnt())
+				}
+			}
+
 		}
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
@@ -1802,18 +1818,37 @@ func (tbl *txnTable) NewReader(
 		for i := range rds {
 			rds[i] = &mrds[i]
 		}
-		return rds, nil
-	}
 
-	if tbl.tableDef.Name == "defect_history" {
-		logutil.Infof("debug defect_history: call tbl.newBlockReader ")
+		if tbl.tableDef.Name == "defect_history" {
+			//mergeRds := ""
+			for i, rd := range rds {
+				logutil.Infof("debug defect_history:total merger reader cnt:%d, merge-reader-%d:%d",
+					len(rds),
+					i,
+					rd.BlkCnt())
+			}
+		}
+
+		return rds, nil
 	}
 
 	blkInfos := make([]*objectio.BlockInfo, 0, len(blkArray))
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, blkInfos, tbl.proc.Load(), orderedScan)
+	rds, err := tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, blkInfos, tbl.proc.Load(), orderedScan)
+	if err != nil {
+		return nil, err
+	}
+
+	if tbl.tableDef.Name == "defect_history" {
+		for i, rd := range rds {
+			logutil.Infof("debug defect_history:total-reader-cnt:%d, block-reader-%d:%d",
+				len(rds), i, rd.BlkCnt())
+		}
+	}
+
+	return rds, nil
 }
 
 func (tbl *txnTable) newMergeReader(

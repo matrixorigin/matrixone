@@ -49,6 +49,10 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
+func (p *PartitionReader) BlkCnt() int {
+	return 1
+}
+
 func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
 }
 

@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -131,6 +132,10 @@ func (r *emptyReader) SetOrderBy([]*plan.OrderBySpec) {
 
 func (r *emptyReader) Close() error {
 	return nil
+}
+
+func (r *emptyReader) BlkCnt() int {
+	return 0
 }
 
 func (r *emptyReader) Read(_ context.Context, _ []string,
@@ -280,6 +285,10 @@ func (r *blockReader) deleteFirstNBlocks(n int) {
 	if len(r.OrderBy) > 0 {
 		r.blockZMS = r.blockZMS[n:]
 	}
+}
+
+func (r *blockReader) BlkCnt() int {
+	return len(r.blks)
 }
 
 func (r *blockReader) Read(
@@ -585,6 +594,10 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	return nil
 }
 
+func (r *blockMergeReader) BlkCnt() int {
+	return len(r.blks)
+}
+
 func (r *blockMergeReader) Read(
 	ctx context.Context,
 	cols []string,
@@ -641,6 +654,14 @@ func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 
 func (r *mergeReader) Close() error {
 	return nil
+}
+
+func (r *mergeReader) BlkCnt() int {
+	cnt := 0
+	for _, rd := range r.rds {
+		cnt += rd.BlkCnt()
+	}
+	return cnt
 }
 
 func (r *mergeReader) Read(
