@@ -512,7 +512,7 @@ func (c *Compile) runOnce() (err error) {
 				// cancel all scope tree.
 				for j := range c.scopes {
 					if c.scopes[j].Proc != nil {
-						c.scopes[j].Proc.Cancel()
+						c.scopes[j].Proc.Cancel(e)
 					}
 				}
 			}
