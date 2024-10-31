@@ -406,31 +406,26 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
-func checkTxnOffsetZero(ls *LocalDisttaeDataSource, writes []Entry) {
-	if len(writes) > 200 && ls.txnOffset == 0 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" {
-		logutil.Info("yyyyyy zero txnOffset",
-			zap.String("txn", hex.EncodeToString(ls.table.db.op.Txn().ID)),
-			zap.Bool("isSnapOp", ls.table.db.op.IsSnapOp()),
-			zap.String("entries", stringifySlice(writes[len(writes)-2:], func(a any) string {
-				e := a.(Entry)
-				batstr := "nil"
-				if e.bat != nil {
-					batstr = common.MoBatchToString(e.bat, 3)
-				}
-				return e.String() + " " + batstr
-			})))
-	}
-}
-
 func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch) {
-	if len(writes) > 400 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
+	injected, writesT := objectio.Debug19357Injected()
+	if injected && int64(len(writes)) > writesT && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
+		outLen := outBatch.Vecs[0].Length()
+		var slim *batch.Batch
+		if outLen > 0 {
+			start := outLen - 3
+			if start < 0 {
+				start = 0
+			}
+			slim, _ = outBatch.Window(start, outLen)
+		}
+
 		logutil.Info("yyyyyy checkTxnLastInsertRow",
 			zap.String("txn", hex.EncodeToString(ls.table.db.op.Txn().ID)),
 			zap.Int("txnOffset", ls.txnOffset),
 			zap.Int("cursor", cursor),
 			zap.Int("writes", len(writes)),
 			zap.Bool("isSnapOp", ls.table.db.op.IsSnapOp()),
-			zap.String("entries", stringifySlice(writes[len(writes)-2:], func(a any) string {
+			zap.String("entries", stringifySlice(writes[len(writes)-1:], func(a any) string {
 				e := a.(Entry)
 				batstr := "nil"
 				if e.bat != nil {
@@ -438,7 +433,7 @@ func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor in
 				}
 				return e.String() + " " + batstr
 			})),
-			zap.String("outBatch", common.MoBatchToString(outBatch, 3)),
+			zap.String("outBatch", common.MoBatchToString(slim, 3)),
 		)
 	}
 }
@@ -488,11 +483,18 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
+		offsetLen := len(offsets)
+		badOffsetStart := offsetLen > 0 && offsets[0] > 0
+
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(
 			ls.ctx, b, offsets, engine.Policy_CheckUnCommittedOnly)
 		if err != nil {
 			return err
+		}
+
+		if (len(sels) < offsetLen || badOffsetStart) && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" {
+			logutil.Info("Shrink retainedRowIds", zap.Any("sels", sels), zap.Any("offsetsLen", offsetLen), zap.Bool("badOffsetStart", badOffsetStart), zap.Int("wsCursor", ls.wsCursor), zap.Int("txnOffset", ls.txnOffset))
 		}
 
 		if len(sels) == 0 {

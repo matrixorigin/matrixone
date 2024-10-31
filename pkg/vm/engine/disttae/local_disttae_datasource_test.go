@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 )
@@ -161,8 +163,18 @@ func TestXxx1(t *testing.T) {
 			},
 		},
 	}
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(context.Background(), objectio.FJ_Debug19357, ":::", "echo", 20, "")
+	t.Log(objectio.Debug19357Injected())
 	writes := make([]Entry, 200)
 	writes = append(writes, Entry{typ: INSERT}, Entry{typ: INSERT, bat: batch.EmptyBatch})
-	checkTxnLastInsertRow(ls, writes, 42, batch.EmptyBatch)
-	checkTxnOffsetZero(ls, writes)
+	outBatch := batch.NewWithSize(3)
+	m := mpool.MustNewZero()
+	for i := 0; i < 3; i++ {
+		outBatch.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+		vector.AppendFixed[int32](outBatch.Vecs[i], int32(i), false, m)
+	}
+	checkTxnLastInsertRow(ls, writes, 42, outBatch)
+
 }
