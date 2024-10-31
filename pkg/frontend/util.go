@@ -504,14 +504,19 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	}
 
-	ses.Info(
-		ctx,
-		"query trace status",
-		logutil.StatementField(str),
-		logutil.StatusField(status.String()),
-		logutil.ErrorField(err),
-		logutil.TxnInfoField(ses.GetStaticTxnInfo()),
-	)
+	if status == success {
+		ses.Info(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		err = nil // make sure: it is nil for EndStatement
+	} else {
+		ses.Error(
+			ctx,
+			"query trace status",
+			logutil.StatementField(str),
+			logutil.StatusField(status.String()),
+			logutil.ErrorField(err),
+			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
+		)
+	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
