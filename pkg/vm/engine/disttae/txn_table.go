@@ -1771,10 +1771,20 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
+
+		if tbl.tableDef.Name == "defect_history" {
+			logutil.Infof("debug defect_history: NewReader dirtyblocks %v cleanblocks %v num %v", len(dirtyBlks), len(cleanBlks), num)
+		}
+
 		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilters, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
+
+		if tbl.tableDef.Name == "defect_history" {
+			logutil.Infof("debug defect_history: readers for dirty blocks %v", len(rds0))
+		}
+
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
@@ -1794,6 +1804,11 @@ func (tbl *txnTable) NewReader(
 		}
 		return rds, nil
 	}
+
+	if tbl.tableDef.Name == "defect_history" {
+		logutil.Infof("debug defect_history: call tbl.newBlockReader ")
+	}
+
 	blkInfos := make([]*objectio.BlockInfo, 0, len(blkArray))
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))

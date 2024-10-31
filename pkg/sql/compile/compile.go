@@ -4016,6 +4016,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		if n.TableDef.Name == "defect_history" {
+			logutil.Infof("debug defect_history: expand ranges in compile time, blocks %v", ranges.Len())
+		}
 	} else {
 		// add current CN
 		nodes = append(nodes, engine.Node{
