@@ -410,7 +410,7 @@ func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor in
 	injected, writesT := objectio.Debug19357Injected()
 	if injected && int64(len(writes)) > writesT && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
 		outLen := outBatch.Vecs[0].Length()
-		var slim *batch.Batch
+		var slim = outBatch
 		if outLen > 0 {
 			start := outLen - 3
 			if start < 0 {

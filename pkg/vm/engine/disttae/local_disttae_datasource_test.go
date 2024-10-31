@@ -150,7 +150,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	}
 }
 
-func TestXxx1(t *testing.T) {
+func TestCheckTxnLastInsertRow(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(context.Background())
 	defer closeFunc()
 	txnOp.AddWorkspace(&Transaction{})
@@ -173,8 +173,11 @@ func TestXxx1(t *testing.T) {
 	m := mpool.MustNewZero()
 	for i := 0; i < 3; i++ {
 		outBatch.Vecs[i] = vector.NewVec(types.T_int32.ToType())
-		vector.AppendFixed[int32](outBatch.Vecs[i], int32(i), false, m)
 	}
 	checkTxnLastInsertRow(ls, writes, 42, outBatch)
 
+	for i := 0; i < 3; i++ {
+		vector.AppendFixed(outBatch.Vecs[i], int32(i), false, m)
+	}
+	checkTxnLastInsertRow(ls, writes, 20, outBatch)
 }
