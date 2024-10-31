@@ -40,7 +40,7 @@ func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []re
 	return []reviseResult{{t.tombstones, TaskHostDN}}
 }
 
-func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {
+func (t *tombstonePolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
 	t.tombstones = t.tombstones[:0]
 }
 

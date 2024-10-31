@@ -426,3 +426,28 @@ deallocate prepare s_pre;
 drop table prepare_test_t1;
 
 drop database if exists db1;
+
+create database db1;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+drop database db1;
+execute s_pre;
+create database db1;
+use db1;
+execute s_pre;
+drop database db1;
+
+create database db1;
+drop database if exists db2;
+create database db2;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+insert into prepare_t1 values(1, 2);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+use db2;
+execute s_pre;
+drop database db1;
+drop database db2;
