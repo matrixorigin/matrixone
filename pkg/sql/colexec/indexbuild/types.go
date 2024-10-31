@@ -74,7 +74,9 @@ func (indexBuild *IndexBuild) Release() {
 }
 
 func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	runtimeSucceed := indexBuild.ctr.state > HandleRuntimeFilter
+
+	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 	indexBuild.ctr.state = ReceiveBatch
 	if indexBuild.ctr.buf != nil {
 		indexBuild.ctr.buf.CleanOnlyData()
