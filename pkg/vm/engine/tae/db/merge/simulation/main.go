@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package simulation
 
 import (
 	"bufio"
@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,6 +37,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"gonum.org/v1/gonum/stat"
 )
+
+var MergeSimulationCmd = &cobra.Command{
+	Use: "merge-simulation",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Simulation is running background...")
+		fmt.Println("Please input 'a' to check performance or 'p' to print object status.")
+		fmt.Println("Press Ctrl-C to quit.")
+		maxValue, err := cmd.Flags().GetInt64("max")
+		if err != nil {
+			panic(err)
+		}
+
+		distribution, err := cmd.Flags().GetString("new_entry_distribution")
+		if err != nil {
+			panic(err)
+		}
+
+		distributionArg, err := cmd.Flags().GetFloat64("new_entry_distribution_arg")
+		if err != nil {
+			panic(err)
+		}
+
+		entryIntervalFactory := func() time.Duration {
+			return time.Duration(rand.ExpFloat64()*distributionArg) * time.Millisecond
+		}
+
+		switch distribution {
+		case "M":
+		// Poisson Process
+		// default
+		case "D":
+			// constant
+			entryIntervalFactory = func() time.Duration {
+				return time.Duration(distributionArg) * time.Millisecond
+			}
+		}
+
+		mergeInterval, err := cmd.Flags().GetDuration("merge_interval")
+		if err != nil {
+			panic(err)
+		}
+
+		writeToCSV, err := cmd.Flags().GetBool("write_to_csv")
+		if err != nil {
+			panic(err)
+		}
+
+		sim(maxValue, mergeInterval, entryIntervalFactory, writeToCSV)
+	},
+}
+
+func init() {
+	MergeSimulationCmd.Flags().Int64("max", 10000, "set max value of all ranges")
+	MergeSimulationCmd.Flags().StringP("new_entry_distribution", "d", "M", "distribution of entry arrival in Kendall's notation")
+	MergeSimulationCmd.Flags().Float64P("new_entry_distribution_arg", "a", 20, "arguments for distribution")
+	MergeSimulationCmd.Flags().DurationP("merge_interval", "i", 50*time.Millisecond, "set merge interval in ms")
+	MergeSimulationCmd.Flags().BoolP("write_to_csv", "c", false, "write result to csv file")
+}
 
 type entry struct {
 	id   *objectio.ObjectId
@@ -54,13 +114,19 @@ func newLockedEntries() *lockedEntries {
 	}
 }
 
+func (l *lockedEntries) getEntries() []*entry {
+	l.RLock()
+	defer l.RUnlock()
+	return l.entries
+}
+
 func (l *lockedEntries) append(e ...*entry) {
 	l.Lock()
 	defer l.Unlock()
 	l.entries = append(l.entries, e...)
 }
 
-func (l *lockedEntries) calculateHits(r int) []float64 {
+func (l *lockedEntries) calculateHits(r int64) []float64 {
 	l.RLock()
 	defer l.RUnlock()
 
@@ -70,7 +136,7 @@ func (l *lockedEntries) calculateHits(r int) []float64 {
 		for _, e := range l.entries {
 			zmMax := e.zm.GetMax().(int64)
 			zmMin := e.zm.GetMin().(int64)
-			if zmMin <= int64(i) && int64(i) < zmMax {
+			if zmMin <= i && i < zmMax {
 				hit++
 			}
 		}
@@ -109,10 +175,7 @@ func segLevel(length int) int {
 }
 
 func (l *lockedEntries) segments() [6][]*entry {
-	l.RLock()
-	entries := l.entries
-	l.RUnlock()
-
+	entries := l.getEntries()
 	segments := make(map[objectio.Segmentid][]*entry)
 	for _, e := range entries {
 		segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
@@ -247,19 +310,28 @@ func createCSVWriter(filename string) (*csv.Writer, *os.File, error) {
 	return writer, f, nil
 }
 
-func main() {
+func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func() time.Duration, writeToCSV bool) {
 	entryChan := make(chan *entry, 1)
 
 	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
+		interval := entryIntervalFactory()
+		for interval == 0 {
+			interval = entryIntervalFactory()
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			<-ticker.C
-			a, b := rand.Int63n(10000), rand.Int63n(10000)
+			a, b := rand.Int63n(maxValue), rand.Int63n(maxValue)
 			a, b = min(a, b), max(a, b)
 			size := 128 * common.Const1MBytes
 
 			entryChan <- newEntry(a, b, size)
+			interval = entryIntervalFactory()
+			for interval == 0 {
+				interval = entryIntervalFactory()
+			}
+			ticker.Reset(interval)
 		}
 	}()
 
@@ -268,20 +340,26 @@ func main() {
 	var i atomic.Int32
 	go func() {
 
-		ticker := time.NewTicker(50 * time.Millisecond)
+		ticker := time.NewTicker(mergeInterval)
 		defer ticker.Stop()
 
-		csvWriter, f, err := createCSVWriter("output.csv")
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-		defer func() {
-			csvWriter.Flush()
-			if err = csvWriter.Error(); err != nil {
+		var csvWriter *csv.Writer
+		if writeToCSV {
+			var f *os.File
+			var err error
+			csvWriter, f, err = createCSVWriter("output.csv")
+			if err != nil {
 				panic(err)
 			}
-		}()
+			defer f.Close()
+			defer func() {
+				csvWriter.Flush()
+				if err = csvWriter.Error(); err != nil {
+					panic(err)
+				}
+			}()
+
+		}
 
 		for {
 			select {
@@ -290,20 +368,22 @@ func main() {
 			case <-ticker.C:
 			}
 
-			hits := entries.calculateHits(10000)
-			mean, variance := stat.MeanVariance(hits, nil)
-			record := []string{
-				strconv.Itoa(int(i.Load())),
-				strconv.FormatFloat(mean, 'f', -1, 64),
-				strconv.FormatFloat(variance, 'f', -1, 64),
-				strconv.FormatFloat(mean/float64(entries.size()), 'f', -1, 64),
-				strconv.FormatFloat(float64(totalMergedSize.Load())/float64(i.Load()), 'f', -1, 64),
+			if writeToCSV {
+				hits := entries.calculateHits(maxValue)
+				mean, variance := stat.MeanVariance(hits, nil)
+				record := []string{
+					strconv.Itoa(int(i.Load())),
+					strconv.FormatFloat(mean, 'f', -1, 64),
+					strconv.FormatFloat(variance, 'f', -1, 64),
+					strconv.FormatFloat(mean/float64(entries.size()), 'f', -1, 64),
+					strconv.FormatFloat(float64(totalMergedSize.Load())/float64(i.Load()), 'f', -1, 64),
+				}
+				err := csvWriter.Write(record)
+				if err != nil {
+					panic(err)
+				}
+				csvWriter.Flush()
 			}
-			err = csvWriter.Write(record)
-			if err != nil {
-				panic(err)
-			}
-			csvWriter.Flush()
 
 			if entries.size() == 0 {
 				continue
@@ -329,20 +409,27 @@ func main() {
 	}()
 
 	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Printf("input: ")
 	for scanner.Scan() {
-		input := scanner.Text()
-		if input == "q" {
-			break
-		}
 		switch scanner.Text() {
 		case "p":
-			entries.RLock()
+			entriesList := entries.getEntries()
 			segments := make(map[objectio.Segmentid][]*entry)
-			for _, e := range entries.entries {
+			for _, e := range entriesList {
 				segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
 			}
 
-			for id, segment := range segments {
+			segmentSlice := make([]objectio.Segmentid, 0, len(segments))
+			for id := range segments {
+				segmentSlice = append(segmentSlice, id)
+			}
+
+			slices.SortFunc(segmentSlice, func(a, b objectio.Segmentid) int {
+				return cmp.Compare(len(segments[a]), len(segments[b]))
+			})
+
+			for _, id := range segmentSlice {
+				segment := segments[id]
 				slices.SortFunc(segment, func(a, b *entry) int {
 					if c := a.zm.CompareMin(b.zm); c != 0 {
 						return c
@@ -357,14 +444,15 @@ func main() {
 				fmt.Printf("\n")
 			}
 
-			entries.RUnlock()
 		case "a":
-			hits := entries.calculateHits(10000)
+			hits := entries.calculateHits(maxValue)
 			mean, variance := stat.MeanVariance(hits, nil)
 			fmt.Printf("Ave(hit)=%f, Var(hit)=%f\n", mean, variance)
 			fmt.Printf("Ave(hit/n)=%f\n", mean/float64(entries.size()))
 			fmt.Printf("Ave(mergedSize)=%f\n", float64(totalMergedSize.Load())/float64(i.Load()))
 		}
+
+		fmt.Printf("input: ")
 	}
 
 	if scanner.Err() != nil {
