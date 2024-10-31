@@ -451,26 +451,6 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	return obj, tableDef
 }
 
-func (tcc *TxnCompilerContext) checkTableDefChange(dbName string, tableName string, originTblId uint64, originVersion uint32) (bool, error) {
-	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
-	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
-		dbName = strings.ToLower(dbName)
-		tableName = strings.ToLower(tableName)
-	}
-
-	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, nil)
-	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return false, err
-	}
-
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, nil)
-	if err != nil {
-		return false, moerr.NewNoSuchTableNoCtx(dbName, tableName)
-	}
-
-	return table.GetTableDef(ctx).Version != originVersion || table.GetTableID(ctx) != originTblId, nil
-}
-
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
 	start := time.Now()
 	defer func() {
