@@ -3816,6 +3816,17 @@ alter_user_stmt:
         // Use the temporary variables to call the function
         $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
+|   ALTER USER exists_opt user_name UNLOCK user_comment_or_attribute_opt
+    {
+        ifExists := $3
+        var Username = $4.Username
+        var Hostname = $4.Hostname
+        user := tree.NewUser(Username,Hostname,nil)
+        users := []*tree.User{user}
+        miscOpt := tree.NewUserMiscOptionAccountUnlock()
+        commentOrAttribute := $6
+        $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
+    }
 
 
 default_role_opt:
@@ -7108,16 +7119,6 @@ user_spec_with_identified:
             Username,
             Hostname,
             AuthOption,
-        )
-    }
-|   user_name
-    {
-        var Username = $1.Username
-        var Hostname = $1.Hostname
-        $$ = tree.NewUser(
-            Username,
-            Hostname,
-            nil,
         )
     }
 
