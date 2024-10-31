@@ -180,4 +180,10 @@ func TestCheckTxnLastInsertRow(t *testing.T) {
 		vector.AppendFixed(outBatch.Vecs[i], int32(i), false, m)
 	}
 	checkTxnLastInsertRow(ls, writes, 20, outBatch, 11, 11)
+	for i := 0; i < 3; i++ {
+		vector.AppendFixed(outBatch.Vecs[i], int32(i), false, m)
+		vector.AppendFixed(outBatch.Vecs[i], int32(i), false, m)
+		vector.AppendFixed(outBatch.Vecs[i], int32(i), false, m)
+	}
+	checkTxnLastInsertRow(ls, writes, 20, outBatch, 11, 11)
 }
