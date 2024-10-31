@@ -3817,6 +3817,7 @@ alter_user_stmt:
         $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
 
+
 default_role_opt:
     {
         $$ = nil
@@ -7107,6 +7108,16 @@ user_spec_with_identified:
             Username,
             Hostname,
             AuthOption,
+        )
+    }
+|   user_name
+    {
+        var Username = $1.Username
+        var Hostname = $1.Hostname
+        $$ = tree.NewUser(
+            Username,
+            Hostname,
+            nil,
         )
     }
 
