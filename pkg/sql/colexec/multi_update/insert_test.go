@@ -277,7 +277,7 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 }
 
 func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey bool, isPartition bool) ([]*batch.Batch, uint64) {
-	inserBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey, isPartition)
+	insertBats, _ := prepareTestInsertBatchs(mp, 5, hasUniqueKey, hasSecondaryKey, isPartition)
 	retBat := batch.NewWithSize(6)
 	action := uint8(actionInsert)
 
@@ -289,7 +289,7 @@ func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey b
 	retBat.Vecs[5] = vector.NewVec(types.T_text.ToType())                                                           //batch bytes
 
 	totalRowCount := 0
-	for _, bat := range inserBats {
+	for _, bat := range insertBats {
 		totalRowCount += bat.RowCount()
 		_ = vector.AppendFixed(retBat.Vecs[3], bat.RowCount(), false, mp)
 
@@ -298,7 +298,6 @@ func buildFlushS3InfoBatch(mp *mpool.MPool, hasUniqueKey bool, hasSecondaryKey b
 
 		bat.Clean(mp)
 	}
-	inserBats = nil
 
 	retBat.SetRowCount(retBat.Vecs[0].Length())
 	return []*batch.Batch{retBat}, uint64(totalRowCount)

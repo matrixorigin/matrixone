@@ -58,8 +58,8 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		for _, updateCtx := range node.UpdateCtxList {
 			rule.schemas = append(rule.schemas, &plan.ObjectRef{
 				Server:     int64(updateCtx.TableDef.Version), //we use this unused field to store table's version
-				Db:         updateCtx.ObjRef.Db,
-				Schema:     updateCtx.ObjRef.Schema,
+				Db:         int64(updateCtx.TableDef.DbId),
+				Schema:     int64(updateCtx.TableDef.DbId),
 				Obj:        updateCtx.ObjRef.Obj,
 				ServerName: updateCtx.ObjRef.ServerName,
 				DbName:     updateCtx.ObjRef.DbName,
