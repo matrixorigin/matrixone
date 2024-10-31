@@ -17,6 +17,7 @@ package merge
 import (
 	"cmp"
 	"context"
+	"go.uber.org/zap"
 	"slices"
 	"time"
 
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"go.uber.org/zap"
 )
 
 type reviseResult struct {
@@ -71,10 +71,10 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 }
 
 func (g *policyGroup) resetForTable(entry *catalog.TableEntry) {
-	for _, p := range g.policies {
-		p.resetForTable(entry)
-	}
 	g.config = g.configProvider.getConfig(entry)
+	for _, p := range g.policies {
+		p.resetForTable(entry, g.config)
+	}
 }
 
 func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) (err error) {
@@ -325,14 +325,13 @@ func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 		_, esize := estimateMergeConsume(ss)
 		return esize > int(2*mem/3)
 	}
-	for needPopout(objs) {
-		objs = objs[:len(objs)-1]
+	if needPopout(objs) {
+		return nil
 	}
-
 	return objs
 }
 
-func (o *basic) resetForTable(entry *catalog.TableEntry) {
+func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.schema = entry.GetLastestSchemaLocked(false)
 	o.lastMergeTime = entry.Stats.GetLastMergeTime()
 	o.objects = o.objects[:0]

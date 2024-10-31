@@ -195,11 +195,6 @@ type Engine struct {
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
-	//snapshot catalog will be loaded from TN When snapshot read is needed.
-	snapCatalog *struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
