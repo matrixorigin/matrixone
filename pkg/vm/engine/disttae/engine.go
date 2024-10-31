@@ -735,6 +735,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
+}
+
 func (e *Engine) PushClient() *PushClient {
 	return &e.pClient
 }
