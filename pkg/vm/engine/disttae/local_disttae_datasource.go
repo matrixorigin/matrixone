@@ -406,23 +406,20 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
-func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch) {
+func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch, scan, fill int) {
 	injected, writesT := objectio.Debug19357Injected()
 	if injected && int64(len(writes)) > writesT && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
 		outLen := outBatch.Vecs[0].Length()
 		var slim = outBatch
-		if outLen > 0 {
+		if outLen > 3 {
 			start := outLen - 3
-			if start < 0 {
-				start = 0
-			}
 			slim, _ = outBatch.Window(start, outLen)
 		}
 
 		logutil.Info("yyyyyy checkTxnLastInsertRow",
 			zap.String("txn", hex.EncodeToString(ls.table.db.op.Txn().ID)),
 			zap.Int("txnOffset", ls.txnOffset),
-			zap.Int("cursor", cursor),
+			zap.Int("beginCursor", cursor),
 			zap.Int("writes", len(writes)),
 			zap.Bool("isSnapOp", ls.table.db.op.IsSnapOp()),
 			zap.String("entries", stringifySlice(writes[len(writes)-1:], func(a any) string {
@@ -433,7 +430,11 @@ func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor in
 				}
 				return e.String() + " " + batstr
 			})),
-			zap.String("outBatch", common.MoBatchToString(slim, 3)),
+			zap.String("outBatchTail", common.MoBatchToString(slim, 3)),
+			zap.Int("outLen", outLen),
+			zap.Int("scanEntry", scan),
+			zap.Int("fillRow", fill),
+			zap.Any("outBatchAttrs", outBatch.Attrs),
 		)
 	}
 }
@@ -464,6 +465,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	var retainedRowIds []objectio.Rowid
 
 	beginCursor := ls.wsCursor
+	scanEntryCnt := 0
+	fillRowCnt := 0
 
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
@@ -479,6 +482,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
 			continue
 		}
+		scanEntryCnt++
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
@@ -501,6 +505,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
+		fillRowCnt += len(sels)
+
 		rows += len(sels)
 
 		for i, destVec := range outBatch.Vecs {
@@ -516,7 +522,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 	}
 
-	checkTxnLastInsertRow(ls, writes, beginCursor, outBatch)
+	checkTxnLastInsertRow(ls, writes, beginCursor, outBatch, scanEntryCnt, fillRowCnt)
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 	return nil
 }
