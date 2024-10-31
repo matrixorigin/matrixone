@@ -96,7 +96,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				panic("wrong joinmap message tag!")
 			}
 			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+			ctr.state = SendSucceed
 
+		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			analyzer.Output(result.Batch)

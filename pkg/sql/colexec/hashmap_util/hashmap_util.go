@@ -75,6 +75,7 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		hb.vecs = make([][]*vector.Vector, 0)
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
+		hb.InputBatchRowCount = 0
 		for i, expr := range Conditions {
 			if _, ok := Conditions[i].Expr.(*plan.Expr_Col); !ok {
 				hb.needDupVec = true
@@ -95,7 +96,11 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 	return nil
 }
 
-func (hb *HashmapBuilder) Reset(proc *process.Process) {
+func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool) {
+	if hashTableHasNotSent || hb.InputBatchRowCount == 0 {
+		hb.FreeHashMapAndBatches(proc)
+	}
+
 	if hb.needDupVec {
 		for i := range hb.vecs {
 			for j := range hb.vecs[i] {
@@ -103,16 +108,13 @@ func (hb *HashmapBuilder) Reset(proc *process.Process) {
 			}
 		}
 	}
-	if hb.InputBatchRowCount == 0 {
-		hb.FreeHashMapAndBatches(proc)
-	}
 	hb.InputBatchRowCount = 0
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].CleanOnlyData()
+		hb.UniqueJoinKeys[i].Free(proc.Mp())
 	}
 	hb.UniqueJoinKeys = nil
 	hb.MultiSels.Free()
@@ -142,8 +144,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.UniqueJoinKeys = nil
 }
 
-// hashmap and batches are owned by probe operators
-// build operator can only call this when error occurs, or inputbatch rowcount is 0
 func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
@@ -154,28 +154,6 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Batches.Clean(proc.Mp())
-}
-
-func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
-	hb.needDupVec = false
-	hb.FreeHashMapAndBatches(proc)
-	hb.MultiSels.Free()
-	for i := range hb.executor {
-		if hb.executor[i] != nil {
-			hb.executor[i].Free()
-		}
-	}
-	hb.executor = nil
-	for i := range hb.vecs {
-		for j := range hb.vecs[i] {
-			hb.vecs[i][j].Free(proc.Mp())
-		}
-	}
-	hb.vecs = nil
-	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].Free(proc.Mp())
-	}
-	hb.UniqueJoinKeys = nil
 }
 
 func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {

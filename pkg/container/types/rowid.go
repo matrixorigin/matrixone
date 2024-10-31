@@ -322,9 +322,7 @@ func (o *Objectid) String() string {
 	return fmt.Sprintf("%v_%d", o.Segment().String(), o.Offset())
 }
 func (o *Objectid) ShortStringEx() string {
-	var shortuuid [12]byte
-	hex.Encode(shortuuid[:], o[10:16])
-	return string(shortuuid[:])
+	return fmt.Sprintf("%v_%d", o.Segment().ShortString(), o.Offset())
 }
 func (o *Objectid) Offset() uint16 {
 	filen := DecodeUint16(o[UuidSize:ObjectBytesSize])

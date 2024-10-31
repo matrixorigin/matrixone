@@ -101,7 +101,9 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 				jm.IncRef(1)
 			}
 			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+			ctr.state = SendSucceed
 
+		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			analyzer.Output(result.Batch)

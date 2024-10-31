@@ -44,6 +44,37 @@ var (
 	MinUpdateInterval = time.Second * 15
 )
 
+// waitKeeper is used to mark the table has finished waited,
+// only after which, the table can be unsubscribed.
+type waitKeeper struct {
+	sync.Mutex
+	records map[uint64]struct{}
+}
+
+func newWaitKeeper() *waitKeeper {
+	return &waitKeeper{
+		records: make(map[uint64]struct{}),
+	}
+}
+
+func (w *waitKeeper) reset() {
+	w.Lock()
+	defer w.Unlock()
+	w.records = make(map[uint64]struct{})
+}
+
+func (w *waitKeeper) add(tid uint64) {
+	w.Lock()
+	defer w.Unlock()
+	w.records[tid] = struct{}{}
+}
+
+func (w *waitKeeper) del(tid uint64) {
+	w.Lock()
+	defer w.Unlock()
+	delete(w.records, tid)
+}
+
 type updateStatsRequest struct {
 	// statsInfo is the field which is to update.
 	statsInfo *pb.StatsInfo
@@ -150,6 +181,10 @@ type GlobalStats struct {
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
 
+	// waitKeeper is used to make sure the table is safe to unsubscribe.
+	// Only when the table is finished waited, it can be unsubscribed safely.
+	waitKeeper *waitKeeper
+
 	// updateWorkerFactor is the times of CPU number of this node
 	// to start update worker. Default is 8.
 	updateWorkerFactor int
@@ -171,6 +206,7 @@ func NewGlobalStats(
 		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
+		waitKeeper:          newWaitKeeper(),
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
@@ -265,6 +301,8 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 }
 
 func (gs *GlobalStats) RemoveTid(tid uint64) {
+	gs.waitKeeper.del(tid)
+
 	gs.logtailUpdate.mu.Lock()
 	defer gs.logtailUpdate.mu.Unlock()
 	delete(gs.logtailUpdate.mu.updated, tid)
@@ -272,11 +310,23 @@ func (gs *GlobalStats) RemoveTid(tid uint64) {
 
 // clearTables clears the tables in the map if there are any tables in it.
 func (gs *GlobalStats) clearTables() {
+	// clear all the waiters in the keeper.
+	gs.waitKeeper.reset()
+
 	gs.logtailUpdate.mu.Lock()
 	defer gs.logtailUpdate.mu.Unlock()
 	if len(gs.logtailUpdate.mu.updated) > 0 {
 		gs.logtailUpdate.mu.updated = make(map[uint64]struct{})
 	}
+}
+
+func (gs *GlobalStats) safeToUnsubscribe(tid uint64) bool {
+	gs.waitKeeper.Lock()
+	defer gs.waitKeeper.Unlock()
+	if _, ok := gs.waitKeeper.records[tid]; ok {
+		return true
+	}
+	return false
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
@@ -380,6 +430,8 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+	defer gs.waitKeeper.add(tid)
+
 	// If the tid is less than reserved, return immediately.
 	if tid < catalog.MO_RESERVED_MAX {
 		return

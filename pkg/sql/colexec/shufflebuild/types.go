@@ -29,6 +29,7 @@ const (
 	ReceiveBatch = iota
 	BuildHashMap
 	SendJoinMap
+	SendSucceed
 )
 
 type container struct {
@@ -86,22 +87,15 @@ func (shuffleBuild *ShuffleBuild) Release() {
 }
 
 func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	shuffleBuild.ctr.state = ReceiveBatch
-	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+	runtimeSucceed := shuffleBuild.ctr.state > ReceiveBatch
+	mapSucceed := shuffleBuild.ctr.state == SendSucceed
 
-	if pipelineFailed || err != nil {
-		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		shuffleBuild.ctr.hashmapBuilder.Reset(proc)
-	}
+	shuffleBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	shuffleBuild.ctr.state = ReceiveBatch
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, mapSucceed)
 }
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-
-	if pipelineFailed || err != nil {
-		shuffleBuild.ctr.hashmapBuilder.FreeWithError(proc)
-	} else {
-		shuffleBuild.ctr.hashmapBuilder.Free(proc)
-	}
+	shuffleBuild.ctr.hashmapBuilder.Free(proc)
 }
