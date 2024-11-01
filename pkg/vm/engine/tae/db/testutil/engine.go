@@ -269,28 +269,6 @@ func (e *TestEngine) Truncate() {
 	assert.NoError(e.T, err)
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
-func (e *TestEngine) GlobalCheckpoint(
-	endTs types.TS,
-	versionInterval time.Duration,
-	enableAndCleanBGCheckpoint bool,
-) error {
-	if enableAndCleanBGCheckpoint {
-		e.DB.BGCheckpointRunner.DisableCheckpoint()
-		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
-		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
-	}
-	if e.DB.BGCheckpointRunner.GetPenddingIncrementalCount() == 0 {
-		testutils.WaitExpect(4000, func() bool {
-			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, false)
-			return flushed
-		})
-		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, true)
-		assert.True(e.T, flushed)
-	}
-	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
-	assert.NoError(e.T, err)
-	return nil
-}
 
 func (e *TestEngine) IncrementalCheckpoint(
 	end types.TS,
