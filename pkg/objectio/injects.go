@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
@@ -30,7 +31,22 @@ const (
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 
 	FJ_Debug19524 = "fj/debug/19524"
+
+	FJ_LogReader = "fj/log/reader"
 )
+
+// `name` is the table name
+// return injected, logLevel
+func LogReaderInjected(name string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogReader)
+	if !injected {
+		return false, 0
+	}
+	if !strings.Contains(sarg, name) {
+		return false, 0
+	}
+	return true, int(iarg)
+}
 
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)

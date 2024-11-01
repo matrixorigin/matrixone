@@ -38,6 +38,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -401,6 +402,31 @@ func (r *reader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil || dataState == engine.End {
 			r.Close()
+		}
+		if injected, logLevel := objectio.LogReaderInjected(r.name); injected {
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			if logLevel == 0 {
+				logger(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.Int("data-len", outBatch.RowCount()),
+					zap.Error(err),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logger(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.Error(err),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+				)
+			}
 		}
 	}()
 
