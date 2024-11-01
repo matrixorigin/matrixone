@@ -288,8 +288,11 @@ var (
     			account_id bigint unsigned,
     			database_id bigint unsigned,
     			table_id bigint unsigned,
+    			database_name varchar(255),
+    			table_name varchar(255),
     			table_stats json,
     			update_time timestamp not null default current_timestamp on update current_timestamp,
+    			took bigint unsigned,
     			primary key(account_id, database_id, table_id)
 			)`
 )
