@@ -651,8 +651,8 @@ func TestCheckPasswordExpired(t *testing.T) {
 
 	// getPasswordLifetime error
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
-	expired, err = checkPasswordExpired(ctx, ses, "1")
-	assert.NoError(t, err)
+	_, err = checkPasswordExpired(ctx, ses, "1")
+	assert.Error(t, err)
 	assert.True(t, expired)
 }
 
@@ -688,7 +688,7 @@ func Test_CheckLockTimeExpired(t *testing.T) {
 
 	// lock time expires
 	ses.gSysVars.Set(ConnectionControlMaxConnectionDelay, int64(30000000))
-	expired, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-31).Format("2006-01-02 15:04:05"))
+	expired, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Hour*-1).Format("2006-01-02 15:04:05"))
 	assert.NoError(t, err)
 	assert.False(t, expired)
 
