@@ -17,10 +17,12 @@ package table_function
 import (
 	"encoding/json"
 	"errors"
-	"os/exec"
+	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/buger/jsonparser"
+	extism "github.com/extism/go-sdk"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -59,15 +62,6 @@ import (
 // INSERT INTO t1 SELECT json_unquote(json_extract(result, '$.chunk')), json_unquote(json_extract(result, '$.e')) from
 // plugin_exec('["python3", "gen_embedding.py", "arg1", "arg2"]', cast('stage://mys3/wiki.bz2?offset=0&size=123456' as datalink)) as f;
 //
-// You can also do ASK function with plugin "ask" command like this:
-// SELECT * FROM plugin_exec('["ask", "index_table"]', 'this is a question?') as f;
-//
-// the plugin ask do the following:
-// 1. get the question from stdin
-// 2. get the embedding of the question from LLM
-// 3. query the database with index_table. SELECT * from index_table order by L2_DISTANCE(e, "[1.3,2.3,3.4]") LIMIT 3;
-// 4. send the result from database to LLM and get the answer
-// 5. return answer to stdout
 
 type pluginState struct {
 	inited bool
@@ -125,63 +119,72 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
-	// plugin exec: number of args is always 2.
+	// plugin exec: number of args is always 4. (wasm_url string, func_name string, config map in JSON, datalink)
 
-	// command
-	var cmdbytes []byte
-	cmdVec := tf.ctr.argVecs[0]
-	if cmdVec.IsNull(uint64(nthRow)) {
+	// wasm
+	wasmVec := tf.ctr.argVecs[0]
+	switch wasmVec.GetType().Oid {
+	case types.T_varchar, types.T_datalink, types.T_char, types.T_text:
+	default:
+		return moerr.NewInternalError(proc.Ctx, "wasm URL only support varchar, char, text and datalink type")
+	}
+
+	if wasmVec.IsNull(uint64(nthRow)) {
 		u.batch.SetRowCount(0)
 		return nil
 	}
-	switch cmdVec.GetType().Oid {
-	case types.T_json:
+	wasmurl := wasmVec.GetStringAt(nthRow)
 
-		cmd := cmdVec.GetBytesAt(nthRow)
-		cmdjs := bytejson.ByteJson{}
-		cmdjs.Unmarshal(cmd)
+	// func name
+	funcVec := tf.ctr.argVecs[1]
+	if funcVec.IsNull(uint64(nthRow)) {
+		u.batch.SetRowCount(0)
+		return nil
+	}
+	funcname := funcVec.GetStringAt(nthRow)
 
-		if cmdjs.Type != bytejson.TpCodeArray {
-			return moerr.NewInternalError(proc.Ctx, "command is a JSON array")
+	// config
+	var cfgbytes []byte
+	cfgVec := tf.ctr.argVecs[2]
+	if !cfgVec.IsNull(uint64(nthRow)) {
+		switch cfgVec.GetType().Oid {
+		case types.T_json:
+
+			cfg := cfgVec.GetBytesAt(nthRow)
+			cfgjs := bytejson.ByteJson{}
+			cfgjs.Unmarshal(cfg)
+
+			if cfgjs.Type != bytejson.TpCodeObject {
+				return moerr.NewInternalError(proc.Ctx, "config must be a JSON object")
+			}
+
+			cfgbytes, _ = cfgjs.MarshalJSON()
+		case types.T_varchar, types.T_text, types.T_char:
+			cfgbytes = cfgVec.GetBytesAt(nthRow)
+		default:
+			return moerr.NewInternalError(proc.Ctx, "config must be a JSON Object or string")
 		}
-
-		cmdbytes, _ = cmdjs.MarshalJSON()
-	case types.T_varchar, types.T_text, types.T_char:
-		cmdbytes = cmdVec.GetBytesAt(nthRow)
-	default:
-		return moerr.NewInternalError(proc.Ctx, "command is a JSON or string")
 	}
 
-	//logutil.Infof("COMMAND %s", string(cmdbytes))
-	var args []string
-	var cmderr error
-	jsonparser.ArrayEach(cmdbytes, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+	cfgmap := make(map[string]string)
 
-		if err != nil {
-			cmderr = errors.Join(cmderr, err)
-			return
-		}
+	if cfgbytes != nil {
+		//logutil.Infof("COMMAND %s", string(cmdbytes))
+		jsonparser.ObjectEach(cfgbytes, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
 
-		if dataType != jsonparser.String {
-			cmderr = errors.Join(cmderr, moerr.NewInternalError(proc.Ctx, "command argument is not string"))
-			return
-		}
+			if dataType != jsonparser.String {
+				return moerr.NewInternalError(proc.Ctx, "config value is not string")
+			}
 
-		args = append(args, string(value))
-	})
-
-	if cmderr != nil {
-		return cmderr
+			cfgmap[string(key)] = string(value)
+			return nil
+		})
+		logutil.Infof("CONFig %v", cfgmap)
 	}
-
-	if len(args) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "command is empty or invalid")
-	}
-
 	//logutil.Infof("ARGS %v", args)
 
 	// datalink
-	dlVec := tf.ctr.argVecs[1]
+	dlVec := tf.ctr.argVecs[3]
 	if dlVec.IsNull(uint64(nthRow)) {
 		u.batch.SetRowCount(0)
 		return nil
@@ -205,27 +208,53 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		return moerr.NewInternalError(proc.Ctx, "plugin_exec input type not supported")
 	}
 
-	// run command
-	var plexec *exec.Cmd
-	if len(args) == 1 {
-		plexec = exec.CommandContext(proc.Ctx, args[0])
+	wurl, err := url.Parse(wasmurl)
+	if err != nil {
+		return err
+	}
+
+	var manifest extism.Manifest
+	if wurl.Scheme == "https" || wurl.Scheme == "http" {
+
+		manifest = extism.Manifest{
+			Wasm: []extism.Wasm{
+				extism.WasmUrl{
+					Url: wasmurl,
+				},
+			},
+			Config: cfgmap,
+		}
 	} else {
-		plexec = exec.CommandContext(proc.Ctx, args[0], args[1:]...)
+		// treat as datalink
+		wasmdl, err := datalink.NewDatalink(wasmurl, proc)
+		if err != nil {
+			return err
+		}
+		image, err := wasmdl.GetBytes(proc)
+		if err != nil {
+			return err
+		}
+		manifest = extism.Manifest{
+			Wasm: []extism.Wasm{
+				extism.WasmData{
+					Data: image,
+				},
+			},
+			Config: cfgmap,
+		}
 	}
-	stdin, err := plexec.StdinPipe()
+
+	config := extism.PluginConfig{
+		EnableWasi: true,
+	}
+	plugin, err := extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
 	if err != nil {
 		return err
 	}
 
-	go func() error {
-		defer stdin.Close()
-		_, err := stdin.Write(bytes)
-		return err
-	}()
-
-	out, err := plexec.Output()
+	exit, out, err := plugin.Call(funcname, bytes)
 	if err != nil {
-		return err
+		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("plugin exit with error %d. err %v", exit, err))
 	}
 
 	nitem := 0
