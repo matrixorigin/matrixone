@@ -26,7 +26,6 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -366,7 +365,6 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 
 	entries := newLockedEntries()
 	recentMergedSize := newRecentRecords[int](25)
-	var i atomic.Int32
 	go func() {
 
 		ticker := time.NewTicker(mergeInterval)
@@ -390,6 +388,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 
 		}
 
+		i := 0
 		for {
 			select {
 			case e := <-entryChan:
@@ -401,11 +400,11 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 				hits := entries.calculateHits(maxValue)
 				mean, variance := stat.MeanVariance(hits, nil)
 				record := []string{
-					strconv.Itoa(int(i.Load())),
+					strconv.Itoa(i),
 					strconv.FormatFloat(mean, 'f', -1, 64),
 					strconv.FormatFloat(variance, 'f', -1, 64),
 					strconv.FormatFloat(mean/float64(entries.size()), 'f', -1, 64),
-					strconv.FormatFloat(float64(recentMergedSize.mean())/float64(i.Load()), 'f', -1, 64),
+					strconv.FormatInt(int64(recentMergedSize.mean()), 10),
 				}
 				err := csvWriter.Write(record)
 				if err != nil {
@@ -418,7 +417,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 				continue
 			}
 
-			i.Add(1)
+			i++
 
 			inputss := entries.checkOverlaps()
 			for _, inputs := range inputss {
@@ -477,10 +476,8 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 
 		case "a":
 			hits := entries.calculateHits(maxValue)
-			mean, variance := stat.MeanVariance(hits, nil)
-			fmt.Printf("Ave(hit)=%f, Var(hit)=%f\n", mean, variance)
-			fmt.Printf("Ave(hit/n)=%f\n", mean/float64(entries.size()))
-			fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean())/float64(i.Load()))
+			fmt.Printf("Ave(hit)=%f, Max(hit)=%f\n", stat.Mean(hits, nil), slices.Max(hits))
+			fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean()))
 			fmt.Printf("Max(mergedSize)=%d\n", recentMergedSize.getMax())
 		}
 
