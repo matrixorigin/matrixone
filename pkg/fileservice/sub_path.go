@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"iter"
 	"path"
 	"strings"
 )
@@ -88,16 +89,15 @@ func (s *subPathFS) ReadCache(ctx context.Context, vector *IOVector) error {
 	return s.upstream.ReadCache(ctx, &subVector)
 }
 
-func (s *subPathFS) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
-	p, err := s.toUpstreamPath(dirPath)
-	if err != nil {
-		return nil, err
+func (s *subPathFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		p, err := s.toUpstreamPath(dirPath)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		s.upstream.List(ctx, p)(yield)
 	}
-	entries, err := s.upstream.List(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	return entries, nil
 }
 
 func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {

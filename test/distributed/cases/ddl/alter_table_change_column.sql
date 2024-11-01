@@ -1178,4 +1178,24 @@ show create table t1;
 desc t1;
 drop table t1;
 
+drop table if exists tb_3;
+create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(30) not null;
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(30);
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(40);
+desc tb_3;
+
+alter table tb_3 modify c4 VARCHAR(40);
+desc tb_3;
+
+alter table tb_3 modify c4 VARCHAR(40) NOT null;
+desc tb_3;
+drop table tb_3;
+
 drop database db2;

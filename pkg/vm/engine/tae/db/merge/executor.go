@@ -240,7 +240,6 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 	}
 }
 func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.ObjectEntry, blkCnt int, entry *catalog.TableEntry, isTombstone bool) {
-	osize, esize := estimateMergeConsume(mobjs)
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
 		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
@@ -257,6 +256,7 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.Obj
 		}
 		return
 	}
+	osize, esize := estimateMergeConsume(mobjs)
 	e.addActiveTask(task.ID(), blkCnt, esize)
 	for _, obj := range mobjs {
 		e.roundMergeRows += uint64(obj.Rows())

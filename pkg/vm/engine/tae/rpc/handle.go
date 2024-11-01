@@ -278,7 +278,7 @@ func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
-) (releaseF []func(), err error) {
+) (releaseF []func(), hasDDL bool, err error) {
 	var (
 		inMemoryInsertRows        int
 		persistedMemoryInsertRows int
@@ -292,14 +292,19 @@ func (h *Handle) handleRequests(
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *pkgcatalog.CreateDatabaseReq:
+			hasDDL = true
 			err = h.HandleCreateDatabase(ctx, txn, req)
 		case *pkgcatalog.DropDatabaseReq:
+			hasDDL = true
 			err = h.HandleDropDatabase(ctx, txn, req)
 		case *pkgcatalog.CreateTableReq:
+			hasDDL = true
 			err = h.HandleCreateRelation(ctx, txn, req)
 		case *pkgcatalog.DropTableReq:
+			hasDDL = true
 			err = h.HandleDropRelation(ctx, txn, req)
 		case *api.AlterTableReq:
+			hasDDL = true
 			err = h.HandleAlterTable(ctx, txn, req)
 		case *cmd_util.WriteReq:
 			var r1, r2, r3, r4 int
@@ -404,8 +409,11 @@ func (h *Handle) HandleCommit(
 ) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
 	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
-	var txn txnif.AsyncTxn
-	var releaseF []func()
+	var (
+		txn      txnif.AsyncTxn
+		releaseF []func()
+		hasDDL   bool = false
+	)
 	defer func() {
 		for _, f := range releaseF {
 			f()
@@ -416,16 +424,21 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			_, _, injected := fault.TriggerFault(objectio.FJ_CommitSlowLog)
-			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || injected {
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY || err != nil || hasDDL || injected {
 				var tnTxnInfo string
 				if txn != nil {
 					tnTxnInfo = txn.String()
 				}
+				logger := logutil.Warn
 				msg := "HandleCommit-SLOW-LOG"
 				if err != nil {
+					logger = logutil.Error
 					msg = "HandleCommit-Error"
+				} else if hasDDL {
+					logger = logutil.Info
+					msg = "HandleCommit-With-DDL"
 				}
-				logutil.Warn(
+				logger(
 					msg,
 					zap.Error(err),
 					zap.Duration("commit-latency", time.Since(start)),
@@ -442,7 +455,7 @@ func (h *Handle) HandleCommit(
 		if err != nil {
 			return
 		}
-		releaseF, err = h.handleRequests(ctx, txn, txnCtx)
+		releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
 		if err != nil {
 			return
 		}
@@ -480,7 +493,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			releaseF, err = h.handleRequests(ctx, txn, txnCtx)
+			releaseF, hasDDL, err = h.handleRequests(ctx, txn, txnCtx)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
@@ -923,9 +936,7 @@ func (h *Handle) HandleWrite(
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
-	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
-	defer pkVec.Close()
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later

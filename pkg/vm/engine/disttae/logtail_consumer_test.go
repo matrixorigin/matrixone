@@ -32,6 +32,7 @@ func TestSubscribedTable(t *testing.T) {
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{
 			logtailUpdate: newLogtailUpdate(),
+			waitKeeper:    newWaitKeeper(),
 		},
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))

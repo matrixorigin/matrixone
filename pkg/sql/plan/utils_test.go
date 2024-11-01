@@ -19,8 +19,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

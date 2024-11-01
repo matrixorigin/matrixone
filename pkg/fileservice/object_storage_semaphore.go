@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"iter"
 	"sync"
 	"time"
 )
@@ -58,10 +59,12 @@ func (o *objectStorageSemaphore) Exists(ctx context.Context, key string) (bool, 
 	return o.upstream.Exists(ctx, key)
 }
 
-func (o *objectStorageSemaphore) List(ctx context.Context, prefix string, fn func(isPrefix bool, key string, size int64) (bool, error)) (err error) {
-	o.acquire()
-	defer o.release()
-	return o.upstream.List(ctx, prefix, fn)
+func (o *objectStorageSemaphore) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		o.acquire()
+		defer o.release()
+		o.upstream.List(ctx, prefix)(yield)
+	}
 }
 
 func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

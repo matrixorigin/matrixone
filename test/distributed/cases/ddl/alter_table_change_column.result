@@ -109,7 +109,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -137,7 +137,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -158,7 +158,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -183,7 +183,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 c    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -197,8 +197,8 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
-x    DATETIME(0)    YES        2023-06-21 12:34:45
-d    DECIMAL(7)    YES        null        
+x    DATETIME(0)    YES        2023-06-21 12:34:45        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    x    d
 1    ab    1980-12-17 11:34:45    800.00
@@ -210,7 +210,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 y    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    y    d
 1    ab    1980-12-17    800.00
@@ -222,7 +222,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    2023-06-21
+c    DATETIME(0)    NO    PRI    2023-06-21        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -245,7 +245,7 @@ x    a    b
 alter table t1 change x y datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-y    DATETIME(0)    NO    PRI    2023-06-21
+y    DATETIME(0)    NO    PRI    2023-06-21        
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 select * from t1;
@@ -260,7 +260,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -280,7 +280,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 x    VARCHAR(20)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    x    c    d
 1    ab    1980-12-17    800.00
@@ -298,7 +298,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 y    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    y    c    d
 1    ab    1980-12-17    800.00
@@ -317,7 +317,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 z    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    z    c    d
 1    ab    1980-12-17    800.00
@@ -330,7 +330,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -350,7 +350,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 1    ab    1980-12-17    800.00
@@ -367,7 +367,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null        
 y    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    y    c    d
 1    ab    1980-12-17    800.00
@@ -380,7 +380,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -401,7 +401,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 x    DATETIME(0)    YES    MUL    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    x    d
 1    ab    1980-12-17 00:00:00    800.00
@@ -422,7 +422,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 y    VARCHAR(20)    YES    UNI    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    y    d
 1    ab    1980-12-17 00:00:00    800.00
@@ -435,7 +435,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT UNSIGNED(32)    NO    PRI    null        
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
 insert into t1 values (7521,'WARD','1981-02-22',1250);
@@ -454,7 +454,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -468,7 +468,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 x    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-y    DECIMAL(6)    YES        null        
+y    DECIMAL(6,2)    YES        null        
 select * from t1;
 x    b    c    y
 7369    SMITH    1980-12-17    800.00
@@ -483,7 +483,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 c    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -495,10 +495,10 @@ a    b    c    d
 alter table t1 change a x decimal(7,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7)    NO    PRI    null        
+x    DECIMAL(7,2)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 c    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -507,10 +507,10 @@ x    b    c    d
 alter table t1 rename column b to y;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7)    NO    PRI    null        
+x    DECIMAL(7,2)    NO    PRI    null        
 y    CHAR(10)    NO    PRI    null        
 c    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    y    c    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -519,10 +519,10 @@ x    y    c    d
 alter table t1 rename column c to z;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7)    NO    PRI    null        
+x    DECIMAL(7,2)    NO    PRI    null        
 y    CHAR(10)    NO    PRI    null        
 z    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 x    y    z    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -580,8 +580,8 @@ ename    VARCHAR(15)    YES        null
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
 hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7)    YES        null        
-comm    DECIMAL(7)    YES        null        
+sal    DECIMAL(7,2)    YES        null        
+comm    DECIMAL(7,2)    YES        null        
 deptno    VARCHAR(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -607,8 +607,8 @@ ename    VARCHAR(15)    YES        null
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
 hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7)    YES        null        
-comm    DECIMAL(7)    YES        null        
+sal    DECIMAL(7,2)    YES        null        
+comm    DECIMAL(7,2)    YES        null        
 deptId    VARCHAR(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
@@ -633,7 +633,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -653,7 +653,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    100        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -670,7 +670,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -687,7 +687,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -699,8 +699,8 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        1990-12-17
-d    DECIMAL(7)    YES        null        
+c    DATE(0)    YES        1990-12-17        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -719,8 +719,8 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        2003-12-17
-d    DECIMAL(7)    YES        null        
+c    DATE(0)    YES        2003-12-17        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -737,7 +737,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -754,7 +754,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -767,7 +767,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -782,7 +782,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -794,7 +794,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -1079,8 +1079,8 @@ e    324214    1
 show columns from alter03;
 Field    Type    Null    Key    Default    Extra    Comment
 col2New    VARBINARY(20)    YES        null        
-col3    DECIMAL(38)    YES        null        
-col1New    DECIMAL(38)    YES        null        
+col3    DECIMAL(38,0)    YES        null        
+col1New    DECIMAL(38,0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter03' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 alter03    col1New    DECIMAL    YES
@@ -1306,23 +1306,21 @@ create table primary08(col1 int ,col2 float, col3 decimal, primary key (col1, co
 insert into primary08 values (1, 213412.32143, 3214312.34243214242);
 insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
-All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary08 change col2 col2New decimal(28,10);
 show create table primary08;
 Table    Create Table
-primary08    CREATE TABLE `primary08` (\n  `col1` int NOT NULL,\n  `col2New` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2New`)\n)
+primary08    CREATE TABLE `primary08` (\n  `col1New` double NOT NULL,\n  `col2New` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1New`,`col2New`)\n)
 insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
 internal error: column 'col2' not found in table 
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
-invalid input: column col1New does not exist
 delete from primary08 where col1 = 1;
+invalid input: column col1 does not exist
 delete from primary08 where col1New = 2;
-invalid input: column col1New does not exist
 select * from primary08;
-col1    col2new    col3
-2    -324.2342529297    -1243
-3    73829.2738972984    38298390
+col1new    col2new    col3
+3.0    73829.2738972984    38298390
+1.0    32432.3242424242    3214312
 drop table primary08;
 drop table if exists primary09;
 create table primary09 (col1 int primary key, col2 decimal);
@@ -1332,7 +1330,7 @@ primary09    CREATE TABLE `primary09` (\n  `col1` int NOT NULL,\n  `col2` decima
 insert into primary09 values(1, 3412.324);
 insert into primary09 values (-10, 323943.2343);
 alter table primary09 change col1 col1New float default null;
-Invalid default value for 'col1new'
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 drop table primary09
 drop table if exists index01;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
@@ -1432,7 +1430,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 bnewNew    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    INT    NO
@@ -1718,9 +1716,9 @@ null    93024232    -32    324242132321
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 cast02    col1New    INT UNSIGNED    YES
+cast02    col22361738278472874382    BIGINT    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
 cast02    col4cdhewjruekhwjf    SMALLINT    YES
-cast02    col22361738278472874382    BIGINT    YES
 drop table cast02;
 drop table if exists cast03;
 create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);
@@ -1769,10 +1767,10 @@ null    null    null    null
 null    null    null    null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
+cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
+cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL    YES
 cast04    col3    TEXT    YES
 cast04    col4    BLOB    YES
-cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL    YES
-cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
 drop table cast04;
 drop table if exists cast05;
 create table cast05 (col1 date);
@@ -1981,8 +1979,8 @@ col2worejnfenrororiri    iwijwehfndatabasectm
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
-cluster01    iwijwehfndatabasectm    DOUBLE    YES
 cluster01    col2worejnfenrororiri    FLOAT    YES
+cluster01    iwijwehfndatabasectm    DOUBLE    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
@@ -2164,4 +2162,48 @@ Field    Type    Null    Key    Default    Extra    Comment
 name    ENUM('A','B','C','D')    YES        null        
 age    INT(32)    YES        null        
 drop table t1;
+drop table if exists tb_3;
+create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(25)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(30) not null;
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(30)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(30);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(30)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c1 VARCHAR(40);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    INT(32)    YES        null        
+alter table tb_3 modify c4 VARCHAR(40);
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    VARCHAR(40)    YES        null        
+alter table tb_3 modify c4 VARCHAR(40) NOT null;
+desc tb_3;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    VARCHAR(40)    NO    PRI    null        
+c2    VARCHAR(25)    NO    PRI    null        
+c3    VARCHAR(25)    NO    PRI    null        
+c4    VARCHAR(40)    NO        null        
+drop table tb_3;
 drop database db2;

@@ -285,7 +285,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	}()
 
 	var dirs []fileservice.DirEntry
-	if dirs, err = c.fs.ListDir(GCMetaDir); err != nil {
+	if dirs, err = fileservice.SortedList(c.fs.ListDir(GCMetaDir)); err != nil {
 		return
 	}
 	if len(dirs) == 0 {
@@ -419,85 +419,6 @@ func (c *checkpointCleaner) Replay() (err error) {
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
 			zap.Duration("duration", time.Since(start)),
-		)
-	}
-	if acctFile == "" {
-		//No account table information, it may be a new cluster or an upgraded cluster,
-		//and the table information needs to be initialized from the checkpoint
-		scanWaterMark := c.GetScanWaterMark()
-		isConsumedGCkp := false
-		var checkpointEntries []*checkpoint.CheckpointEntry
-		if checkpointEntries, err = checkpoint.ListSnapshotCheckpoint(
-			c.ctx, c.sid, c.fs.Service, scanWaterMark.GetEnd(), 0,
-		); err != nil {
-			logutil.Error(
-				"GC-REPLAY-LIST-ERROR",
-				zap.String("task", c.TaskNameLocked()),
-				zap.Error(err),
-			)
-			return
-		}
-		if len(checkpointEntries) == 0 {
-			return
-		}
-		for _, entry := range checkpointEntries {
-			logutil.Info(
-				"GC-REPLAY-TRACE-LOAD",
-				zap.String("task", c.TaskNameLocked()),
-				zap.String("checkpoint", entry.String()),
-				zap.String("scanWaterMark", scanWaterMark.String()),
-			)
-			var ckpData *logtail.CheckpointData
-			if ckpData, err = c.collectCkpData(entry); err != nil {
-				logutil.Error(
-					"GC-REPLAY-COLLECT-ERROR",
-					zap.String("task", c.TaskNameLocked()),
-					zap.Error(err),
-					zap.String("checkpoint", entry.String()),
-				)
-				return
-			}
-			if entry.GetType() == checkpoint.ET_Global {
-				isConsumedGCkp = true
-			}
-			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
-			ckpData.Close()
-		}
-		if !isConsumedGCkp {
-			// The global checkpoint that Specified checkpoint depends on may have been GC,
-			// so we need to load a latest global checkpoint
-			entry := c.checkpointCli.MaxGlobalCheckpoint()
-			if entry == nil {
-				logutil.Warn(
-					"GC-REPLAY-NO-MAX-GLOBAL",
-					zap.String("task", c.TaskNameLocked()),
-				)
-				return
-			}
-			logutil.Info(
-				"GC-REPLAY-TRACE-MAX-GLOBAL",
-				zap.String("task", c.TaskNameLocked()),
-				zap.String("max-gloabl", entry.String()),
-				zap.String("max-consumed", scanWaterMark.String()),
-			)
-			var ckpData *logtail.CheckpointData
-			if ckpData, err = c.collectCkpData(entry); err != nil {
-				logutil.Error(
-					"GC-REPLAY-COLLECT-CHECKPOINT-ERROR",
-					zap.String("task", c.TaskNameLocked()),
-					zap.Error(err),
-					zap.String("checkpoint", entry.String()),
-				)
-				return
-			}
-			c.mutation.snapshotMeta.InitTableInfo(c.ctx, c.fs.Service, ckpData, entry.GetStart(), entry.GetEnd())
-			ckpData.Close()
-		}
-
-		logutil.Info(
-			"GC-REPLAY-TRACE-INIT-TABLE-INFO",
-			zap.String("task", c.TaskNameLocked()),
-			zap.String("details", c.mutation.snapshotMeta.TableInfoString()),
 		)
 	}
 	return
@@ -878,6 +799,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		toMergeEntries,
 		bf,
 		&checkpointMaxEnd,
+		c.checkpointCli,
 		c.mp,
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
