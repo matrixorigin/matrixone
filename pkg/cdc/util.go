@@ -536,7 +536,7 @@ var openDbConn = func(
 	user, password string,
 	ip string,
 	port int) (db *sql.DB, err error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?multiStatements=true",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=10m&timeout=10m&writeTimeout=10m&multiStatements=true",
 		user,
 		password,
 		ip,
@@ -549,7 +549,7 @@ var openDbConn = func(
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("^^^^^ openDbConn failed")
+	logutil.Error("cdc task openDbConn failed")
 	return
 }
 
