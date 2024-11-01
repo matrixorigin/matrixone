@@ -1,3 +1,7 @@
+create stage mystage URL='file:///$resources/plugin/';
+select wasm('stage://mystage/hello.wasm', 'mowasm_hello', 'world');
+wasm(stage://mystage/hello.wasm, mowasm_hello, world)
+Hello world!
 select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_hello', 'world');
 wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm, mowasm_hello, world)
 Hello world!
@@ -61,3 +65,4 @@ id    try_wasm(https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.
 9    Hello [1, 2]!
 10    3
 drop table wasmt;
+drop stage mystage;

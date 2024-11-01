@@ -15,12 +15,13 @@
 package function
 
 import (
-	"context"
+	"net/url"
 
 	extism "github.com/extism/go-sdk"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,23 +46,49 @@ func newOpBuiltInWasm() *opBuiltInWasm {
 	return &opBuiltInWasm{}
 }
 
-func (op *opBuiltInWasm) buildWasm(ctx context.Context, url string) error {
+func (op *opBuiltInWasm) buildWasm(proc *process.Process, wasmurl string) error {
 	var err error
 
-	// manifest is created from wasm url.
-	// We will need to handle stage in the future.
-	manifest := extism.Manifest{
-		Wasm: []extism.Wasm{
-			extism.WasmUrl{
-				Url: url,
-			},
-		},
+	u, err := url.Parse(wasmurl)
+	if err != nil {
+		return err
 	}
+
+	var manifest extism.Manifest
+	if u.Scheme == "http" || u.Scheme == "https" {
+		// manifest is created from wasm url.
+		manifest = extism.Manifest{
+			Wasm: []extism.Wasm{
+				extism.WasmUrl{
+					Url: wasmurl,
+				},
+			},
+		}
+	} else {
+
+		// treat as datalink
+		wasmdl, err := datalink.NewDatalink(wasmurl, proc)
+		if err != nil {
+			return err
+		}
+		image, err := wasmdl.GetBytes(proc)
+		if err != nil {
+			return err
+		}
+		manifest = extism.Manifest{
+			Wasm: []extism.Wasm{
+				extism.WasmData{
+					Data: image,
+				},
+			},
+		}
+	}
+
 	// enable wasi: tinygo build wasm need wasi.
 	config := extism.PluginConfig{
 		EnableWasi: true,
 	}
-	op.plugin, err = extism.NewPlugin(ctx, manifest, config, []extism.HostFunction{})
+	op.plugin, err = extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
 	return err
 }
 
@@ -90,7 +117,7 @@ func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.Func
 	if isnull {
 		return moerr.NewInvalidInput(proc.Ctx, "wasm url cannot be null.")
 	}
-	if err := op.buildWasm(proc.Ctx, string(url)); err != nil {
+	if err := op.buildWasm(proc, string(url)); err != nil {
 		return err
 	}
 

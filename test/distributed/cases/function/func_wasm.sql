@@ -2,6 +2,10 @@
 -- wasm test
 --
 
+create stage mystage URL='file:///$resources/plugin/';
+
+select wasm('stage://mystage/hello.wasm', 'mowasm_hello', 'world');
+
 select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_hello', 'world');
 select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add', '[3, 5]');
 
@@ -36,6 +40,7 @@ from wasmt;
 
 drop table wasmt;
 
+drop stage mystage;
 
 
 
