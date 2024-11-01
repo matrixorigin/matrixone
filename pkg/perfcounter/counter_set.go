@@ -70,9 +70,10 @@ type FileServiceCounterSet struct {
 	}
 
 	FileWithChecksum struct {
-		Read            stats.Counter // logical read, unit：bytes
-		Write           stats.Counter // logical write, unit：bytes
-		UnderlyingRead  stats.Counter // physical read, unit：bytes
+		Read  stats.Counter // logical read, unit：bytes
+		Write stats.Counter // logical write, unit：bytes
+		//disable this for now because it's too time consuming
+		//UnderlyingRead  stats.Counter // physical read, unit：bytes
 		UnderlyingWrite stats.Counter // physical write, unit：bytes
 	}
 }

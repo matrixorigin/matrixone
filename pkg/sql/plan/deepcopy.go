@@ -485,6 +485,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
+		DbId:           table.DbId,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -1098,6 +1099,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		NetworkIO:              analyzeinfo.GetNetworkIO(),
 		ScanTime:               analyzeinfo.GetScanTime(),
 		InsertTime:             analyzeinfo.GetInsertTime(),
+		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
 	}
 }
 

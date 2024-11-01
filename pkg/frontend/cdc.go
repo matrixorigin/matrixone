@@ -1025,6 +1025,8 @@ func NewCdcTask(
 }
 
 func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
+	logutil.Infof("cdc task %s start on cn %s", cdc.cdcTask.TaskName, cdc.cnUUID)
+
 	defer func() {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)

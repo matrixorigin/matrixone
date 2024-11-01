@@ -367,6 +367,9 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 
 	op.reset.workspace = tc.reset.workspace.CloneSnapshotWS()
 	op.reset.workspace.BindTxnOp(op)
+	op.logger = tc.logger
+	op.sender = tc.sender
+	op.timestampWaiter = tc.timestampWaiter
 
 	tc.mu.Lock()
 	defer tc.mu.Unlock()

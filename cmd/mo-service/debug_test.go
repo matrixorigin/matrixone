@@ -16,11 +16,54 @@ package main
 
 import (
 	"context"
+	"io"
+	"iter"
+	"os"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
+
+func Test_saveProfile(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
+	assert.Nil(t, err)
+	defer fs.Close()
+	globalEtlFS = fs
+	saveCpuProfile(time.Second)
+	saveMallocProfile()
+}
+
+func Test_saveProfile2(t *testing.T) {
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	assert.NoError(t, err)
+	defer fs.Close()
+	globalEtlFS = fs
+	saveCpuProfile(time.Second)
+}
+
+func Test_saveProfile3(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	close(sigs)
+	*profileInterval = time.Second * 10
+	dir := t.TempDir()
+	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
+	assert.Nil(t, err)
+	defer fs.Close()
+	globalEtlFS = fs
+	saveProfilesLoop(sigs)
+}
+
+func Test_saveProfile4(t *testing.T) {
+	saveProfileWithType("cpu", func(writer io.Writer) error {
+		return context.DeadlineExceeded
+	})
+}
 
 var _ fileservice.FileService = &testFS{}
 
@@ -46,7 +89,7 @@ func (tfs *testFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) 
 	panic("implement me")
 }
 
-func (tfs *testFS) List(ctx context.Context, dirPath string) ([]fileservice.DirEntry, error) {
+func (tfs *testFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
 	//TODO implement me
 	panic("implement me")
 }
@@ -76,7 +119,7 @@ func (tfs *testFS) Close() {
 	panic("implement me")
 }
 
-func Test_saveMallocProfile(t *testing.T) {
+func Test_saveMallocProfile5(t *testing.T) {
 	globalEtlFS = &testFS{}
 	saveMallocProfile()
 }

@@ -110,7 +110,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -138,7 +138,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -170,7 +170,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 c    DATETIME(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -184,8 +184,8 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        2023-06-21 12:34:45
-d    DECIMAL(7)    YES        null        
+c    DATETIME(0)    YES        2023-06-21 12:34:45        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17 11:34:45    800.00
@@ -197,7 +197,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    NO    PRI    null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -209,7 +209,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    2023-06-21
+c    DATETIME(0)    NO    PRI    2023-06-21        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -232,7 +232,7 @@ c    a    b
 alter table t1 modify c datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-c    DATETIME(0)    NO    PRI    2023-06-21
+c    DATETIME(0)    NO    PRI    2023-06-21        
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 select * from t1;
@@ -247,7 +247,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -282,7 +282,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -295,7 +295,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -335,7 +335,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    VARCHAR(20)    YES    UNI    null        
 c    VARCHAR(20)    YES    UNI    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -360,8 +360,8 @@ ename    VARCHAR(15)    NO    PRI    null
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
 hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7)    YES        null        
-comm    DECIMAL(7)    YES        null        
+sal    DECIMAL(7,2)    YES        null        
+comm    DECIMAL(7,2)    YES        null        
 deptno    INT UNSIGNED(32)    YES        null        
 INSERT INTO t1 VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO t1 VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -400,9 +400,9 @@ ename    VARCHAR(15)    NO    PRI    null
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
 hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7)    YES        null        
+sal    DECIMAL(7,2)    YES        null        
 empno    VARCHAR(20)    NO    PRI    null        
-comm    DECIMAL(7)    YES        null        
+comm    DECIMAL(7,2)    YES        null        
 deptno    INT UNSIGNED(32)    YES        null        
 select * from t1;
 ename    job    mgr    hiredate    sal    empno    comm    deptno
@@ -427,7 +427,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT UNSIGNED(32)    NO    PRI    null        
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
 insert into t1 values (7521,'WARD','1981-02-22',1250);
@@ -446,7 +446,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -460,7 +460,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(6)    YES        null        
+d    DECIMAL(6,2)    YES        null        
 select * from t1;
 a    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -520,8 +520,8 @@ ename    VARCHAR(15)    YES        null
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
 hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7)    YES        null        
-comm    DECIMAL(7)    YES        null        
+sal    DECIMAL(7,2)    YES        null        
+comm    DECIMAL(7,2)    YES        null        
 deptno    VARCHAR(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -587,7 +587,7 @@ show create table bool01;
 Table    Create Table
 bool01    CREATE TABLE `bool01` (\n  `col1` int DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'bool01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 bool01    col1    INT    YES
 bool01    col2    CHAR    YES
 drop table bool01;
@@ -612,7 +612,7 @@ truncate table char01;
 select * from char01;
 col1    col2
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 char01    col1    INT    YES
 char01    col2    VARCHAR    YES
 drop table char01;
@@ -645,7 +645,7 @@ a32f4    2
 738fewhu&^YUH    100
 w43234rfq    100
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 char02    col1    INT    YES
 char02    col2    CHAR    YES
 drop table char02;
@@ -678,7 +678,7 @@ col1    col2
 2    367283r343
 3    null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 char03    col1    INT    YES
 char03    col2    CHAR    YES
 drop table char03;
@@ -707,7 +707,7 @@ null    ahu323ew32
 32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM    null
 4    eyuiwqewq3
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 char04    col1    VARCHAR    YES
 char04    col2    CHAR    YES
 drop table char04;
@@ -723,7 +723,7 @@ no such table test.text01
 select * from text01;
 SQL parser error: table "text01" does not exist
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table text01;
 no such table test.text01
 drop table if exists alter03;
@@ -767,7 +767,7 @@ col1
 102
 103
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 alter04    col1    INT    NO
 drop table alter04;
 drop table if exists alter05;
@@ -791,7 +791,7 @@ col1
 1
 2
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter05' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 alter05    col1    INT    NO
 drop table alter05;
 drop table if exists primary01;
@@ -811,7 +811,7 @@ col1    col2
 2.0    243ewfvefreverewfcwr
 2378.3242    234242))())_
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary01    col1    FLOAT    NO
 primary01    col2    TEXT    YES
 drop table primary01;
@@ -829,7 +829,7 @@ show create table primary02;
 Table    Create Table
 primary02    CREATE TABLE `primary02` (\n  `col1` int DEFAULT NULL,\n  `col2` binary(10) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary02    col1    INT    YES
 primary02    col2    BINARY    YES
 drop table primary02;
@@ -850,7 +850,7 @@ col1    col2
 2    3e        
 3    *         
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary03    col1    INT    NO
 primary03    col2    BINARY    YES
 drop table primary03;
@@ -871,7 +871,7 @@ col1    col2
 2.0    324543##
 3.0    qw
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary04    col1    FLOAT    NO
 primary04    col2    VARBINARY    YES
 drop table primary04;
@@ -885,7 +885,7 @@ show create table primary05;
 Table    Create Table
 primary05    CREATE TABLE `primary05` (\n  `col1` int NOT NULL,\n  `col2` varbinary(20) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary05' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary05    col1    INT    NO
 primary05    col2    VARBINARY    YES
 drop table primary05;
@@ -901,7 +901,7 @@ show create table primary06;
 Table    Create Table
 primary06    CREATE TABLE `primary06` (\n  `col1` int NOT NULL,\n  `col2` varbinary(20) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary06' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary06    col1    INT    NO
 primary06    col2    VARBINARY    YES
 drop table primary06;
@@ -927,11 +927,10 @@ create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, co
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double not null;
-All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary07 modify col2 decimal(28,10);
 show create table primary07;
 Table    Create Table
-primary07    CREATE TABLE `primary07` (\n  `col1` int NOT NULL,\n  `col2` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+primary07    CREATE TABLE `primary07` (\n  `col1` double NOT NULL,\n  `col2` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 drop table primary07;
 drop table if exists index01;
 CREATE TABLE index01(a INTEGER not null , b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
@@ -1022,7 +1021,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    VARCHAR(20)    YES    UNI    null        
 c    VARCHAR(20)    YES    UNI    null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    INT    NO
@@ -1082,13 +1081,13 @@ show create table foreign02;
 Table    Create Table
 foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  `col2` double DEFAULT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 foreign01    col1    INT    NO
 foreign01    col2    VARCHAR    YES
 foreign01    col3    INT    YES
 foreign01    col4    BIGINT    YES
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 foreign02    col1    INT    YES
 foreign02    col2    DOUBLE    YES
 foreign02    col3    INT    NO
@@ -1131,7 +1130,7 @@ col1    col2
 1    32143     
 null    3e        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 null01    col1    INT    YES
 null01    col2    BINARY    YES
 drop table null01;
@@ -1152,7 +1151,7 @@ col1    col2
 2    3e
 342    aesd
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 null02    col1    INT    NO
 null02    col2    VARBINARY    YES
 drop table null02;
@@ -1356,7 +1355,7 @@ show create table cast05;
 Table    Create Table
 cast05    CREATE TABLE `cast05` (\n  `col1` datetime DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast05' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 cast05    col1    DATETIME    YES
 drop table cast05;
 drop table if exists abnormal02;
@@ -1377,7 +1376,7 @@ show create table abnormal02;
 Table    Create Table
 abnormal02    CREATE TABLE `abnormal02` (\n  `col1` int DEFAULT NULL,\n  `col2` smallint DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 abnormal02    col1    INT    YES
 abnormal02    col2    SMALLINT    YES
 drop table abnormal02;
@@ -1430,7 +1429,7 @@ show create table abnormal02;
 Table    Create Table
 abnormal02    CREATE TABLE `abnormal02` (\n  `col1` int NOT NULL,\n  `col2` smallint DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 abnormal02    col1    INT    NO
 abnormal02    col2    SMALLINT    YES
 drop table abnormal02;
@@ -1453,7 +1452,7 @@ show create table abnormal03;
 Table    Create Table
 abnormal03    CREATE TABLE `abnormal03` (\n  `col1` varchar(100) DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal03' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 abnormal03    col1    VARCHAR    YES
 abnormal03    col2    BLOB    YES
 drop table abnormal03;
@@ -1477,7 +1476,7 @@ show create table abnormal04;
 Table    Create Table
 abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2` enum('a','b') DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 abnormal04    col1    JSON    YES
 abnormal04    col2    ENUM    YES
 drop table abnormal04;
@@ -1501,7 +1500,7 @@ show create table abnormal05;
 Table    Create Table
 abnormal05    CREATE TABLE `abnormal05` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 drop table abnormal05;
 drop table if exists view01;
 drop table if exists view02;
@@ -1537,7 +1536,7 @@ col2    col1
 3.892349E8    1.0
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 cluster01    col1    DOUBLE    YES
 cluster01    col2    FLOAT    YES
 drop table cluster01;
@@ -1574,7 +1573,7 @@ show create table time01;
 Table    Create Table
 time01    CREATE TABLE `time01` (\n  `col2` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` int DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 time01    col1    INT    YES
 time01    col2    INT    YES
 time01    col3    INT    YES
