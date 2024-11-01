@@ -209,6 +209,53 @@ func TestCancelRunningTask(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestDoHeartbeat(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		c := make(chan struct{})
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+			defer close(c)
+			return nil
+		})
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
+		<-c
+
+		r.doHeartbeat(context.Background())
+
+		tasks := mustGetTestAsyncTask(t, store, 1, WithTaskStatusCond(task.TaskStatus_Running))
+		require.Equal(t, 1, len(tasks))
+		assert.Greater(t, tasks[0].LastHeartbeat, int64(0))
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond),
+		WithRunnerHeartbeatInterval(time.Millisecond))
+}
+
+func TestDoHeartbeatInvalidTask(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		c := make(chan struct{})
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+			defer close(c)
+			return nil
+		})
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
+		<-c
+
+		// Simulate invalid task by removing it from the store
+		v := mustGetTestAsyncTask(t, store, 1)[0]
+		v.Status = task.TaskStatus_Completed
+		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+
+		r.doHeartbeat(context.Background())
+
+		r.runningTasks.RLock()
+		defer r.runningTasks.RUnlock()
+		assert.Equal(t, 0, len(r.runningTasks.m))
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond),
+		WithRunnerHeartbeatInterval(time.Millisecond))
+}
+
 func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
