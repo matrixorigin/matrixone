@@ -31,7 +31,7 @@ var upg_mo_user_add_password_last_changed = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_USER,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_user add column password_last_changed timestamp not null default utc_timestamp",
+	UpgSql:    "alter table mo_catalog.mo_user add column password_last_changed timestamp default utc_timestamp",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "password_last_changed")
 		if err != nil {
@@ -49,7 +49,7 @@ var upg_mo_user_add_password_history = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_USER,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_user add column password_history text not null default '[]'",
+	UpgSql:    "alter table mo_catalog.mo_user add column password_history text default '[]'",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "password_history")
 		if err != nil {
@@ -67,7 +67,7 @@ var upg_mo_user_add_login_attempts = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_USER,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_user add column login_attempts int unsigned not null default 0",
+	UpgSql:    "alter table mo_catalog.mo_user add column login_attempts int unsigned default 0",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "login_attempts")
 		if err != nil {
@@ -85,7 +85,7 @@ var upg_mo_user_add_lock_time = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_USER,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    "alter table mo_catalog.mo_user add column lock_time timestamp not null default utc_timestamp",
+	UpgSql:    "alter table mo_catalog.mo_user add column lock_time timestamp default utc_timestamp",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "lock_time")
 		if err != nil {
