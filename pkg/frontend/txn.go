@@ -411,7 +411,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	err, hasRecovered = executeFuncWithRecover(func() error {
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
 		th.txnOp, err2 = getPu(execCtx.ses.GetService()).TxnClient.New(
 			th.txnCtx,
 			execCtx.ses.getLastCommitTS(),
@@ -523,7 +523,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		err, hasRecovered = executeFuncWithRecover(func() error {
+		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
 		if err != nil {
@@ -531,7 +531,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			if hasRecovered {
 				execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
 				defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
-				err2, hasRecovered2 = executeFuncWithRecover(func() error {
+				err2, hasRecovered2 = ExecuteFuncWithRecover(func() error {
 					return th.txnOp.Rollback(ctx2)
 				})
 				if err2 != nil || hasRecovered2 {
@@ -582,7 +582,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
-			err, hasRecovered = executeFuncWithRecover(func() error {
+			err, hasRecovered = ExecuteFuncWithRecover(func() error {
 				return th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
 			})
 			if err != nil || hasRecovered {
@@ -646,7 +646,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		err, hasRecovered = executeFuncWithRecover(func() error {
+		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
 		})
 		if err != nil || hasRecovered {

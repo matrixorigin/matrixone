@@ -2579,7 +2579,7 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 	crs := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
-	err, hasRecovered = executeFuncWithRecover(func() error {
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
 		return txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	})
 	if err != nil || hasRecovered {
