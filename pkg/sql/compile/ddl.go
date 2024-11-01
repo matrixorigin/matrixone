@@ -130,17 +130,82 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
+	// whether foreign_key_checks = 0 or 1
+	err = s.removeFkeysRelationships(c, dbName)
+	if err != nil {
+		return err
+	}
+
+	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	relations, err := database.Relations(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	var ignoreTables []string
+	for _, r := range relations {
+		t, err := database.Relation(c.proc.Ctx, r, nil)
+		if err != nil {
+			return err
+		}
+		defs, err := t.TableDefs(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+
+		constrain := GetConstraintDefFromTableDefs(defs)
+		for _, ct := range constrain.Cts {
+			if ds, ok := ct.(*engine.IndexDef); ok {
+				for _, d := range ds.Indexes {
+					ignoreTables = append(ignoreTables, d.IndexTableName)
+				}
+			}
+		}
+
+		for _, def := range defs {
+			if partitionDef, ok := def.(*engine.PartitionDef); ok {
+				if partitionDef.Partitioned > 0 {
+					p := &plan.PartitionByDef{}
+					err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+					if err != nil {
+						return err
+					}
+					ignoreTables = append(ignoreTables, p.PartitionTableNames...)
+				}
+				break
+			}
+		}
+	}
+
+	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
+	for _, r := range relations {
+		isIndexTable := false
+		for _, d := range ignoreTables {
+			if d == r {
+				isIndexTable = true
+				break
+			}
+		}
+		if !isIndexTable {
+			deleteTables = append(deleteTables, r)
+		}
+	}
+
+	for _, t := range deleteTables {
+		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
+		err = c.runSql(dropSql)
+		if err != nil {
+			return err
+		}
+	}
+
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
 		if err = runDetectFkReferToDBSql(c, sql); err != nil {
 			return err
 		}
-	}
-
-	// whether foreign_key_checks = 0 or 1
-	err = s.removeFkeysRelationships(c, dbName)
-	if err != nil {
-		return err
 	}
 
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
