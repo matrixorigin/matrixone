@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
@@ -42,10 +41,46 @@ func LogReaderInjected(name string) (bool, int) {
 	if !injected {
 		return false, 0
 	}
-	if !strings.Contains(sarg, name) {
+	if sarg != name {
 		return false, 0
 	}
 	return true, int(iarg)
+}
+
+// inject log reader and partition state
+// `name` is the table name
+func InjectLog1(
+	name string,
+	level int,
+) (rmFault func(), err error) {
+	rmFault = func() {}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogReader,
+		":::",
+		"echo",
+		int64(level),
+		name,
+	); err != nil {
+		return
+	}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TracePartitionState,
+		":::",
+		"echo",
+		0,
+		name,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		return
+	}
+
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+	}
+	return
 }
 
 func Debug19524Injected() bool {

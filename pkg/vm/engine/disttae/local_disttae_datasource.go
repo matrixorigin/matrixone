@@ -292,6 +292,7 @@ func (ls *LocalDisttaeDataSource) Next(
 					"LOGREADER-INJECTED-2",
 					zap.String("table", ls.table.tableName),
 					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
 					zap.Error(err),
 				)
 				return
@@ -301,6 +302,7 @@ func (ls *LocalDisttaeDataSource) Next(
 					"LOGREADER-INJECTED-2",
 					zap.String("table", ls.table.tableName),
 					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
 					zap.String("blk", info.String()),
 				)
 			} else {
