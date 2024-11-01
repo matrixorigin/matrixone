@@ -412,7 +412,7 @@ func (r *reader) Read(
 				)
 				return
 			}
-			if isEnd == true {
+			if isEnd {
 				return
 			}
 			if logLevel == 0 {
