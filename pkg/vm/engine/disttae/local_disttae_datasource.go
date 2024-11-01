@@ -297,6 +297,9 @@ func (ls *LocalDisttaeDataSource) Next(
 				)
 				return
 			}
+			if state == engine.End {
+				return
+			}
 			if info != nil {
 				logutil.Info(
 					"LOGREADER-INJECTED-2",
