@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"strings"
 	"time"
 
@@ -81,9 +82,6 @@ func updateTableStats(
 ) (err error) {
 	de := eng.(*Engine)
 
-	de.Lock()
-	defer de.Unlock()
-
 	var (
 		totalSize   float64
 		totalRows   float64
@@ -91,18 +89,29 @@ func updateTableStats(
 		deletedRows float64
 
 		objIds []types.Objectid
+
+		accs, dbs, tbls []uint64
 	)
 
+	accs, dbs, tbls, err = collectAndSubscribeTables(ctx, eng, sqlExecutor)
+	if err != nil {
+		return err
+	}
+
 	snapshot := types.BuildTS(time.Now().UnixNano(), 0)
-	for id, partition := range de.partitions {
+	for i := range tbls {
 		start := time.Now()
 
-		tblItem := de.catalog.GetTableById(0, id[0], id[1])
+		tblItem := de.catalog.GetTableById(uint32(accs[i]), dbs[i], tbls[i])
+		if tblItem == nil {
+			fmt.Println("tblItem is nil", dbs[i], tbls[i])
+			continue
+		}
 		if !strings.Contains(tblItem.Name, "hhhh") {
 			continue
 		}
 
-		pState := partition.Snapshot().Copy()
+		pState := de.GetOrCreateLatestPart(dbs[i], tbls[i]).Snapshot()
 		totalRows, totalSize, err = collectVisibleData(snapshot, &objIds, pState)
 		if deletedRows, err = applyTombstones(ctx, de.fs, de.mp, snapshot, objIds, pState); err != nil {
 			return err
@@ -110,17 +119,53 @@ func updateTableStats(
 
 		deletedSize = totalSize / totalRows * deletedRows
 
-		fmt.Printf("%s(%d)-%s(%d), %f, %f, %v\n",
-			tblItem.DatabaseName, id[0], tblItem.Name, id[1],
+		fmt.Printf("%d-%s(%d)-%s(%d), %f, %f, %v\n\n",
+			accs[i], tblItem.DatabaseName, dbs[i], tblItem.Name, tbls[i],
 			(totalSize-deletedSize)/1024.0/1024.0, totalRows-deletedRows,
 			time.Since(start))
 
 		totalRows = 0
-		deletedSize = 0
+		totalSize = 0
 		objIds = objIds[:0]
 	}
 
 	return nil
+}
+
+func collectAndSubscribeTables(
+	ctx context.Context,
+	eng engine.Engine,
+	sqlExecutor func() ie.InternalExecutor,
+) (accs, dbs, tbls []uint64, err error) {
+
+	cc := eng.(*Engine).GetLatestCatalogCache()
+	cc.TableItemScan(func(item *cache.TableItem) bool {
+		if strings.ToUpper(item.Kind) != "R" {
+			return true
+		}
+
+		tbl := txnTable{}
+		tbl.tableId = item.Id
+		tbl.tableName = item.Name
+		tbl.accountId = uint32(item.AccountId)
+		tbl.db = &txnDatabase{
+			databaseId:   item.DatabaseId,
+			databaseName: item.DatabaseName,
+		}
+
+		tbl.primarySeqnum = item.PrimarySeqnum
+		if _, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &tbl); err != nil {
+			return false
+		}
+
+		tbls = append(tbls, item.Id)
+		dbs = append(dbs, item.DatabaseId)
+		accs = append(accs, uint64(item.AccountId))
+
+		return true
+	})
+
+	return
 }
 
 // O(m+n)
@@ -204,9 +249,6 @@ func collectVisibleData(
 	err = rowIter.Close()
 	return
 }
-
-// 1. deletes in tombstone obj can be a deletes on in-mem rows
-// 2. deletes in in-mem rows can be a deletes on rows in data objects
 
 func applyTombstones(
 	ctx context.Context,
