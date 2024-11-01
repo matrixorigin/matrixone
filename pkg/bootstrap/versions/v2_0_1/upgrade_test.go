@@ -29,6 +29,7 @@ import (
 )
 
 func Test_UpgEntry(t *testing.T) {
+
 	indexCheckPrefixMatchSql := "select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` " +
 		"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` " +
 		"where `tbl`.`account_id` = 0 AND `tbl`.`reldatabase`"
