@@ -1134,12 +1134,11 @@ var (
 				status,
 				created_time,
 				expired_time,
-				password_history,
 				login_type,
 				creator,
 				owner,
 				default_role
-    		) values(%d,"%s","%s","%s","%s","%s",%s, '%s',"%s",%d,%d,%d);`
+    		) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d);`
 	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
 				user_host,
 				user_name,
@@ -7553,14 +7552,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		}
 	}
 
-	var passwordHistory []byte
-	passwordHistory, err = generageEmptyPasswordRecord()
-	if err != nil {
-		return err
-	}
 	//the first user id in the general tenant
 	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, encryption, status,
-		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, string(passwordHistory), rootLoginType,
+		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
