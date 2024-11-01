@@ -2015,10 +2015,6 @@ func getPasswordLifetime(ctx context.Context, ses *Session) (int, error) {
 		return 0, err
 	}
 
-	if value == nil {
-		return 0, nil
-	}
-
 	lifetime, ok := value.(int64)
 	if !ok {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", DefaultPasswordLifetime)
@@ -2033,9 +2029,6 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 		err      error
 		lt       time.Time
 	)
-	if len(lockTime) == 0 {
-		return true, nil
-	}
 
 	// get the lock time as utc time
 	lt, err = time.ParseInLocation("2006-01-02 15:04:05", lockTime, time.UTC)
@@ -2064,10 +2057,6 @@ func getLoginAttempts(ctx context.Context, ses *Session) (int64, error) {
 		return 0, err
 	}
 
-	if value == nil {
-		return 0, nil
-	}
-
 	attempts, ok := value.(int64)
 	if !ok {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", ConnectionControlFailedConnectionsThreshold)
@@ -2080,10 +2069,6 @@ func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
 	value, err := ses.GetGlobalSysVar(ConnectionControlMaxConnectionDelay)
 	if err != nil {
 		return 0, err
-	}
-
-	if value == nil {
-		return 0, nil
 	}
 
 	delay, ok := value.(int64)

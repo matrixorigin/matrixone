@@ -648,4 +648,104 @@ func TestCheckPasswordExpired(t *testing.T) {
 	assert.NoError(t, err)
 	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
 	assert.Error(t, err)
+
+	// getPasswordLifetime error
+	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
+	expired, err = checkPasswordExpired(ctx, ses, "1")
+	assert.NoError(t, err)
+	assert.True(t, expired)
+}
+
+func Test_CheckLockTimeExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock time expires
+	ses.gSysVars.Set(ConnectionControlMaxConnectionDelay, int64(30000000))
+	expired, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-31).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// lock time not expires
+	expired, err = checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-20).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// lock time parse error
+	expired, err = checkLockTimeExpired(ctx, ses, "1")
+	assert.Error(t, err)
+	assert.False(t, expired)
+}
+
+func Test_OperatorLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock
+	err := setUserUnlock(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// increaseLoginAttempts
+	err = increaseLoginAttempts(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// updateLockTime
+	err = updateLockTime(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// unlock
+	err = setUserUnlock(ctx, "user1", bh)
+	assert.NoError(t, err)
 }
