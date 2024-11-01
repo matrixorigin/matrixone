@@ -4801,6 +4801,12 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower)
 
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
+		}
+	}
+
 	ctx := c.proc.Ctx
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
