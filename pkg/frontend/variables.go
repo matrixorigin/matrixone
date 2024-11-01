@@ -3524,7 +3524,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("validate_password.check_user_name"),
-		Default:           int64(1),
+		Default:           int64(0),
 	},
 	"validate_password.changed_characters_percentage": {
 		Name:              "validate_password.changed_characters_percentage",
