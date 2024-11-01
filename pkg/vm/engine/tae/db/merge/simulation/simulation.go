@@ -17,6 +17,7 @@ package simulation
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"golang.org/x/exp/constraints"
@@ -304,12 +305,6 @@ func (r *recentRecords[T]) add(record T) {
 	r.Unlock()
 }
 
-func (r *recentRecords[T]) reset() {
-	r.Lock()
-	r.records = r.records[:0]
-	r.Unlock()
-}
-
 func (r *recentRecords[T]) mean() T {
 	r.RLock()
 	defer r.RUnlock()
@@ -339,6 +334,8 @@ func createCSVWriter(filename string) (*csv.Writer, *os.File, error) {
 }
 
 func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func() time.Duration, writeToCSV bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	entryChan := make(chan *entry, 1)
 
 	go func() {
@@ -436,58 +433,66 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 		}
 	}()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("input: ")
-	for scanner.Scan() {
-		switch scanner.Text() {
-		case "p":
-			entries.RLock()
-			entriesList := entries.entries
-			segments := make(map[objectio.Segmentid][]*entry)
-			for _, e := range entriesList {
-				segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
-			}
-			entries.RUnlock()
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Printf("input: ")
+		for scanner.Scan() {
+			switch scanner.Text() {
+			case "p":
+				entries.RLock()
+				entriesList := entries.entries
+				segments := make(map[objectio.Segmentid][]*entry)
+				for _, e := range entriesList {
+					segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
+				}
+				entries.RUnlock()
 
-			segmentSlice := make([]objectio.Segmentid, 0, len(segments))
-			for id := range segments {
-				segmentSlice = append(segmentSlice, id)
-			}
+				segmentSlice := make([]objectio.Segmentid, 0, len(segments))
+				for id := range segments {
+					segmentSlice = append(segmentSlice, id)
+				}
 
-			slices.SortFunc(segmentSlice, func(a, b objectio.Segmentid) int {
-				return cmp.Compare(len(segments[a]), len(segments[b]))
-			})
-
-			for _, id := range segmentSlice {
-				segment := segments[id]
-				slices.SortFunc(segment, func(a, b *entry) int {
-					if c := a.zm.CompareMin(b.zm); c != 0 {
-						return c
-					}
-					return a.zm.CompareMax(b.zm)
+				slices.SortFunc(segmentSlice, func(a, b objectio.Segmentid) int {
+					return cmp.Compare(len(segments[a]), len(segments[b]))
 				})
 
-				fmt.Printf("%s(%d): ", id.ShortString(), merge.SegLevel(len(segment)))
-				for _, e := range segment {
-					fmt.Printf("(%d, %d), ", e.zm.GetMin(), e.zm.GetMax())
+				for _, id := range segmentSlice {
+					segment := segments[id]
+					slices.SortFunc(segment, func(a, b *entry) int {
+						if c := a.zm.CompareMin(b.zm); c != 0 {
+							return c
+						}
+						return a.zm.CompareMax(b.zm)
+					})
+
+					fmt.Printf("%s(%d): ", id.ShortString(), merge.SegLevel(len(segment)))
+					for _, e := range segment {
+						fmt.Printf("(%d, %d), ", e.zm.GetMin(), e.zm.GetMax())
+					}
+					fmt.Printf("\n")
 				}
-				fmt.Printf("\n")
+
+			case "a":
+				hits := entries.calculateHits(maxValue)
+				fmt.Printf("Ave(hit)=%f, Max(hit)=%f\n", stat.Mean(hits, nil), slices.Max(hits))
+				fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean()))
+				fmt.Printf("Max(mergedSize)=%d\n", recentMergedSize.getMax())
+			case "q":
+				cancel()
+			case "w":
+				time.Sleep(10 * time.Second)
 			}
 
-		case "a":
-			hits := entries.calculateHits(maxValue)
-			fmt.Printf("Ave(hit)=%f, Max(hit)=%f\n", stat.Mean(hits, nil), slices.Max(hits))
-			fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean()))
-			fmt.Printf("Max(mergedSize)=%d\n", recentMergedSize.getMax())
+			fmt.Printf("input: ")
+
 		}
 
-		fmt.Printf("input: ")
-	}
+		if scanner.Err() != nil {
+			panic(scanner.Err())
+		}
+	}()
 
-	if scanner.Err() != nil {
-		panic(scanner.Err())
-	}
-
+	<-ctx.Done()
 }
 
 func mergeEntries(inputs []*entry, targetSize int) ([]*entry, int) {
