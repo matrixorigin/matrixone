@@ -218,7 +218,8 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 					Url: wasmurl,
 				},
 			},
-			Config: cfgmap,
+			Config:       cfgmap,
+			AllowedHosts: []string{"localhost"},
 		}
 	} else {
 		// treat as datalink
@@ -236,12 +237,14 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 					Data: image,
 				},
 			},
-			Config: cfgmap,
+			Config:       cfgmap,
+			AllowedHosts: []string{"localhost"},
 		}
 	}
 
 	config := extism.PluginConfig{
-		EnableWasi: true,
+		EnableWasi:                true,
+		EnableHttpResponseHeaders: true,
 	}
 	plugin, err := extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
 	if err != nil {
