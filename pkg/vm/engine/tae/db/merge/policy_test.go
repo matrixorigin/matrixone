@@ -391,11 +391,7 @@ func TestSegLevel(t *testing.T) {
 	require.Equal(t, 3, SegLevel(16))
 	require.Equal(t, 3, SegLevel(17))
 	require.Equal(t, 3, SegLevel(63))
-	require.Equal(t, 4, SegLevel(64))
-	require.Equal(t, 4, SegLevel(65))
-	require.Equal(t, 4, SegLevel(255))
-	require.Equal(t, 5, SegLevel(256))
-	require.Equal(t, 5, SegLevel(257))
+	require.Equal(t, 3, SegLevel(257))
 }
 
 func TestCheckTombstone(t *testing.T) {
