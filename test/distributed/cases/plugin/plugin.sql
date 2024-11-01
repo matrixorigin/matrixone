@@ -16,6 +16,9 @@ select * from wasm_run_table('stage://llmstage/cat.wasm', null, null, null) as f
 
 select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '') as f;
 
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', 
+	'{"header":"[", "footer":"]"}', '1,2,3') as f;
+
 select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[1,2,3]') as f;
 
 select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '["1","2","3"]') as f;
