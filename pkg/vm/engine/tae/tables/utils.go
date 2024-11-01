@@ -140,6 +140,7 @@ func LoadPersistedColumnDatas(
 				deletes.Add(uint64(i))
 			}
 		}
+		vecs[len(vecs)-1].Close()
 		vecs = vecs[:len(vecs)-1]
 	}
 	for i, vec := range vecs {

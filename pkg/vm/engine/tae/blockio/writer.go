@@ -49,6 +49,21 @@ func ConstructTombstoneWriter(
 	)
 }
 
+func ConstructWriterWithSegmentID(
+	segmentID *objectio.Segmentid,
+	num uint16,
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	name := objectio.BuildObjectName(segmentID, num)
+	return constructWriterWithName(name,
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+}
+
 func ConstructWriter(
 	ver uint32,
 	seqnums []uint16,
@@ -58,6 +73,19 @@ func ConstructWriter(
 	fs fileservice.FileService,
 ) *BlockWriter {
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	return constructWriterWithName(name,
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+}
+
+func constructWriterWithName(
+	name objectio.ObjectName,
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
 	writer, err := NewBlockWriterNew(
 		fs,
 		name,
