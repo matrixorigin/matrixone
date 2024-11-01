@@ -1,71 +1,75 @@
-select * from plugin_exec('cat', '[1,2,3]') as f;
-internal error: command is empty or invalid
-select * from plugin_exec(cast('"cat"' as json), '[1,2,3]') as f;
-internal error: command is a JSON array
-select * from plugin_exec(cast('[1]' as json), '[1,2,3]') as f;
-internal error: command argument is not string
-select * from plugin_exec('["cat"]') as f;
-invalid input: Invalid number of arguments (NARGS != 2).
-select * from plugin_exec('["unknown"]', '[1,2,3]') as f;
-exec: "unknown": executable file not found in $PATH
-select * from plugin_exec('["cat"]', 1) as f;
-internal error: plugin_exec input type not supported
-select * from plugin_exec('["cat"]', '[1a,2,3]') as f;
-internal error: parse json: json: expected token but found 'a': a
-select * from plugin_exec(null, null) as f;
-result
-select * from plugin_exec('["cat"]', null) as f;
-result
-select * from plugin_exec('["cat"]', '') as f;
-result
-select * from plugin_exec('["cat"]', '[1,2,3]') as f;
+create stage llmstage URL='file:///$resources/plugin/';
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[1,2,3]') as f;
 result
 1
 2
 3
-select * from plugin_exec('["cat"]', '["1","2","3"]') as f;
+select * from wasm_run_table(cast('stage://llmstage/cat.wasm' as json), 'cat', null, '[1,2,3]') as f;
+invalid input: json text stage://llmstage/cat.wasm
+select * from wasm_run_table('stage://llmstage/cat.wasm"') as f;
+invalid input: Invalid number of arguments (NARGS != 4).
+select * from wasm_run_table('unknown', 'cat', null, '[1,2,3]') as f;
+unsupported url scheme  is not yet implemented
+select * from wasm_run_table('stage://llmstage/cat.wasm', '1') as f;
+invalid input: Invalid number of arguments (NARGS != 4).
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[1a,2,3]') as f;
+internal error: parse json: json: expected token but found 'a': a
+select * from wasm_run_table(null, 'cat', null, null) as f;
+internal error: wasm URL only support varchar, char, text and datalink type
+select * from wasm_run_table('stage://llmstage/cat.wasm', null, null, null) as f;
+result
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '') as f;
+result
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[1,2,3]') as f;
+result
+1
+2
+3
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '["1","2","3"]') as f;
 result
 "1"
 "2"
 "3"
-select * from plugin_exec(cast('["cat"]' as json), '["a","b","c"]') as f;
+select * from wasm_run_table(cast('stage://llmstage/cat.wasm' as datalink), 'cat', null, '["a","b","c"]') as f;
 result
 "a"
 "b"
 "c"
-select * from plugin_exec(cast('["cat"]' as json), '["a","b",null]') as f;
+select * from wasm_run_table(cast('stage://llmstage/cat.wasm' as datalink), 'cat', null, '["a","b",null]') as f;
 result
 "a"
 "b"
 null
-select * from plugin_exec('["cat"]', '[false,true,null]') as f;
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[false,true,null]') as f;
 result
 false
 true
 null
-select json_extract(result, "$.id") from plugin_exec('["cat"]', '[{"id":1},{"id":2},{"id":3}]') as f;
+select json_extract(result, "$.id") from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, '[{"id":1},{"id":2},{"id":3}]') as f;
 json_extract(result, $.id)
 1
 2
 3
-select * from plugin_exec('["cat"]', cast('file:///$resources/plugin/result.json' as datalink)) as f;
+select * from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/result.json' as datalink)) as f;
 result
 {"chunk": 0, "e": "[1.1, 2.2, 3.3]", "t": "text0"}
 {"chunk": "1", "e": "[2.5, 3.5, 4.5]", "t": "text1"}
 {"chunk": "2", "e": "[9.1, 8.2, 7.3]", "t": "text2"}
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 0    "[1.1, 2.2, 3.3]"
 "1"    "[2.5, 3.5, 4.5]"
 "2"    "[9.1, 8.2, 7.3]"
-select json_extract(result, "$.chunk"), json_extract(result, "$.e") from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
+select json_extract(result, "$.chunk"), json_extract(result, "$.e") from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
 json_extract(result, $.chunk)    json_extract(result, $.e)
 3    "[10.1, 20.2, 30.3]"
 "4"    "[20.5, 30.5, 40.5]"
 "5"    "[90.1, 80.2, 70.3]"
 create table t1 (chunk int, e vecf32(3));
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('["cat"]', cast('file:///$resources/plugin/result.json' as datalink)) as f;
+from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/result.json' as datalink)) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
@@ -73,14 +77,15 @@ chunk    e
 2    [9.1, 8.2, 7.3]
 truncate t1;
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
+from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null,
+cast('file:///$resources/plugin/multistream.json?offset=0&size=155' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
 1    [2.5, 3.5, 4.5]
 2    [9.1, 8.2, 7.3]
 insert into t1 select json_unquote(json_extract(result, "$.chunk")), json_unquote(json_extract(result, "$.e"))
-from plugin_exec('["cat"]', cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
+from wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, cast('file:///$resources/plugin/multistream.json?offset=155&size=164' as datalink) ) as f;
 select * from t1;
 chunk    e
 0    [1.1, 2.2, 3.3]
@@ -90,7 +95,6 @@ chunk    e
 4    [20.5, 30.5, 40.5]
 5    [90.1, 80.2, 70.3]
 drop table t1;
-create stage llmstage URL='file:///$resources/plugin/';
 create table src (pkey int primary key, dlink datalink);
 create table embed (pkey int, chunk int, e vecf32(3), t varchar);
 insert into src values
@@ -98,7 +102,7 @@ insert into src values
 (1, 'stage://llmstage/multistream.json?offset=155&size=164');
 insert into embed select src.pkey, json_unquote(json_extract(f.result, "$.chunk")),
 json_unquote(json_extract(f.result, "$.e")), json_unquote(json_extract(f.result, "$.t"))
-from src CROSS APPLY plugin_exec('["cat"]', src.dlink) as f;
+from src CROSS APPLY wasm_run_table('stage://llmstage/cat.wasm', 'cat', null, src.dlink) as f;
 select * from embed;
 pkey    chunk    e    t
 0    0    [1.1, 2.2, 3.3]    text0
@@ -110,6 +114,3 @@ pkey    chunk    e    t
 drop stage llmstage;
 drop table src;
 drop table embed;
-select * from plugin_exec('["$resources/plugin/ask.sh", "index_table"]', 'this is question to LLM') as f;
-result
-"This is answer from LLM. Input Data: this is question to LLM. Index Table: index_table."
