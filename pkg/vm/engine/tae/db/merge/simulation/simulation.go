@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"encoding/csv"
 	"fmt"
+	"golang.org/x/exp/constraints"
 	"math"
 	"math/rand"
 	"os"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"gonum.org/v1/gonum/stat"
 )
@@ -89,7 +91,7 @@ var MergeSimulationCmd = &cobra.Command{
 }
 
 func init() {
-	MergeSimulationCmd.Flags().Int64("max", 10000, "set max value of all ranges")
+	MergeSimulationCmd.Flags().Int64("max", 100000, "set max value of all ranges")
 	MergeSimulationCmd.Flags().StringP("new_entry_distribution", "d", "M", "distribution of entry arrival in Kendall's notation")
 	MergeSimulationCmd.Flags().Float64P("new_entry_distribution_arg", "a", 100, "arguments for distribution")
 	MergeSimulationCmd.Flags().DurationP("merge_interval", "i", 100*time.Millisecond, "set merge interval in ms")
@@ -114,12 +116,6 @@ func newLockedEntries() *lockedEntries {
 	}
 }
 
-func (l *lockedEntries) getEntries() []*entry {
-	l.RLock()
-	defer l.RUnlock()
-	return l.entries
-}
-
 func (l *lockedEntries) append(e ...*entry) {
 	l.Lock()
 	defer l.Unlock()
@@ -130,18 +126,16 @@ func (l *lockedEntries) calculateHits(r int64) []float64 {
 	l.RLock()
 	defer l.RUnlock()
 
-	hits := make([]float64, 0, r)
-	for i := range r {
-		hit := 0
-		for _, e := range l.entries {
-			zmMax := e.zm.GetMax().(int64)
-			zmMin := e.zm.GetMin().(int64)
-			if zmMin <= i && i < zmMax {
-				hit++
-			}
+	hits := make([]float64, r)
+
+	for _, e := range l.entries {
+		for i := e.zm.GetMin().(int64); i < e.zm.GetMax().(int64); i++ {
+			hits[i] += 1
 		}
-		hits = append(hits, float64(hit))
 	}
+	slices.DeleteFunc(hits, func(f float64) bool {
+		return f == 0
+	})
 
 	return hits
 }
@@ -155,36 +149,22 @@ func (l *lockedEntries) size() int {
 func (l *lockedEntries) remove(del func(*entry) bool) {
 	l.Lock()
 	defer l.Unlock()
-
 	l.entries = slices.DeleteFunc(l.entries, del)
 }
 
-var levels = [6]int{
-	1, 2, 4, 16, 64, 256,
-}
-
-func segLevel(length int) int {
-	l := 5
-	for i, level := range levels {
-		if length < level {
-			l = i - 1
-			break
-		}
-	}
-	return l
-}
-
-func (l *lockedEntries) segments() [6][]*entry {
-	entries := l.getEntries()
+func (l *lockedEntries) segments() [4][]*entry {
+	l.RLock()
+	defer l.RUnlock()
+	entries := l.entries
 	segments := make(map[objectio.Segmentid][]*entry)
 	for _, e := range entries {
 		segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
 	}
 
-	leveledObjects := [6][]*entry{}
+	leveledObjects := [4][]*entry{}
 
 	for _, segment := range segments {
-		level := segLevel(len(segment))
+		level := merge.SegLevel(len(segment))
 		for _, e := range segment {
 			leveledObjects[level] = append(leveledObjects[level], e)
 		}
@@ -236,10 +216,10 @@ func (s *entrySet) add(obj *entry) {
 	}
 }
 
-func (l *lockedEntries) checkOverlaps() [6][]*entry {
+func (l *lockedEntries) checkOverlaps() [4][]*entry {
 
 	leveledEntries := l.segments()
-	leveledOutputs := [6][]*entry{}
+	leveledOutputs := [4][]*entry{}
 
 	for i, entries := range leveledEntries {
 		overlappingSet := make([][]*entry, 0)
@@ -293,12 +273,61 @@ func (l *lockedEntries) checkOverlaps() [6][]*entry {
 		if len(objs) < 2 {
 			continue
 		}
-		if len(objs) > 16 {
-			objs = objs[:16]
-		}
 		leveledOutputs[i] = append(leveledOutputs[i], objs...)
 	}
 	return leveledOutputs
+}
+
+type recentRecords[T constraints.Integer | constraints.Float] struct {
+	sync.RWMutex
+
+	size      int
+	records   []T
+	maxRecord T
+}
+
+func newRecentRecords[T constraints.Integer | constraints.Float](size int) recentRecords[T] {
+	return recentRecords[T]{
+		size:    size,
+		records: make([]T, 0, size),
+	}
+}
+
+func (r *recentRecords[T]) add(record T) {
+	r.Lock()
+	if len(r.records) == r.size {
+		r.records = r.records[1:]
+	}
+	r.records = append(r.records, record)
+	if record > r.maxRecord {
+		r.maxRecord = record
+	}
+	r.Unlock()
+}
+
+func (r *recentRecords[T]) reset() {
+	r.Lock()
+	r.records = r.records[:0]
+	r.Unlock()
+}
+
+func (r *recentRecords[T]) mean() T {
+	r.RLock()
+	defer r.RUnlock()
+	if len(r.records) == 0 {
+		return T(0)
+	}
+	sum := T(0)
+	for _, record := range r.records {
+		sum += record
+	}
+	return sum / T(len(r.records))
+}
+
+func (r *recentRecords[T]) getMax() T {
+	r.RLock()
+	defer r.RUnlock()
+	return r.maxRecord
 }
 
 func createCSVWriter(filename string) (*csv.Writer, *os.File, error) {
@@ -336,7 +365,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 	}()
 
 	entries := newLockedEntries()
-	var totalMergedSize atomic.Int64
+	recentMergedSize := newRecentRecords[int](25)
 	var i atomic.Int32
 	go func() {
 
@@ -376,7 +405,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 					strconv.FormatFloat(mean, 'f', -1, 64),
 					strconv.FormatFloat(variance, 'f', -1, 64),
 					strconv.FormatFloat(mean/float64(entries.size()), 'f', -1, 64),
-					strconv.FormatFloat(float64(totalMergedSize.Load())/float64(i.Load()), 'f', -1, 64),
+					strconv.FormatFloat(float64(recentMergedSize.mean())/float64(i.Load()), 'f', -1, 64),
 				}
 				err := csvWriter.Write(record)
 				if err != nil {
@@ -401,8 +430,8 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 						return entry.id == e.id
 					})
 				}
-				outputs, mergedSize := merge(inputs, 128*common.Const1MBytes)
-				totalMergedSize.Add(int64(mergedSize) / common.Const1MBytes)
+				outputs, size := mergeEntries(inputs, 128*common.Const1MBytes)
+				recentMergedSize.add(size / common.Const1MBytes)
 				entries.append(outputs...)
 			}
 		}
@@ -413,11 +442,13 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 	for scanner.Scan() {
 		switch scanner.Text() {
 		case "p":
-			entriesList := entries.getEntries()
+			entries.RLock()
+			entriesList := entries.entries
 			segments := make(map[objectio.Segmentid][]*entry)
 			for _, e := range entriesList {
 				segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
 			}
+			entries.RUnlock()
 
 			segmentSlice := make([]objectio.Segmentid, 0, len(segments))
 			for id := range segments {
@@ -437,7 +468,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 					return a.zm.CompareMax(b.zm)
 				})
 
-				fmt.Printf("%s(%d): ", id.ShortString(), segLevel(len(segment)))
+				fmt.Printf("%s(%d): ", id.ShortString(), merge.SegLevel(len(segment)))
 				for _, e := range segment {
 					fmt.Printf("(%d, %d), ", e.zm.GetMin(), e.zm.GetMax())
 				}
@@ -449,7 +480,8 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 			mean, variance := stat.MeanVariance(hits, nil)
 			fmt.Printf("Ave(hit)=%f, Var(hit)=%f\n", mean, variance)
 			fmt.Printf("Ave(hit/n)=%f\n", mean/float64(entries.size()))
-			fmt.Printf("Ave(mergedSize)=%f\n", float64(totalMergedSize.Load())/float64(i.Load()))
+			fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean())/float64(i.Load()))
+			fmt.Printf("Max(mergedSize)=%d\n", recentMergedSize.getMax())
 		}
 
 		fmt.Printf("input: ")
@@ -461,7 +493,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 
 }
 
-func merge(inputs []*entry, targetSize int) ([]*entry, int) {
+func mergeEntries(inputs []*entry, targetSize int) ([]*entry, int) {
 	totalSize := 0
 	minValue, maxValue := int64(math.MaxInt64), int64(math.MinInt64)
 	for _, input := range inputs {
@@ -471,6 +503,9 @@ func merge(inputs []*entry, targetSize int) ([]*entry, int) {
 		}
 		if input.zm.GetMax().(int64) > maxValue {
 			maxValue = input.zm.GetMax().(int64)
+			if maxValue >= 100000 {
+				panic("max exceed")
+			}
 		}
 	}
 
@@ -490,14 +525,17 @@ func merge(inputs []*entry, targetSize int) ([]*entry, int) {
 			entryMax = maxValue
 		}
 		if totalSize < 2*targetSize {
-			entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, minValue+interval, totalSize))
+			entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, entryMax, totalSize))
 			i++
 			break
 		}
-		entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, minValue+interval, targetSize))
+		entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, entryMax, targetSize))
 		i++
 		minValue += interval
 		minValue += 1
+		if minValue > maxValue {
+			minValue = maxValue
+		}
 		totalSize -= targetSize
 	}
 

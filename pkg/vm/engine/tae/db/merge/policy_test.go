@@ -380,22 +380,22 @@ func Test_timeout(t *testing.T) {
 }
 
 func TestSegLevel(t *testing.T) {
-	require.Equal(t, 0, segLevel(1))
-	require.Equal(t, 1, segLevel(2))
-	require.Equal(t, 1, segLevel(3))
-	require.Equal(t, 2, segLevel(4))
-	require.Equal(t, 2, segLevel(5))
-	require.Equal(t, 2, segLevel(6))
-	require.Equal(t, 2, segLevel(14))
-	require.Equal(t, 2, segLevel(15))
-	require.Equal(t, 3, segLevel(16))
-	require.Equal(t, 3, segLevel(17))
-	require.Equal(t, 3, segLevel(63))
-	require.Equal(t, 4, segLevel(64))
-	require.Equal(t, 4, segLevel(65))
-	require.Equal(t, 4, segLevel(255))
-	require.Equal(t, 5, segLevel(256))
-	require.Equal(t, 5, segLevel(257))
+	require.Equal(t, 0, SegLevel(1))
+	require.Equal(t, 1, SegLevel(2))
+	require.Equal(t, 1, SegLevel(3))
+	require.Equal(t, 2, SegLevel(4))
+	require.Equal(t, 2, SegLevel(5))
+	require.Equal(t, 2, SegLevel(6))
+	require.Equal(t, 2, SegLevel(14))
+	require.Equal(t, 2, SegLevel(15))
+	require.Equal(t, 3, SegLevel(16))
+	require.Equal(t, 3, SegLevel(17))
+	require.Equal(t, 3, SegLevel(63))
+	require.Equal(t, 4, SegLevel(64))
+	require.Equal(t, 4, SegLevel(65))
+	require.Equal(t, 4, SegLevel(255))
+	require.Equal(t, 5, SegLevel(256))
+	require.Equal(t, 5, SegLevel(257))
 }
 
 func TestCheckTombstone(t *testing.T) {

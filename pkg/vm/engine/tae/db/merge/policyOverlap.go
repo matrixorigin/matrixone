@@ -26,12 +26,12 @@ import (
 
 var _ policy = (*objOverlapPolicy)(nil)
 
-var levels = [6]int{
-	1, 2, 4, 16, 64, 256,
+var levels = [4]int{
+	1, 2, 4, 16,
 }
 
 type objOverlapPolicy struct {
-	leveledObjects [6][]*catalog.ObjectEntry
+	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
 	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
@@ -63,7 +63,7 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
 	for _, objects := range m.segments {
-		segLevel := segLevel(len(objects))
+		segLevel := SegLevel(len(objects))
 		for obj := range objects {
 			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
 		}
@@ -176,8 +176,8 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 	}
 }
 
-func segLevel(length int) int {
-	l := 5
+func SegLevel(length int) int {
+	l := 3
 	for i, level := range levels {
 		if length < level {
 			l = i - 1
