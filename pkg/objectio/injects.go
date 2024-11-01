@@ -31,8 +31,24 @@ const (
 
 	FJ_Debug19524 = "fj/debug/19524"
 
-	FJ_LogReader = "fj/log/reader"
+	FJ_LogReader    = "fj/log/reader"
+	FJ_LogWorkspace = "fj/log/workspace"
 )
+
+const (
+	FJ_C_AllNames = "_%_all_"
+)
+
+func LogWorkspaceInjected(name string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogWorkspace)
+	if !injected {
+		return false, 0
+	}
+	if sarg == name || sarg == FJ_C_AllNames {
+		return true, int(iarg)
+	}
+	return false, 0
+}
 
 // `name` is the table name
 // return injected, logLevel
@@ -76,7 +92,21 @@ func InjectLog1(
 		return
 	}
 
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogWorkspace,
+		":::",
+		"echo",
+		int64(level),
+		name,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		return
+	}
+
 	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogWorkspace)
 		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
 		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
 	}

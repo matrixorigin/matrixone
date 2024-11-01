@@ -1056,7 +1056,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	defer fault.Disable()
 	rmFault, err := objectio.InjectLog1(
 		"mo_account",
-		0,
+		2,
 	)
 	require.NoError(t, err)
 	defer rmFault()

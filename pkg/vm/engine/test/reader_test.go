@@ -81,7 +81,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	schema.Name = tableName
 	fault.Enable()
 	defer fault.Disable()
-	rmFault, err := objectio.InjectLog1(tableName, 2)
+	rmFault, err := objectio.InjectLog1(tableName, 0)
 	require.NoError(t, err)
 	defer rmFault()
 
