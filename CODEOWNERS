@@ -107,13 +107,13 @@
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
-/pkg/logservice @zhangxu19830126
+/pkg/logservice @zhangxu19830126 @volgariver6
 
 # pkg/logutil
 /pkg/logutil @daviszhen
 
 # pkg/objectio
-/pkg/objectio @LeftHandCold
+/pkg/objectio @LeftHandCold @XuPeng-SH
 
 # pkg/partition
 /pkg/partition @aunjgr @m-schen
@@ -194,6 +194,7 @@
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
 /pkg/util/metric/v2 @zhangxu19830126 @aptend
+/pkg/util/fault @XuPeng-SH
 
 # pkg/vectorize
 /pkg/vectorize @aunjgr
@@ -202,10 +203,10 @@
 /pkg/vm @XuPeng-SH
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @m-schen
-/pkg/vm/process @m-schen @XuPeng-SH @aunjgr
+/pkg/vm/process @m-schen @aunjgr
 /pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @triump2020
+/pkg/vm/engine/disttae/logtailreplay @triump2020 @XuPeng-SH
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
