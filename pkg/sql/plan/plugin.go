@@ -23,7 +23,7 @@ import (
 
 // coldef shall copy index type
 var (
-	plugin_exec_func_name = "plugin_exec"
+	plugin_exec_func_name = "wasm_run_table"
 
 	pluginColdefs = []*plan.ColDef{
 		{
@@ -39,8 +39,8 @@ var (
 // arg list [command, datalink]
 func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 
-	if len(exprs) != 2 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 2).")
+	if len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 4).")
 	}
 
 	colDefs := _getColDefs(pluginColdefs)
