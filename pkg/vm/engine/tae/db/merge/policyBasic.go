@@ -64,6 +64,8 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 		for _, r := range pResult {
 			if len(r.objs) > 0 {
 				results = append(results, r)
+				_, eSize := estimateMergeConsume(r.objs)
+				mem -= int64(eSize)
 			}
 		}
 	}
@@ -243,8 +245,10 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
 
-	dnobjs := controlMem(objs, mem)
-	dnobjs = o.optimize(dnobjs, config)
+	if ok, _ := controlMem(objs, mem); !ok {
+		return nil
+	}
+	dnobjs := o.optimize(objs, config)
 
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
@@ -262,8 +266,10 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	}
 
 	schedCN := func() []reviseResult {
-		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
-		cnobjs = o.optimize(cnobjs, config)
+		if ok, _ := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load())); !ok {
+			return nil
+		}
+		cnobjs := o.optimize(objs, config)
 		return []reviseResult{{cnobjs, TaskHostCN}}
 	}
 
@@ -316,19 +322,15 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	return objs
 }
 
-func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func controlMem(objs []*catalog.ObjectEntry, mem int64) (bool, int64) {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-
-	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		_, esize := estimateMergeConsume(ss)
-		return esize > int(2*mem/3)
+	_, eSize := estimateMergeConsume(objs)
+	if eSize > int(2*mem/3) {
+		return false, 0
 	}
-	if needPopout(objs) {
-		return nil
-	}
-	return objs
+	return true, int64(eSize)
 }
 
 func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
