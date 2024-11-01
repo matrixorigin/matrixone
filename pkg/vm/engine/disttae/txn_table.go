@@ -1794,15 +1794,16 @@ func (tbl *txnTable) NewReader(
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 
+		var blkRds []engine.Reader
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, cleanBlks, tbl.proc.Load(), orderedScan)
+			blkRds, err = tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, cleanBlks, tbl.proc.Load(), orderedScan)
 			if err != nil {
 				return nil, err
 			}
 
 			if tbl.tableDef.Name == "defect_history" {
 				//mergeRds := ""
-				for i, rd := range rds0 {
+				for i, rd := range blkRds {
 					logutil.Infof("debug defect_history:total blk reader cnt:%d, block-reader-%d:%d",
 						len(rds0),
 						i,
@@ -1811,7 +1812,7 @@ func (tbl *txnTable) NewReader(
 			}
 
 		}
-		for i, rd := range rds0 {
+		for i, rd := range blkRds {
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 
@@ -1871,7 +1872,10 @@ func (tbl *txnTable) newMergeReader(
 	if err != nil {
 		return nil, err
 	}
-	mrds[0].rds = append(mrds[0].rds, rds0...)
+	//mrds[0].rds = append(mrds[0].rds, rds0...)
+	for i, rd := range rds0 {
+		mrds[i].rds = append(mrds[i].rds, rd)
+	}
 
 	for i := range rds {
 		rds[i] = &mrds[i]
