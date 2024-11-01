@@ -91,8 +91,8 @@ var MergeSimulationCmd = &cobra.Command{
 func init() {
 	MergeSimulationCmd.Flags().Int64("max", 10000, "set max value of all ranges")
 	MergeSimulationCmd.Flags().StringP("new_entry_distribution", "d", "M", "distribution of entry arrival in Kendall's notation")
-	MergeSimulationCmd.Flags().Float64P("new_entry_distribution_arg", "a", 20, "arguments for distribution")
-	MergeSimulationCmd.Flags().DurationP("merge_interval", "i", 50*time.Millisecond, "set merge interval in ms")
+	MergeSimulationCmd.Flags().Float64P("new_entry_distribution_arg", "a", 100, "arguments for distribution")
+	MergeSimulationCmd.Flags().DurationP("merge_interval", "i", 100*time.Millisecond, "set merge interval in ms")
 	MergeSimulationCmd.Flags().BoolP("write_to_csv", "c", false, "write result to csv file")
 }
 
