@@ -728,7 +728,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// return a pipeline which merge result from scanUsedCpuNumber scan.
 	readerScopes := make([]*Scope, scanUsedCpuNumber)
 	if s.DataSource.TableDef.Name == "defect_history" {
-		logutil.Infof("debug defect_history: build pipelines cpu %v", len(readers), scanUsedCpuNumber)
+		logutil.Infof("debug defect_history: build pipelines cpu:%v-%v", len(readers), scanUsedCpuNumber)
 	}
 	for i := 0; i < scanUsedCpuNumber; i++ {
 		readerScopes[i] = newScope(Normal)
