@@ -283,6 +283,15 @@ var (
 				update_time timestamp not null default current_timestamp on update current_timestamp,
     			primary key(account_id, key_id)
 			)`
+
+	MoCatalogMoTableStatsDDL = `create table mo_catalog.mo_table_stats (
+    			account_id bigint unsigned,
+    			database_id bigint unsigned,
+    			table_id bigint unsigned,
+    			table_stats json,
+    			update_time timestamp not null default current_timestamp on update current_timestamp,
+    			primary key(account_id, database_id, table_id)
+			)`
 )
 
 // `mo_catalog` database system tables
