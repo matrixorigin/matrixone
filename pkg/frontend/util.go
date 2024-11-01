@@ -1830,9 +1830,8 @@ func Slice(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
-// runFuncWithRecover executes txn operations and handle the recover
-// if fun panic, always
-func runFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
+// executeFuncWithRecover executes the function and recover the panic
+func executeFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
 	defer func() {
 		if rErr := recover(); rErr != nil {
 			hasRecovered = true

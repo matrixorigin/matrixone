@@ -2561,7 +2561,7 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
-	var hasPanic bool
+	var hasRecovered bool
 	ses.EnterFPrint(FPExecStmtWithIncrStmt)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmt)
 
@@ -2579,10 +2579,10 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 	crs := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
-	err, hasPanic = runFuncWithRecover(func() error {
+	err, hasRecovered = executeFuncWithRecover(func() error {
 		return txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	})
-	if err != nil || hasPanic {
+	if err != nil || hasRecovered {
 		return err
 	}
 	stats := statistic.StatsInfoFromContext(newCtx)
