@@ -510,3 +510,7 @@ func (s *store) setupStatusServer() {
 	}
 
 }
+
+func (s *store) GetLockTableAllocator() lockservice.LockTableAllocator {
+	return s.lockTableAllocator
+}
