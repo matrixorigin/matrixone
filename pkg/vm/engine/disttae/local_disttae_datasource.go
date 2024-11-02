@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -35,11 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
-	"go.uber.org/zap"
 )
 
 func NewLocalDataSource(
@@ -406,38 +402,6 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
-func checkTxnLastInsertRow(ls *LocalDisttaeDataSource, writes []Entry, cursor int, outBatch *batch.Batch) {
-	injected, writesT := objectio.Debug19357Injected()
-	if injected && int64(len(writes)) > writesT && len(outBatch.Vecs) == 3 && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" && writes[len(writes)-1].typ == INSERT && writes[len(writes)-1].tableId == ls.table.tableId {
-		outLen := outBatch.Vecs[0].Length()
-		var slim *batch.Batch
-		if outLen > 0 {
-			start := outLen - 3
-			if start < 0 {
-				start = 0
-			}
-			slim, _ = outBatch.Window(start, outLen)
-		}
-
-		logutil.Info("yyyyyy checkTxnLastInsertRow",
-			zap.String("txn", hex.EncodeToString(ls.table.db.op.Txn().ID)),
-			zap.Int("txnOffset", ls.txnOffset),
-			zap.Int("cursor", cursor),
-			zap.Int("writes", len(writes)),
-			zap.Bool("isSnapOp", ls.table.db.op.IsSnapOp()),
-			zap.String("entries", stringifySlice(writes[len(writes)-1:], func(a any) string {
-				e := a.(Entry)
-				batstr := "nil"
-				if e.bat != nil {
-					batstr = common.MoBatchToString(e.bat, 3)
-				}
-				return e.String() + " " + batstr
-			})),
-			zap.String("outBatch", common.MoBatchToString(slim, 3)),
-		)
-	}
-}
-
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
@@ -463,15 +427,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 	var retainedRowIds []objectio.Rowid
 
-	beginCursor := ls.wsCursor
-
 	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
 		if writes[ls.wsCursor].bat == nil {
 			continue
-		}
-
-		if rows+writes[ls.wsCursor].bat.RowCount() > maxRows {
-			break
 		}
 
 		entry := writes[ls.wsCursor]
@@ -481,10 +439,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
+		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
+		// Refter to genBlock and genRowid method.
 		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
-
-		offsetLen := len(offsets)
-		badOffsetStart := offsetLen > 0 && offsets[0] > 0
 
 		b := retainedRowIds[0].BorrowBlockID()
 		sels, err := ls.ApplyTombstones(
@@ -493,14 +450,13 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			return err
 		}
 
-		if (len(sels) < offsetLen || badOffsetStart) && ls.table.accountId == 0 && ls.table.tableName == "mo_increment_columns" {
-			logutil.Info("Shrink retainedRowIds", zap.Any("sels", sels), zap.Any("offsetsLen", offsetLen), zap.Bool("badOffsetStart", badOffsetStart), zap.Int("wsCursor", ls.wsCursor), zap.Int("txnOffset", ls.txnOffset))
-		}
-
 		if len(sels) == 0 {
 			continue
 		}
 
+		if rows+len(sels) > maxRows {
+			break
+		}
 		rows += len(sels)
 
 		for i, destVec := range outBatch.Vecs {
@@ -516,7 +472,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 	}
 
-	checkTxnLastInsertRow(ls, writes, beginCursor, outBatch)
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 	return nil
 }
