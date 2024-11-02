@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -262,6 +261,11 @@ func (exec *txnExecutor) Exec(
 		defer recoverAccount(exec, originAccountID)
 	}
 	//-----------------------------------------------------------------------------------------
+	if statementOption.IgnoreForeignKey() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.IgnoreForeignKey{},
+			true)
+	}
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
@@ -370,9 +374,6 @@ func (exec *txnExecutor) Exec(
 			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
-		if len(batches) == 0 && strings.HasPrefix(sql, "select offset, step from") {
-			logutil.Info("Empty incr query", zap.String("ws", exec.opts.Txn().GetWorkspace().PPString()))
-		}
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()

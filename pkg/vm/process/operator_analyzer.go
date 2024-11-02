@@ -47,6 +47,7 @@ type Analyzer interface {
 	AddWaitLockTime(t time.Time)
 	AddS3RequestCount(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
+	GetOpCounterSet() *perfcounter.CounterSet
 	GetOpStats() *OperatorStats
 	Reset()
 
@@ -62,6 +63,7 @@ type operatorAnalyzer struct {
 	start                time.Time
 	wait                 time.Duration
 	childrenCallDuration time.Duration
+	crs                  *perfcounter.CounterSet
 	opStats              *OperatorStats
 }
 
@@ -75,6 +77,7 @@ func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyz
 		isLast:               isLast,
 		wait:                 0,
 		childrenCallDuration: 0,
+		crs:                  new(perfcounter.CounterSet),
 		opStats:              NewOperatorStats(operatorName),
 	}
 }
@@ -82,13 +85,23 @@ func NewAnalyzer(idx int, isFirst bool, isLast bool, operatorName string) Analyz
 // NewTempAnalyzer is used to provide resource statistics services for non operator logic
 func NewTempAnalyzer() Analyzer {
 	return &operatorAnalyzer{
+		wait:    0,
+		crs:     new(perfcounter.CounterSet),
 		opStats: NewOperatorStats("temp Analyzer"),
 	}
+}
+
+// GetOpCounterSet returns the current CounterSet and resets it.
+// This method should be used when you want to start fresh with the performance counters.
+func (opAlyzr *operatorAnalyzer) GetOpCounterSet() *perfcounter.CounterSet {
+	opAlyzr.crs.Reset()
+	return opAlyzr.crs
 }
 
 func (opAlyzr *operatorAnalyzer) Reset() {
 	opAlyzr.wait = 0
 	opAlyzr.childrenCallDuration = 0
+	opAlyzr.crs.Reset()
 	opAlyzr.opStats.Reset()
 }
 

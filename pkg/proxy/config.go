@@ -31,7 +31,7 @@ var (
 	// The default value of proxy service.
 	defaultListenAddress = "127.0.0.1:6009"
 	// The default value of refresh interval to HAKeeper.
-	defaultRefreshInterval = 5 * time.Second
+	defaultRefreshInterval = 2 * time.Second
 	// The default value of rebalance interval.
 	defaultRebalanceInterval = 10 * time.Second
 	// The default value of rebalnce tolerance.
