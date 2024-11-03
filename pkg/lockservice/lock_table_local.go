@@ -224,7 +224,6 @@ func (l *localLockTable) unlock(
 
 	logUnlockTableOnLocal(
 		l.logger,
-		l.bind.ServiceID,
 		txn,
 		l.bind,
 	)
@@ -586,7 +585,7 @@ func (l *localLockTable) addRangeLockLocked(
 					prevStartKey,
 					key, keyLock,
 					mc,
-					c.txn)
+				)
 				prevStartKey = nil
 				rangeStartEncountered = false
 				return bytes.Compare(key, end) < 0
@@ -632,7 +631,7 @@ func (l *localLockTable) addRangeLockLocked(
 				prevStartKey,
 				key, keyLock,
 				mc,
-				c.txn)
+			)
 		}
 		break
 	}
@@ -662,7 +661,7 @@ func (l *localLockTable) mergeRangeLocked(
 	seekKey []byte,
 	seekLock Lock,
 	mc *mergeContext,
-	txn *activeTxn) ([]byte, []byte) {
+) ([]byte, []byte) {
 	// range lock encountered a row lock
 	if seekLock.isLockRow() {
 		// 5 + [1, 4] => [1, 4] + [5]
@@ -766,10 +765,10 @@ func (c *mergeContext) commit(
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
 	txn.lockRemoved(
-		bind.ServiceID,
 		bind.Group,
 		bind.Table,
-		c.mergedLocks)
+		c.mergedLocks,
+	)
 
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.
