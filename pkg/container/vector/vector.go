@@ -778,26 +778,11 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
-	w := NewConstNull(v.typ, length, mp)
-	if v.IsConstNull() || v.nsp.Contains(uint64(row)) {
-		return w
+func (v *Vector) ToConst() {
+	if v.nsp.Contains(0) {
+		v.data = v.data[:0]
 	}
-
-	if v.IsConst() {
-		row = 0
-	}
-
-	sz := v.typ.TypeSize()
-	w.data = v.data[row*sz : (row+1)*sz]
-	w.setupFromData()
-	if v.typ.IsVarlen() {
-		w.area = v.area
-	}
-	w.cantFreeData = true
-	w.cantFreeArea = true
-
-	return w
+	v.class = CONSTANT
 }
 
 // PreExtend use to expand the capacity of the vector
