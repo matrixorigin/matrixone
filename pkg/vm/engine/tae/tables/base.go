@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -275,6 +276,13 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
+	if err != nil {
+		logutil.Info("Dedup-Err",
+			zap.Any("err", err),
+			zap.String("txn", txn.Repr()),
+			zap.String("obj", obj.meta.Load().ID().String()),
+			zap.Uint16("blk offset", blkOffset))
+	}
 	return
 }
 
@@ -313,6 +321,13 @@ func (obj *baseObject) containsWithLoad(
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
+	if err != nil {
+		logutil.Info("Dedup-Err",
+			zap.Any("err", err),
+			zap.String("txn", txn.Repr()),
+			zap.String("obj", obj.meta.Load().ID().String()),
+			zap.Uint16("blk offset", blkOffset))
+	}
 	return
 }
 

@@ -19,12 +19,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 var getDuplicatedRowIDNABlkFunctions = map[types.T]any{
@@ -296,6 +298,11 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.Int("row offset", row),
+						zap.String("commit ts", commitTS.ToString()),
+					)
 					return txnif.ErrTxnWWConflict
 				}
 				if skip && commitTS.LT(&startTS) {
@@ -346,6 +353,11 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					commitTS := tsVec.Get(row).(types.TS)
 					startTS := txn.GetStartTS()
 					if commitTS.GT(&startTS) {
+						logutil.Info("Dedup-WW",
+							zap.String("txn", txn.Repr()),
+							zap.Int("row offset", row),
+							zap.String("commit ts", commitTS.ToString()),
+						)
 						return txnif.ErrTxnWWConflict
 					}
 					if skip && commitTS.LT(&startTS) {
@@ -391,6 +403,11 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.Int("row offset", row),
+						zap.String("commit ts", commitTS.ToString()),
+					)
 					return txnif.ErrTxnWWConflict
 				}
 			}
@@ -447,6 +464,11 @@ func dedupABlkClosureFactory(
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.Int("row offset", row),
+						zap.String("commit ts", commitTS.ToString()),
+					)
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)
