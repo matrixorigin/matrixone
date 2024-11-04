@@ -53,8 +53,10 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		cnt := 0
@@ -82,7 +84,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		catalog2.SetupDefines("")
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
@@ -125,8 +127,10 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 					return moerr.NewInternalError(ctx, "commit failed")
 				}
 			}).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -149,7 +153,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ec.ses = &Session{}
@@ -192,8 +196,10 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 					return moerr.NewInternalError(ctx, "rollback failed")
 				}
 			}).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
@@ -210,7 +216,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		txn := InitTxnHandler("", eng, ctx, nil)
-		setGlobalPu(pu)
+		setPu("", pu)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ec.ses = &Session{}
@@ -239,10 +245,10 @@ func TestSession_TxnBegin(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		setGlobalSessionAlloc(newLeakCheckAllocator())
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		catalog2.SetupDefines("")
-		ioSes, err := NewIOSession(&testConn{}, pu)
+		ioSes, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			panic(err)
 		}
@@ -250,8 +256,10 @@ func TestSession_TxnBegin(t *testing.T) {
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -259,8 +267,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		getGlobalPu().TxnClient = txnClient
-		getGlobalPu().StorageEngine = eng
+		getPu("").TxnClient = txnClient
+		getPu("").StorageEngine = eng
 		session := NewSession(ctx, "", proto, nil)
 
 		var c clock.Clock
@@ -305,7 +313,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			t.Error(err)
 		}
 
-		ioses, err := NewIOSession(&testConn{}, pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
 			t.Error(err)
 		}
@@ -325,6 +333,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -337,7 +347,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -353,8 +363,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-		setGlobalPu(pu)
-		setGlobalSessionAlloc(newLeakCheckAllocator())
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ses := genSession(ctrl, pu)
 
 		var ts *timestamp.Timestamp
@@ -380,84 +390,55 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	})
 }
 
-func TestSession_GetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
+var genSession1 = func(t *testing.T, ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
 	}
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	if err != nil {
+		t.Error(err)
+	}
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	session := NewSession(context.Background(), "", proto, nil)
+	return session
+}
 
+func TestSession_GetTempTableStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ses := genSession1(t, ctrl, pu)
 	assert.Panics(t, func() {
 		_ = ses.GetTxnHandler().GetTempStorage()
 	})
 }
 
 func TestIfInitedTempEngine(t *testing.T) {
-
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ses := genSession1(t, ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
 
 func TestSetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setGlobalPu(pu)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ses := genSession1(t, ctrl, pu)
 
 	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
@@ -516,7 +497,9 @@ func TestSession_Migrate(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -525,8 +508,10 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -542,13 +527,18 @@ func TestSession_Migrate(t *testing.T) {
 		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
-		setGlobalPu(&config.ParameterUnit{
+		setPu("", &config.ParameterUnit{
 			SV:            sv,
 			TxnClient:     txnClient,
 			StorageEngine: eng,
 		})
+
+		mockBS := MockBaseService{}
+		rm, _ := NewRoutineManager(context.Background(), "")
+		rm.baseService = &mockBS
+		setRtMgr("", rm)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-		ioses, err := NewIOSession(&testConn{}, getGlobalPu())
+		ioses, err := NewIOSession(&testConn{}, getPu(""), "")
 		if err != nil {
 			panic(err)
 		}
@@ -560,6 +550,7 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: session}
 		proto.ses = session
+		session.setRoutineManager(rm)
 		return session
 	}
 	ctrl := gomock.NewController(t)
@@ -582,4 +573,13 @@ func TestSession_Migrate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "d1", s.GetDatabaseName())
 	assert.Equal(t, 2, len(s.prepareStmts))
+}
+
+func Test_connectionid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	s := newSes(nil, ctrl)
+	s.SetConnectionID(10)
+	x := s.GetConnectionID()
+	assert.Equal(t, uint32(10), x)
 }

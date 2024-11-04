@@ -21,10 +21,11 @@ import (
 	"slices"
 	"sort"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -35,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -65,6 +68,9 @@ func NewLocalDataSource(
 		}
 
 		source.rangeSlice = rangesSlice
+		source.rc.prefetchDisabled = rangesSlice.Len() < 4
+	} else {
+		source.rc.prefetchDisabled = true
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
@@ -108,6 +114,7 @@ type LocalDisttaeDataSource struct {
 
 	// runtime config
 	rc struct {
+		prefetchDisabled    bool
 		batchPrefetchCursor int
 		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
@@ -264,7 +271,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	filter any,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
-) (*objectio.BlockInfo, engine.DataState, error) {
+) (info *objectio.BlockInfo, state engine.DataState, err error) {
 
 	if ls.memPKFilter == nil {
 		ff := filter.(engine_util.MemPKFilter)
@@ -272,7 +279,48 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	if len(cols) == 0 {
-		return nil, engine.End, nil
+		state = engine.End
+		return
+	}
+
+	injected, logLevel := objectio.LogReaderInjected(ls.table.tableName)
+	if injected && logLevel > 0 {
+		defer func() {
+			if err != nil {
+				logutil.Error(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+					zap.Error(err),
+				)
+				return
+			}
+			if state == engine.End {
+				return
+			}
+			if info != nil {
+				logutil.Info(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+					zap.String("blk", info.String()),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logutil.Info(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+				)
+			}
+		}()
 	}
 
 	// bathed prefetch block data and deletes
@@ -282,9 +330,11 @@ func (ls *LocalDisttaeDataSource) Next(
 		switch ls.iteratePhase {
 		case engine.InMem:
 			outBatch.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, outBatch, mp)
-			if err != nil {
-				return nil, engine.InMem, err
+			if err = ls.iterateInMemData(
+				ctx, cols, types, seqNums, outBatch, mp,
+			); err != nil {
+				state = engine.InMem
+				return
 			}
 
 			if outBatch.RowCount() == 0 {
@@ -292,26 +342,30 @@ func (ls *LocalDisttaeDataSource) Next(
 				continue
 			}
 
-			return nil, engine.InMem, nil
+			state = engine.InMem
+			return
 
 		case engine.Persisted:
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				state = engine.End
+				return
 			}
 
 			ls.handleOrderBy()
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				state = engine.End
+				return
 			}
 
-			blk := ls.rangeSlice.Get(ls.rangesCursor)
+			info = ls.rangeSlice.Get(ls.rangesCursor)
 			ls.rangesCursor++
-
-			return blk, engine.Persisted, nil
+			state = engine.Persisted
+			return
 
 		case engine.End:
-			return nil, ls.iteratePhase, nil
+			state = ls.iteratePhase
+			return
 		}
 	}
 }
@@ -404,11 +458,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
-
 	if ls.wsCursor >= ls.txnOffset {
 		return nil
 	}
-
 	ls.table.getTxn().Lock()
 	ls.rc.WorkspaceLocked = true
 	defer func() {
@@ -430,10 +482,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
-		if rows+writes[ls.wsCursor].bat.RowCount() > maxRows {
-			break
-		}
-
 		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
@@ -441,6 +489,8 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
+		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
+		// Refter to genBlock and genRowid method.
 		offsets := engine_util.RowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b := retainedRowIds[0].BorrowBlockID()
@@ -452,6 +502,10 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		if len(sels) == 0 {
 			continue
+		}
+
+		if rows+len(sels) > maxRows {
+			break
 		}
 
 		rows += len(sels)
@@ -480,21 +534,13 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
-
-	// in meme committed insert only need to apply deletes that exists
-	// in workspace and flushed to s3 but not commit.
-	//ls.rc.SkipPStateDeletes = true
-	//defer func() {
-	//	ls.rc.SkipPStateDeletes = false
-	//}()
-
 	if outBatch.RowCount() >= objectio.BlockMaxRows {
 		return nil
 	}
 
 	var (
-		err error
-		sel []int64
+		err  error
+		sels []int64
 	)
 
 	if ls.pStateRows.insIter == nil {
@@ -506,48 +552,49 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		}
 	}
 
-	var batRowIdx int
-	if batRowIdx = slices.Index(outBatch.Attrs, catalog.Row_ID); batRowIdx == -1 {
-		batRowIdx = len(outBatch.Attrs)
-		outBatch.Attrs = append(outBatch.Attrs, catalog.Row_ID)
-		outBatch.Vecs = append(outBatch.Vecs, vector.NewVec(types.T_Rowid.ToType()))
-		// Add empty rowid for workspace row
-		// It is impossible for them to be be eliminated by tombstone in tomestone objects, so using emtpy rowid is totally safe.
-		for range outBatch.RowCount() {
-			vector.AppendFixed(outBatch.Vecs[len(outBatch.Vecs)-1], objectio.Rowid{}, false, mp)
-		}
-
-		defer func() {
-			outBatch.Attrs = outBatch.Attrs[:len(outBatch.Attrs)-1]
-			outBatch.Vecs[len(outBatch.Vecs)-1].Free(mp)
-			outBatch.Vecs = outBatch.Vecs[:len(outBatch.Vecs)-1]
-		}()
+	var (
+		physicalColumn    vector.Vector
+		physicalColumnPtr *vector.Vector
+		physicalColumnPos int
+	)
+	if physicalColumnPos = slices.Index(
+		outBatch.Attrs,
+		objectio.PhysicalAddr_Attr,
+	); physicalColumnPos == -1 {
+		physicalColumn.SetType(objectio.RowidType)
+		physicalColumnPtr = &physicalColumn
+		defer physicalColumn.Free(mp)
+	} else {
+		physicalColumnPtr = outBatch.Vecs[physicalColumnPos]
 	}
 
 	applyPolicy := engine.TombstoneApplyPolicy(
-		engine.Policy_SkipCommittedInMemory | engine.Policy_SkipCommittedS3)
+		engine.Policy_SkipCommittedInMemory | engine.Policy_SkipCommittedS3,
+	)
 
 	var (
-		goon        bool = true
+		goNext      bool = true
 		minTS            = types.MaxTs()
+		inputRowCnt      = outBatch.RowCount()
 		applyOffset      = 0
 	)
 
-	for goon && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
+	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
-			if goon = ls.pStateRows.insIter.Next(); !goon {
+			if goNext = ls.pStateRows.insIter.Next(); !goNext {
 				break
 			}
 
 			entry := ls.pStateRows.insIter.Entry()
 			b, o := entry.RowID.Decode()
 
-			sel, err = ls.ApplyTombstones(ls.ctx, b, []int64{int64(o)}, applyPolicy)
-			if err != nil {
+			if sels, err = ls.ApplyTombstones(
+				ls.ctx, b, []int64{int64(o)}, applyPolicy,
+			); err != nil {
 				return err
 			}
 
-			if len(sel) == 0 {
+			if len(sels) == 0 {
 				continue
 			}
 
@@ -555,52 +602,66 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				minTS = entry.Time
 			}
 
-			for i, name := range outBatch.Attrs {
-				if name == catalog.Row_ID {
-					if err = vector.AppendFixed(
+			if err = vector.AppendFixed(
+				physicalColumnPtr,
+				entry.RowID,
+				false,
+				mp,
+			); err != nil {
+				return err
+			}
+
+			for i := range outBatch.Attrs {
+				if i == physicalColumnPos {
+					continue
+				}
+				idx := 2 /*rowid and commits*/ + seqNums[i]
+				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
+					entry.Batch.Attrs[idx] == "" /*drop column*/ {
+					err = vector.AppendAny(
 						outBatch.Vecs[i],
-						entry.RowID,
-						false,
-						mp); err != nil {
-						return err
-					}
+						nil,
+						true,
+						mp)
 				} else {
-					idx := 2 /*rowid and commits*/ + seqNums[i]
-					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
-						entry.Batch.Attrs[idx] == "" /*drop column*/ {
-						err = vector.AppendAny(
-							outBatch.Vecs[i],
-							nil,
-							true,
-							mp)
-					} else {
-						err = outBatch.Vecs[i].UnionOne(
-							entry.Batch.Vecs[int(2+seqNums[i])],
-							entry.Offset,
-							mp,
-						)
-					}
-					if err != nil {
-						return err
-					}
+					err = outBatch.Vecs[i].UnionOne(
+						entry.Batch.Vecs[int(2+seqNums[i])],
+						entry.Offset,
+						mp,
+					)
+				}
+				if err != nil {
+					return err
 				}
 			}
 		}
 
-		rowIds := vector.MustFixedColWithTypeCheck[objectio.Rowid](outBatch.Vecs[batRowIdx])
+		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](physicalColumnPtr)
 		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
 		if err != nil {
 			return err
 		}
 
-		for i := range deleted {
-			deleted[i] += int64(applyOffset)
+		if len(deleted) > 0 {
+			if physicalColumnPos == -1 {
+				for i := range deleted {
+					deleted[i] += int64(applyOffset)
+				}
+				physicalColumnPtr.Shrink(deleted, true)
+				for i := range deleted {
+					deleted[i] += int64(inputRowCnt)
+				}
+				outBatch.Shrink(deleted, true)
+			} else {
+				for i := range deleted {
+					deleted[i] += int64(applyOffset)
+				}
+				outBatch.Shrink(deleted, true)
+			}
 		}
 
-		outBatch.Shrink(deleted, true)
-
 		minTS = types.MaxTs()
-		applyOffset = outBatch.Vecs[0].Length()
+		applyOffset = physicalColumnPtr.Length()
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
@@ -690,52 +751,54 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 
 func (ls *LocalDisttaeDataSource) GetTombstones(
 	ctx context.Context, bid *objectio.Blockid,
-) (deletedRows *nulls.Nulls, err error) {
+) (deletedRows objectio.Bitmap, err error) {
 
-	deletedRows = &nulls.Nulls{}
-	deletedRows.InitWithSize(8192)
+	deletedRows = objectio.GetReusableBitmap()
 
 	if ls.category == engine.ShardingRemoteDataSource {
 		if ls.extraTombstones != nil {
-			ls.extraTombstones.ApplyInMemTombstones(bid, nil, deletedRows)
-			_, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, &ls.snapshotTS, bid, nil, deletedRows)
-			if err != nil {
-				return nil, err
+			ls.extraTombstones.ApplyInMemTombstones(bid, nil, &deletedRows)
+			if _, err = ls.extraTombstones.ApplyPersistedTombstones(
+				ctx, ls.fs, &ls.snapshotTS, bid, nil, &deletedRows,
+			); err != nil {
+				deletedRows.Release()
+				return
 			}
 		}
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
+		ls.applyWorkspaceEntryDeletes(bid, nil, &deletedRows)
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
-		_, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedRows)
-		if err != nil {
-			return nil, err
+		if _, err = ls.applyWorkspaceFlushedS3Deletes(
+			bid, nil, &deletedRows,
+		); err != nil {
+			deletedRows.Release()
+			return
 		}
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		ls.applyWorkspaceRawRowIdDeletes(bid, nil, deletedRows)
+		ls.applyWorkspaceRawRowIdDeletes(bid, nil, &deletedRows)
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipCommittedInMemory == 0 {
-		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
+		ls.applyPStateInMemDeletes(bid, nil, &deletedRows)
 	}
 
-	//_, err = ls.applyPStatePersistedDeltaLocation(bid, nil, deletedRows)
-	_, err = ls.applyPStateTombstoneObjects(bid, nil, deletedRows)
-	if err != nil {
-		return nil, err
+	if _, err = ls.applyPStateTombstoneObjects(bid, nil, &deletedRows); err != nil {
+		deletedRows.Release()
+		return
 	}
 
-	return deletedRows, nil
+	return
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
 
 	leftRows = offsets
@@ -781,7 +844,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	bid *objectio.Blockid,
 	offsets []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) (leftRows []int64, err error) {
 
 	leftRows = offsets
@@ -790,14 +853,17 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data) == 0 || ls.pState.BlockPersisted(bid) {
+	if len(s3FlushedDeletes.data) == 0 {
 		return
 	}
 
+	release := func() {}
 	if deletedRows == nil {
-		deletedRows = &nulls.Nulls{}
-		deletedRows.InitWithSize(8192)
+		bm := objectio.GetReusableBitmap()
+		deletedRows = &bm
+		release = bm.Release
 	}
+	defer release()
 
 	var curr int
 	getTombstone := func() (*objectio.ObjectStats, error) {
@@ -830,7 +896,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
 
 	leftRows = offsets
@@ -852,13 +918,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
-
-	//if ls.rc.SkipPStateDeletes {
-	//	return offsets
-	//}
-
 	var delIter logtailreplay.RowsIter
 
 	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
@@ -888,7 +949,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	bid *objectio.Blockid,
 	offsets []int64,
-	deletedRows *nulls.Nulls,
+	deletedRows *objectio.Bitmap,
 ) ([]int64, error) {
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
 		return offsets, nil
@@ -935,10 +996,13 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
+	release := func() {}
 	if deletedRows == nil {
-		deletedRows = &nulls.Nulls{}
-		deletedRows.InitWithSize(8192)
+		bm := objectio.GetReusableBitmap()
+		deletedRows = &bm
+		release = bm.Release
 	}
+	defer release()
 
 	if err := blockio.GetTombstonesByBlockId(
 		ls.ctx,
@@ -959,6 +1023,9 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+	if ls.rc.prefetchDisabled {
+		return
+	}
 	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
 		ls.rangesCursor < ls.rc.batchPrefetchCursor {
 		return
@@ -969,20 +1036,24 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
-	blks := make([]*objectio.BlockInfo, end-begin)
+	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
-		blks[idx-begin] = ls.rangeSlice.Get(idx)
-	}
+		blk := ls.rangeSlice.Get(idx)
+		if blk.BlockID.Object().EQ(&preObj) {
+			continue
+		}
 
-	// prefetch blk data
-	err := blockio.Prefetch(
-		ls.table.proc.Load().GetService(), ls.fs, blks[0].MetaLocation())
-	if err != nil {
-		logutil.Errorf("pefetch block data: %s", err.Error())
-	}
+		preObj = *blk.BlockID.Object()
 
-	ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list.RUnlock()
+		// prefetch blk data
+		err := blockio.Prefetch(
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		if err != nil {
+			logutil.Errorf("pefetch block data: %s, blk:%s",
+				err.Error(),
+				blk.String())
+		}
+	}
 
 	ls.rc.batchPrefetchCursor = end
 }
@@ -1018,7 +1089,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	}
 
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
-	emptyBatch := batch.EmptyBatchWithAttrs(attrs)
+	cacheVectors := containers.NewVectors(len(attrs))
 
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
@@ -1043,7 +1114,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = blockio.ReadDeletes(
-				ls.ctx, location, ls.fs, obj.GetCNCreated(), &emptyBatch,
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
 				return nil, err
 			}
@@ -1051,9 +1122,9 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
 
-			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](emptyBatch.Vecs[0])
+			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](emptyBatch.Vecs[1])
+				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
 			}
 
 			for i := 0; i < len(rowIds); i++ {

@@ -149,12 +149,26 @@ var (
 		}, []string{"type"})
 	CdcTotalProcessingRecordCountGauge = cdcProcessingRecordCountGauge.WithLabelValues("total")
 
-	cdcAllocatedBatchBytesGauge = prometheus.NewGaugeVec(
+	cdcMemoryGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "frontend",
-			Name:      "cdc_allocated_batch_bytes",
-			Help:      "Bytes allocated by cdc",
+			Name:      "cdc_memory",
+			Help:      "Memory used by cdc",
 		}, []string{"type"})
-	CdcTotalAllocatedBatchBytesGauge = cdcAllocatedBatchBytesGauge.WithLabelValues("total")
+	CdcHoldChangesBytesGauge = cdcMemoryGauge.WithLabelValues("hold-changes")
+	CdcMpoolInUseBytesGauge  = cdcMemoryGauge.WithLabelValues("mpool-inuse")
+
+	cdcDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "cdc_duration",
+			Help:      "Bucketed histogram of each phase duration of cdc task.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+	CdcReadDurationHistogram    = cdcDurationHistogram.WithLabelValues("read")
+	CdcAppendDurationHistogram  = cdcDurationHistogram.WithLabelValues("append")
+	CdcSinkDurationHistogram    = cdcDurationHistogram.WithLabelValues("sink")
+	CdcSendSqlDurationHistogram = cdcDurationHistogram.WithLabelValues("send-sql")
 )

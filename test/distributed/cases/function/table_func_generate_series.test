@@ -52,3 +52,8 @@ explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
 -- @separator:table
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
 drop table t;
+
+create table t (id int);
+insert into t select result from generate_series(1,100.0) g; 
+insert into t select result from generate_series(1,1e2) g; 
+insert into t select result from generate_series(1,100, "step") g; 

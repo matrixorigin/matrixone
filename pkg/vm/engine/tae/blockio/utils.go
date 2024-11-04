@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -81,21 +80,26 @@ func GetTombstonesByBlockId(
 	ts *types.TS,
 	blockId *objectio.Blockid,
 	getTombstoneFileFn func() (*objectio.ObjectStats, error),
-	deletedMask *nulls.Nulls,
+	deletedMask *objectio.Bitmap,
 	fs fileservice.FileService,
 ) (err error) {
 	loadedBlkCnt := 0
 	onBlockSelectedFn := func(tombstoneObject *objectio.ObjectStats, pos int) (bool, error) {
-		var location objectio.ObjectLocation
+		var (
+			err2     error
+			mask     objectio.Bitmap
+			location objectio.ObjectLocation
+		)
 		tombstoneObject.BlockLocationTo(uint16(pos), objectio.BlockMaxRows, location[:])
-		if mask, err := FillBlockDeleteMask(
+		if mask, err2 = FillBlockDeleteMask(
 			ctx, ts, blockId, location[:], fs, tombstoneObject.GetCNCreated(),
-		); err != nil {
-			return false, err
+		); err2 != nil {
+			return false, err2
 		} else {
 			deletedMask.Or(mask)
 		}
 		loadedBlkCnt++
+		mask.Release()
 		return true, nil
 	}
 
@@ -213,16 +217,14 @@ func CheckTombstoneFile(
 			columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
-			if !columnZonemap.RowidPrefixEq(prefixPattern) {
-				if columnZonemap.RowidPrefixGT(prefixPattern) {
-					// all zone maps are sorted by the rowid
-					// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			if columnZonemap.RowidPrefixEq(prefixPattern) {
+				var goOn bool
+				if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
 					break
 				}
-				continue
-			}
-			var goOn bool
-			if goOn, err = onBlockSelectedFn(tombstoneObject, pos); err != nil || !goOn {
+			} else if columnZonemap.RowidPrefixGT(prefixPattern) {
+				// all zone maps are sorted by the rowid
+				// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
 				break
 			}
 		}

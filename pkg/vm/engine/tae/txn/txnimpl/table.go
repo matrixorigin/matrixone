@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -45,10 +46,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
+)
+
+const (
+	TransferSinkerBufferSize          = common.Const1MBytes * 5
+	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
 
 type txnEntries struct {
@@ -177,6 +182,51 @@ func (tbl *txnTable) TransferDeleteIntent(
 func (tbl *txnTable) approxSize() int {
 	return tbl.dataTable.approxSize() + tbl.tombstoneTable.approxSize()
 }
+func (tbl *txnTable) recurTransferS3Delete(
+	id *common.ID,
+	rowID types.Rowid,
+	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
+	softDeletes map[objectio.ObjectId]struct{},
+) (newID types.Rowid, err error) {
+	blkID2, row := rowID.Decode()
+	id.BlockID = *blkID2
+	pinned, ok := memo[*blkID2]
+	if !ok {
+		pinned, err = tbl.store.rt.TransferTable.Pin(*id)
+		// cannot find a transferred record. maybe the transferred record was TTL'ed
+		// here we can convert the error back to r-w conflict
+		if err != nil {
+			logutil.Error(
+				"TRANSFER-ERR-TO-RW",
+				zap.Error(err),
+				zap.String("id", id.String()),
+				zap.String("txn", tbl.store.txn.String()),
+			)
+			err = moerr.NewTxnRWConflictNoCtx()
+			return
+		}
+	}
+	page := pinned.Item()
+	newID, ok = page.Transfer(row)
+	if !ok {
+		err = moerr.NewTxnWWConflictNoCtx(0, "")
+		msg := fmt.Sprintf("table-%d blk-%d delete row-%d",
+			id.TableID,
+			id.BlockID,
+			row)
+		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
+			tbl.store.txn.GetStartTS().ToString(),
+			msg)
+		return
+	}
+	blkID, _ := newID.Decode()
+	objID := blkID.Object()
+	_, ok = softDeletes[*objID]
+	if !ok {
+		return
+	}
+	return tbl.recurTransferS3Delete(id, newID, memo, softDeletes)
+}
 func (tbl *txnTable) TransferDeletes(
 	ctx context.Context,
 	ts types.TS,
@@ -192,20 +242,33 @@ func (tbl *txnTable) TransferDeletes(
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
 		tGetSoftdeleteObjects := time.Now()
-		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(tbl.store.txn.GetStartTS(), tbl.transferedTS.Next(), ts)
+		startTS := tbl.transferedTS.Next()
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType.SkipTargetOldCommitted() {
+			txnStartTS := tbl.store.txn.GetStartTS()
+			if txnStartTS.GT(&startTS) {
+				startTS = txnStartTS
+			}
+		}
+		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
 		sort.Slice(softDeleteObjects, func(i, j int) bool {
 			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
 		})
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var transferBatch *containers.Batch
+		var sinker *engine_util.Sinker
 		defer func() {
-			if transferBatch != nil {
-				transferBatch.Close()
+			if sinker != nil {
+				sinker.Close()
 			}
 		}()
 		// transfer deltaloc
+		memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
+		objMap := make(map[types.Objectid]struct{})
+		for _, obj := range softDeleteObjects {
+			objMap[*obj.ID()] = struct{}{}
+		}
 		for _, obj := range softDeleteObjects {
 			var currentTransferBatch *containers.Batch
 			tFindTombstone := time.Now()
@@ -217,7 +280,7 @@ func (tbl *txnTable) TransferDeletes(
 				return err
 			}
 			id := obj.AsCommonID()
-			if sel.IsEmpty() && transferBatch == nil {
+			if sel.IsEmpty() {
 				continue
 			}
 
@@ -228,37 +291,17 @@ func (tbl *txnTable) TransferDeletes(
 			transferFn := func(pkVec, rowIDVec containers.Vector) (err error) {
 				for i := 0; i < rowIDVec.Length(); i++ {
 					rowID := rowIDVec.Get(i).(types.Rowid)
-					blkID2, row := rowID.Decode()
+					blkID2, _ := rowID.Decode()
 					if !blkID2.Object().EQ(obj.ID()) {
 						continue
 					}
-					id.BlockID = *blkID2
-					pinned, err := tbl.store.rt.TransferTable.Pin(*id)
-					// cannot find a transferred record. maybe the transferred record was TTL'ed
-					// here we can convert the error back to r-w conflict
-					if err != nil {
-						logutil.Error(
-							"TRANSFER-ERR-TO-RW",
-							zap.Error(err),
-							zap.String("id", id.String()),
-							zap.String("txn", tbl.store.txn.String()),
-						)
-						err = moerr.NewTxnRWConflictNoCtx()
-						return err
-					}
-					page := pinned.Item()
-					newRowID, ok := page.Transfer(row)
-					if !ok {
-						err := moerr.NewTxnWWConflictNoCtx(0, "")
-						msg := fmt.Sprintf("table-%d blk-%d delete row-%d",
-							id.TableID,
-							id.BlockID,
-							row)
-						logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
-							tbl.store.txn.GetStartTS().ToString(),
-							msg)
-						return err
-					}
+					var newRowID types.Rowid
+					newRowID, err = tbl.recurTransferS3Delete(
+						id,
+						rowID,
+						memo,
+						objMap,
+					)
 					pk := pkVec.Get(i)
 					// try to transfer the delete node
 					// here are some possible returns
@@ -292,99 +335,49 @@ func (tbl *txnTable) TransferDeletes(
 						nil,
 					)
 					readTombstoneDuration += time.Since(tReadTombstone)
-					defer closeFunc()
 					if err != nil {
+						closeFunc()
 						return err
 					}
 					err = transferFn(vectors[1], vectors[0])
+					closeFunc()
 					if err != nil {
 						return err
 					}
-				}
-			}
-			if transferBatch != nil {
-				err = transferFn(
-					transferBatch.GetVectorByName(objectio.TombstoneAttr_PK_Attr),
-					transferBatch.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr))
-				if err != nil {
-					return err
 				}
 			}
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
-				if transferBatch == nil {
-					transferBatch = catalog.NewCNTombstoneBatchByPKType(*pkType, common.WorkspaceAllocator)
+				if sinker == nil {
+					sinker = engine_util.NewTombstoneSinker(
+						objectio.HiddenColumnSelection_None,
+						*pkType,
+						common.WorkspaceAllocator,
+						tbl.store.rt.Fs.Service,
+						engine_util.WithBufferSizeCap(TransferSinkerBufferSize),
+						engine_util.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
-				transferBatch.Extend(currentTransferBatch)
+				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
 				currentTransferBatch.Close()
 			}
 		}
-		if transferBatch != nil {
-			bat := containers.ToCNBatch(transferBatch)
-			if err = mergesort.SortColumnsByIndex(
-				bat.Vecs,
-				objectio.TombstonePrimaryKeyIdx,
-				common.WorkspaceAllocator,
-			); err != nil {
-				return
-			}
-			schema := tbl.getSchema(true)
-			seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
-			name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-			writer, err := blockio.NewBlockWriterNew(
-				tbl.store.rt.Fs.Service,
-				name,
-				schema.Version,
-				seqnums,
-				true,
-			)
-			if err != nil {
-				return err
-			}
+		if sinker != nil {
+			sinker.Sync(ctx)
+			stats, bats := sinker.GetResult()
+			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats...)
 
-			writer.SetPrimaryKeyWithType(
-				uint16(objectio.TombstonePrimaryKeyIdx),
-				index.HBF,
-				index.ObjectPrefixFn,
-				index.BlockPrefixFn,
-			)
-
-			split := containers.NewBatchSplitter(transferBatch, int(schema.Extra.BlockMaxRows))
-
-			for {
-				bat, err := split.Next()
-				if err != nil {
-					break
-				}
-				cnBatch := containers.ToCNBatch(bat)
-				for _, vec := range cnBatch.Vecs {
-					if vec == nil {
-						// this task has been canceled
-						return nil
-					}
-				}
-				_, err = writer.WriteBatch(cnBatch)
-				if err != nil {
-					return err
-				}
+			if len(bats) != 0 {
+				panic(fmt.Sprintf("TN-TRANSFER-TOMBSTONE-FILES, batch is %d", len(bats)))
 			}
-			_, _, err = writer.Sync(context.Background())
-			if err != nil {
-				return err
-			}
-			writerStats := writer.GetObjectStats()
 			logutil.Info(
 				"TN-TRANSFER-TOMBSTONE-FILES",
 				zap.String("table", tbl.GetLocalSchema(false).Name),
 				zap.String("phase", phase),
-				zap.String("from", tbl.transferedTS.Next().ToString()),
+				zap.String("from", startTS.ToString()),
 				zap.String("to", ts.ToString()),
 				zap.Int("s-cnt", len(softDeleteObjects)),
 				zap.String("txn", tbl.store.txn.String()),
 			)
-			stats := objectio.NewObjectStatsWithObjectID(name.ObjectId(), false, true, true)
-			objectio.SetObjectStats(stats, &writerStats)
-			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, *stats)
 		}
 		v2.TxnS3TombstoneTransferFindTombstonesHistogram.Observe(findTombstoneDuration.Seconds())
 		v2.TxnS3TombstoneTransferReadTombstoneHistogram.Observe(readTombstoneDuration.Seconds())
@@ -578,7 +571,17 @@ func (tbl *txnTable) TransferDeleteRows(
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
+		oldErr := err
 		err = moerr.NewTxnRWConflictNoCtx()
+		logutil.Error(
+			"TRANSFER-ERR",
+			zap.Error(err),
+			zap.String("old-err", oldErr.Error()),
+			zap.String("id", id.String()),
+			zap.String("txn", tbl.store.txn.String()),
+			zap.String("phase", phase),
+		)
+
 		return
 	}
 	memo[id.BlockID] = pinned
@@ -660,8 +663,15 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		counter.TAE.Object.Create.Add(1)
 	})
 	sorted := isTombstone
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, sorted, false)
-	return tbl.createObject(&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone})
+	stats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectid(),
+		true,
+		sorted,
+		false,
+	)
+	return tbl.createObject(
+		&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone},
+	)
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -795,7 +805,10 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 	if !dedupType.SkipTargetOldCommitted() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
-			pk, false, isTombstone); err != nil {
+			pk,
+			false,
+			isTombstone,
+		); err != nil {
 			return
 		}
 	} else {
@@ -912,7 +925,16 @@ func (tbl *txnTable) GetValue(
 	}
 	block := meta.GetObjectData()
 	_, blkIdx := id.BlockID.Offsets()
-	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(false), blkIdx, int(row), int(col), skipCheckDelete, common.WorkspaceAllocator)
+	return block.GetValue(
+		ctx,
+		tbl.store.txn,
+		tbl.GetLocalSchema(false),
+		blkIdx,
+		int(row),
+		int(col),
+		skipCheckDelete,
+		common.WorkspaceAllocator,
+	)
 }
 func (tbl *txnTable) UpdateObjectStats(
 	id *common.ID, stats *objectio.ObjectStats, isTombstone bool,
@@ -1457,7 +1479,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 	rowIDVec containers.Vector,
 	pk containers.Vector,
 	dt handle.DeleteType) (err error) {
-	rowIDStr := rowIDVec.PPString(1)
+	var rowIDStr string
 	defer func() {
 		if err == nil {
 			return
@@ -1470,29 +1492,32 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		// 		end)
 		// }
 		// This err also captured by txn's write conflict check.
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(int(pk.Length())))
-			}
-
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			err = moerr.NewTxnWWConflictNoCtx(tbl.GetID(), pk.PPString(pk.Length()))
+		}
+		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[ts=%s]: table-%d delete rows(%v) %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				tbl.GetID(),
 				rowIDStr,
 				err)
-			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-				logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
-					tbl.store.txn.GetID(),
-					tbl.store.txn.GetStartTS().ToString(),
-					tbl.GetID(),
-					rowIDStr,
-					pk.PPString(pk.Length()),
-				)
-			}
+		})
+
+		if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			logutil.Warnf("[txn%X,ts=%s]: table-%d delete rows(%v) pk %s",
+				tbl.store.txn.GetID(),
+				tbl.store.txn.GetStartTS().ToString(),
+				tbl.GetID(),
+				rowIDStr,
+				pk.PPString(pk.Length()),
+			)
 		}
 	}()
 	deleteBatch := tbl.createTombstoneBatch(rowIDVec, pk)
 	defer func() {
+		if err != nil {
+			rowIDStr = rowIDVec.PPString(1)
+		}
 		for _, attr := range deleteBatch.Attrs {
 			if attr == objectio.TombstoneAttr_PK_Attr {
 				// not close pk

@@ -24,14 +24,15 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestHAKeeperClientConfigIsValidated(t *testing.T) {
@@ -756,4 +757,85 @@ func TestHAKeeperClientSendProxyHeartbeat(t *testing.T) {
 		assert.Equal(t, []pb.ProxyStore{p}, cd.ProxyStores)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
+	t.Run("no tn stores", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			cfg := HAKeeperClientConfig{
+				ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			c, err := NewClusterHAKeeperClient(ctx, "", cfg)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+			err = c.CheckLogServiceHealth(ctx)
+			require.NoError(t, err)
+		}
+		runServiceTest(t, true, true, fn)
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			req := pb.Request{
+				Method: pb.TN_HEARTBEAT,
+				TNHeartbeat: &pb.TNStoreHeartbeat{
+					UUID: "uuid1",
+					Shards: []pb.TNShardInfo{
+						{
+							ShardID:   1,
+							ReplicaID: 100,
+						},
+					},
+				},
+			}
+			resp := s.handleTNHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+			req = pb.Request{
+				Method: pb.LOG_HEARTBEAT,
+				LogHeartbeat: &pb.LogStoreHeartbeat{
+					UUID: s.ID(),
+					Replicas: []pb.LogReplicaInfo{
+						{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID: 1,
+								Replicas: map[uint64]string{
+									100: "uuid1",
+								},
+							},
+						},
+					},
+				},
+			}
+			s.handleLogHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+			cfg := HAKeeperClientConfig{
+				ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+			}
+			c, err := NewClusterHAKeeperClient(ctx, "", cfg)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+			err = c.CheckLogServiceHealth(ctx)
+			require.NoError(t, err)
+		}
+		runServiceTest(t, true, true, fn)
+	})
+}
+
+func Test_NewLogHAKeeperClientWithRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.NewInternalErrorNoCtx("ut tester"))
+	defer cancel()
+	cfg := HAKeeperClientConfig{
+		DiscoveryAddress: "wrongaddress",
+	}
+	NewLogHAKeeperClientWithRetry(ctx, "", cfg)
 }

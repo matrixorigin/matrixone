@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -602,6 +603,29 @@ func TestInProgressTransfer(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
+	fault.Enable()
+	defer fault.Disable()
+	err1 := fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitDelete,
+		":::",
+		"echo",
+		0,
+		"trace delete",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
+	err1 = fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitSlowLog,
+		":::",
+		"echo",
+		0,
+		"trace slowlog",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
+
 	var did, tid uint64
 	var theRow *batch.Batch
 	{
@@ -782,8 +806,8 @@ func TestCacheGC(t *testing.T) {
 	// gc
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
-	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
-	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
+	require.Equal(t, 4, r.TStaleItem)
+	require.Equal(t, 2 /*test2 & test 4*/, r.TStaleCpk)
 
 }
 
@@ -1028,6 +1052,14 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(
+		"mo_account",
+		2,
+	)
+	require.NoError(t, err)
+	defer rmFault()
 
 	schema := catalog2.MockSchemaAll(5, 1)
 	schema.Name = "mo_account"
@@ -1048,7 +1080,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	exec := v.(executor.SQLExecutor)
 
 	txnop = p.StartCNTxn()
-	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	_, err = exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
 

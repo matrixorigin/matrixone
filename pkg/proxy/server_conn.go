@@ -24,13 +24,14 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
-	"go.uber.org/zap"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -114,7 +115,9 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
-	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	frontend.InitServerLevelVars(cn.uuid)
+	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(pu))
+	ios, err := frontend.NewIOSession(c.RawConn(), pu, cn.uuid)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +166,7 @@ func (s *serverConn) RawConn() net.Conn {
 func (s *serverConn) HandleHandshake(
 	handshakeResp *frontend.Packet, timeout time.Duration,
 ) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
 	defer cancel()
 
 	var r *frontend.Packet
@@ -187,7 +190,7 @@ func (s *serverConn) HandleHandshake(
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
 			s.cnServer.addr, timeout, s.connID)
 		// Return a retryable error.
-		return nil, newConnectErr(context.DeadlineExceeded)
+		return nil, newConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
 	}
 }
 
@@ -268,8 +271,10 @@ func (s *serverConn) Close() error {
 			s.mysqlProto.Close()
 		}
 	})
-	// Un-track the connection.
-	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	if s.rebalancer != nil {
+		// Un-track the connection.
+		s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	}
 	return nil
 }
 

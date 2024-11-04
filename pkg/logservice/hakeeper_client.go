@@ -21,13 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -48,6 +49,8 @@ type basicHAKeeperClient interface {
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// GetClusterState queries the cluster state
 	GetClusterState(ctx context.Context) (pb.CheckerState, error)
+	// CheckLogServiceHealth checks if the log-service is healthy or not.
+	CheckLogServiceHealth(ctx context.Context) error
 }
 
 // ClusterHAKeeperClient used to get cluster detail
@@ -114,6 +117,15 @@ var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
+func NewClusterHAKeeperClient(
+	ctx context.Context, sid string, cfg HAKeeperClientConfig,
+) (ClusterHAKeeperClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
 // NewCNHAKeeperClient creates a HAKeeper client to be used by a CN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
@@ -162,10 +174,11 @@ func NewLogHAKeeperClientWithRetry(
 ) ClusterHAKeeperClient {
 	var c ClusterHAKeeperClient
 	createFn := func() error {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewLogHAKeeperClientWithRetry)
 		defer cancel()
-		client, err := NewLogHAKeeperClient(ctx, sid, cfg)
+		client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create HAKeeper client: %v", err)
 			return err
 		}
@@ -260,6 +273,39 @@ func (c *managedHAKeeperClient) Close() error {
 		return nil
 	}
 	return c.mu.client.close()
+}
+
+// CheckLogServiceHealth implements the ClusterHAKeeperClient interface.
+func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		details, err := c.getClient().getClusterDetails(ctx)
+		if err != nil {
+			if c.isRetryableError(err) {
+				c.resetClient()
+				continue
+			}
+			return err
+		}
+		if len(details.TNStores) == 0 {
+			// there are no tn stores yet.
+			return nil
+		}
+		var err1 error
+		for _, tnStore := range details.TNStores {
+			for _, shard := range tnStore.Shards {
+				err1 = firstError(err1, c.getClient().checkLogServiceHealth(
+					ctx,
+					pb.CheckHealth{
+						ShardID: shard.ShardID,
+					},
+				))
+			}
+		}
+		return err1
+	}
 }
 
 func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -780,6 +826,21 @@ func (c *hakeeperClient) getClusterState(ctx context.Context) (pb.CheckerState, 
 		return pb.CheckerState{}, err
 	}
 	return *resp.CheckerState, nil
+}
+
+func (c *hakeeperClient) checkLogServiceHealth(ctx context.Context, checkHealth pb.CheckHealth) error {
+	req := pb.Request{
+		Method:      pb.CHECK_HEALTH,
+		CheckHealth: &checkHealth,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	if resp.ErrorCode != 0 {
+		return moerr.NewInternalError(ctx, resp.ErrorMessage)
+	}
+	return nil
 }
 
 func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {

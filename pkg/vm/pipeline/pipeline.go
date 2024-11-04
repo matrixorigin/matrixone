@@ -47,7 +47,7 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
+func (p *Pipeline) RunWithReader(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
 
 	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
@@ -56,35 +56,26 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		tableScanOperator.TableID = p.tableID
 	}
 
-	return p.run(proc)
+	return p.Run(proc)
 }
 
-func (p *Pipeline) ConstRun(proc *process.Process) (end bool, err error) {
-	return p.run(proc)
-}
+func (p *Pipeline) Run(proc *process.Process) (end bool, err error) {
+	defer catchPanic(proc.Ctx, &err)
 
-func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
-	return p.run(proc)
-}
-
-func (p *Pipeline) run(proc *process.Process) (end bool, err error) {
 	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
-
-	defer catchPanic(proc.Ctx, &err)
-
 	vm.ModifyOutputOpNodeIdx(p.rootOp, proc)
 
-	for end := false; !end; {
-		result, err := p.rootOp.Call(proc)
-		if err != nil {
-			return true, err
+	for end = false; !end; {
+		result, er := p.rootOp.Call(proc)
+		if er != nil {
+			return true, er
 		}
 		end = result.Status == vm.ExecStop || result.Batch == nil
 	}
 
-	return true, nil
+	return true, err
 }
 
 func catchPanic(ctx context.Context, errPtr *error) {

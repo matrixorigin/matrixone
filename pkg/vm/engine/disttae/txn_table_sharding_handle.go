@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +50,7 @@ func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef)
 		sr.colTypes = make([]types.Type, len(cols))
 		for i, column := range cols {
 			column = strings.ToLower(column)
-			if column == catalog.Row_ID {
+			if objectio.IsPhysicalAddr(column) {
 				sr.colTypes[i] = objectio.RowidType
 			} else {
 				colIdx := tblDef.Name2ColIndex[column]
@@ -227,6 +226,7 @@ func HandleShardingReadRanges(
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
+		2,
 		nil,
 	)
 	if err != nil {
@@ -284,6 +284,7 @@ func HandleShardingReadBuildReader(
 		tbl.db.op.SnapshotTS(),
 		param.ReaderBuildParam.Expr,
 		ds,
+		engine_util.GetThresholdForReader(1),
 	)
 	if err != nil {
 		return nil, err

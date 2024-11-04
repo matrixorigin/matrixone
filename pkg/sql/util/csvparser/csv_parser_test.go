@@ -110,23 +110,23 @@ func TestTPCH(t *testing.T) {
 		TrimLastSep:        true,
 	}
 
-	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
+	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
 	var row []Field
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[0], row)
 	require.Equal(t, parser.Pos(), int64(126))
 	assertPosEqual(t, parser, 126)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[1], row)
 	assertPosEqual(t, parser, 241)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[2], row)
 	assertPosEqual(t, parser, 369)
@@ -182,14 +182,14 @@ func TestTPCHMultiBytes(t *testing.T) {
 		}
 
 		reader := NewStringReader(inputStr)
-		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
+		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
 		if fmt.Sprint(err) == "invalid input: invalid field or comment delimiter" {
 			continue
 		}
 		require.NoError(t, err)
 
 		for i, expectedParserPos := range allExpectedParserPos {
-			row, err := parser.Read()
+			row, err := parser.Read(nil)
 			require.Nil(t, err)
 			require.Equal(t, datums[i], row)
 			assertPosEqual(t, parser, int64(expectedParserPos))
@@ -210,23 +210,23 @@ func TestLinesTerminatedBy(t *testing.T) {
 		TrimLastSep:        true,
 	}
 
-	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
+	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
 	var row []Field
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[0], row)
 	require.Equal(t, parser.Pos(), int64(127))
 	assertPosEqual(t, parser, 127)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[1], row)
 	assertPosEqual(t, parser, 242)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, datums[2], row)
 	assertPosEqual(t, parser, 370)
@@ -241,12 +241,12 @@ func TestRFC4180(t *testing.T) {
 
 	// example 1, trailing new lines
 
-	parser, err := NewCSVParser(&cfg, NewStringReader("aaa,bbb,ccc\nzzz,yyy,xxx\n"), int64(ReadBlockSize), false, false)
+	parser, err := NewCSVParser(&cfg, NewStringReader("aaa,bbb,ccc\nzzz,yyy,xxx\n"), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
 	var row []Field
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("aaa", false),
@@ -255,7 +255,7 @@ func TestRFC4180(t *testing.T) {
 	}, row)
 	assertPosEqual(t, parser, 12)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("zzz", false),
@@ -266,10 +266,10 @@ func TestRFC4180(t *testing.T) {
 
 	// example 2, no trailing new lines
 
-	parser, err = NewCSVParser(&cfg, NewStringReader("aaa,bbb,ccc\nzzz,yyy,xxx"), int64(ReadBlockSize), false, false)
+	parser, err = NewCSVParser(&cfg, NewStringReader("aaa,bbb,ccc\nzzz,yyy,xxx"), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("aaa", false),
@@ -278,7 +278,7 @@ func TestRFC4180(t *testing.T) {
 	}, row)
 	assertPosEqual(t, parser, 12)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("zzz", false),
@@ -289,10 +289,10 @@ func TestRFC4180(t *testing.T) {
 
 	// example 5, quoted fields
 
-	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), false, false)
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("aaa", false),
@@ -301,7 +301,7 @@ func TestRFC4180(t *testing.T) {
 	}, row)
 	assertPosEqual(t, parser, 18)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("zzz", false),
@@ -314,10 +314,10 @@ func TestRFC4180(t *testing.T) {
 
 	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","b
 bb","ccc"
-zzz,yyy,xxx`), int64(ReadBlockSize), false, false)
+zzz,yyy,xxx`), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("aaa", false),
@@ -326,7 +326,7 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false, false)
 	}, row)
 	assertPosEqual(t, parser, 19)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("zzz", false),
@@ -337,10 +337,10 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false, false)
 
 	// example 7, quote escaping
 
-	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","b""bb","ccc"`), int64(ReadBlockSize), false, false)
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","b""bb","ccc"`), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("aaa", false),
@@ -348,6 +348,32 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false, false)
 		newStringField("ccc", false),
 	}, row)
 	assertPosEqual(t, parser, 19)
+
+	//  example 8, read head columns
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), true)
+	require.NoError(t, err)
+
+	row, err = parser.Read(nil)
+	require.Nil(t, err)
+	require.Equal(t, 0, len(parser.columns))
+	require.Equal(t, []Field{
+		newStringField("zzz", false),
+		newStringField("yyy", false),
+		newStringField("xxx", false),
+	}, row)
+
+	cfg.HeaderSchemaMatch = true
+	parser, err = NewCSVParser(&cfg, NewStringReader(`"aaa","bbb","ccc"`+"\nzzz,yyy,xxx"), int64(ReadBlockSize), true)
+	require.NoError(t, err)
+
+	row, err = parser.Read(nil)
+	require.Nil(t, err)
+	require.Equal(t, []string{"aaa", "bbb", "ccc"}, parser.columns)
+	require.Equal(t, []Field{
+		newStringField("zzz", false),
+		newStringField("yyy", false),
+		newStringField("xxx", false),
+	}, row)
 
 }
 
@@ -363,12 +389,12 @@ func TestMySQL(t *testing.T) {
 
 	parser, err := NewCSVParser(&cfg, NewStringReader(`"\"","\\","\?"
 "\
-",\N,\\N`), int64(ReadBlockSize), false, false)
+",\N,\\N`), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
 	var row []Field
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
 		newStringField(`"`, false),
@@ -378,7 +404,7 @@ func TestMySQL(t *testing.T) {
 
 	assertPosEqual(t, parser, 15)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 
 	require.Equal(t, []Field{
@@ -392,10 +418,10 @@ func TestMySQL(t *testing.T) {
 	parser, err = NewCSVParser(
 		&cfg,
 		NewStringReader(`"\0\b\n\r\t\Z\\\  \c\'\""`),
-		int64(ReadBlockSize), false, false)
+		int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
 		newStringField(string([]byte{0, '\b', '\n', '\r', '\t', 26, '\\', ' ', ' ', 'c', '\'', '"'}), false),
@@ -406,10 +432,10 @@ func TestMySQL(t *testing.T) {
 		&cfg,
 		NewStringReader(`3,"a string containing a " quote",102.20
 `),
-		int64(ReadBlockSize), false, false)
+		int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
 		newStringField("3", false),
@@ -420,10 +446,10 @@ func TestMySQL(t *testing.T) {
 	parser, err = NewCSVParser(
 		&cfg,
 		NewStringReader(`3,"a string containing a " quote","102.20"`),
-		int64(ReadBlockSize), false, false)
+		int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
 		newStringField("3", false),
@@ -434,10 +460,10 @@ func TestMySQL(t *testing.T) {
 	parser, err = NewCSVParser(
 		&cfg,
 		NewStringReader(`"a"b",c"d"e`),
-		int64(ReadBlockSize), false, false)
+		int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.NoError(t, err)
 	require.Equal(t, []Field{
 		newStringField(`a"b`, false),
@@ -456,12 +482,12 @@ func TestCustomEscapeChar(t *testing.T) {
 
 	parser, err := NewCSVParser(&cfg, NewStringReader(`"!"","!!","!\"
 "!
-",!N,!!N`), int64(ReadBlockSize), false, false)
+",!N,!!N`), int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
 	var row []Field
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField(`"`, false),
@@ -470,7 +496,7 @@ func TestCustomEscapeChar(t *testing.T) {
 	}, row)
 	assertPosEqual(t, parser, 15)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField("\n", false),
@@ -490,10 +516,10 @@ func TestCustomEscapeChar(t *testing.T) {
 	parser, err = NewCSVParser(
 		&cfg,
 		NewStringReader(`"{""itemRangeType"":0,""itemContainType"":0,""shopRangeType"":1,""shopJson"":""[{\""id\"":\""A1234\"",\""shopName\"":\""AAAAAA\""}]""}"`),
-		int64(ReadBlockSize), false, false)
+		int64(ReadBlockSize), false)
 	require.NoError(t, err)
 
-	row, err = parser.Read()
+	row, err = parser.Read(nil)
 	require.Nil(t, err)
 	require.Equal(t, []Field{
 		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false),

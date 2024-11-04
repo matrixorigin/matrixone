@@ -16,29 +16,31 @@ package merge
 
 import (
 	"cmp"
-	"fmt"
-	"math"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
 
-type objOverlapPolicy struct {
-	objects     []*catalog.ObjectEntry
-	objectsSize int
+var levels = [6]int{
+	1, 2, 4, 16, 64, 256,
+}
 
+type objOverlapPolicy struct {
+	leveledObjects [6][]*catalog.ObjectEntry
+
+	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
-		objects:            make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
+		segments:           make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -52,32 +54,44 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
-	if m.objectsSize > 10*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-		return false
+	if m.segments[obj.ObjectName().SegmentId()] == nil {
+		m.segments[obj.ObjectName().SegmentId()] = make(map[*catalog.ObjectEntry]struct{})
 	}
-	m.objects = append(m.objects, obj)
-	m.objectsSize += int(obj.OriginSize())
+	m.segments[obj.ObjectName().SegmentId()][obj] = struct{}{}
 	return true
 }
 
 func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	if len(m.objects) < 2 {
-		return nil
+	for _, objects := range m.segments {
+		segLevel := segLevel(len(objects))
+		for obj := range objects {
+			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
+		}
 	}
-	if cpu > 95 {
-		return nil
+
+	reviseResults := make([]reviseResult, len(levels))
+	for i := range len(levels) {
+		if len(m.leveledObjects[i]) < 2 {
+			continue
+		}
+
+		if cpu > 80 {
+			continue
+		}
+
+		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+
+		objs, taskHostKind := m.reviseLeveledObjs(i)
+		if ok, eSize := controlMem(objs, mem); ok && len(objs) > 1 {
+			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+			mem -= eSize
+		}
 	}
-	objs, taskHostKind := m.reviseDataObjs(config)
-	objs = controlMem(objs, mem)
-	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
-	}
-	return nil
+	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	t := m.objects[0].SortKeyZoneMap().GetType()
-	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
+func (m *objOverlapPolicy) reviseLeveledObjs(i int) ([]*catalog.ObjectEntry, TaskHostKind) {
+	slices.SortFunc(m.leveledObjects[i], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
 		if c := zmA.CompareMin(zmB); c != 0 {
@@ -85,16 +99,16 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 		}
 		return zmA.CompareMax(zmB)
 	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
-	for _, obj := range m.objects {
+	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
+	for _, obj := range m.leveledObjects[i] {
 		if len(set.entries) == 0 {
-			set.add(t, obj)
+			set.add(obj)
 			continue
 		}
 
-		if compute.CompareGeneric(set.maxValue, obj.SortKeyZoneMap().GetMin(), t) > 0 {
+		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
 			// zm is overlapped
-			set.add(t, obj)
+			set.add(obj)
 			continue
 		}
 
@@ -106,15 +120,15 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 		}
 
-		set.reset(t)
-		set.add(t, obj)
+		set.reset()
+		set.add(obj)
 	}
 	// there is still more than one entry in set.
 	if len(set.entries) > 1 {
 		objs := make([]*catalog.ObjectEntry, len(set.entries))
 		copy(objs, set.entries)
 		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
-		set.reset(t)
+		set.reset()
 	}
 	if len(m.overlappingObjsSet) == 0 {
 		return nil, TaskHostDN
@@ -129,89 +143,45 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}
-	if len(objs) > config.MergeMaxOneRun {
-		objs = objs[:config.MergeMaxOneRun]
-	}
 	return objs, TaskHostDN
 }
 
-func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
-	m.objects = m.objects[:0]
+func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
-	m.objectsSize = 0
+	for i := range m.leveledObjects {
+		m.leveledObjects[i] = m.leveledObjects[i][:0]
+	}
+	clear(m.segments)
 }
 
 type entrySet struct {
 	entries  []*catalog.ObjectEntry
-	maxValue any
+	maxValue []byte
 	size     int
 }
 
-func (s *entrySet) reset(t types.T) {
+func (s *entrySet) reset() {
 	s.entries = s.entries[:0]
-	s.maxValue = minValue(t)
+	s.maxValue = []byte{}
 	s.size = 0
 }
 
-func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
+func (s *entrySet) add(obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += int(obj.OriginSize())
-	zmMax := obj.SortKeyZoneMap().GetMax()
-	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
-		s.maxValue = zmMax
+	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 ||
+		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
+		s.maxValue = zm.GetMaxBuf()
 	}
 }
 
-func minValue(t types.T) any {
-	switch t {
-	case types.T_bit:
-		return 0
-	case types.T_int8:
-		return int8(math.MinInt8)
-	case types.T_int16:
-		return int16(math.MinInt16)
-	case types.T_int32:
-		return int32(math.MinInt32)
-	case types.T_int64:
-		return int64(math.MinInt64)
-	case types.T_uint8:
-		return uint8(0)
-	case types.T_uint16:
-		return uint16(0)
-	case types.T_uint32:
-		return uint32(0)
-	case types.T_uint64:
-		return uint64(0)
-	case types.T_float32:
-		return float32(-math.MaxFloat32)
-	case types.T_float64:
-		return float64(-math.MaxFloat64)
-	case types.T_date:
-		return types.Date(math.MinInt32)
-	case types.T_time:
-		return types.Time(math.MinInt64)
-	case types.T_datetime:
-		return types.Datetime(math.MinInt64)
-	case types.T_timestamp:
-		return types.Timestamp(math.MinInt64)
-	case types.T_enum:
-		return types.Enum(0)
-	case types.T_decimal64:
-		return types.Decimal64Min
-	case types.T_decimal128:
-		return types.Decimal128Min
-	case types.T_uuid:
-		return types.Uuid{}
-	case types.T_TS:
-		return types.TS{}
-	case types.T_Rowid:
-		return types.Rowid{}
-	case types.T_Blockid:
-		return types.Blockid{}
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		return []byte{}
-	default:
-		panic(fmt.Sprintf("unsupported type: %v", t))
+func segLevel(length int) int {
+	l := 5
+	for i, level := range levels {
+		if length < level {
+			l = i - 1
+			break
+		}
 	}
+	return l
 }

@@ -53,16 +53,20 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 	} else {
 		if startVec.GetType().Oid == types.T_int32 {
 			gs.start = int64(vector.GetFixedAtNoTypeCheck[int32](startVec, nth))
-		} else {
+		} else if startVec.GetType().Oid == types.T_int64 {
 			gs.start = vector.GetFixedAtNoTypeCheck[int64](startVec, nth)
+		} else {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series start must be int32 or int64")
 		}
 	}
 
 	// end vec is always not null
 	if endVec.GetType().Oid == types.T_int32 {
 		gs.end = int64(vector.GetFixedAtNoTypeCheck[int32](endVec, nth))
-	} else {
+	} else if endVec.GetType().Oid == types.T_int64 {
 		gs.end = vector.GetFixedAtNoTypeCheck[int64](endVec, nth)
+	} else {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
 	}
 
 	if stepVec == nil {
@@ -74,8 +78,10 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 	} else {
 		if stepVec.GetType().Oid == types.T_int32 {
 			gs.step = int64(vector.GetFixedAtNoTypeCheck[int32](stepVec, nth))
-		} else {
+		} else if stepVec.GetType().Oid == types.T_int64 {
 			gs.step = vector.GetFixedAtNoTypeCheck[int64](stepVec, nth)
+		} else {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
 		}
 	}
 	if gs.step == 0 {
@@ -156,7 +162,7 @@ func (g *generateSeriesArg) free(tf *TableFunction, proc *process.Process, pipel
 	}
 }
 
-func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	var err error
 	var startVec, endVec, stepVec *vector.Vector
 	// get result type, this should happen in parpare.

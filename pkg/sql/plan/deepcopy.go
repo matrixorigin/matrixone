@@ -485,6 +485,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
+		DbId:           table.DbId,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -1089,11 +1090,16 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
 		ScanBytes:              analyzeinfo.GetScanBytes(),
-		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
-		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
+		S3List:                 analyzeinfo.GetS3List(),
+		S3Put:                  analyzeinfo.GetS3Put(),
+		S3Get:                  analyzeinfo.GetS3Get(),
+		S3Head:                 analyzeinfo.GetS3Head(),
+		S3Delete:               analyzeinfo.GetS3Delete(),
+		S3DeleteMul:            analyzeinfo.GetS3DeleteMul(),
 		NetworkIO:              analyzeinfo.GetNetworkIO(),
 		ScanTime:               analyzeinfo.GetScanTime(),
 		InsertTime:             analyzeinfo.GetInsertTime(),
+		WaitLockTime:           analyzeinfo.GetWaitLockTime(),
 	}
 }
 

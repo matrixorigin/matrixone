@@ -132,6 +132,7 @@ message CNTxnSnapshot {
     bool                      Disable1PCOpt    = 4;
     repeated lock.LockTable   LockTables       = 5 [(gogoproto.nullable) = false];
     TxnOptions                Options          = 6 [(gogoproto.nullable) = false];
+    uint32                    Flag             = 7;
 }
 
 // CNOpRequest cn read/write request, CN -> TN. If data is written to more than one TN (>1) in a 
@@ -377,4 +378,6 @@ message TxnOptions {
     bool inRollback = 13;
     bool byBegin = 14;//created by the BEGIN statement
     bool autocommit = 15;//AUTOCOMMIT
+    bool inIncrStmt = 16;
+    bool inRollbackStmt = 17;
 }

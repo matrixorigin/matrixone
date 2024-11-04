@@ -17,6 +17,7 @@ package merge
 import (
 	"cmp"
 	"context"
+	"go.uber.org/zap"
 	"slices"
 	"time"
 
@@ -63,6 +64,8 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 		for _, r := range pResult {
 			if len(r.objs) > 0 {
 				results = append(results, r)
+				_, eSize := estimateMergeConsume(r.objs)
+				mem -= int64(eSize)
 			}
 		}
 	}
@@ -70,10 +73,10 @@ func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
 }
 
 func (g *policyGroup) resetForTable(entry *catalog.TableEntry) {
-	for _, p := range g.policies {
-		p.resetForTable(entry)
-	}
 	g.config = g.configProvider.getConfig(entry)
+	for _, p := range g.policies {
+		p.resetForTable(entry, g.config)
+	}
 }
 
 func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) (err error) {
@@ -84,11 +87,26 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	ctx := context.Background()
 	defer func() {
 		if err != nil {
+			logutil.Error(
+				"Policy-SetConfig-Error",
+				zap.Error(err),
+				zap.Uint64("table-id", tbl.ID),
+				zap.String("table-name", schema.Name),
+			)
 			txn.Rollback(ctx)
-			logutil.Errorf("mergeblocks set %v-%v failed %v", tbl.ID, schema.Name, err)
 		} else {
-			logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, schema.Name, cfg)
-			txn.Commit(ctx)
+			err = txn.Commit(ctx)
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Policy-SetConfig-Commit",
+				zap.Error(err),
+				zap.String("commit-ts", txn.GetCommitTS().ToString()),
+				zap.Uint64("table-id", tbl.ID),
+				zap.String("table-name", schema.Name),
+			)
 			g.configProvider.invalidCache(tbl)
 		}
 	}()
@@ -224,11 +242,14 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	})
 	objs := o.objects
 
-	isStandalone := common.IsStandaloneBoost.Load()
-	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
-
-	dnobjs := controlMem(objs, mem)
-	dnobjs = o.optimize(dnobjs, config)
+	/*
+		isStandalone := common.IsStandaloneBoost.Load()
+		mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
+	*/
+	if ok, _ := controlMem(objs, mem); !ok {
+		return nil
+	}
+	dnobjs := o.optimize(objs, config)
 
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
@@ -245,22 +266,24 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 		return nil
 	}
 
-	schedCN := func() []reviseResult {
-		cnobjs := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
-		cnobjs = o.optimize(cnobjs, config)
-		return []reviseResult{{cnobjs, TaskHostCN}}
-	}
-
-	if isStandalone && mergeOnDNIfStandalone {
-		return schedDN()
-	}
-
-	// CNs come into the picture in two cases:
-	// 1.cluster deployed
-	// 2.standalone deployed but it's asked to merge on cn
-	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
-		return schedCN()
-	}
+	/*
+		schedCN := func() []reviseResult {
+			if ok, _ := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load())); !ok {
+				return nil
+			}
+			cnobjs := o.optimize(objs, config)
+			return []reviseResult{{cnobjs, TaskHostCN}}
+		}
+		if isStandalone && mergeOnDNIfStandalone {
+			return schedDN()
+		}
+		// CNs come into the picture in two cases:
+		// 1.cluster deployed
+		// 2.standalone deployed but it's asked to merge on cn
+		if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
+			return schedCN()
+		}
+	*/
 
 	// CNs don't take over the task, leave it on dn.
 	return schedDN()
@@ -300,23 +323,18 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	return objs
 }
 
-func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func controlMem(objs []*catalog.ObjectEntry, mem int64) (bool, int64) {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-
-	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		_, esize := estimateMergeConsume(ss)
-		return esize > int(2*mem/3)
+	_, eSize := estimateMergeConsume(objs)
+	if eSize > int(2*mem/3) {
+		return false, 0
 	}
-	for needPopout(objs) {
-		objs = objs[:len(objs)-1]
-	}
-
-	return objs
+	return true, int64(eSize)
 }
 
-func (o *basic) resetForTable(entry *catalog.TableEntry) {
+func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.schema = entry.GetLastestSchemaLocked(false)
 	o.lastMergeTime = entry.Stats.GetLastMergeTime()
 	o.objects = o.objects[:0]

@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -100,7 +100,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
@@ -116,7 +116,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
 
@@ -269,28 +269,6 @@ func (e *TestEngine) Truncate() {
 	assert.NoError(e.T, err)
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
-func (e *TestEngine) GlobalCheckpoint(
-	endTs types.TS,
-	versionInterval time.Duration,
-	enableAndCleanBGCheckpoint bool,
-) error {
-	if enableAndCleanBGCheckpoint {
-		e.DB.BGCheckpointRunner.DisableCheckpoint()
-		defer e.DB.BGCheckpointRunner.EnableCheckpoint()
-		e.DB.BGCheckpointRunner.CleanPenddingCheckpoint()
-	}
-	if e.DB.BGCheckpointRunner.GetPenddingIncrementalCount() == 0 {
-		testutils.WaitExpect(4000, func() bool {
-			flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, false)
-			return flushed
-		})
-		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, endTs, true)
-		assert.True(e.T, flushed)
-	}
-	err := e.DB.BGCheckpointRunner.ForceGlobalCheckpoint(endTs, versionInterval)
-	assert.NoError(e.T, err)
-	return nil
-}
 
 func (e *TestEngine) IncrementalCheckpoint(
 	end types.TS,
@@ -388,7 +366,7 @@ func InitTestDBWithDir(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	return db
 }
 
@@ -409,7 +387,7 @@ func InitTestDB(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GE(&min)
-		}, gc.CheckerKeyMinTS)
+		}, cmd_util.CheckerKeyMinTS)
 	return db
 }
 

@@ -18,13 +18,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -129,6 +128,9 @@ func hasData(conn net.Conn) (bool, error) {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			return false, nil
 		}
+		if err == io.EOF {
+			return false, nil
+		}
 		return false, err
 	}
 	return n > 0, nil
@@ -143,15 +145,15 @@ func generateRandomBytes(n int) []byte {
 
 func TestMySQLProtocolRead(t *testing.T) {
 	var err error
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	tConn := &testConn{}
+	defer tConn.Close()
+
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 24 * time.Hour
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	cm, err := NewIOSession(client, pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	cm, err := NewIOSession(tConn, pu, "")
 	assert.Nil(t, err)
 	cm.allowedPacketSize = int(MaxPayloadSize) * 16
 	convey.Convey("read small packet < 1MB", t, func() {
@@ -159,7 +161,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 5 // 5KB
-		go func() {
+		{
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
@@ -167,10 +169,10 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(append(header, payload...))
+				_, err := tConn.Write(append(header, payload...))
 				assert.Nil(t, err)
 			}
-		}()
+		}
 		var data []byte
 		for i := 0; i < repeat; i++ {
 			data, err = cm.Read()
@@ -186,7 +188,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 1024 * 5 // 5MB
-		go func() {
+		{
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
@@ -194,10 +196,10 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				_, err := server.Write(append(header, payload...))
+				_, err := tConn.Write(append(header, payload...))
 				assert.Nil(t, err)
 			}
-		}()
+		}
 		var data []byte
 		for i := 0; i < repeat; i++ {
 			data, err = cm.Read()
@@ -211,7 +213,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 	convey.Convey("read big packet", t, func() {
 		exceptPayload := make([]byte, 0)
-		go func() {
+		{
 			packetSize := MaxPayloadSize // 16MB
 			totalPackets := 3
 
@@ -225,10 +227,10 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(append(header, payload...))
+				_, err := tConn.Write(append(header, payload...))
 				assert.Nil(t, err)
 			}
-		}()
+		}
 
 		actualPayload, err := cm.Read()
 		assert.Nil(t, err)
@@ -239,7 +241,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 	convey.Convey("read big packet, the last package size is equal to 16MB", t, func() {
 		exceptPayload := make([]byte, 0)
-		go func() {
+		{
 			packetSize := MaxPayloadSize // 16MB
 			totalPackets := 3
 
@@ -249,15 +251,15 @@ func TestMySQLProtocolRead(t *testing.T) {
 				header[3] = byte(i)
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				_, err := server.Write(append(header, payload...))
+				_, err := tConn.Write(append(header, payload...))
 				assert.Nil(t, err)
 			}
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
 			header[3] = byte(totalPackets)
-			_, err := server.Write(header)
+			_, err := tConn.Write(header)
 			assert.Nil(t, err)
-		}()
+		}
 
 		actualPayload, err := cm.Read()
 		assert.Nil(t, err)
@@ -268,15 +270,15 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 	var err error
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	tConn := &testConn{}
+	defer tConn.Close()
+
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 24 * time.Hour
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
-	cm, err := NewIOSession(client, pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	cm, err := NewIOSession(tConn, pu, "")
 	assert.Nil(t, err)
 	cm.allowedPacketSize = int(MaxPayloadSize) * 16
 	convey.Convey("Bad Network: read small packet < 1MB", t, func() {
@@ -284,7 +286,7 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 5 // 5KB
-		go func() {
+		{
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
@@ -292,9 +294,9 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				stumblingToWrite(t, server, append(header, payload...))
+				stumblingToWrite(t, tConn, append(header, payload...))
 			}
-		}()
+		}
 		var data []byte
 		for i := 0; i < repeat; i++ {
 			data, err = cm.Read()
@@ -310,7 +312,7 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 		actualPayload := make([][]byte, 0)
 		repeat := 5
 		packetSize := 1024 * 1024 * 5 // 5MB
-		go func() {
+		{
 			for i := 0; i < repeat; i++ {
 				header := make([]byte, 4)
 				binary.LittleEndian.PutUint32(header, uint32(packetSize))
@@ -318,9 +320,9 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 
 				payload := generateRandomBytes(packetSize)
 				exceptPayload = append(exceptPayload, payload)
-				stumblingToWrite(t, server, append(header, payload...))
+				stumblingToWrite(t, tConn, append(header, payload...))
 			}
-		}()
+		}
 		var data []byte
 		for i := 0; i < repeat; i++ {
 			data, err = cm.Read()
@@ -334,7 +336,7 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 
 	convey.Convey("Bad Network: read big packet", t, func() {
 		exceptPayload := make([]byte, 0)
-		go func() {
+		{
 			packetSize := MaxPayloadSize // 16MB
 			totalPackets := 3
 
@@ -348,9 +350,9 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				stumblingToWrite(t, server, append(header, payload...))
+				stumblingToWrite(t, tConn, append(header, payload...))
 			}
-		}()
+		}
 
 		actualPayload, err := cm.Read()
 		assert.Nil(t, err)
@@ -361,7 +363,7 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 
 	convey.Convey("Bad Network: read big packet, the last package size is equal to 16MB", t, func() {
 		exceptPayload := make([]byte, 0)
-		go func() {
+		{
 			packetSize := MaxPayloadSize // 16MB
 			totalPackets := 3
 
@@ -371,14 +373,14 @@ func TestMySQLProtocolReadInBadNetwork(t *testing.T) {
 				header[3] = byte(i)
 				payload := generateRandomBytes(int(packetSize))
 				exceptPayload = append(exceptPayload, payload...)
-				stumblingToWrite(t, server, append(header, payload...))
+				stumblingToWrite(t, tConn, append(header, payload...))
 			}
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
 			header[3] = byte(totalPackets)
-			_, err := server.Write(header)
+			_, err := tConn.Write(header)
 			assert.Nil(t, err)
-		}()
+		}
 
 		actualPayload, err := cm.Read()
 		assert.Nil(t, err)
@@ -393,22 +395,22 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	convey.Convey("test write packet", t, func() {
 		rows := 20
-		server, client := net.Pipe()
-		defer server.Close()
-		defer client.Close()
-		cWriter, err := NewIOSession(client, pu)
+		tConn := &testConn{}
+		defer tConn.Close()
+
+		cWriter, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
-		cReader, err := NewIOSession(server, pu)
+		cReader, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
 		cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		columns := rand.Intn(20) + 1
 		fieldSize := rand.Intn(20) + 1
-		go func() {
+		{
 			var err error
 			for i := 0; i < rows; i++ {
 				exceptRow := make([]byte, 0)
@@ -426,7 +428,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			err = cWriter.Flush()
 			assert.Nil(t, err)
-		}()
+		}
 
 		var data []byte
 		for i := 0; i < rows; i++ {
@@ -434,7 +436,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			assert.Nil(t, err)
 			actualPayload = append(actualPayload, data)
 		}
-		remain, err := hasData(server)
+		remain, err := hasData(tConn)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 		convey.So(remain, convey.ShouldBeFalse)
@@ -444,19 +446,19 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	convey.Convey("test write packet when row size > 1MB", t, func() {
 		rows := 2
 		convey.Convey("many columns", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 1024
 			fieldSize := 4 * 1024
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -474,7 +476,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -482,25 +484,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 		convey.Convey("big field size", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := 1024 * 1024 * 2
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -519,7 +521,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -527,7 +529,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
@@ -537,19 +539,19 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	convey.Convey("test write packet when sometime buffer size >= 16MB", t, func() {
 		rows := 1
 		convey.Convey("big field size", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := 1024 * 1024 * 20
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -568,7 +570,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -576,26 +578,26 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
 		convey.Convey("big columns number", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 1024
 			fieldSize := 1024 * 20
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -613,7 +615,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -621,26 +623,26 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
 		convey.Convey("row size equal to 16MB", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := int(MaxPayloadSize / 2)
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -663,7 +665,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -671,26 +673,26 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
 		convey.Convey("field size equal to 16MB", func() {
-			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
-			cWriter, err := NewIOSession(client, pu)
+			tConn := &testConn{}
+			defer tConn.Close()
+
+			cWriter, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
-			cReader, err := NewIOSession(server, pu)
+			cReader, err := NewIOSession(tConn, pu, "")
 			assert.Nil(t, err)
 			cReader.allowedPacketSize = int(MaxPayloadSize) * 16
 			exceptPayload := make([][]byte, 0)
 			actualPayload := make([][]byte, 0)
 			columns := 2
 			fieldSize := int(MaxPayloadSize)
-			go func() {
+			{
 				var err error
 				for i := 0; i < rows; i++ {
 					exceptRow := make([]byte, 0)
@@ -708,7 +710,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				}
 				err = cWriter.Flush()
 				assert.Nil(t, err)
-			}()
+			}
 			var data []byte
 
 			for i := 0; i < rows; i++ {
@@ -716,7 +718,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				assert.Nil(t, err)
 				actualPayload = append(actualPayload, data)
 			}
-			remain, err := hasData(server)
+			remain, err := hasData(tConn)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
@@ -731,18 +733,18 @@ func TestMySQLBufferReadLoadLocal(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	convey.Convey("test read load local packet", t, func() {
-		server, client := net.Pipe()
-		defer server.Close()
-		defer client.Close()
-		cWriter, _ := NewIOSession(client, pu)
+		tConn := &testConn{}
+		defer tConn.Close()
+
+		cWriter, _ := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
-		cReader, _ := NewIOSession(server, pu)
+		cReader, _ := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
-		go func() {
+		{
 			var err error
 			fieldSizes := []int{1000, 2000, 1000}
 			for i := 0; i < 3; i++ {
@@ -759,7 +761,7 @@ func TestMySQLBufferReadLoadLocal(t *testing.T) {
 			}
 			err = cWriter.Flush()
 			assert.Nil(t, err)
-		}()
+		}
 
 		var err error
 		var data []byte
@@ -770,7 +772,7 @@ func TestMySQLBufferReadLoadLocal(t *testing.T) {
 			assert.Nil(t, err)
 			actualPayload = append(actualPayload, payload)
 		}
-		remain, err := hasData(server)
+		remain, err := hasData(tConn)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 		convey.So(remain, convey.ShouldBeFalse)
@@ -786,14 +788,13 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(newLeakCheckAllocator())
+	setSessionAlloc("", NewLeakCheckAllocator())
 	convey.Convey("test read max allowed packet", t, func() {
-		server, client := net.Pipe()
-		defer server.Close()
-		defer client.Close()
-		cWriter, err := NewIOSession(client, pu)
+		tConn := &testConn{}
+		defer tConn.Close()
+		cWriter, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
-		cReader, err := NewIOSession(server, pu)
+		cReader, err := NewIOSession(tConn, pu, "")
 		assert.Nil(t, err)
 		ses := &Session{}
 		ses.respr = &MysqlResp{
@@ -802,44 +803,32 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		cReader.ses = ses
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
-		go func() {
-			for {
-				_, err := ReadPacketForTest(cWriter)
-				if err != nil {
-					return
-				}
-			}
-		}()
-		go func() {
-			var err error
+		err = cWriter.BeginPacket()
+		assert.Nil(t, err)
+		exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)
+		exceptPayload = append(exceptPayload, exceptRow)
+		err = cWriter.Append(exceptRow...)
+		assert.Nil(t, err)
+		err = cWriter.FinishedPacket()
+		assert.Nil(t, err)
 
-			err = cWriter.BeginPacket()
-			assert.Nil(t, err)
-			exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)
-			exceptPayload = append(exceptPayload, exceptRow)
-			err = cWriter.Append(exceptRow...)
-			assert.Nil(t, err)
-			err = cWriter.FinishedPacket()
-			assert.Nil(t, err)
+		err = cWriter.BeginPacket()
+		assert.Nil(t, err)
+		exceptRow = generateRandomBytes(int(MaxPayloadSize) - 1)
+		exceptPayload = append(exceptPayload, exceptRow)
+		err = cWriter.Append(exceptRow...)
+		assert.Nil(t, err)
+		err = cWriter.FinishedPacket()
+		assert.Nil(t, err)
 
-			err = cWriter.BeginPacket()
-			assert.Nil(t, err)
-			exceptRow = generateRandomBytes(int(MaxPayloadSize) - 1)
-			exceptPayload = append(exceptPayload, exceptRow)
-			err = cWriter.Append(exceptRow...)
-			assert.Nil(t, err)
-			err = cWriter.FinishedPacket()
-			assert.Nil(t, err)
-
-			err = cWriter.BeginPacket()
-			assert.Nil(t, err)
-			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 2)
-			exceptPayload = append(exceptPayload, exceptRow)
-			err = cWriter.Append(exceptRow...)
-			assert.Nil(t, err)
-			err = cWriter.FinishedPacket()
-			assert.Nil(t, err)
-		}()
+		err = cWriter.BeginPacket()
+		assert.Nil(t, err)
+		exceptRow = generateRandomBytes(int(MaxPayloadSize) * 2)
+		exceptPayload = append(exceptPayload, exceptRow)
+		err = cWriter.Append(exceptRow...)
+		assert.Nil(t, err)
+		err = cWriter.FinishedPacket()
+		assert.Nil(t, err)
 
 		var data []byte
 		data, err = ReadPacketForTest(cReader)
@@ -850,7 +839,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		actualPayload = append(actualPayload, data)
 		_, err = ReadPacketForTest(cReader)
 		convey.So(err, convey.ShouldNotBeNil)
-		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
+		for remain, _ = hasData(tConn); remain; remain, _ = hasData(tConn) {
 			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize)))
 		}
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload[:2]), convey.ShouldBeTrue)
@@ -858,65 +847,9 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 	})
 }
 
-var _ Allocator = new(leakCheckAllocator)
-
-const (
-	leakCheckAllocatorModeNormal = iota
-	leakCheckAllocatorModeAllocReturnErr
-	leakCheckAllocatorModeAllocPanic
-)
-
-type leakCheckAllocator struct {
-	sync.Mutex
-	allocated uint64
-	freed     uint64
-	records   map[unsafe.Pointer]int
-	mod       int
-}
-
-func newLeakCheckAllocator() *leakCheckAllocator {
-	return &leakCheckAllocator{
-		records: make(map[unsafe.Pointer]int),
-	}
-}
-
-func (lca *leakCheckAllocator) Alloc(capacity int) ([]byte, error) {
-	lca.Lock()
-	defer lca.Unlock()
-	if lca.mod == leakCheckAllocatorModeAllocReturnErr {
-		return nil, moerr.NewInternalErrorNoCtx("leak check allocator returns eror")
-	} else if lca.mod == leakCheckAllocatorModeAllocPanic {
-		panic("leak check allocator panic")
-	}
-	buf := make([]byte, capacity)
-	lca.allocated += uint64(len(buf))
-	lca.records[unsafe.Pointer(&buf[0])] = capacity
-	return buf, nil
-}
-
-func (lca *leakCheckAllocator) Free(bytes []byte) {
-	if len(bytes) == 0 {
-		return
-	}
-	lca.Lock()
-	defer lca.Unlock()
-	if _, ok := lca.records[unsafe.Pointer(&bytes[0])]; ok {
-		delete(lca.records, unsafe.Pointer(&bytes[0]))
-	} else {
-		panic(fmt.Sprintf("no such ptr %v", unsafe.Pointer(&bytes[0])))
-	}
-	lca.freed += uint64(len(bytes))
-}
-
-func (lca *leakCheckAllocator) CheckBalance() bool {
-	lca.Lock()
-	defer lca.Unlock()
-	return lca.allocated == lca.freed && len(lca.records) == 0
-}
-
 func Test_ListBlock(t *testing.T) {
 	const n = 1024
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	buf, err := leakAlloc.Alloc(n)
 	assert.Nil(t, err)
 	mem1 := MemBlock{
@@ -953,23 +886,23 @@ func Test_ListBlock(t *testing.T) {
 func Test_NewIOSessionFailed(t *testing.T) {
 	var err error
 	var conn *Conn
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	tConn := &testConn{}
+	defer tConn.Close()
+
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	aAlloc := newLeakCheckAllocator()
+	aAlloc := NewLeakCheckAllocator()
 	aAlloc.mod = leakCheckAllocatorModeAllocReturnErr
-	setGlobalSessionAlloc(aAlloc)
-	conn, err = NewIOSession(client, pu)
+	setSessionAlloc("", aAlloc)
+	conn, err = NewIOSession(tConn, pu, "")
 	assert.NotNil(t, err)
 	assert.Nil(t, conn)
 	assert.Zero(t, aAlloc.allocated)
 
 	aAlloc.mod = 0
-	conn, err = NewIOSession(client, pu)
+	conn, err = NewIOSession(tConn, pu, "")
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 	assert.NotNil(t, conn.fixBuf.data)
@@ -1046,22 +979,22 @@ func makePacket(data []byte, seq uint8) []byte {
 	return append(makeHead(len(data), seq), data...)
 }
 
-func newTestConn(t *testing.T, leakAlloc *leakCheckAllocator) (*testConn, *Conn) {
+func newTestConn(t *testing.T, leakAlloc *LeakCheckAllocator) (*testConn, *Conn) {
 	var conn *Conn
 	tConn := &testConn{}
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	assert.Nil(t, err)
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	setGlobalSessionAlloc(leakAlloc)
-	conn, err = NewIOSession(tConn, pu)
+	setSessionAlloc("", leakAlloc)
+	conn, err = NewIOSession(tConn, pu, "")
 	assert.Nil(t, err)
 	assert.NotNil(t, conn)
 	return tConn, conn
 }
 
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 	var read []byte
@@ -1283,7 +1216,7 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 }
 
 func TestConn_ReadErr(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 	var tConn *testConn
@@ -1498,7 +1431,7 @@ func TestConn_ReadErr(t *testing.T) {
 }
 
 func TestConn_ReadOnePayload(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 	var tConn *testConn
@@ -1642,7 +1575,7 @@ func TestConn_ReadOnePayload(t *testing.T) {
 }
 
 func TestConn_AllocNewBlock(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 
@@ -1680,7 +1613,7 @@ func TestConn_AllocNewBlock(t *testing.T) {
 }
 
 func Test_AppendPart(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 
@@ -1727,7 +1660,7 @@ func Test_AppendPart(t *testing.T) {
 }
 
 func Test_Append(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 
@@ -1818,7 +1751,7 @@ func Test_Append(t *testing.T) {
 }
 
 func Test_BeginPacket(t *testing.T) {
-	leakAlloc := newLeakCheckAllocator()
+	leakAlloc := NewLeakCheckAllocator()
 	var err error
 	var conn *Conn
 

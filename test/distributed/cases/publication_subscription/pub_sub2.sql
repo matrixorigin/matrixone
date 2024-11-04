@@ -621,6 +621,27 @@ show publications;
 drop publication pub10;
 drop database db10;
 
+
+
+
+-- open save_query_result
+drop database if exists test10;
+create database test10;
+drop publication if exists pub10;
+create publication pub10 database test10 account acc01 comment 'pub to acc01';
+-- @ignore:5,6
+show publications;
+-- @session:id=8&user=acc01:test_account&password=111
+set save_query_result = on;
+-- @ignore:5,7
+show subscriptions all;
+-- @ignore:5,7
+select * from result_scan(last_query_id()) as u;
+set save_query_result = off;
+-- @session
+drop publication pub10;
+drop database test10;
+
 drop account acc01;
 drop account acc02;
 drop account acc03;

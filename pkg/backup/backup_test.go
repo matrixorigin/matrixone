@@ -141,13 +141,21 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	fileList := make([]*taeFile, 0)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
 	assert.Nil(t, err)
+	fileMap := make(map[string]struct{})
+	for _, file := range fileList {
+		_, ok := fileMap[file.path]
+		assert.True(t, !ok)
+		fileMap[file.path] = struct{}{}
+	}
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
+
 }
 
 func Test_saveTaeFilesList(t *testing.T) {
@@ -386,7 +394,7 @@ func Test_backupConfigFile(t *testing.T) {
 			},
 			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 				assert.NoError(t, err)
-				list, err2 := Fs.List(context.Background(), configDir)
+				list, err2 := fileservice.SortedList(Fs.List(context.Background(), configDir))
 				assert.NoError(t, err2)
 				var configFile string
 				for _, entry := range list {
@@ -579,7 +587,7 @@ func TestBackup(t *testing.T) {
 				assert.NotNil(t, cfg)
 
 				//checkup config files
-				list, err2 := cfg.GeneralDir.List(context.Background(), configDir)
+				list, err2 := fileservice.SortedList(cfg.GeneralDir.List(context.Background(), configDir))
 				assert.NoError(t, err2)
 				var configFile string
 				for _, entry := range list {

@@ -71,8 +71,16 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
 		s.cfg.LogtailUpdateWorkerFactor,
+
+		disttae.WithCNTransferTxnLifespanThreshold(
+			s.cfg.Engine.CNTransferTxnLifespanThreshold),
 	)
 	pu.StorageEngine = s.storeEngine
+
+	// cdc mp
+	if s.cdcMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed); err != nil {
+		return err
+	}
 
 	// internal sql executor.
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.

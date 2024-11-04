@@ -112,7 +112,7 @@ func (l *lockTableAllocator) Get(
 	sharding pb.Sharding) pb.LockTable {
 	binds := l.getServiceBinds(serviceID)
 	if binds == nil {
-		binds = l.registerService(serviceID, tableID)
+		binds = l.registerService(serviceID)
 	}
 	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
@@ -137,6 +137,15 @@ func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
 		}
 	}
 	return committing
+}
+
+func (l *lockTableAllocator) AddInvalidService(serviceID string) {
+	l.inactiveService.Store(serviceID, time.Now())
+}
+
+func (l *lockTableAllocator) HasInvalidService(serviceID string) bool {
+	_, ok := l.inactiveService.Load(serviceID)
+	return ok
 }
 
 func (l *lockTableAllocator) Valid(
@@ -169,8 +178,9 @@ func (l *lockTableAllocator) Valid(
 
 	if _, ok := l.inactiveService.Load(serviceID); ok {
 		l.logger.Info("inactive service",
-			zap.String("serviceID", serviceID))
-		return nil, moerr.NewCannotCommitOrphanNoCtx()
+			zap.String("serviceID", serviceID),
+		)
+		return nil, moerr.NewCannotCommitOnInvalidCNNoCtx()
 	}
 
 	c := l.getCtl(serviceID)
@@ -373,7 +383,6 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 
 func (l *lockTableAllocator) registerService(
 	serviceID string,
-	tableID uint64,
 ) *serviceBinds {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -515,7 +524,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 	getActiveTxnFunc := l.options.getActiveTxnFunc
 	if getActiveTxnFunc == nil {
 		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseCleanCommitState)
 			defer cancel()
 
 			req := acquireRequest()
@@ -526,7 +535,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			resp, err := l.client.Send(ctx, req)
 			if err != nil {
-				return false, nil, err
+				return false, nil, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
@@ -762,7 +771,8 @@ func (l *lockTableAllocator) initServer(cfg morpc.Config) {
 func (l *lockTableAllocator) initHandler() {
 	l.server.RegisterMethodHandler(
 		pb.Method_GetBind,
-		l.handleGetBind)
+		l.handleGetBind,
+	)
 
 	l.server.RegisterMethodHandler(
 		pb.Method_KeepLockTableBind,
@@ -786,11 +796,18 @@ func (l *lockTableAllocator) initHandler() {
 
 	l.server.RegisterMethodHandler(
 		pb.Method_CannotCommit,
-		l.handleCannotCommit)
+		l.handleCannotCommit,
+	)
 
 	l.server.RegisterMethodHandler(
 		pb.Method_CheckOrphan,
-		l.handleCheckOrphan)
+		l.handleCheckOrphan,
+	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_ResumeInvalidCN,
+		l.handleResumeInvalidCN,
+	)
 }
 
 func (l *lockTableAllocator) handleGetBind(
@@ -800,7 +817,7 @@ func (l *lockTableAllocator) handleGetBind(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	if !l.canGetBind(req.GetBind.ServiceID) {
-		writeResponse(ctx, l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
+		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
 	}
 	resp.GetBind.LockTable = l.Get(
@@ -809,7 +826,7 @@ func (l *lockTableAllocator) handleGetBind(
 		req.GetBind.Table,
 		req.GetBind.OriginTable,
 		req.GetBind.Sharding)
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
@@ -821,7 +838,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
-		writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
 	}
 	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
@@ -831,7 +848,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 				zap.String("serviceID", b.serviceID),
 				zap.String("status", req.KeepLockTableBind.Status.String()))
 		} else {
-			writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+			writeResponse(l.logger, cancel, resp, nil, cs)
 			return
 		}
 	}
@@ -851,7 +868,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		resp.KeepLockTableBind.Status = req.KeepLockTableBind.Status
 	}
 	l.disableGroupTables(req.KeepLockTableBind.LockTables, b)
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleSetRestartService(
@@ -862,7 +879,7 @@ func (l *lockTableAllocator) handleSetRestartService(
 	cs morpc.ClientSession) {
 	l.setRestartService(req.SetRestartService.ServiceID)
 	resp.SetRestartService.OK = true
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleCanRestartService(
@@ -872,7 +889,7 @@ func (l *lockTableAllocator) handleCanRestartService(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CanRestartService.OK = l.canRestartService(req.CanRestartService.ServiceID)
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleRemainTxnInService(
@@ -882,7 +899,7 @@ func (l *lockTableAllocator) handleRemainTxnInService(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.RemainTxnInService.RemainTxn = l.remainTxnInService(req.RemainTxnInService.ServiceID)
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.LockTable {
@@ -903,7 +920,7 @@ func (l *lockTableAllocator) handleCannotCommit(
 	cs morpc.ClientSession) {
 	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
 	resp.CannotCommit.CommittingTxn = committingTxn
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleCheckOrphan(
@@ -915,7 +932,18 @@ func (l *lockTableAllocator) handleCheckOrphan(
 	c := l.getCtl(req.CheckOrphan.ServiceID)
 	state, ok := c.getCtlState(util.UnsafeBytesToString(req.CheckOrphan.Txn))
 	resp.CheckOrphan.Orphan = ok && state == cannotCommitState
-	writeResponse(ctx, l.logger, cancel, resp, nil, cs)
+	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleResumeInvalidCN(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	l.inactiveService.Delete(req.ResumeInvalidCN.ServiceID)
+	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) getCtl(serviceID string) *commitCtl {
@@ -940,7 +968,7 @@ func validateService(
 	if timeout < defaultRPCTimeout {
 		timeout = defaultRPCTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseValidateService)
 	defer cancel()
 
 	req := acquireRequest()
@@ -951,6 +979,7 @@ func validateService(
 
 	resp, err := client.Send(ctx, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logPingFailed(logger, serviceID, err)
 		return false, err
 	}

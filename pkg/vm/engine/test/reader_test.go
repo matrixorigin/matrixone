@@ -39,6 +39,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -78,6 +79,11 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(tableName, 0)
+	require.NoError(t, err)
+	defer rmFault()
 
 	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
 	require.NoError(t, err)
@@ -782,7 +788,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -792,7 +798,6 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		data, err := relData.MarshalBinary()
 		require.NoError(t, err)
 		readerBuildParam.ReaderBuildParam.RelData = data
-		readerBuildParam.ReaderBuildParam.ScanType = engine_util.SMALL
 		readerBuildParam.ReaderBuildParam.TombstoneApplyPolicy =
 			int32(engine.Policy_SkipUncommitedInMemory | engine.Policy_SkipUncommitedS3)
 		res, err := disttae.HandleShardingReadBuildReader(
@@ -1048,7 +1053,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 0)
+	relData, err := delegate.Ranges(ctx, nil, 2, 0)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
@@ -1212,7 +1217,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()
@@ -1327,7 +1332,7 @@ func Test_SimpleReader(t *testing.T) {
 	require.NoError(t, err)
 	defer w.Free(mp)
 	w.StashBatch(proc, bat1)
-	_, stats, err := w.SortAndSync(proc)
+	_, stats, err := w.SortAndSync(proc.Ctx, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint32(20), stats.Rows())
 	t.Logf("stats: %s", stats.String())

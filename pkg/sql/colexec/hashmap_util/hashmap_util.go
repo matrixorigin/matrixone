@@ -17,6 +17,8 @@ package hashmap_util
 import (
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,7 +38,7 @@ type HashmapBuilder struct {
 	vecs               [][]*vector.Vector
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
-	MultiSels          [][]int32
+	MultiSels          message.JoinSels
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executor           []colexec.ExpressionExecutor
@@ -68,6 +70,7 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 		hb.vecs = make([][]*vector.Vector, 0)
 		hb.executor = make([]colexec.ExpressionExecutor, len(Conditions))
 		hb.keyWidth = 0
+		hb.InputBatchRowCount = 0
 		for i, expr := range Conditions {
 			if _, ok := Conditions[i].Expr.(*pbplan.Expr_Col); !ok {
 				hb.needDupVec = true
@@ -88,7 +91,11 @@ func (hb *HashmapBuilder) Prepare(Conditions []*plan.Expr, proc *process.Process
 	return nil
 }
 
-func (hb *HashmapBuilder) Reset(proc *process.Process) {
+func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool) {
+	if hashTableHasNotSent || hb.InputBatchRowCount == 0 {
+		hb.FreeHashMapAndBatches(proc)
+	}
+
 	if hb.needDupVec {
 		for i := range hb.vecs {
 			for j := range hb.vecs[i] {
@@ -96,21 +103,16 @@ func (hb *HashmapBuilder) Reset(proc *process.Process) {
 			}
 		}
 	}
-	if hb.InputBatchRowCount == 0 {
-		hb.FreeHashMapAndBatches(proc)
-	}
 	hb.InputBatchRowCount = 0
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].CleanOnlyData()
+		hb.UniqueJoinKeys[i].Free(proc.Mp())
 	}
 	hb.UniqueJoinKeys = nil
-	if len(hb.MultiSels) > 0 {
-		hb.MultiSels = hb.MultiSels[:0]
-	}
+	hb.MultiSels.Free()
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].ResetForNextQuery()
@@ -123,7 +125,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	hb.MultiSels = nil
+	hb.MultiSels.Free()
 	for i := range hb.executor {
 		if hb.executor[i] != nil {
 			hb.executor[i].Free()
@@ -137,8 +139,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.UniqueJoinKeys = nil
 }
 
-// hashmap and batches are owned by probe operators
-// build operator can only call this when error occurs, or inputbatch rowcount is 0
 func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	if hb.IntHashMap != nil {
 		hb.IntHashMap.Free()
@@ -149,28 +149,6 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Batches.Clean(proc.Mp())
-}
-
-func (hb *HashmapBuilder) FreeWithError(proc *process.Process) {
-	hb.needDupVec = false
-	hb.FreeHashMapAndBatches(proc)
-	hb.MultiSels = nil
-	for i := range hb.executor {
-		if hb.executor[i] != nil {
-			hb.executor[i].Free()
-		}
-	}
-	hb.executor = nil
-	for i := range hb.vecs {
-		for j := range hb.vecs[i] {
-			hb.vecs[i][j].Free(proc.Mp())
-		}
-	}
-	hb.vecs = nil
-	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].Free(proc.Mp())
-	}
-	hb.UniqueJoinKeys = nil
 }
 
 func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
@@ -233,7 +211,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	} else {
 		if needAllocateSels {
-			hb.MultiSels = make([][]int32, hb.InputBatchRowCount)
+			hb.MultiSels.InitSel(hb.InputBatchRowCount)
 		}
 	}
 
@@ -290,10 +268,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			ai := int64(v) - 1
 
 			if !hashOnPK && needAllocateSels {
-				if hb.MultiSels[ai] == nil {
-					hb.MultiSels[ai] = make([]int32, 0)
-				}
-				hb.MultiSels[ai] = append(hb.MultiSels[ai], int32(i+k))
+				hb.MultiSels.InsertSel(int32(ai), int32(i+k))
 			}
 		}
 
@@ -338,5 +313,16 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
+	// if groupcount == inputrowcount, it means building hashmap on unique rows
+	// we can free sels now
+	if hb.keyWidth <= 8 {
+		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	} else {
+		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
+			hb.MultiSels.Free()
+		}
+	}
 	return nil
 }

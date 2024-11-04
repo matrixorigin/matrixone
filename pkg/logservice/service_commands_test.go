@@ -182,20 +182,24 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 func TestHandleStartNonVotingReplica(t *testing.T) {
 	t.Skip() // pls re-open after https://github.com/matrixorigin/matrixone/pull/19025
 	fn := func(t *testing.T, s *Service) {
-		cfg := getStoreTestConfig()
-		gPort := getTestGossipPort()
-		cfg.GossipAddress = fmt.Sprintf("0.0.0.0:%d", gPort)
-		cfg.GossipSeedAddresses = []string{getTestGossipAddress(gPort)}
-		cfg.GossipPort = getTestGossipPort()
-		cfg.GossipSeedAddresses = []string{
-			s.store.cfg.GossipAddress,
-			getTestGossipAddress(cfg.GossipPort),
+		var cfg Config
+		genCfg := func() Config {
+			cfg = getStoreTestConfig()
+			gPort := getTestGossipPort()
+			cfg.GossipAddress = fmt.Sprintf("0.0.0.0:%d", gPort)
+			cfg.GossipSeedAddresses = []string{getTestGossipAddress(gPort)}
+			cfg.GossipPort = getTestGossipPort()
+			cfg.GossipSeedAddresses = []string{
+				s.store.cfg.GossipAddress,
+				getTestGossipAddress(cfg.GossipPort),
+			}
+			cfg.RaftAddress = getTestRaftAddress()
+			svcPort := getTestServicePort()
+			cfg.ServiceListenAddress = fmt.Sprintf("0.0.0.0:%d", svcPort)
+			cfg.ServiceAddress = getTestServiceAddress(svcPort)
+			return cfg
 		}
-		cfg.RaftAddress = getTestRaftAddress()
-		svcPort := getTestServicePort()
-		cfg.ServiceListenAddress = fmt.Sprintf("0.0.0.0:%d", svcPort)
-		cfg.ServiceAddress = getTestServiceAddress(svcPort)
-		newStore, err := getTestStore(cfg, false, nil)
+		newStore, err := getTestStore(genCfg, false, nil)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, newStore.close())
@@ -418,9 +422,13 @@ func TestServiceAddLogShard(t *testing.T) {
 
 func TestServiceBootstrapShard(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -463,4 +471,50 @@ func TestServiceBootstrapShard(t *testing.T) {
 	if !done {
 		t.Fatalf("failed to get shard info")
 	}
+}
+
+func Test_heartbeat(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	srv := &Service{
+		runtime: runtime.DefaultRuntime(),
+	}
+	srv.cfg.HAKeeperClientConfig.ServiceAddresses = []string{"wrong address"}
+	srv.heartbeat(ctx)
+}
+
+func TestCheckReplicaHealth(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+
+		// no tn shard yet.
+		s.checkReplicaHealth(ctx)
+
+		req := pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID: uuid.NewString(),
+				Shards: []pb.TNShardInfo{
+					{
+						ShardID:   1,
+						ReplicaID: 100,
+					},
+				},
+			},
+		}
+		s.handleTNHeartbeat(ctx, req)
+		s.checkReplicaHealth(ctx)
+
+		req = pb.Request{
+			Method: pb.LOG_HEARTBEAT,
+			LogHeartbeat: &pb.LogStoreHeartbeat{
+				UUID: s.ID(),
+			},
+		}
+		s.handleLogHeartbeat(ctx, req)
+		s.checkReplicaHealth(ctx)
+	}
+	runServiceTest(t, true, true, fn)
 }

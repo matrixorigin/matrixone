@@ -59,6 +59,7 @@ import (
     tableExpr tree.TableExpr
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
+    fullTextSearchType tree.FullTextSearchType
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
@@ -606,6 +607,8 @@ import (
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
+%type <fullTextSearchType> fulltext_search_opt
+%type <str> search_pattern
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
@@ -1670,22 +1673,18 @@ variable:
 system_variable:
     AT_AT_ID
     {
-        vs := strings.Split($1, ".")
+        v := strings.ToLower($1)
         var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-           r = vs[1]
-        } else if len(vs) == 1 {
-           r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		}
         $$ = &tree.VarExpr{
-            Name: r,
+            Name: v,
             System: true,
             Global: isGlobal,
         }
@@ -2573,24 +2572,20 @@ var_assignment:
     }
 |   AT_AT_ID equal_or_assignment set_expr
     {
-        vs := strings.Split($1, ".")
-        var isGlobal bool
-        if strings.ToLower(vs[0]) == "global" {
-            isGlobal = true
-        }
-        var r string
-        if len(vs) == 2 {
-            r = vs[1]
-        } else if len(vs) == 1{
-            r = vs[0]
-        } else {
-            yylex.Error("variable syntax error")
-            goto ret1
-        }
+        v := strings.ToLower($1)
+		var isGlobal bool
+		if strings.HasPrefix(v, "global.") {
+			isGlobal = true
+			v = strings.TrimPrefix(v, "global.")
+		} else if strings.HasPrefix(v, "session.") {
+			v = strings.TrimPrefix(v, "session.")
+		} else if strings.HasPrefix(v, "local.") {
+			v = strings.TrimPrefix(v, "local.")
+		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
-            Name: r,
+            Name: v,
             Value: $3,
         }
     }
@@ -3821,6 +3816,18 @@ alter_user_stmt:
         // Use the temporary variables to call the function
         $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
+|   ALTER USER exists_opt user_name UNLOCK user_comment_or_attribute_opt
+    {
+        ifExists := $3
+        var Username = $4.Username
+        var Hostname = $4.Hostname
+        user := tree.NewUser(Username,Hostname,nil)
+        users := []*tree.User{user}
+        miscOpt := tree.NewUserMiscOptionAccountUnlock()
+        commentOrAttribute := $6
+        $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
+    }
+
 
 default_role_opt:
     {
@@ -9334,6 +9341,27 @@ match:
         $$ = tree.MATCH_SIMPLE
     }
 
+fulltext_search_opt:
+    {
+	$$ = tree.FULLTEXT_DEFAULT
+    }
+|   IN NATURAL LANGUAGE MODE
+    {
+	$$ = tree.FULLTEXT_NL
+    }
+|   IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_NL_QUERY_EXPANSION
+    }
+|   IN BOOLEAN MODE
+    {
+	$$ = tree.FULLTEXT_BOOLEAN
+    }
+|   WITH QUERY EXPANSION
+    {
+	$$ = tree.FULLTEXT_QUERY_EXPANSION
+    }
+
 index_column_list_opt:
     {
         $$ = nil
@@ -9573,6 +9601,23 @@ simple_expr:
         $$ = $1
     }
 |   simple_expr COLLATE collate_name
+    {
+        $$ = $1
+    }
+|   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
+    {
+	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
+	if err != nil {
+		yylex.Error(err.Error())
+		goto ret1
+	}
+	$$ = val		
+    }
+
+
+
+search_pattern:
+    STRING
     {
         $$ = $1
     }

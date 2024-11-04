@@ -16,12 +16,15 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
+
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
@@ -29,9 +32,11 @@ import (
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
@@ -40,7 +45,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"go.uber.org/zap"
 )
 
 type storeMeta struct {
@@ -63,7 +67,7 @@ func isSetLeaseHolderUpdate(cmd []byte) bool {
 	return parseCmdTag(cmd) == pb.LeaseHolderIDUpdate
 }
 
-func getNodeHostConfig(cfg Config) config.NodeHostConfig {
+func getNodeHostConfig(cfg Config, fs fileservice.FileService) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.LogServiceServiceAddr(),
 	}
@@ -74,11 +78,12 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	logdb.KVWriteBufferSize = cfg.LogDBBufferSize
 	logdbFactory := (config.LogDBFactory)(nil)
 	logdbFactory = tan.Factory
+	logdb.MaxLogFileSize = cfg.LogDBMaxLogFileSize
 	if cfg.UseTeeLogDB {
 		logutil.Warn("using tee based logdb backed by pebble and tan, for testing purposes only")
 		logdbFactory = tee.TanPebbleLogDBFactory
 	}
-	return config.NodeHostConfig{
+	c := config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostID:          cfg.UUID,
 		NodeHostDir:         cfg.DataDir,
@@ -104,6 +109,10 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			CanUseSelfAsSeed: cfg.GossipAllowSelfAsSeed,
 		},
 	}
+	if cfg.ArchiveLogEnabled {
+		c.Expert.ArchiveIO = newArchiveIO(cfg.FS, fs)
+	}
+	return c
 }
 
 func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
@@ -148,8 +157,10 @@ type store struct {
 func newLogStore(cfg Config,
 	taskServiceGetter func() taskservice.TaskService,
 	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
-	rt runtime.Runtime) (*store, error) {
-	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
+	rt runtime.Runtime,
+	fs fileservice.FileService,
+) (*store, error) {
+	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg, fs))
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +192,28 @@ func newLogStore(cfg Config,
 		return nil, err
 	}
 	return ls, nil
+}
+
+// newLogStoreWithRetry mainly used in tests which create new log store.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new log store instance.
+func newLogStoreWithRetry(
+	genCfg func() Config,
+	taskServiceGetter func() taskservice.TaskService,
+	onReplicaChanged func(shardID uint64, replicaID uint64, typ ChangeType),
+	rt runtime.Runtime,
+	fs fileservice.FileService,
+) (*store, error) {
+	for {
+		s, err := newLogStore(genCfg(), taskServiceGetter, onReplicaChanged, rt, fs)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (l *store) close() error {
@@ -335,12 +368,13 @@ func (l *store) addReplica(shardID uint64, replicaID uint64,
 	// Set timeout to a little bigger value to prevent Timeout Error and
 	// returns a dragonboat.ErrRejected at last, in which case, it will take
 	// longer time to finish this operation.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseAddReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -360,12 +394,13 @@ func (l *store) addNonVotingReplica(
 	target dragonboat.Target,
 	cci uint64,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseAddNonVotingReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestAddNonVoting(ctx, shardID, replicaID, target, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -380,12 +415,13 @@ func (l *store) addNonVotingReplica(
 }
 
 func (l *store) removeReplica(shardID uint64, replicaID uint64, cci uint64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseRemoveReplica)
 	defer cancel()
 	count := 0
 	for {
 		count++
 		if err := l.nh.SyncRequestDeleteReplica(ctx, shardID, replicaID, cci); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				l.retryWait()
 				continue
@@ -415,6 +451,42 @@ func (l *store) addLogShard(ctx context.Context, addLogShard pb.AddLogShard) err
 		return handleNotHAKeeperError(ctx, err)
 	}
 	return nil
+}
+
+func (l *store) checkHealth(shardID uint64) error {
+	opts := dragonboat.NodeHostInfoOption{
+		SkipLogInfo: true,
+	}
+	nhi := l.nh.GetNodeHostInfo(opts)
+	for _, ci := range nhi.ShardInfoList {
+		if ci.ShardID == shardID {
+			if ci.Pending {
+				return moerr.NewInternalErrorNoCtxf("shard %d is pending on store %s",
+					shardID, l.cfg.UUID)
+			}
+			break
+		}
+	}
+	cs, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	storeInfo, ok := cs.LogState.Stores[l.cfg.UUID]
+	if ok {
+		if storeInfo.Tick >= cs.Tick {
+			return nil
+		}
+		if (cs.Tick-storeInfo.Tick)*uint64(l.cfg.HAKeeperTickInterval.Duration) >
+			uint64(l.cfg.HAKeeperConfig.LogStoreTimeout.Duration) {
+			return moerr.NewInternalErrorNoCtxf("log store %s of shard %d expired",
+				l.cfg.UUID, shardID)
+		} else {
+			return nil
+		}
+	} else {
+		return moerr.NewInternalErrorNoCtxf("shard %d not started on store %s",
+			shardID, l.cfg.UUID)
+	}
 }
 
 func (l *store) retryWait() {
@@ -883,6 +955,27 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 	}
 }
 
+func (l *store) queryLogLsn(ctx context.Context, shardID uint64, ts time.Time) (Lsn, error) {
+	rs, err := l.nh.QueryLogLsn(shardID, ts)
+	if err != nil {
+		l.runtime.Logger().Error("QueryLogLsn failed", zap.Error(err))
+		return 0, err
+	}
+	select {
+	case v := <-rs.ResultC():
+		if v.Completed() {
+			_, logRange := v.RaftLogs()
+			return logRange.FirstIndex, nil
+		} else if v.RequestOutOfRange() {
+			l.runtime.Logger().Error("OutOfRange query found, could not find the Lsn")
+			return 0, dragonboat.ErrInvalidRange
+		}
+		panic(moerr.NewInvalidState(ctx, "unexpected rs state"))
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop()
@@ -972,10 +1065,11 @@ func (l *store) hakeeperTick() {
 
 	if isLeader {
 		cmd := hakeeper.GetTickCmd()
-		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseHakeeperTick)
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 		if _, err := l.propose(ctx, session, cmd); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			l.runtime.Logger().Error("propose tick failed", zap.Error(err))
 			return
 		}

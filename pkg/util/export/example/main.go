@@ -65,7 +65,7 @@ func main() {
 		logutil.Infof("failed open fileservice: %v", err)
 		return
 	}
-	files, err := fs.List(ctx, "/")
+	files, err := fileservice.SortedList(fs.List(ctx, "/"))
 	if err != nil {
 		logutil.Infof("failed list /: %v", err)
 		return

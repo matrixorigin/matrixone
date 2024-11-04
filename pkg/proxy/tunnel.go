@@ -24,12 +24,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 const (
@@ -235,6 +236,13 @@ func (t *tunnel) getConns() (*MySQLConn, *MySQLConn) {
 	return t.mu.clientConn, t.mu.serverConn
 }
 
+// getServerConn returns the ServerConn in the tunnel.
+func (t *tunnel) getServerConn() ServerConn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.mu.sc
+}
+
 // setError tries to set the tunnel error if there is no error.
 func (t *tunnel) setError(err error) {
 	select {
@@ -392,21 +400,22 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	defer t.finishTransfer(start)
 	t.logger.Info("transfer begin")
 
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransfer)
 	defer cancel()
 
 	csp, scp := t.getPipes()
 	// Pause pipes before the transfer.
 	if err := csp.pause(ctx); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if err := scp.pause(ctx); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	if err := t.doReplaceConnection(ctx, false); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
+		err = moerr.AttachCause(ctx, err)
 		t.logger.Error("failed to replace connection", zap.Error(err))
 	}
 	// Restart pipes even if the error happened in last step.
@@ -427,11 +436,11 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	start := time.Now()
 	defer t.finishTransfer(start)
 	t.logger.Info("transfer begin")
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
 	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	v2.ProxyTransferSuccessCounter.Inc()
 	return nil
@@ -491,6 +500,12 @@ func (t *tunnel) Close() error {
 		}
 		if !t.connCacheEnabled && sc != nil {
 			_ = sc.Close()
+		}
+
+		// close the server connection
+		serverC := t.getServerConn()
+		if serverC != nil {
+			_ = serverC.Close()
 		}
 	})
 	return nil

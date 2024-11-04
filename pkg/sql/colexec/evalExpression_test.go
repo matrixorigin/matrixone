@@ -402,7 +402,7 @@ func TestExpressionReset(t *testing.T) {
 		t.Log(tree)
 
 		inputs := []*batch.Batch{
-			batch.New(true, nil),
+			batch.New(nil),
 		}
 		inputs[0].SetRowCount(100)
 		result, err = executor.Eval(proc, inputs, nil)
@@ -423,6 +423,13 @@ func TestExpressionReset(t *testing.T) {
 
 func TestFunctionFold(t *testing.T) {
 	t.Skip("todo: implement this test")
+}
+
+func TestModifyResultOwnerToOuter(t *testing.T) {
+	// we cannot modify the column expression's memory owner.
+	// because its owner is never own to executor.
+	columnExecutor := &ColumnExpressionExecutor{}
+	require.False(t, modifyResultOwnerToOuter(columnExecutor))
 }
 
 // some util code copied from package `plan`.

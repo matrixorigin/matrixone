@@ -17,15 +17,18 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 func TestEventTypeDesc(t *testing.T) {
@@ -136,7 +139,9 @@ func runEventTest(t *testing.T,
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
-	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil)
+	frontend.InitServerLevelVars(cn1.uuid)
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
+	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil, withService(cn1.uuid))
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -144,7 +149,9 @@ func runEventTest(t *testing.T,
 	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
-	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil)
+	frontend.InitServerLevelVars(cn2.uuid)
+	frontend.SetSessionAlloc(cn2.uuid, frontend.NewSessionAllocator(newTestPu()))
+	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil, withService(cn2.uuid))
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -201,14 +208,16 @@ func runEventTest(t *testing.T,
 	require.NoError(t, err)
 
 	// tunnel1 is on cn1, connection ID is 10.
-	_, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
+	ssc1, ret, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
+	defer ssc1.Close()
 	// get connection id from result.
 	connID := uint32(ret[6])
 
 	// tunnel2 is on cn2, connection ID is 20.
-	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
+	ssc2, _, err := tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
+	defer ssc2.Close()
 
 	err = tu1.run(cc1, sc1)
 	require.NoError(t, err)
@@ -398,12 +407,14 @@ func TestQuitEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// tunnel1 is on cn1, connection ID is 10.
-	_, _, err = tp.ru.Connect(cn1, testPacket, tu1)
+	ssc1, _, err := tp.ru.Connect(cn1, testPacket, tu1)
 	require.NoError(t, err)
+	defer ssc1.Close()
 
 	// tunnel2 is on cn2, connection ID is 20.
-	_, _, err = tp.ru.Connect(cn2, testPacket, tu2)
+	ssc2, _, err := tp.ru.Connect(cn2, testPacket, tu2)
 	require.NoError(t, err)
+	defer ssc2.Close()
 
 	err = tu1.run(cc1, sc1)
 	require.NoError(t, err)

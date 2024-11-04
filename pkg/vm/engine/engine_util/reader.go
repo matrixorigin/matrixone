@@ -38,12 +38,8 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-)
-
-const (
-	SMALL = iota
-	NORMAL
-	LARGE
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 // -----------------------------------------------------------------
@@ -52,6 +48,7 @@ const (
 
 func (mixin *withFilterMixin) reset() {
 	mixin.filterState.filter = objectio.BlockReadFilter{}
+	mixin.filterState.memFilter = MemPKFilter{}
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
@@ -113,7 +110,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 	for i, column := range cols {
 		column = strings.ToLower(column)
-		if column == catalog.Row_ID {
+		if objectio.IsPhysicalAddr(column) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
@@ -216,10 +213,11 @@ type withFilterMixin struct {
 
 	filterState struct {
 		//point select for primary key
-		expr     *plan.Expr
-		filter   objectio.BlockReadFilter
-		seqnums  []uint16 // seqnums of the columns in the filter
-		colTypes []types.Type
+		expr      *plan.Expr
+		filter    objectio.BlockReadFilter
+		memFilter MemPKFilter
+		seqnums   []uint16 // seqnums of the columns in the filter
+		colTypes  []types.Type
 	}
 }
 
@@ -228,14 +226,11 @@ type reader struct {
 
 	source engine.DataSource
 
-	memFilter MemPKFilter
+	readBlockCnt uint64 // count of blocks this reader has read
+	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
 
-	scanType   int
-	cacheBatch *batch.Batch
-}
-
-func (r *reader) SetScanType(typ int) {
-	r.scanType = typ
+	// cacheVectors is used for vector reuse
+	cacheVectors containers.Vectors
 }
 
 type mergeReader struct {
@@ -322,6 +317,7 @@ func NewReader(
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
+	threshHold uint64,
 ) (*reader, error) {
 
 	baseFilter, err := ConstructBasePKFilter(
@@ -358,24 +354,23 @@ func NewReader(
 			tableDef: tableDef,
 			name:     tableDef.Name,
 		},
-		memFilter: memFilter,
-		source:    source,
+		source: source,
 	}
 	r.columns.phyAddrPos = -1
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
+	r.filterState.memFilter = memFilter
+	r.threshHold = threshHold
 	return r, nil
 }
 
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
-	if r.cacheBatch != nil {
-		if r.cacheBatch.Allocated() > 0 {
-			logutil.Fatal("cache batch is not empty")
-		}
-		r.cacheBatch = nil
+	if r.cacheVectors.Allocated() > 0 {
+		logutil.Fatal("cache vector is not empty")
 	}
+	r.cacheVectors = nil
 	return nil
 }
 
@@ -408,6 +403,38 @@ func (r *reader) Read(
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
+		if injected, logLevel := objectio.LogReaderInjected(r.name); injected || err != nil {
+			if err != nil {
+				logutil.Error(
+					"LOGREADER-ERROR",
+					zap.String("name", r.name),
+					zap.Error(err),
+				)
+				return
+			}
+			if isEnd {
+				return
+			}
+			if logLevel == 0 {
+				logutil.Info(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.Int("data-len", outBatch.RowCount()),
+					zap.Error(err),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logutil.Info(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.Error(err),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+				)
+			}
+		}
 	}()
 
 	r.tryUpdateColumns(cols)
@@ -417,7 +444,7 @@ func (r *reader) Read(
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
-		r.memFilter,
+		r.filterState.memFilter,
 		mp,
 		outBatch)
 
@@ -443,13 +470,14 @@ func (r *reader) Read(
 	}
 
 	var policy fileservice.Policy
-	if r.scanType == LARGE || r.scanType == NORMAL {
+
+	if r.readBlockCnt > r.threshHold {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
+	r.readBlockCnt++
 
-	if r.cacheBatch == nil {
-		cacheBatch := batch.EmptyBatchWithSize(len(r.columns.seqnums) + 1)
-		r.cacheBatch = &cacheBatch
+	if len(r.cacheVectors) == 0 {
+		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
 
 	err = blockio.BlockDataRead(
@@ -466,7 +494,7 @@ func (r *reader) Read(
 		policy,
 		r.name,
 		outBatch,
-		r.cacheBatch,
+		r.cacheVectors,
 		mp,
 		r.fs,
 	)
@@ -485,9 +513,12 @@ func (r *reader) Read(
 		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block reader", outBatch))
-	}
-
 	return false, nil
+}
+
+func GetThresholdForReader(readerNum int) uint64 {
+	if readerNum <= 8 {
+		return uint64(1024 / readerNum)
+	}
+	return 128
 }

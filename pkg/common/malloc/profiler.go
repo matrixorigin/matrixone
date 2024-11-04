@@ -15,22 +15,28 @@
 package malloc
 
 import (
+	"hash/maphash"
 	"io"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/google/pprof/profile"
 )
 
 type Profiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }] struct {
+
+	// pcs -> locations -> samples
+	pcsToSample       sync.Map // _PCs -> *SampleInfo[P], caching, may be flush
+	locationsToSample sync.Map // hashsum([]*Locations) -> *SampleInfo[P]
+
 	locations sync.Map // LocationKey -> *profile.Location
 	functions sync.Map // FunctionKey -> *profile.Function
-	samples   sync.Map // SampleKey -> *SampleInfo[P]
 
 	// special samples
 	stackOmittedSample SampleInfo[T]
@@ -41,10 +47,9 @@ type Profiler[T any, P interface {
 type SampleInfo[T any] struct {
 	Values    T
 	Locations []*profile.Location
-	Scale     int64
 }
 
-type SampleValues interface {
+type SampleValues[T any] interface {
 	Init()
 	SampleTypes() []*profile.ValueType
 	DefaultSampleType() string
@@ -61,13 +66,9 @@ type FunctionKey struct {
 	Name string
 }
 
-type SampleKey struct {
-	PCs _PCs
-}
-
 func NewProfiler[T any, P interface {
 	*T
-	SampleValues
+	SampleValues[P]
 }]() *Profiler[T, P] {
 	ret := &Profiler[T, P]{}
 
@@ -184,23 +185,39 @@ func (p *Profiler[T, P]) getMockFunction(label string) *profile.Function {
 }
 
 func (p *Profiler[T, P]) getSampleValueFromPCs(pcs _PCs, scale int64) P {
-	key := SampleKey{
-		PCs: pcs,
-	}
-
-	if v, ok := p.samples.Load(key); ok {
+	// get from cache
+	if v, ok := p.pcsToSample.Load(pcs); ok {
 		return v.(*SampleInfo[P]).Values
 	}
 
+	// get from locations
+	locations := p.getLocationsFromPCs(pcs)
+	locationsHashSum := hashLocations(locations)
+	if v, ok := p.locationsToSample.Load(locationsHashSum); ok {
+		// set cache
+		p.setPCsToSample(pcs, v.(*SampleInfo[P]))
+		return v.(*SampleInfo[P]).Values
+	}
+
+	// create new sample
 	var value T
 	P(&value).Init()
-	v, _ := p.samples.LoadOrStore(key, &SampleInfo[P]{
+	v, _ := p.locationsToSample.LoadOrStore(locationsHashSum, &SampleInfo[P]{
 		Values:    &value,
-		Locations: p.getLocationsFromPCs(pcs),
-		Scale:     scale,
+		Locations: locations,
 	})
+	// set cache
+	p.setPCsToSample(pcs, v.(*SampleInfo[P]))
 
 	return v.(*SampleInfo[P]).Values
+}
+
+func (p *Profiler[T, P]) setPCsToSample(pcs _PCs, info *SampleInfo[P]) {
+	// flush
+	if fastrand()%1024 == 0 {
+		p.pcsToSample.Clear()
+	}
+	p.pcsToSample.Store(pcs, info)
 }
 
 func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
@@ -233,6 +250,35 @@ func (p *Profiler[T, P]) getLocationsFromPCs(pcs _PCs) []*profile.Location {
 	return locations
 }
 
+var hashSeed = maphash.MakeSeed()
+
+var hasherPool = sync.Pool{
+	New: func() any {
+		hasher := new(maphash.Hash)
+		hasher.SetSeed(hashSeed)
+		return hasher
+	},
+}
+
+func hashLocations(locations []*profile.Location) uint64 {
+	hasher := hasherPool.Get().(*maphash.Hash)
+	defer func() {
+		hasher.Reset()
+		hasherPool.Put(hasher)
+	}()
+
+	for _, location := range locations {
+		hasher.Write(
+			unsafe.Slice(
+				(*byte)(unsafe.Pointer(&location.ID)),
+				unsafe.Sizeof(location.ID),
+			),
+		)
+	}
+
+	return hasher.Sum64()
+}
+
 func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	var ptr P
@@ -241,17 +287,18 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 		DefaultSampleType: ptr.DefaultSampleType(),
 	}
 
-	p.samples.Range(func(k, v any) bool {
+	prof.Sample = append(prof.Sample, &profile.Sample{
+		Location: p.stackOmittedSample.Locations,
+		Value:    P(&p.stackOmittedSample.Values).Values(),
+	})
+
+	p.locationsToSample.Range(func(k, v any) bool {
 		info := v.(*SampleInfo[P])
 		values := info.Values.Values()
-		for i := range values {
-			values[i] *= info.Scale
-		}
-		sample := &profile.Sample{
+		prof.Sample = append(prof.Sample, &profile.Sample{
 			Location: info.Locations,
 			Value:    values,
-		}
-		prof.Sample = append(prof.Sample, sample)
+		})
 		return true
 	})
 

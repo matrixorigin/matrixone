@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -95,6 +94,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
+	// NOTE: Stats May indirectly access the file service
 	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
@@ -616,7 +616,7 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	// false positive check
+	// false positive check, HasBlockTombstone will access FileService
 	HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
@@ -632,7 +632,7 @@ type Tombstoner interface {
 	ApplyInMemTombstones(
 		bid *types.Blockid,
 		rowsOffset []int64,
-		deleted *nulls.Nulls,
+		deleted *objectio.Bitmap,
 	) (left []int64)
 
 	// it applies the block related tombstones from the persisted tombstone file
@@ -643,7 +643,7 @@ type Tombstoner interface {
 		snapshot *types.TS,
 		bid *types.Blockid,
 		rowsOffset []int64,
-		deletedMask *nulls.Nulls,
+		deletedMask *objectio.Bitmap,
 	) (left []int64, err error)
 
 	// a.merge(b) => a = a U b
@@ -677,7 +677,7 @@ type RelData interface {
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	BuildEmptyRelData() RelData
+	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
 	// specified interface
@@ -715,13 +715,13 @@ func ForRangeShardID(
 func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
-	onBlock func(blk objectio.BlockInfo) (bool, error)) error {
+	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
 
 	for i := 0; i < sliceLen; i++ {
-		if ok, err := onBlock(*slice.Get(i)); !ok || err != nil {
+		if ok, err := onBlock(slice.Get(i)); !ok || err != nil {
 			return err
 		}
 	}
@@ -765,7 +765,7 @@ type DataSource interface {
 
 	GetTombstones(
 		ctx context.Context, bid *objectio.Blockid,
-	) (deletedRows *nulls.Nulls, err error)
+	) (deletedRows objectio.Bitmap, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
 
@@ -814,7 +814,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -830,6 +830,7 @@ type Relation interface {
 
 	GetHideKeys(context.Context) ([]*Attribute, error)
 
+	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 
 	Update(context.Context, *batch.Batch) error
@@ -855,6 +856,7 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
+	// Note: Write Will access Fileservice
 	BuildReaders(
 		ctx context.Context,
 		proc any,
@@ -886,6 +888,7 @@ type Relation interface {
 
 	GetProcess() any
 
+	// Note: GetColumMetadataScanInfo Will access Fileservice
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
@@ -898,9 +901,13 @@ type Relation interface {
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
-type Reader interface {
+type BaseReader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+}
+
+type Reader interface {
+	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)
@@ -1089,7 +1096,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
 	return &EmptyRelationData{}
 }
 

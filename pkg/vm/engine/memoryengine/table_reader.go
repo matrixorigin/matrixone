@@ -246,7 +246,7 @@ func (t *Table) GetProcess() any {
 	panic("Not Support")
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _int, _ int) (engine.RelData, error) {
 	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
@@ -348,7 +348,7 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
+func (rd *MemRelationData) BuildEmptyRelData(i int) engine.RelData {
 	return &MemRelationData{}
 }
 

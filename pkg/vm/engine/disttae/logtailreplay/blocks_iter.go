@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
@@ -120,8 +121,10 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.LT(&p.minTS) {
-		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
+			p.tid, p, snapshot.ToString(), p.start.ToString())
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.start.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 
@@ -194,8 +197,7 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 
 func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
-	collectDeleted bool,
-) (stats []objectio.ObjectStats) {
+) (insertList, deletedList []objectio.ObjectStats) {
 
 	iter := p.dataObjectTSIndex.Copy().Iter()
 	defer iter.Release()
@@ -211,6 +213,10 @@ func (p *PartitionState) CollectObjectsBetween(
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
 
+		if entry.Time.GT(&end) {
+			break
+		}
+
 		var ss objectio.ObjectStats
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
 
@@ -224,25 +230,24 @@ func (p *PartitionState) CollectObjectsBetween(
 			continue
 		}
 
-		if !collectDeleted {
-			// if deleted before end
-			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
-				continue
-			}
+		// case1: no soft delete
+		if val.DeleteTime.IsEmpty() {
+			insertList = append(insertList, val.ObjectStats)
 		} else {
-			// only collect deletes
-			// if not delete or delete after end
-			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
-				continue
+			if val.CreateTime.LT(&start) {
+				// create --------- delete
+				//          start -------- end
+				if val.DeleteTime.LE(&end) {
+					deletedList = append(deletedList, val.ObjectStats)
+				}
+			} else {
+				//        create ---------- delete
+				// start ------------ end
+				if val.DeleteTime.GT(&end) {
+					insertList = append(insertList, val.ObjectStats)
+				}
 			}
 		}
-
-		// if created not in [start, end]
-		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
-			continue
-		}
-
-		stats = append(stats, val.ObjectStats)
 	}
 
 	return

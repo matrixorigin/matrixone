@@ -44,8 +44,8 @@ show columns from `TABLES`;
 show columns from `PARTITIONS`;
 
 use mo_catalog;
-show columns from `mo_cdc_task`;
-show columns from `mo_cdc_watermark`;
+# show columns from `mo_cdc_task`;
+# show columns from `mo_cdc_watermark`;
 show columns from `mo_data_key`;
 
 drop database if exists test;

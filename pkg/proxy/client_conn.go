@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // clientBaseConnID is the base connection ID for client.
@@ -214,7 +215,9 @@ func newClientConn(
 	}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
-	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	frontend.InitServerLevelVars(cfg.UUID)
+	frontend.SetSessionAlloc(cfg.UUID, frontend.NewSessionAllocator(pu))
+	ios, err := frontend.NewIOSession(c.RawConn(), pu, cfg.UUID)
 	if err != nil {
 		return nil, err
 	}
@@ -679,13 +682,13 @@ func (c *clientConn) genConnID() (uint32, error) {
 	if c.haKeeperClient == nil {
 		return nextClientConnID(), nil
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseGenConnID)
 	defer cancel()
 	// Use the same key with frontend module to make sure the connection ID
 	// is unique globally.
 	connID, err := c.haKeeperClient.AllocateIDByKey(ctx, frontend.ConnIDAllocKey)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	// Convert uint64 to uint32 to adapt MySQL protocol.
 	return uint32(connID), nil

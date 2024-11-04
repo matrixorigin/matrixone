@@ -342,17 +342,12 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: []float32{1.1, 2.2, 3.3}, typ: &types.Type{Oid: types.T_array_float32}, sqlBuff: []byte{}},
-			want:    []byte("'[1.100000,2.200000,3.300000]'"),
+			want:    []byte("'[1.1, 2.2, 3.3]'"),
 			wantErr: assert.NoError,
 		},
 		{
 			args:    args{ctx: context.Background(), data: []float64{1.1, 2.2, 3.3}, typ: &types.Type{Oid: types.T_array_float64}, sqlBuff: []byte{}},
-			want:    []byte("'[1.100000,2.200000,3.300000]'"),
-			wantErr: assert.NoError,
-		},
-		{
-			args:    args{ctx: context.Background(), data: []float64{1.1, 2.2, 3.3}, typ: &types.Type{Oid: types.T_array_float64}, sqlBuff: []byte{}},
-			want:    []byte("'[1.100000,2.200000,3.300000]'"),
+			want:    []byte("'[1.1, 2.2, 3.3]'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -449,7 +444,7 @@ func Test_copyBytes(t *testing.T) {
 
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
-	bat := batch.New(true, []string{"const_null", "const", "normal"})
+	bat := batch.New([]string{"const_null", "const", "normal"})
 	bat.Vecs[0] = testutil.MakeScalarNull(types.T_int32, 3)
 	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
 	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
@@ -915,4 +910,17 @@ func TestAesCFBEncodeWithKey_EmptyKey(t *testing.T) {
 func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 	_, err := AesCFBDecodeWithKey(context.Background(), "01234567890123456789012345678901", []byte{})
 	assert.Error(t, err)
+}
+
+func Test_batchRowCount(t *testing.T) {
+	assert.Equal(t, 0, batchRowCount(nil))
+
+	bat := batch.New([]string{})
+	assert.Equal(t, 0, batchRowCount(bat))
+
+	bat = batch.New([]string{"a", "ts"})
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.SetRowCount(3)
+	assert.Equal(t, 3, batchRowCount(bat))
 }

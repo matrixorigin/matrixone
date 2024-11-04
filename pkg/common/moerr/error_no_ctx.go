@@ -382,6 +382,10 @@ func NewCannotCommitOrphanNoCtx() *Error {
 	return NewCannotCommitOrphan(Context())
 }
 
+func NewCannotCommitOnInvalidCNNoCtx() *Error {
+	return NewCannotCommitOnInvalidCN(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -392,6 +396,10 @@ func NewLockTableNotFoundNoCtx() *Error {
 
 func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
+}
+
+func NewLockNeedUpgradeNoCtx() *Error {
+	return newError(Context(), ErrLockNeedUpgrade)
 }
 
 func NewUDFAlreadyExistsNoCtx(f string) *Error {

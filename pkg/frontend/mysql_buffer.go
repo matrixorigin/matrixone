@@ -24,9 +24,12 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -186,27 +189,22 @@ type Conn struct {
 	allocator         *BufferAllocator
 	ses               *Session
 	closeFunc         sync.Once
+	service           string
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (_ *Conn, err error) {
-	// just for ut
-	_, ok := globalSessionAlloc.Load().(Allocator)
-	if !ok {
-		allocator := NewSessionAllocator(pu)
-		setGlobalSessionAlloc(allocator)
-	}
-
+func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
 	c := &Conn{
 		conn:              conn,
 		localAddr:         conn.LocalAddr().String(),
 		remoteAddr:        conn.RemoteAddr().String(),
 		fixBuf:            MemBlock{},
 		dynamicWrBuf:      list.New(),
-		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
+		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
 		timeout:           pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 		allowedPacketSize: int(MaxPayloadSize),
+		service:           service,
 	}
 
 	defer func() {
@@ -275,10 +273,10 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			return
+			logutil.Error("close conn error", zap.Error(err))
 		}
 		c.ses = nil
-		rm := getGlobalRtMgr()
+		rm := getRtMgr(c.service)
 		if rm != nil {
 			rm.Closed(c)
 		}
@@ -734,6 +732,7 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
+	c.ses.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -746,7 +745,6 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.ses.CountPacket(1)
 	c.packetInBuf = 0
 	return err
 }
@@ -789,6 +787,7 @@ func (c *Conn) WriteToConn(buf []byte) error {
 			return err
 		}
 		sendLength += n
+		c.ses.CountOutputBytes(n)
 	}
 	return nil
 }
@@ -817,4 +816,29 @@ func (c *Conn) Reset() {
 	c.freeDynamicBuffUnsafe()
 	c.packetInBuf = 0
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+}
+
+var dumpConn = &Conn{}
+
+var ExecuteFuncWithRecover = func(fun func() error) (err error, hasRecovered bool) {
+	return dumpConn.ExecuteFuncWithRecover(fun)
+}
+
+// ExecuteFuncWithRecover executes the function and recover the panic
+func (c *Conn) ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			hasRecovered = true
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
+	}()
+	if err = fun(); err != nil {
+		return err, false
+	}
+	return nil, false
 }

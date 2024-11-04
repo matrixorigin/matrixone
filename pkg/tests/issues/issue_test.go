@@ -26,14 +26,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
@@ -197,8 +201,8 @@ func TestWWConflict(t *testing.T) {
 func cleanDatabase(
 	t *testing.T,
 	ctx context.Context,
-	cn cnservice.Service, dbName string) {
-
+	cn cnservice.Service, dbName string,
+) {
 	exec := cn.GetSQLExecutor()
 	require.NotNil(t, exec)
 
@@ -207,7 +211,6 @@ func cleanDatabase(
 		require.NoError(t, eng.Delete(ctx, dbName, txn.Txn()))
 		return nil
 	}, executor.Options{})
-
 }
 
 // #18754
@@ -374,4 +377,370 @@ func TestCNFlushS3Deletes(t *testing.T) {
 				})
 			}
 		})
+}
+
+//#16493
+/*
+// create table t (id int auto_increment primary key, id2 int);
+// 				CN1 										CN2
+// insert into t(id2) values (1), (2)
+// 											insert into t(id) values (3)
+// insert into t(id2) values (1), (2)
+
+There is no lock competition, but there is data modification
+*/
+func TestDedupForAutoPk(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			cn2, err := c.GetCNService(1)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int auto_increment primary key, id2 int)",
+				cn1,
+				cn2,
+			)
+
+			committedAt := testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+"(id2) values (1), (2)",
+			)
+
+			exec2 := testutils.GetSQLExecutor(cn2)
+			err = exec2.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+"(id) values (3)",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithMinCommittedTS(committedAt),
+			)
+			require.NoError(t, err)
+
+			exec1 := testutils.GetSQLExecutor(cn1)
+			err = exec1.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+"(id2) values (1), (2)",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithWaitCommittedLogApplied(),
+			)
+			require.NoError(t, err)
+
+			// check the result
+			exec := testutils.GetSQLExecutor(cn1)
+			res, err := exec.Exec(
+				ctx,
+				"select id from t;",
+				executor.Options{}.
+					WithDatabase(db).
+					WithWaitCommittedLogApplied(),
+			)
+			require.NoError(t, err)
+
+			res.ReadRows(
+				func(rows int, cols []*vector.Vector) bool {
+					for i := 0; i < rows; i++ {
+						n := executor.GetFixedRows[int32](cols[0])[i]
+						t.Logf("the value of rows %d is %d", i, n)
+					}
+					return true
+				},
+			)
+			res.Close()
+		})
+}
+
+func TestLockNeedUpgrade(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			cn2, err := c.GetCNService(1)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int primary key, id2 int)",
+				cn1,
+				cn2,
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"truncate table "+table+";",
+				"insert into "+table+" select result, result from generate_series(1,5000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
+			)
+
+			committedAt := testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+			)
+
+			// case 1
+			// test for local LocalTable that need upgrade row level lock to table level lock
+			exec1 := testutils.GetSQLExecutor(cn1)
+			err = exec1.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"delete from "+table+" where id > 1",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithMinCommittedTS(committedAt),
+			)
+			require.NoError(t, err)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"truncate table "+table+";",
+				"insert into "+table+" select result, result from generate_series(1,5000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(5001,10000) g;",
+			)
+
+			_ = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(10001,15000) g;",
+			)
+
+			committedAt = testutils.ExecSQL(
+				t,
+				db,
+				cn1,
+				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
+			)
+
+			// case 2
+			// test for remote LockTable that need upgrade row level lock to table level lock
+			exec2 := testutils.GetSQLExecutor(cn2)
+			err = exec2.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"delete from "+table+" where id > 1",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(db).
+					WithMinCommittedTS(committedAt),
+			)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestIssue19551(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
+			defer cancel()
+
+			var allocator lockservice.LockTableAllocator
+			c.ForeachServices(
+				func(s embed.ServiceOperator) bool {
+					if s.ServiceType() != metadata.ServiceType_TN {
+						return true
+					}
+
+					tn := s.RawService().(tnservice.Service)
+					allocator = tn.GetLockTableAllocator()
+					return false
+				},
+			)
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+			lockSID := lockservice.GetLockServiceByServiceID(cn1.ServiceID()).GetServiceID()
+
+			db := testutils.GetDatabaseName(t)
+			table := "t"
+
+			testutils.CreateTableAndWaitCNApplied(
+				t,
+				db,
+				table,
+				"create table "+table+" (id int primary key, v int)",
+				cn1,
+			)
+
+			// workflow:
+			// start txn1, txn2 on cn1
+			// mark cn1 invalid
+			// commit txn1
+			// wait abort active txn completed
+			// commit txn2
+			// start txn3 and commit will success
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			txn1StartedC := make(chan struct{})
+			txn2StartedC := make(chan struct{})
+			invalidMarkedC := make(chan struct{})
+
+			// txn1
+			exec := testutils.GetSQLExecutor(cn1)
+			go func() {
+				defer wg.Done()
+
+				err := exec.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						close(txn1StartedC)
+						<-invalidMarkedC
+
+						res, err := txn.Exec(
+							"insert into "+table+" values (1, 1)",
+							executor.StatementOption{},
+						)
+						if err != nil {
+							return err
+						}
+						res.Close()
+						return nil
+					},
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+			}()
+
+			go func() {
+				defer wg.Done()
+
+				err := exec.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						close(txn2StartedC)
+
+						res, err := txn.Exec(
+							"insert into "+table+" values (2, 2)",
+							executor.StatementOption{},
+						)
+						if err != nil {
+							return err
+						}
+						res.Close()
+
+						// wait valid service resume, means all active in txn client is marked aborted
+						for {
+							if !allocator.HasInvalidService(lockSID) {
+								break
+							}
+							time.Sleep(time.Millisecond * 100)
+						}
+						return nil
+					},
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+
+			}()
+
+			<-txn1StartedC
+			<-txn2StartedC
+
+			// mark cn1 invalid
+			allocator.AddInvalidService(lockSID)
+			require.True(t, allocator.HasInvalidService(lockSID))
+			close(invalidMarkedC)
+			wg.Wait()
+
+			// service is resume, txn3 can commit ok
+			err = exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into "+table+" values (3, 3)",
+						executor.StatementOption{},
+					)
+					if err != nil {
+						return err
+					}
+					res.Close()
+
+					return nil
+				},
+				executor.Options{}.WithDatabase(db),
+			)
+			require.NoError(t, err)
+		},
+	)
 }

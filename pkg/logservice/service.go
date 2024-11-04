@@ -20,12 +20,15 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -38,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -124,7 +126,7 @@ func NewService(
 	if service.dataSync != nil {
 		onReplicaChanged = service.dataSync.NotifyReplicaID
 	}
-	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime)
+	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime, fileService)
 	if err != nil {
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -167,6 +169,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 
@@ -201,6 +206,27 @@ func NewService(
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
 	return service, nil
+}
+
+// NewServiceWithRetry mainly used in tests which create new service.
+// If an error occurred and the error is syscall.EADDRINUSE, retry to
+// create a new service instance.
+func NewServiceWithRetry(
+	genCfg func() Config,
+	fileService fileservice.FileService,
+	shutdownC chan struct{},
+	opts ...Option,
+) (*Service, error) {
+	for {
+		s, err := NewService(genCfg(), fileService, shutdownC, opts...)
+		if err != nil {
+			if strings.Contains(err.Error(), "address already in use") {
+				continue
+			}
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (s *Service) Start() error {
@@ -315,6 +341,10 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_LEADER_ID:
 		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
+	case pb.CHECK_HEALTH:
+		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
+	case pb.READ_LSN:
+		return s.handleReadLsn(ctx, req)
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -417,6 +447,18 @@ func (s *Service) handleRead(ctx context.Context, req pb.Request) (pb.Response, 
 		resp.LogResponse.LastLsn = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
+}
+
+func (s *Service) handleReadLsn(ctx context.Context, req pb.Request) (pb.Response, pb.LogRecordResponse) {
+	r := req.LogRequest
+	resp := getResponse(req)
+	lsn, err := s.store.queryLogLsn(ctx, r.ShardID, r.TS)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.Lsn = lsn
+	}
+	return resp, pb.LogRecordResponse{}
 }
 
 func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Response {
@@ -635,9 +677,10 @@ func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
 	wg.Add(1)
 	if err := s.stopper.RunNamedTask("add new log shard", func(ctx context.Context) {
 		defer wg.Done()
-		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseHandleAddLogShard)
 		defer cancel()
 		if err := s.store.addLogShard(ctx, pb.AddLogShard{ShardID: shardID}); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			s.runtime.Logger().Error("failed to add shard",
 				zap.Uint64("shard ID", shardID),
 				zap.Error(err),
@@ -665,6 +708,15 @@ func (s *Service) handleBootstrapShard(cmd pb.ScheduleCommand) {
 			zap.Error(err),
 		)
 	}
+}
+
+func (s *Service) handleCheckHealth(_ context.Context, req pb.Request) pb.Response {
+	r := req.CheckHealth
+	resp := getResponse(req)
+	if err := s.store.checkHealth(r.ShardID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
 }
 
 func (s *Service) getBackendOptions() []morpc.BackendOption {

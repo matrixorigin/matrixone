@@ -48,10 +48,7 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	}
 
 	if apply.ctr.sels == nil {
-		apply.ctr.sels = make([]int32, colexec.DefaultBatchSize)
-		for i := range apply.ctr.sels {
-			apply.ctr.sels[i] = int32(i)
-		}
+		apply.ctr.sels = make([]int32, 0)
 	}
 
 	err = apply.TableFunction.ApplyPrepare(proc)
@@ -114,7 +111,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.rbat.CleanOnlyData()
 		}
 
-		err = ctr.probe(apply, proc, &probeResult)
+		err = ctr.probe(apply, proc, &probeResult, analyzer)
 		if err != nil {
 			return result, err
 		}
@@ -130,14 +127,15 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallResult, analyzer process.Analyzer) error {
 	inbat := ctr.inbat
 	count := inbat.RowCount()
 	tfResult := vm.NewCallResult()
 	var err error
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
-			err = ap.TableFunction.ApplyStart(i, proc)
+			err = ap.TableFunction.ApplyStart(i, proc, analyzer)
+			ctr.tfNull = true
 			if err != nil {
 				return err
 			}
@@ -149,14 +147,30 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				return err
 			}
 			if tfResult.Batch.IsDone() {
+				if ap.ApplyType == OUTER && ctr.tfNull {
+					for j, rp := range ap.Result {
+						if rp.Rel == 0 {
+							err = ctr.rbat.Vecs[j].UnionOne(ctr.inbat.Vecs[rp.Pos], int64(i), proc.Mp())
+						} else {
+							err = vector.AppendAny(ctr.rbat.Vecs[j], nil, true, proc.Mp())
+						}
+						if err != nil {
+							return err
+						}
+					}
+				}
 				ctr.tfFinish = true
 				break
 			}
+			ctr.tfNull = false
 			rowCountIncrease := tfResult.Batch.RowCount()
 			for j, rp := range ap.Result {
 				if rp.Rel == 0 {
 					err = ctr.rbat.Vecs[j].UnionMulti(ctr.inbat.Vecs[rp.Pos], int64(i), rowCountIncrease, proc.Mp())
 				} else {
+					for len(ctr.sels) < rowCountIncrease {
+						ctr.sels = append(ctr.sels, int32(len(ctr.sels)))
+					}
 					err = ctr.rbat.Vecs[j].UnionInt32(tfResult.Batch.Vecs[rp.Pos], ctr.sels[:rowCountIncrease], proc.Mp())
 				}
 				if err != nil {

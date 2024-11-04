@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -62,12 +61,12 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 
 	// calculate uuid
-	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(builder.compCtx.GetProcess(), exprs[0])
 	if err != nil {
 		return 0, err
 	}
 	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
-	vec.Free(builder.compCtx.GetProcess().GetMPool())
+	free()
 
 	// get cols
 	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.String())

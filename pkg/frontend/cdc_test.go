@@ -76,12 +76,13 @@ func Test_newCdcSqlFormat(t *testing.T) {
 		125,
 		true,
 		"yyy",
+		"{}",
 	)
-	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",\"\",\"\",\"\",\"\",\"\")"
+	wantSql := "insert into mo_catalog.mo_cdc_task values(3,\"019111fd-aed1-70c0-8760-9abadd8f0f4a\",\"task1\",\"src uri\",\"123\",\"dst uri\",\"mysql\",\"456\",\"ca path\",\"cert path\",\"key path\",\"db1:t1\",\"xfilter\",\"op filters\",\"error\",\"common\",\"\",\"\",\"conf path\",\"2024-08-02 15:20:00\",\"running\",125,\"125\",\"true\",\"yyy\",'{}',\"\",\"\",\"\",\"\")"
 	assert.Equal(t, wantSql, sql)
 
 	sql2 := getSqlForRetrievingCdcTask(3, id)
-	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, no_full from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
+	wantSql2 := "select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 3 and task_id = \"019111fd-aed1-70c0-8760-9abadd8f0f4a\""
 	assert.Equal(t, wantSql2, sql2)
 
 	sql3 := getSqlForDbIdAndTableId(10, "db", "t1")
@@ -662,7 +663,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	sql3_1 := "select count.*att_constraint_type.* from `mo_catalog`.`mo_columns` where account_id = 0 and att_database = 'db1' and att_relname = 't2' and att_constraint_type = 'p'"
 	mock.ExpectQuery(sql3_1).WillReturnRows(sqlmock.NewRows([]string{"count(att_constraint_type)"}).AddRow(uint64(1)))
 
-	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",\"\",\"\",\"\",\"\",\"\".*"
+	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",'{\"InitSnapshotSplitTxn\":false}',\"\",\"\",\"\",\"\".*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 	////
 
@@ -670,7 +671,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	pu.TaskService = &testTaskService{
 		db: db,
 	}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	create := &tree.CreateCDC{
 		IfNotExists: false,
@@ -686,6 +687,8 @@ func Test_handleCreateCdc(t *testing.T) {
 			sysAccountName,
 			"Rules",
 			"db2.t3,db2.t4",
+			cdc2.InitSnapshotSplitTxn,
+			"false",
 		},
 	}
 
@@ -693,7 +696,7 @@ func Test_handleCreateCdc(t *testing.T) {
 
 	cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
 	defer func() { cdc2.AesKey = "" }()
-	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32) (err error) {
+	stub := gostub.Stub(&initAesKeyWrapper, func(context.Context, taskservice.SqlExecutor, uint32, string) (err error) {
 		return nil
 	})
 	defer stub.Reset()
@@ -892,13 +895,15 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			tables := ""
 			filters := ""
 			noFull := ""
+			splitTxn := ""
 			err = rows.Scan(
 				&sinkUri,
 				&sinkType,
 				&sinkPwd,
 				&tables,
 				&filters,
-				&noFull)
+				&noFull,
+				&splitTxn)
 			if err != nil {
 				panic(err)
 			}
@@ -908,6 +913,7 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, tables)
 			rowValues = append(rowValues, filters)
 			rowValues = append(rowValues, noFull)
+			rowValues = append(rowValues, splitTxn)
 		} else if idx == mSqlIdx2 {
 			dbId := uint64(0)
 			tableId := uint64(0)
@@ -1096,7 +1102,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 
 	/////////mock sql result
-	sql1 := `select sink_uri, sink_type, sink_password, tables, filters, no_full from mo_catalog.mo_cdc_task where account_id = 0 and task_id = "00000000-0000-0000-0000-000000000000"`
+	sql1 := `select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = 0 and task_id = "00000000-0000-0000-0000-000000000000"`
 	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
@@ -1130,6 +1136,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			"tables",
 			"filters",
 			"no_full",
+			"additional_config",
 		},
 	).AddRow(
 		sinkUri,
@@ -1138,6 +1145,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		tables,
 		filters,
 		true,
+		"{}",
 	),
 	)
 
@@ -1161,10 +1169,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		uint64(0),
 	))
 
-	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', 1001, '0-0'.*"
+	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', '1001_0', '0-0'.*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectQuery(sql5).WillReturnRows(sqlmock.NewRows(
 		[]string{
 			"watermark",
@@ -1173,7 +1181,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"0-0",
 	))
 
-	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = 1001"
+	sql6 := "update mo_catalog.mo_cdc_watermark set watermark='0-0' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectExec(sql6).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1238,6 +1246,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -1278,6 +1288,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		},
 	}
 
+	mp, err := mpool.NewMPool("cdc", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
 	tests := []struct {
 		name string
 		args args
@@ -1291,6 +1305,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 				ieFactory:    tIEFactory1,
 				attachToTask: attacher,
 				cnEngine:     eng,
+				cnEngMp:      mp,
 				cnTxnClient:  txnClient,
 			},
 		},
@@ -1714,7 +1729,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1801,7 +1816,7 @@ func Test_updateCdc_cancel_all(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1905,7 +1920,7 @@ func Test_updateCdc_pause(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -1998,7 +2013,7 @@ func Test_updateCdc_pause_all(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2100,7 +2115,7 @@ func Test_updateCdc_restart(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2198,7 +2213,7 @@ func Test_updateCdc_resume(t *testing.T) {
 		},
 	}
 
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	tests := []struct {
 		name    string
@@ -2279,7 +2294,7 @@ func Test_getTaskCkp(t *testing.T) {
 				accountId: sysAccountID,
 				taskId:    "taskID-1",
 			},
-			wantS: "{\n  \"db1.tb1\": 1970-01-01 00:00:00 +0000 UTC,\n}",
+			wantS: "{\n  \"db1.tb1\": " + timestamp.Timestamp{}.ToStdTime().In(time.Local).String() + ",\n}",
 		},
 	}
 	for _, tt := range tests {
@@ -2410,6 +2425,8 @@ func Test_handleShowCdc(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -2419,7 +2436,7 @@ func Test_handleShowCdc(t *testing.T) {
 		StorageEngine: eng,
 		TxnClient:     txnClient,
 	}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	//////////
 
@@ -2567,6 +2584,9 @@ func TestCdcTask_Resume(t *testing.T) {
 			name: "t1",
 			fields: fields{
 				activeRoutine: cdc2.NewCdcActiveRoutine(),
+				cdcTask: &task.CreateCdcDetails{
+					TaskName: "task1",
+				},
 			},
 		},
 	}
@@ -2646,6 +2666,9 @@ func TestCdcTask_Restart(t *testing.T) {
 					"taskID-0",
 					tie,
 				),
+				cdcTask: &task.CreateCdcDetails{
+					TaskName: "task1",
+				},
 			},
 		},
 	}
@@ -2679,6 +2702,9 @@ func TestCdcTask_Restart(t *testing.T) {
 func TestCdcTask_Pause(t *testing.T) {
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")
@@ -2705,6 +2731,9 @@ func TestCdcTask_Cancel(t *testing.T) {
 			"taskID-1",
 			tie,
 		),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
 		holdCh: ch,
 	}
 	err = cdc.Cancel()
@@ -2740,7 +2769,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
-	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, no_full from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
+	sqlx := "select sink_uri, sink_type, sink_password, tables, filters, no_full, additional_config from mo_catalog.mo_cdc_task where account_id = .* and task_id =.*"
 	sinkUri, err := cdc2.JsonEncode(&cdc2.UriInfo{
 		User: "root",
 		Ip:   "127.0.0.1",
@@ -2774,6 +2803,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			"tables",
 			"filters",
 			"no_full",
+			"additional_config",
 		},
 	).AddRow(
 		sinkUri,
@@ -2782,6 +2812,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		tables,
 		filters,
 		true,
+		"{\"InitSnapshotSplitTxn\": false}",
 	),
 	)
 
@@ -2853,7 +2884,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 
 func Test_execFrontend(t *testing.T) {
 	pu := config.ParameterUnit{}
-	setGlobalPu(&pu)
+	setPu("", &pu)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2928,7 +2959,7 @@ func Test_getSqlForGetTask(t *testing.T) {
 func Test_initAesKey(t *testing.T) {
 	{
 		cdc2.AesKey = "test-aes-key-not-use-it-in-cloud"
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 
 		cdc2.AesKey = ""
@@ -2941,7 +2972,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Equal(t, e, err)
 	}
 
@@ -2951,7 +2982,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer queryTableStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.Error(t, err)
 	}
 
@@ -2966,7 +2997,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer decryptStub.Reset()
 
-		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func(string) *config.ParameterUnit {
 			return &config.ParameterUnit{
 				SV: &config.FrontendParameters{
 					KeyEncryptionKey: "kek",
@@ -2975,7 +3006,7 @@ func Test_initAesKey(t *testing.T) {
 		})
 		defer getGlobalPuStub.Reset()
 
-		err := initAesKeyBySqlExecutor(context.Background(), nil, 0)
+		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
 		assert.NoError(t, err)
 		assert.Equal(t, "aesKey", cdc2.AesKey)
 		cdc2.AesKey = ""
@@ -3120,7 +3151,7 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 	})
 	defer decryptStub.Reset()
 
-	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func() *config.ParameterUnit {
+	getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func(string) *config.ParameterUnit {
 		return &config.ParameterUnit{
 			SV: &config.FrontendParameters{
 				KeyEncryptionKey: "kek",

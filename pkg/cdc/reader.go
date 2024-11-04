@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,16 +33,18 @@ import (
 var _ Reader = new(tableReader)
 
 type tableReader struct {
-	cnTxnClient  client.TxnClient
-	cnEngine     engine.Engine
-	mp           *mpool.MPool
-	packerPool   *fileservice.Pool[*types.Packer]
-	info         *DbTableInfo
-	sinker       Sinker
-	wMarkUpdater *WatermarkUpdater
-	tick         *time.Ticker
-	restartFunc  func(*DbTableInfo) error
+	cnTxnClient          client.TxnClient
+	cnEngine             engine.Engine
+	mp                   *mpool.MPool
+	packerPool           *fileservice.Pool[*types.Packer]
+	info                 *DbTableInfo
+	sinker               Sinker
+	wMarkUpdater         *WatermarkUpdater
+	tick                 *time.Ticker
+	restartFunc          func(*DbTableInfo) error
+	initSnapshotSplitTxn bool
 
+	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
 }
@@ -58,17 +59,20 @@ func NewTableReader(
 	wMarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 	restartFunc func(*DbTableInfo) error,
+	initSnapshotSplitTxn bool,
 ) Reader {
 	reader := &tableReader{
-		cnTxnClient:  cnTxnClient,
-		cnEngine:     cnEngine,
-		mp:           mp,
-		packerPool:   packerPool,
-		info:         info,
-		sinker:       sinker,
-		wMarkUpdater: wMarkUpdater,
-		tick:         time.NewTicker(200 * time.Millisecond),
-		restartFunc:  restartFunc,
+		cnTxnClient:          cnTxnClient,
+		cnEngine:             cnEngine,
+		mp:                   mp,
+		packerPool:           packerPool,
+		info:                 info,
+		sinker:               sinker,
+		wMarkUpdater:         wMarkUpdater,
+		tick:                 time.NewTicker(200 * time.Millisecond),
+		restartFunc:          restartFunc,
+		initSnapshotSplitTxn: initSnapshotSplitTxn,
+		tableDef:             tableDef,
 	}
 
 	// batch columns layout:
@@ -83,19 +87,24 @@ func NewTableReader(
 	return reader
 }
 
-func (reader *tableReader) Close() {}
+func (reader *tableReader) Close() {
+	reader.sinker.Close()
+}
 
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
-	logutil.Infof("^^^^^ tableReader(%s).Run: start", reader.info.SourceTblName)
+	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
-		logutil.Infof("^^^^^ tableReader(%s).Run: end", reader.info.SourceTblName)
+		reader.Close()
+		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-ar.Pause:
 			return
 		case <-ar.Cancel:
 			return
@@ -103,18 +112,19 @@ func (reader *tableReader) Run(
 		}
 
 		if err := reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("reader %v failed err:%v", reader.info, err)
+			logutil.Errorf("cdc tableReader(%v) failed, err: %v\n", reader.info, err)
 
-			// if stale read, restart reader
-			var moErr *moerr.Error
-			if errors.As(err, &moErr) && moErr.ErrorCode() == moerr.ErrStaleRead {
+			// if stale read, try to restart reader
+			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
 				if err = reader.restartFunc(reader.info); err != nil {
-					logutil.Errorf("reader %v restart failed, err:%v", reader.info, err)
+					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v\n", reader.info, err)
 					return
 				}
+				logutil.Errorf("cdc tableReader(%v) restart successfully\n", reader.info)
 				continue
 			}
 
+			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit\n", reader.info)
 			return
 		}
 	}
@@ -133,6 +143,12 @@ func (reader *tableReader) readTable(
 	defer func() {
 		FinishTxnOp(ctx, err, txnOp, reader.cnEngine)
 	}()
+
+	EnterRunSql(txnOp)
+	defer func() {
+		ExitRunSql(txnOp)
+	}()
+
 	err = GetTxn(ctx, reader.cnEngine, txnOp)
 	if err != nil {
 		return err
@@ -148,7 +164,6 @@ func (reader *tableReader) readTable(
 		txnOp,
 		packer,
 		ar)
-
 	return
 }
 
@@ -168,9 +183,11 @@ func (reader *tableReader) readTableWithTxn(
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblId)
+	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceTblIdStr)
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
+	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return
 	}
@@ -180,38 +197,88 @@ func (reader *tableReader) readTableWithTxn(
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
 
+	defer func() {
+		if insertData != nil {
+			insertData.Clean(reader.mp)
+		}
+		if deleteData != nil {
+			deleteData.Clean(reader.mp)
+		}
+		if insertAtmBatch != nil {
+			insertAtmBatch.Close()
+		}
+		if deleteAtmBatch != nil {
+			deleteAtmBatch.Close()
+		}
+	}()
+
 	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
 		if atmBatch == nil {
-			atmBatch = NewAtomicBatch(
-				reader.mp,
-				fromTs, toTs,
-			)
+			atmBatch = NewAtomicBatch(reader.mp)
 		}
 		return atmBatch
 	}
 
-	recordCount := func(bat *batch.Batch) int {
-		if bat == nil || len(bat.Vecs) == 0 {
-			return 0
-		}
-		return bat.Vecs[0].Length()
+	addStartMetrics := func() {
+		count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
+		allocated := float64(insertData.Allocated() + deleteData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Add(count)
+		v2.CdcHoldChangesBytesGauge.Add(allocated)
+		v2.CdcReadRecordCounter.Add(count)
 	}
+
+	addSnapshotEndMetrics := func() {
+		count := float64(batchRowCount(insertData))
+		allocated := float64(insertData.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
+		v2.CdcHoldChangesBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
+	}
+
+	addTailEndMetrics := func(bat *AtomicBatch) {
+		count := float64(bat.RowCount())
+		allocated := float64(bat.Allocated())
+		v2.CdcTotalProcessingRecordCountGauge.Sub(count)
+		v2.CdcHoldChangesBytesGauge.Sub(allocated)
+		v2.CdcSinkRecordCounter.Add(count)
+	}
+
+	hasBegin := false
+	defer func() {
+		if hasBegin {
+			if err == nil {
+				err = reader.sinker.SendCommit(ctx)
+			} else {
+				_ = reader.sinker.SendRollback(ctx)
+			}
+		}
+
+		if err == nil {
+			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
+		}
+	}()
 
 	var curHint engine.ChangesHandle_Hint
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
 		case <-ar.Cancel:
 			return
 		default:
 		}
+		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
 
-		if insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp); err != nil {
+		start = time.Now()
+		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
+		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
+		if err != nil {
 			return
 		}
 
-		//both nil denote no more data
+		// both nil denote no more data (end of this tail)
 		if insertData == nil && deleteData == nil {
 			// heartbeat
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
@@ -222,21 +289,27 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		}
 
-		count := float64(recordCount(insertData) + recordCount(deleteData))
-		allocated := float64(insertData.Allocated() + deleteData.Allocated())
-		v2.CdcTotalProcessingRecordCountGauge.Add(count)
-		v2.CdcTotalAllocatedBatchBytesGauge.Add(allocated)
-		v2.CdcReadRecordCounter.Add(count)
+		addStartMetrics()
 
 		switch curHint {
 		case engine.ChangesHandle_Snapshot:
+			// output sql in a txn
+			if !hasBegin && !reader.initSnapshotSplitTxn {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
+					return err
+				}
+				hasBegin = true
+			}
+
 			// transform into insert instantly
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
-				outputTyp:     OutputTypeCheckpoint,
+				outputTyp:     OutputTypeSnapshot,
 				checkpointBat: insertData,
 				fromTs:        fromTs,
 				toTs:          toTs,
 			})
+			addSnapshotEndMetrics()
+			insertData.Clean(reader.mp)
 			if err != nil {
 				return
 			}
@@ -250,13 +323,33 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 			insertAtmBatch.Append(packer, insertData, reader.insTsColIdx, reader.insCompositedPkColIdx)
 			deleteAtmBatch.Append(packer, deleteData, reader.delTsColIdx, reader.delCompositedPkColIdx)
+
+			//if !strings.Contains(reader.info.SourceTblName, "order") {
+			//	logutil.Errorf("tableReader(%s)[%s, %s], insertAtmBatch: %s, deleteAtmBatch: %s",
+			//		reader.info.SourceTblName, fromTs.ToString(), toTs.ToString(),
+			//		insertAtmBatch.DebugString(reader.tableDef, false),
+			//		deleteAtmBatch.DebugString(reader.tableDef, true))
+			//}
+
+			// output sql in a txn
+			if !hasBegin {
+				if err = reader.sinker.SendBegin(ctx); err != nil {
+					return err
+				}
+				hasBegin = true
+			}
+
 			err = reader.sinker.Sink(ctx, &DecoderOutput{
-				outputTyp:      OutputTypeTailDone,
+				outputTyp:      OutputTypeTail,
 				insertAtmBatch: insertAtmBatch,
 				deleteAtmBatch: deleteAtmBatch,
 				fromTs:         fromTs,
 				toTs:           toTs,
 			})
+			addTailEndMetrics(insertAtmBatch)
+			addTailEndMetrics(deleteAtmBatch)
+			insertAtmBatch.Close()
+			deleteAtmBatch.Close()
 			if err != nil {
 				return
 			}

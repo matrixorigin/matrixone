@@ -16,8 +16,9 @@ package compile
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -47,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -510,7 +511,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				PipelineId:     ctx0.id,
 			}
 		}
-
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
 			for i := range t.RemoteRegs {
@@ -711,17 +711,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx,
 		}
-	case *mark.MarkJoin:
-		in.MarkJoin = &pipeline.MarkJoin{
-			Result:     t.Result,
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
-			Expr:       t.Cond,
-			OnList:     t.OnList,
-			HashOnPk:   t.HashOnPK,
-			JoinMapTag: t.JoinMapTag,
-		}
-		in.ProjectList = t.ProjectList
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
@@ -818,6 +807,26 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Args:   t.TableFunction.Args,
 			Params: t.TableFunction.Params,
 			Name:   t.TableFunction.FuncName,
+		}
+	case *postdml.PostDml:
+		in.PostDml = &pipeline.PostDml{
+			AddAffectedRows:        t.PostDmlCtx.AddAffectedRows,
+			Ref:                    t.PostDmlCtx.Ref,
+			PrimaryKeyIdx:          t.PostDmlCtx.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PostDmlCtx.PrimaryKeyName,
+			IsDelete:               t.PostDmlCtx.IsDelete,
+			IsInsert:               t.PostDmlCtx.IsInsert,
+			IsDeleteWithoutFilters: t.PostDmlCtx.IsDeleteWithoutFilters,
+		}
+		if t.PostDmlCtx.FullText != nil {
+			ft := t.PostDmlCtx.FullText
+			fulltext := &plan.PostDmlFullTextCtx{
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			in.PostDml.FullText = fulltext
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
@@ -1137,17 +1146,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ProjectList = opr.ProjectList
 		op = arg
-	case vm.Mark:
-		t := opr.GetMarkJoin()
-		arg := mark.NewArgument()
-		arg.Result = t.Result
-		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
-		arg.Cond = t.Expr
-		arg.OnList = t.OnList
-		arg.HashOnPK = t.HashOnPk
-		arg.JoinMapTag = t.JoinMapTag
-		arg.ProjectList = opr.ProjectList
-		op = arg
 	case vm.Top:
 		op = top.NewArgument().
 			WithLimit(opr.Limit).
@@ -1286,6 +1284,30 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		op = arg
+	case vm.PostDml:
+		t := opr.GetPostDml()
+		arg := postdml.NewArgument()
+		arg.PostDmlCtx = &postdml.PostDmlCtx{
+			Ref:                    t.Ref,
+			AddAffectedRows:        t.AddAffectedRows,
+			PrimaryKeyIdx:          t.PrimaryKeyIdx,
+			PrimaryKeyName:         t.PrimaryKeyName,
+			IsDelete:               t.IsDelete,
+			IsInsert:               t.IsInsert,
+			IsDeleteWithoutFilters: t.IsDeleteWithoutFilters,
+		}
+
+		if t.FullText != nil {
+			ft := t.FullText
+			fulltext := &postdml.PostDmlFullTextCtx{
+				SourceTableName: ft.SourceTableName,
+				IndexTableName:  ft.IndexTableName,
+				Parts:           ft.Parts,
+				AlgoParams:      ft.AlgoParams,
+			}
+			arg.PostDmlCtx.FullText = fulltext
+		}
 		op = arg
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

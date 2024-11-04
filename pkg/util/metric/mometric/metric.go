@@ -382,7 +382,7 @@ type InitOptions struct {
 	// internalGatherInterval, handle metric.SubSystemMO gather interval
 	internalGatherInterval time.Duration
 	// frontendServerStarted, function return bool, represent server started or not
-	frontendServerStarted func() bool
+	frontendServerStarted func(string) bool
 }
 
 type InitOption func(*InitOptions)
@@ -428,7 +428,7 @@ func WithInternalGatherInterval(interval time.Duration) InitOption {
 	})
 }
 
-func WithFrontendServerStarted(f func() bool) InitOption {
+func WithFrontendServerStarted(f func(string) bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.frontendServerStarted = f
 	})

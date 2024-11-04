@@ -50,7 +50,7 @@ count(*)
 10
 show snapshots where SNAPSHOT_NAME = 'sp01';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp01    2024-05-15 06:05:10.724748    account    sys        
+sp01    2024-10-28 10:09:01.873904373    account    sys        
 insert into snapshot01 values(11, 100.00, 8899001122, 101.24, 156.79);
 select count(*) from snapshot01;
 count(*)
@@ -181,15 +181,15 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-272916    test    def    create database test    0    1    2024-06-03 11:11:41    0    
+274717    test    def    create database test    0    1    2024-10-28 18:09:01    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test';
 attname
-__mo_rowid
 col1
 col2
 col3
 col4
 col5
+__mo_rowid
 drop snapshot sp01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -242,15 +242,15 @@ drop snapshot if exists sp03;
 create snapshot sp03 for account sys;
 show snapshots where account_name = 'sys';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp03    2024-05-15 06:05:11.168435    account    sys        
+sp03    2024-10-28 10:09:02.060237872    account    sys        
 insert into snapshot03 values(3,'sfhuwe',1,1);
 insert into snapshot03 values(4,'37829901k3d',2,2);
 drop snapshot if exists sp04;
 create snapshot sp04 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp04    2024-05-15 06:05:11.186636    account    sys        
-sp03    2024-05-15 06:05:11.168435    account    sys        
+sp04    2024-10-28 10:09:02.08058989    account    sys        
+sp03    2024-10-28 10:09:02.060237872    account    sys        
 select * from snapshot03;
 col1    col2    col3    col4
 1    sfhuwe    1    1
@@ -296,9 +296,9 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp05    2024-05-15 06:05:11.294674    account    sys        
-sp04    2024-05-15 06:05:11.186636    account    sys        
-sp03    2024-05-15 06:05:11.168435    account    sys        
+sp05    2024-10-28 10:09:02.122807362    account    sys        
+sp04    2024-10-28 10:09:02.08058989    account    sys        
+sp03    2024-10-28 10:09:02.060237872    account    sys        
 select count(*) from snapshot03 {snapshot = 'sp05'};
 count(*)
 5
@@ -314,10 +314,11 @@ count(*)
 3
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275154    test    def    create database test    0    1    2024-05-15 14:05:10    0    
+274717    test    def    create database test    0    1    2024-10-28 18:09:01    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp05'} where att_database = 'test';
 attname
 __mo_index_idx_col
+__mo_index_pri_col
 __mo_rowid
 col1
 col2
@@ -328,7 +329,6 @@ col1
 col2
 col3
 __mo_rowid
-__mo_index_pri_col
 drop snapshot sp05;
 drop snapshot sp04;
 drop snapshot sp03;
@@ -354,39 +354,39 @@ drop snapshot if exists snap01;
 create snapshot snap01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snap01    2024-05-15 06:05:12.271032    account    acc01        
+snap01    2024-10-28 10:09:02.571420221    account    acc01        
 use test01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 select count(*) from acc01_snap{snapshot = 'snap01'};
-not connect to a database
+No database selected
 select count(*) from mo_catalog.mo_tables{snapshot = 'snap01'} where reldatabase = 'test01';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'snap01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275240    test01    def    create database test01    2    2    2024-05-15 14:05:12    27    
+274805    test01    def    create database test01    2    2    2024-10-28 18:09:02    10    
 select attname from mo_catalog.mo_columns{snapshot = 'snap01'} where att_database = 'test01';
 attname
-__mo_cpkey_col
-__mo_rowid
 col1
 col2
 col3
+__mo_cpkey_col
+__mo_rowid
 drop database test01;
 select count(*) from mo_catalog.mo_tables{snapshot = 'snap01'} where reldatabase = 'test01';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'snap01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275240    test01    def    create database test01    2    2    2024-05-15 14:05:12    27    
+274805    test01    def    create database test01    2    2    2024-10-28 18:09:02    10    
 select attname from mo_catalog.mo_columns{snapshot = 'snap01'} where att_database = 'test01';
 attname
-__mo_cpkey_col
-__mo_rowid
 col1
 col2
 col3
+__mo_cpkey_col
+__mo_rowid
 drop snapshot snap01;
 drop account acc01;
 drop account if exists acc02;
@@ -406,10 +406,10 @@ drop snapshot if exists snap02;
 create snapshot snap02 for account acc02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snap02    2024-05-15 06:05:13.454736    account    acc02        
+snap02    2024-10-28 10:09:03.141989874    account    acc02        
 show snapshots where account_name = 'acc02';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snap02    2024-05-15 06:05:13.454736    account    acc02        
+snap02    2024-10-28 10:09:03.141989874    account    acc02        
 select count(*) from acc02_test01 {snapshot = 'snap02'};
 count(*)
 3
@@ -453,15 +453,15 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'snap02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275316    test02    def    create database test02    2    2    2024-05-15 14:05:13    28    
+274885    test02    def    create database test02    2    2    2024-10-28 18:09:03    11    
 select attname from mo_catalog.mo_columns{snapshot = 'snap02'} where att_database = 'test02';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
 col4
+__mo_fake_pk_col
+__mo_rowid
 drop snapshot snap02;
 drop table acc02_test01;
 drop database test02;
@@ -573,22 +573,22 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275321    test03    def    create database test03    0    1    2024-05-15 14:05:13    0    
+274889    test03    def    create database test03    0    1    2024-10-28 18:09:03    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
-__mo_index_pri_col
-__mo_fake_pk_col
-__mo_rowid
-email
 employeeNumber
-extension
-firstName
-jobTitle
 lastName
+firstName
+extension
+email
 officeCode
 reportsTo
+jobTitle
+__mo_fake_pk_col
 __mo_rowid
 __mo_index_idx_col
+__mo_index_pri_col
+__mo_rowid
 drop table testsnap_03;
 drop table testsnap_04;
 drop snapshot sp04;
@@ -610,7 +610,7 @@ count(*)
 47
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-06-03 10:16:00    0
+1    mo_catalog    mo_catalog        0    0    2024-10-28 18:07:36    0    
 drop table cluster01;
 drop snapshot sp06;
 drop database if exists test03;
@@ -653,15 +653,15 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp06'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275326    test03    def    create database test03    0    1    2024-05-15 14:05:14    0    
+274894    test03    def    create database test03    0    1    2024-10-28 18:09:03    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp06'} where att_database = 'test03';
 attname
-__mo_rowid
 col1
 col2
 col3
 col4
 col5
+__mo_rowid
 use sub_database01;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp06'} where reldatabase = 'sub_database01';
 internal error: find 0 snapshot records by name(sp06), expect only 1
@@ -683,7 +683,7 @@ drop snapshot if exists sp07;
 create snapshot sp07 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp07    2024-05-15 06:05:15.081991    account    sys        
+sp07    2024-10-28 10:09:04.235206461    account    sys        
 select count(*) from pt_table{snapshot = 'sp07'};
 count(*)
 11
@@ -695,13 +695,18 @@ count(*)
 11
 select * from mo_catalog.mo_database{snapshot = 'sp07'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275326    test03    def    create database test03    0    1    2024-05-15 14:05:14    0    
+274894    test03    def    create database test03    0    1    2024-10-28 18:09:03    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp07'} where att_database = 'test03';
 attname
-__mo_fake_pk_col
-__mo_rowid
-clo4
 col1
+col2
+col3
+clo4
+col5
+col6
+col7
+col8
+col9
 col10
 col11
 col12
@@ -712,18 +717,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -734,18 +739,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -756,18 +761,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -778,18 +783,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -800,18 +805,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -822,18 +827,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -844,18 +849,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -866,18 +871,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -888,18 +893,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -910,18 +915,18 @@ col16
 col17
 col18
 col19
-col2
 col20
+__mo_fake_pk_col
+__mo_rowid
+col1
+col2
 col3
+clo4
 col5
 col6
 col7
 col8
 col9
-__mo_fake_pk_col
-__mo_rowid
-clo4
-col1
 col10
 col11
 col12
@@ -932,14 +937,9 @@ col16
 col17
 col18
 col19
-col2
 col20
-col3
-col5
-col6
-col7
-col8
-col9
+__mo_fake_pk_col
+__mo_rowid
 drop snapshot sp07;
 drop table pt_table;
 drop database test03;
@@ -1014,11 +1014,9 @@ count(*)
 drop account test_tenant_1;
 select * from mo_catalog.mo_database{snapshot = 'sp08'} where datname = 'test04';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275414    test04    def    create database test04    0    1    2024-05-15 14:05:15    0    
+274986    test04    def    create database test04    0    1    2024-10-28 18:09:04    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp08'} where att_database = 'test04';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
@@ -1028,16 +1026,16 @@ maxvalue
 __mo_fake_pk_col
 __mo_rowid
 maxvalue
+__mo_fake_pk_col
+__mo_rowid
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp08'} where reldatabase = 'test04';
 count(*)
 3
 select * from mo_catalog.mo_database{snapshot = 'sp08'} where datname = 'test04';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275414    test04    def    create database test04    0    1    2024-05-15 14:05:15    0    
+274986    test04    def    create database test04    0    1    2024-10-28 18:09:04    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp08'} where att_database = 'test04';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
@@ -1047,6 +1045,8 @@ maxvalue
 __mo_fake_pk_col
 __mo_rowid
 maxvalue
+__mo_fake_pk_col
+__mo_rowid
 drop publication publication01;
 drop table normal_table01;
 use mo_catalog;
@@ -1076,12 +1076,12 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = `binary`} where datname = 'test05';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273259    test05    def    create database test05    0    1    2024-06-03 11:11:50    0    
+275069    test05    def    create database test05    0    1    2024-10-28 18:09:05    0    
 select attname from mo_catalog.mo_columns{snapshot = `binary`} where att_database = 'test05';
 attname
+a
 __mo_fake_pk_col
 __mo_rowid
-a
 drop snapshot `binary`;
 drop table t1;
 drop table if exists t1;
@@ -1099,12 +1099,12 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = consistent} where datname = 'test05';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273259    test05    def    create database test05    0    1    2024-06-03 11:11:50    0    
+275069    test05    def    create database test05    0    1    2024-10-28 18:09:05    0    
 select attname from mo_catalog.mo_columns{snapshot = consistent} where att_database = 'test05';
 attname
-__mo_rowid
 dvalue
 value32
+__mo_rowid
 drop snapshot consistent;
 drop table t1;
 drop database if exists test05;
@@ -1124,8 +1124,8 @@ drop snapshot if exists sp09;
 create snapshot sp09 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp09    2024-05-15 06:05:16.658938    account    sys        
-sp08    2024-05-15 06:05:16.140226    account    sys        
+sp09    2024-10-28 10:09:05.169634826    account    sys        
+sp08    2024-10-28 10:09:04.760322217    account    sys        
 select count(*) from tran01{snapshot = 'sp09'};
 count(*)
 3
@@ -1134,12 +1134,12 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp09'} where datname = 'test06';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275497    test06    def    create database test06    0    1    2024-05-15 14:05:16    0    
+275072    test06    def    create database test06    0    1    2024-10-28 18:09:05    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp09'} where att_database = 'test06';
 attname
+col1
 __mo_fake_pk_col
 __mo_rowid
-col1
 drop table tran01;
 drop snapshot sp09;
 drop database test06;
@@ -1153,7 +1153,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    MUL    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL(7)    YES        null        
+d    DECIMAL(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);

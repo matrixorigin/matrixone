@@ -35,8 +35,13 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
-const S3IOInputCount = "S3 IO Input Count"
-const S3IOOutputCount = "S3 IO Output Count"
+const S3List = "S3 List Count"
+const S3Head = "S3 Head Count"
+const S3Put = "S3 Put Count"
+const S3Get = "S3 Get Count"
+const S3Delete = "S3 Delete Count"
+const S3DeleteMul = "S3 DeleteMul Count"
+
 const Network = "Network"
 
 type ExplainData struct {
@@ -239,8 +244,13 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		//io
 		gDiskIO := NewStatisticValue(DiskIO, "byte")
 		gS3IOByte := NewStatisticValue(ScanBytes, "byte")
-		gS3IOInputCount := NewStatisticValue(S3IOInputCount, "count")
-		gS3IOOutputCount := NewStatisticValue(S3IOOutputCount, "count")
+
+		gS3ListCount := NewStatisticValue(S3List, "count")
+		gS3HeadCount := NewStatisticValue(S3Head, "count")
+		gS3PutCount := NewStatisticValue(S3Put, "count")
+		gS3GetCount := NewStatisticValue(S3Get, "count")
+		gS3DeleteCount := NewStatisticValue(S3Delete, "count")
+		gS3DeleteMulCount := NewStatisticValue(S3DeleteMul, "count")
 
 		// network
 		gNetwork := NewStatisticValue(Network, "byte")
@@ -262,16 +272,14 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 			}
 
 			for _, throughputValue := range node.Statistics.Throughput {
-				if throughputValue.Name == InputRows {
+				switch throughputValue.Name {
+				case InputRows:
 					ginputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputRows {
+				case OutputRows:
 					goutputRows.Value += throughputValue.Value
-				}
-				if throughputValue.Name == InputSize {
+				case InputSize:
 					ginputSize.Value += throughputValue.Value
-				}
-				if throughputValue.Name == OutputSize {
+				case OutputSize:
 					goutputSize.Value += throughputValue.Value
 				}
 			}
@@ -283,17 +291,23 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 			}
 
 			for _, ioValue := range node.Statistics.IO {
-				if ioValue.Name == DiskIO {
+				switch ioValue.Name {
+				case DiskIO:
 					gDiskIO.Value += ioValue.Value
-				}
-				if ioValue.Name == ScanBytes {
+				case ScanBytes:
 					gS3IOByte.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOInputCount {
-					gS3IOInputCount.Value += ioValue.Value
-				}
-				if ioValue.Name == S3IOOutputCount {
-					gS3IOOutputCount.Value += ioValue.Value
+				case S3List:
+					gS3ListCount.Value += ioValue.Value
+				case S3Head:
+					gS3HeadCount.Value += ioValue.Value
+				case S3Put:
+					gS3PutCount.Value += ioValue.Value
+				case S3Get:
+					gS3GetCount.Value += ioValue.Value
+				case S3Delete:
+					gS3DeleteCount.Value += ioValue.Value
+				case S3DeleteMul:
+					gS3DeleteMulCount.Value += ioValue.Value
 				}
 			}
 
@@ -308,7 +322,16 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		times := []StatisticValue{*gtimeConsumed, *gwaitTime}
 		mbps := []StatisticValue{*ginputRows, *goutputRows, *ginputSize, *goutputSize}
 		mems := []StatisticValue{*gMemorySize}
-		io := []StatisticValue{*gDiskIO, *gS3IOByte, *gS3IOInputCount, *gS3IOOutputCount}
+		io := []StatisticValue{
+			*gDiskIO,
+			*gS3IOByte,
+			*gS3ListCount,
+			*gS3HeadCount,
+			*gS3PutCount,
+			*gS3GetCount,
+			*gS3DeleteCount,
+			*gS3DeleteMulCount,
+		}
 		nw := []StatisticValue{*gNetwork}
 
 		graphData.Global.Statistics.Time = append(graphData.Global.Statistics.Time, times...)

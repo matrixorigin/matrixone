@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hayageek/threadsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -82,8 +85,10 @@ func NewTopProcess(
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 
 		// 3. other fields.
-		logger:   util.GetLogger(sid),
-		UnixTime: time.Now().UnixNano(),
+		logger:         util.GetLogger(sid),
+		UnixTime:       time.Now().UnixNano(),
+		PostDmlSqlList: threadsafe.NewSlice[string](),
+		StageCache:     threadsafe.NewMap[string, stage.StageDef](),
 	}
 
 	proc := &Process{
@@ -261,8 +266,8 @@ func (qbCtx *QueryBaseContext) DoSpecialCleanUp(isMergeCTE bool) bool {
 }
 
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
-func (qbCtx *QueryBaseContext) BuildQueryCtx() context.Context {
-	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
+func (qbCtx *QueryBaseContext) BuildQueryCtx(parent context.Context) context.Context {
+	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(parent)
 
 	qbCtx.Lock()
 	qbCtx.pipelineLoopBreak = false
