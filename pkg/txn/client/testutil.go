@@ -32,6 +32,7 @@ func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOptio
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
 	c := NewTxnClient("", ts, opts...)
+	defer c.Close()
 	c.Resume()
 	fn(c, ts)
 }
