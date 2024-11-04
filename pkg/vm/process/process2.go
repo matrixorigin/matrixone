@@ -22,7 +22,6 @@ import (
 	"github.com/hayageek/threadsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -81,8 +80,7 @@ func NewTopProcess(
 		UdfService:  udfService,
 
 		// 2. fields from make.
-		LastInsertID:   new(uint64),
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
+		LastInsertID: new(uint64),
 
 		// 3. other fields.
 		logger:         util.GetLogger(sid),
@@ -224,7 +222,6 @@ func (proc *Process) Free() {
 	if proc == nil {
 		return
 	}
-	proc.CleanValueScanBatchs()
 }
 
 type QueryBaseContext struct {

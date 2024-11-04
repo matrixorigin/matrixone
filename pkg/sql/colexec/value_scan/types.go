@@ -17,8 +17,8 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,11 +34,12 @@ type ValueScan struct {
 	// this means all the batches were saved other place.
 	// there is no need clean them after operator done.
 	dataInProcess bool
+	ColCount      int
+	NodeType      plan2.Node_NodeType
 
-	Batchs     []*batch.Batch
-	RowsetData *plan.RowsetData
-	ColCount   int
-	Uuid       []byte
+	Batchs        []*batch.Batch
+	RowsetData    *plan2.RowsetData
+	ExprExecLists [][]colexec.ExpressionExecutor
 }
 
 type container struct {
@@ -57,6 +58,10 @@ func init() {
 		reuse.DefaultOptions[ValueScan]().
 			WithEnableChecker(),
 	)
+}
+
+func NewArgument() *ValueScan {
+	return reuse.Alloc[ValueScan](nil)
 }
 
 func NewValueScanFromProcess() *ValueScan {
@@ -92,13 +97,43 @@ func (valueScan *ValueScan) Release() {
 
 func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 	valueScan.runningCtx.nowIdx = 0
-	valueScan.doBatchClean(proc)
+	// valueScan.doBatchClean(proc)
+	if valueScan.Batchs != nil {
+		valueScan.resetBatchs()
+	}
+	for i := 0; i < valueScan.ColCount; i++ {
+		exprExecList := valueScan.ExprExecLists[i]
+		for _, expr := range exprExecList {
+			expr.ResetForNextQuery()
+		}
+	}
 	valueScan.ResetProjection(proc)
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 	valueScan.FreeProjection(proc)
-	valueScan.doBatchClean(proc)
+	// valueScan.doBatchClean(proc)
+	if valueScan.Batchs != nil {
+		valueScan.cleanBatchs(proc)
+	}
+	for i := range valueScan.ExprExecLists {
+		exprExecList := valueScan.ExprExecLists[i]
+		for i, expr := range exprExecList {
+			if expr != nil {
+				expr.Free()
+				exprExecList[i] = nil
+			}
+		}
+	}
+}
+
+func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
+	for _, bat := range valueScan.Batchs {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	valueScan.Batchs = nil
 }
 
 func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
@@ -116,6 +151,16 @@ func (valueScan *ValueScan) doBatchClean(proc *process.Process) {
 		valueScan.Batchs[i] = nil
 	}
 	valueScan.Batchs = nil
+}
+
+func (valueScan *ValueScan) resetBatchs() {
+	for _, bat := range valueScan.Batchs {
+		if bat != nil {
+			for _, vec := range bat.Vecs {
+				vec.CleanOnlyData()
+			}
+		}
+	}
 }
 
 // TypeName implement the `reuse.ReusableObject` interface.
