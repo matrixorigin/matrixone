@@ -47,7 +47,7 @@ func (c *Client) init() error {
 			c.mutex.Lock()
 			defer c.mutex.Unlock()
 			if c.sc == nil {
-				conn, err := grpc.Dial(c.cfg.ServerAddress,
+				conn, err := grpc.NewClient(c.cfg.ServerAddress,
 					grpc.WithTransportCredentials(insecure.NewCredentials()),
 					grpc.WithDefaultCallOptions(
 						grpc.MaxCallSendMsgSize(math.MaxInt32),
