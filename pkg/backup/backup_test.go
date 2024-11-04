@@ -199,6 +199,9 @@ func TestBackupData2(t *testing.T) {
 	}
 	wg.Wait()
 	opts = config.WithLongScanAndCKPOpts(nil)
+	testutils.WaitExpect(5000, func() bool {
+		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
+	})
 	db.Restart(ctx, opts)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	deletedRows := 0
