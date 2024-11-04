@@ -104,6 +104,8 @@ id
 2022-01-02 00:00:00
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 invalid argument operator =, bad value [TIMESTAMP DOUBLE]
+SELECT * from t_timestamp WHERE id NOT IN (2.0200101e7,2.0200102e7);
+invalid argument operator !=, bad value [TIMESTAMP DOUBLE]
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 invalid argument operator >=, bad value [TIMESTAMP DOUBLE]
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
