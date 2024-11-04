@@ -1188,7 +1188,7 @@ const (
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history, status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	getPasswordHistoty = `select password_history from mo_catalog.mo_user where user_name = "%s";`
+	getPasswordHistotyOfUsrFormat = `select password_history from mo_catalog.mo_user where user_name = "%s";`
 
 	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
 
@@ -1645,7 +1645,7 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 }
 
 func getPasswordHistotyOfUserSql(user string) string {
-	return fmt.Sprintf(getPasswordOfUserFormat, user)
+	return fmt.Sprintf(getPasswordHistotyOfUsrFormat, user)
 }
 
 func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
