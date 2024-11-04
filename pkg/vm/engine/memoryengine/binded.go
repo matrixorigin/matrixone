@@ -120,3 +120,7 @@ func (b *BindedEngine) GetMessageCenter() any {
 func (b *BindedEngine) GetService() string {
 	return b.engine.GetService()
 }
+
+func (b *BindedEngine) GetCacheTS() timestamp.Timestamp {
+	return b.engine.GetCacheTS()
+}

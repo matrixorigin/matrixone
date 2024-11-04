@@ -369,6 +369,10 @@ func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog
 }
 
+func (e *Engine) GetCacheTS() timestamp.Timestamp {
+	return e.catalog.GetStartTs().ToTimestamp()
+}
+
 func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {

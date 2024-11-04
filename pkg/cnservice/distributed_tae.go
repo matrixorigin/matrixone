@@ -76,6 +76,7 @@ func (s *service) initDistributedTAE(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
 	)
 	pu.StorageEngine = s.storeEngine
+	client.SetCacheTSGetter(s.storeEngine)
 
 	// cdc mp
 	if s.cdcMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed); err != nil {

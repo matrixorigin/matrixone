@@ -173,6 +173,9 @@ type txnClient struct {
 	enableRefreshExpression    bool
 	txnOpenedCallbacks         []func(TxnOperator)
 
+	// cacheTSGetter is the interface which gets the start TS of catalog.
+	cacheTSGetter CacheTSGetter
+
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
 	// until the txn client's state to be normal; otherwise, if it is true,
@@ -226,6 +229,11 @@ func (client *txnClient) GetState() TxnState {
 		WaitActiveTxns: wt,
 		LatestTS:       client.timestampWaiter.LatestTS(),
 	}
+}
+
+// SetCacheTSGetter implements the TxnClient interface.
+func (client *txnClient) SetCacheTSGetter(t CacheTSGetter) {
+	client.cacheTSGetter = t
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
@@ -328,7 +336,8 @@ func (client *txnClient) doCreateTxn(
 		client.closeTxn,
 	)
 
-	if err := client.openTxn(op); err != nil {
+	wait, err := client.openTxn(op)
+	if err != nil {
 		return nil, err
 	}
 
@@ -346,6 +355,12 @@ func (client *txnClient) doCreateTxn(
 			_ = op.Rollback(ctx)
 			return nil, err
 		}
+	}
+	// If this transaction waits for the TN logtail service,
+	// we should check ts of catalog. If the ts is greater than
+	// snapshot ts, update snapshot ts to catalog ts.
+	if wait {
+		op.TryPushSnapshot(client.cacheTSGetter.GetCacheTS())
 	}
 
 	util.LogTxnSnapshotTimestamp(
@@ -500,7 +515,9 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 	return client.atomic.forceSyncCommitTimes.Load()
 }
 
-func (client *txnClient) openTxn(op *txnOperator) error {
+// openTxn tries to open transaction. The first return value is boolean, which indicates
+// if the transaction waits for the status of TN logtail service.
+func (client *txnClient) openTxn(op *txnOperator) (bool, error) {
 	client.mu.Lock()
 	defer func() {
 		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
@@ -508,15 +525,17 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		client.mu.Unlock()
 	}()
 
+	var wait bool
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.normalStateNoWait {
-				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
+				return false, moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
 			if op.opts.options.WaitPausedDisabled() {
-				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
+				return false, moerr.NewInvalidStateNoCtx("txn client is in pause state")
 			}
+			wait = true
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
@@ -531,19 +550,19 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
 		client.addActiveTxnLocked(op)
-		return nil
+		return wait, nil
 	}
 	var cancelC chan struct{}
 	if client.timestampWaiter != nil {
 		cancelC = client.timestampWaiter.CancelC()
 		if cancelC == nil {
-			return moerr.NewWaiterPausedNoCtx()
+			return false, moerr.NewWaiterPausedNoCtx()
 		}
 	}
 	op.reset.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
 	op.reset.waiter.ref()
 	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
-	return nil
+	return wait, nil
 }
 
 func (client *txnClient) closeTxn(event TxnEvent) {

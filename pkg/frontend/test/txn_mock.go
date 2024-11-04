@@ -392,6 +392,18 @@ func (mr *MockTxnClientMockRecorder) Resume() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resume", reflect.TypeOf((*MockTxnClient)(nil).Resume))
 }
 
+// SetCacheTSGetter mocks base method.
+func (m *MockTxnClient) SetCacheTSGetter(t client.CacheTSGetter) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCacheTSGetter", t)
+}
+
+// SetCacheTSGetter indicates an expected call of SetCacheTSGetter.
+func (mr *MockTxnClientMockRecorder) SetCacheTSGetter(t interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCacheTSGetter", reflect.TypeOf((*MockTxnClient)(nil).SetCacheTSGetter), t)
+}
+
 // SyncLatestCommitTS mocks base method.
 func (m *MockTxnClient) SyncLatestCommitTS(arg0 timestamp.Timestamp) {
 	m.ctrl.T.Helper()
@@ -1335,4 +1347,41 @@ func (m *MockWorkspace) UpdateSnapshotWriteOffset() {
 func (mr *MockWorkspaceMockRecorder) UpdateSnapshotWriteOffset() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).UpdateSnapshotWriteOffset))
+}
+
+// MockCacheTSGetter is a mock of CacheTSGetter interface.
+type MockCacheTSGetter struct {
+	ctrl     *gomock.Controller
+	recorder *MockCacheTSGetterMockRecorder
+}
+
+// MockCacheTSGetterMockRecorder is the mock recorder for MockCacheTSGetter.
+type MockCacheTSGetterMockRecorder struct {
+	mock *MockCacheTSGetter
+}
+
+// NewMockCacheTSGetter creates a new mock instance.
+func NewMockCacheTSGetter(ctrl *gomock.Controller) *MockCacheTSGetter {
+	mock := &MockCacheTSGetter{ctrl: ctrl}
+	mock.recorder = &MockCacheTSGetterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockCacheTSGetter) EXPECT() *MockCacheTSGetterMockRecorder {
+	return m.recorder
+}
+
+// GetCacheTS mocks base method.
+func (m *MockCacheTSGetter) GetCacheTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCacheTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// GetCacheTS indicates an expected call of GetCacheTS.
+func (mr *MockCacheTSGetterMockRecorder) GetCacheTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCacheTS", reflect.TypeOf((*MockCacheTSGetter)(nil).GetCacheTS))
 }

@@ -278,5 +278,6 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	op := &txnOperator{}
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
-	require.Error(t, c.openTxn(op))
+	_, err := c.openTxn(op)
+	require.Error(t, err)
 }

@@ -650,6 +650,23 @@ func TestBase(t *testing.T) {
 	)
 }
 
+func TestPushSnapshot(t *testing.T) {
+	runOperatorTests(t, func(
+		ctx context.Context,
+		tc *txnOperator,
+		_ *testTxnSender,
+	) {
+		require.NotNil(t, tc.TxnRef())
+		require.Equal(t, tc.Txn().SnapshotTS, tc.SnapshotTS())
+		cacheTS := timestamp.Timestamp{
+			PhysicalTime: 10,
+			LogicalTime:  10,
+		}
+		tc.TryPushSnapshot(cacheTS)
+		require.Equal(t, tc.SnapshotTS(), cacheTS)
+	})
+}
+
 func runOperatorTests(
 	t *testing.T,
 	tc func(context.Context, *txnOperator, *testTxnSender),

@@ -117,3 +117,7 @@ func (e *EntireEngine) GetMessageCenter() any {
 func (e *EntireEngine) GetService() string {
 	return e.Engine.GetService()
 }
+
+func (e *EntireEngine) GetCacheTS() timestamp.Timestamp {
+	return e.Engine.GetCacheTS()
+}

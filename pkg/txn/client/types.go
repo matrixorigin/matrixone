@@ -96,6 +96,12 @@ type TxnClient interface {
 	IterTxns(func(TxnOverview) bool)
 	// GetState returns the current state of txn client.
 	GetState() TxnState
+	// SetCacheTSGetter set the CacheTSGetter to the client.
+	// The CacheTSGetter gets the start ts of catalog. When TN first
+	// starts or restarts, some transactions wait for the TN ready,
+	// the snapshot TS of those transactions should be after the
+	// start ts of catalog.
+	SetCacheTSGetter(t CacheTSGetter)
 }
 
 type TxnState struct {
@@ -337,4 +343,8 @@ func (e TxnEvent) Committed() bool {
 
 func (e TxnEvent) Aborted() bool {
 	return e.Txn.Status == txn.TxnStatus_Aborted
+}
+
+type CacheTSGetter interface {
+	GetCacheTS() timestamp.Timestamp
 }

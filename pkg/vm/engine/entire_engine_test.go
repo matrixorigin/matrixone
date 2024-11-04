@@ -350,6 +350,10 @@ func (e *testEngine) GetService() string {
 	return ""
 }
 
+func (e *testEngine) GetCacheTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func (e *testEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
