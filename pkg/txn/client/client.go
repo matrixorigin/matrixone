@@ -23,12 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/ratelimit"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -36,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/ratelimit"
+	"go.uber.org/zap"
 )
 
 // WithTxnIDGenerator setup txn id generator
@@ -157,6 +157,7 @@ const (
 
 type txnClient struct {
 	sid                        string
+	stopper                    *stopper.Stopper
 	logger                     *log.MOLogger
 	clock                      clock.Clock
 	sender                     rpc.TxnSender
@@ -203,6 +204,8 @@ type txnClient struct {
 		// FIFO queue for ready to active txn
 		waitActiveTxns []*txnOperator
 	}
+
+	abortC chan time.Time
 }
 
 func (client *txnClient) GetState() TxnState {
@@ -236,7 +239,9 @@ func NewTxnClient(
 		logger: util.GetLogger(sid),
 		clock:  runtime.ServiceRuntime(sid).Clock(),
 		sender: sender,
+		abortC: make(chan time.Time, 1),
 	}
+	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.mu.state = paused
 	c.mu.cond = sync.NewCond(&c.mu)
 	c.mu.activeTxns = make(map[string]*txnOperator, 100000)
@@ -245,6 +250,9 @@ func NewTxnClient(
 	}
 	c.adjust()
 	c.startLeakChecker()
+	if err := c.stopper.RunTask(c.handleMarkActiveTxnAborted); err != nil {
+		panic(err)
+	}
 	return c
 }
 
@@ -314,9 +322,11 @@ func (client *txnClient) doCreateTxn(
 	client.limiter.Take()
 
 	op.timestampWaiter = client.timestampWaiter
-	op.AppendEventCallback(ClosedEvent,
+	op.AppendEventCallback(
+		ClosedEvent,
 		client.updateLastCommitTS,
-		client.closeTxn)
+		client.closeTxn,
+	)
 
 	if err := client.openTxn(op); err != nil {
 		return nil, err
@@ -364,6 +374,7 @@ func (client *txnClient) NewWithSnapshot(
 }
 
 func (client *txnClient) Close() error {
+	client.stopper.Stop()
 	if client.leakChecker != nil {
 		client.leakChecker.close()
 	}
@@ -544,6 +555,10 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 		client.mu.Unlock()
 	}()
+
+	if moerr.IsMoErrCode(event.Err, moerr.ErrCannotCommitOnInvalidCN) {
+		client.markAllActiveTxnAborted()
+	}
 
 	key := string(txn.ID)
 	op, ok := client.mu.activeTxns[key]
@@ -728,4 +743,39 @@ func (client *txnClient) getTxnOptions(
 		options = append(options, WithTxnEnableCheckDup())
 	}
 	return options
+}
+
+func (client *txnClient) markAllActiveTxnAborted() {
+	select {
+	case client.abortC <- time.Now():
+	default:
+	}
+}
+
+func (client *txnClient) handleMarkActiveTxnAborted(
+	ctx context.Context,
+) {
+	select {
+	case <-ctx.Done():
+		return
+	case from := <-client.abortC:
+		fn := func() {
+			client.mu.Lock()
+			defer client.mu.Unlock()
+
+			for _, op := range client.mu.activeTxns {
+				if op.reset.createAt.Before(from) {
+					op.addFlag(AbortedFlag)
+				}
+			}
+		}
+		fn()
+
+		if err := client.lockService.(lockservice.ResumeLockService).Resume(); err != nil {
+			client.logger.Error(
+				"resume lock service failed",
+				zap.Error(err),
+			)
+		}
+	}
 }

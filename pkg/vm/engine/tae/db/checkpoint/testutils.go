@@ -86,29 +86,40 @@ func (r *runner) CleanPenddingCheckpoint() {
 	}
 }
 
-func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
-	if versionInterval == 0 {
-		versionInterval = r.options.globalVersionInterval
+func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) error {
+	if interval == 0 {
+		interval = r.options.globalVersionInterval
 	}
 	if r.GetPenddingIncrementalCount() != 0 {
 		end = r.MaxIncrementalCheckpoint().GetEnd()
 		r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 			force:    true,
 			end:      end,
-			interval: versionInterval,
+			interval: interval,
 		})
 		return nil
 	}
-	timeout := time.After(versionInterval)
+	retryTime := 0
+	timeout := time.After(interval)
+	var err error
+	defer func() {
+		if err != nil || retryTime > 0 {
+			logutil.Error("ForceGlobalCheckpoint-End",
+				zap.Error(err),
+				zap.Uint64("retryTime", uint64(retryTime)))
+			return
+		}
+	}()
 	for {
 		select {
 		case <-timeout:
 			return moerr.NewInternalError(r.ctx, "timeout")
 		default:
-			err := r.ForceIncrementalCheckpoint(end, false)
+			err = r.ForceIncrementalCheckpoint(end, false)
 			if err != nil {
 				if dbutils.IsRetrieableCheckpoint(err) {
-					interval := versionInterval.Milliseconds() / 400
+					retryTime++
+					interval := interval.Milliseconds() / 400
 					time.Sleep(time.Duration(interval))
 					break
 				}
@@ -117,7 +128,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 			r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 				force:    true,
 				end:      end,
-				interval: versionInterval,
+				interval: interval,
 			})
 			return nil
 		}

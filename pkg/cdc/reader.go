@@ -172,8 +172,6 @@ func (reader *tableReader) readTableWithTxn(
 	txnOp client.TxnOperator,
 	packer *types.Packer,
 	ar *ActiveRoutine) (err error) {
-	v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
-
 	var rel engine.Relation
 	var changes engine.ChangesHandle
 	//step1 : get relation
@@ -249,7 +247,7 @@ func (reader *tableReader) readTableWithTxn(
 	defer func() {
 		if hasBegin {
 			if err == nil {
-				_ = reader.sinker.SendCommit(ctx)
+				err = reader.sinker.SendCommit(ctx)
 			} else {
 				_ = reader.sinker.SendRollback(ctx)
 			}
@@ -271,6 +269,7 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		default:
 		}
+		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
 
 		start = time.Now()
 		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
