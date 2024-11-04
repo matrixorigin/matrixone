@@ -77,6 +77,10 @@ authentication_string    VARCHAR(100)    YES        null
 status    VARCHAR(8)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 expired_time    TIMESTAMP(0)    YES        null        
+password_last_changed    TIMESTAMP(0)    YES        utc_timestamp()        
+password_history    TEXT(0)    YES        []        
+login_attempts    INT UNSIGNED(32)    YES        0        
+lock_time    TIMESTAMP(0)    YES        utc_timestamp()        
 login_type    VARCHAR(16)    YES        null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -395,6 +399,10 @@ authentication_string    VARCHAR(100)    YES        null
 status    VARCHAR(8)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 expired_time    TIMESTAMP(0)    YES        null        
+password_last_changed    TIMESTAMP(0)    YES        utc_timestamp()        
+password_history    TEXT(0)    YES        []        
+login_attempts    INT UNSIGNED(32)    YES        0        
+lock_time    TIMESTAMP(0)    YES        utc_timestamp()        
 login_type    VARCHAR(16)    YES        null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -704,6 +712,10 @@ authentication_string    VARCHAR(100)    YES        null
 status    VARCHAR(8)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 expired_time    TIMESTAMP(0)    YES        null        
+password_last_changed    TIMESTAMP(0)    YES        utc_timestamp()        
+password_history    TEXT(0)    YES        []        
+login_attempts    INT UNSIGNED(32)    YES        0        
+lock_time    TIMESTAMP(0)    YES        utc_timestamp()        
 login_type    VARCHAR(16)    YES        null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -1013,6 +1025,10 @@ authentication_string    VARCHAR(100)    YES        null
 status    VARCHAR(8)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 expired_time    TIMESTAMP(0)    YES        null        
+password_last_changed    TIMESTAMP(0)    YES        utc_timestamp()        
+password_history    TEXT(0)    YES        []        
+login_attempts    INT UNSIGNED(32)    YES        0        
+lock_time    TIMESTAMP(0)    YES        utc_timestamp()        
 login_type    VARCHAR(16)    YES        null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
