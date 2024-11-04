@@ -262,3 +262,7 @@ func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 func (e *Engine) GetMessageCenter() any {
 	return nil
 }
+
+func (e *Engine) GetCacheTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}

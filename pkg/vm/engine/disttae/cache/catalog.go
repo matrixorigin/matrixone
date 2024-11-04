@@ -84,6 +84,12 @@ func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	return ts.GE(&cc.mu.start) && ts.LE(&cc.mu.end)
 }
 
+func (cc *CatalogCache) GetStartTs() types.TS {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.mu.start
+}
+
 type GCReport struct {
 	TScanItem  int
 	TStaleItem int

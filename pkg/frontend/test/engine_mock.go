@@ -455,17 +455,17 @@ func (mr *MockRelDataMockRecorder) AttachTombstones(tombstones interface{}) *gom
 }
 
 // BuildEmptyRelData mocks base method.
-func (m *MockRelData) BuildEmptyRelData() engine.RelData {
+func (m *MockRelData) BuildEmptyRelData(preAllocSize int) engine.RelData {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildEmptyRelData")
+	ret := m.ctrl.Call(m, "BuildEmptyRelData", preAllocSize)
 	ret0, _ := ret[0].(engine.RelData)
 	return ret0
 }
 
 // BuildEmptyRelData indicates an expected call of BuildEmptyRelData.
-func (mr *MockRelDataMockRecorder) BuildEmptyRelData() *gomock.Call {
+func (mr *MockRelDataMockRecorder) BuildEmptyRelData(preAllocSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildEmptyRelData", reflect.TypeOf((*MockRelData)(nil).BuildEmptyRelData))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildEmptyRelData", reflect.TypeOf((*MockRelData)(nil).BuildEmptyRelData), preAllocSize)
 }
 
 // DataCnt mocks base method.
@@ -1454,6 +1454,58 @@ func (mr *MockRelationMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1)
 }
 
+// MockBaseReader is a mock of BaseReader interface.
+type MockBaseReader struct {
+	ctrl     *gomock.Controller
+	recorder *MockBaseReaderMockRecorder
+}
+
+// MockBaseReaderMockRecorder is the mock recorder for MockBaseReader.
+type MockBaseReaderMockRecorder struct {
+	mock *MockBaseReader
+}
+
+// NewMockBaseReader creates a new mock instance.
+func NewMockBaseReader(ctrl *gomock.Controller) *MockBaseReader {
+	mock := &MockBaseReader{ctrl: ctrl}
+	mock.recorder = &MockBaseReaderMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockBaseReader) EXPECT() *MockBaseReaderMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockBaseReader) Close() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Close")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockBaseReaderMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockBaseReader)(nil).Close))
+}
+
+// Read mocks base method.
+func (m *MockBaseReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 *batch.Batch) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3, arg4)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Read indicates an expected call of Read.
+func (mr *MockBaseReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockBaseReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
+}
+
 // MockReader is a mock of Reader interface.
 type MockReader struct {
 	ctrl     *gomock.Controller
@@ -1842,6 +1894,20 @@ func (m *MockEngine) Delete(ctx context.Context, databaseName string, op client.
 func (mr *MockEngineMockRecorder) Delete(ctx, databaseName, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), ctx, databaseName, op)
+}
+
+// GetCacheTS mocks base method.
+func (m *MockEngine) GetCacheTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCacheTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// GetCacheTS indicates an expected call of GetCacheTS.
+func (mr *MockEngineMockRecorder) GetCacheTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCacheTS", reflect.TypeOf((*MockEngine)(nil).GetCacheTS))
 }
 
 // GetMessageCenter mocks base method.

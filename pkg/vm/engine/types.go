@@ -989,6 +989,8 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	GetCacheTS() timestamp.Timestamp
 }
 
 type VectorPool interface {

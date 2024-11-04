@@ -530,6 +530,16 @@ func (tc *txnOperator) UpdateSnapshot(
 	return err
 }
 
+// TryPushSnapshot tries to push the snapshot ts byb the cache ts, which is
+// from catalog. If the current snapshot ts is smaller than cache ts, push it.
+func (tc *txnOperator) TryPushSnapshot(cacheTS timestamp.Timestamp) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if cacheTS.Greater(tc.mu.txn.SnapshotTS) {
+		tc.mu.txn.SnapshotTS = cacheTS
+	}
+}
+
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	if !tc.opts.coordinator {
 		tc.logger.Fatal("apply snapshot on non-coordinator txn operator")
