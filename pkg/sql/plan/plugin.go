@@ -23,7 +23,7 @@ import (
 
 // coldef shall copy index type
 var (
-	plugin_exec_func_name = "wasm_run_table"
+	plugin_exec_func_name = "moplugin_table"
 
 	pluginColdefs = []*plan.ColDef{
 		{

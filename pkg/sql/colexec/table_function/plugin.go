@@ -61,8 +61,10 @@ import (
 //
 
 type pluginState struct {
-	inited bool
-	called bool
+	inited       bool
+	called       bool
+	plugin_cache map[string][]byte
+
 	// holding one call batch, pluginState owns it.
 	batch *batch.Batch
 }
@@ -93,6 +95,7 @@ func (u *pluginState) free(tf *TableFunction, proc *process.Process, pipelineFai
 func pluginPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &pluginState{}
+	st.plugin_cache = make(map[string][]byte)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
@@ -222,14 +225,19 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 			AllowedHosts: []string{"localhost"},
 		}
 	} else {
-		// treat as datalink
-		wasmdl, err := datalink.NewDatalink(wasmurl, proc)
-		if err != nil {
-			return err
-		}
-		image, err := wasmdl.GetBytes(proc)
-		if err != nil {
-			return err
+		image, ok := u.plugin_cache[wasmurl]
+		if !ok {
+			// treat as datalink
+			wasmdl, err := datalink.NewDatalink(wasmurl, proc)
+			if err != nil {
+				return err
+			}
+			image, err = wasmdl.GetBytes(proc)
+			if err != nil {
+				return err
+			}
+
+			u.plugin_cache[wasmurl] = image
 		}
 		manifest = extism.Manifest{
 			Wasm: []extism.Wasm{

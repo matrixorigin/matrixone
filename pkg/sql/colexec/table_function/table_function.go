@@ -151,7 +151,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
-	case "wasm_run_table":
+	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
