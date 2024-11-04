@@ -60,7 +60,7 @@ type passwordReuseInfo struct {
 	PasswordReuseInterval int64
 }
 
-func needValidatePassword(session *Session) (bool, error) {
+func needValidatePwd(session *Session) (bool, error) {
 	value, err := session.GetGlobalSysVar(ValidatePasswordVar)
 	if err != nil {
 		return false, err
@@ -78,7 +78,7 @@ func needValidatePassword(session *Session) (bool, error) {
 	return true, nil
 }
 
-func validatePassword(ctx context.Context, pwd string, session *Session, authUserName, curUserName string) error {
+func validatePwd(ctx context.Context, pwd string, session *Session, authUserName, curUserName string) error {
 	// check if the username is in the password
 	err := validateCheckUserNameInPassword(ctx, pwd, authUserName, curUserName, session)
 	if err != nil {
