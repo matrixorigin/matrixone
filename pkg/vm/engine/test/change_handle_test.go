@@ -259,7 +259,8 @@ func TestChangesHandle3(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeHandler.Close(true)

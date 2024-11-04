@@ -79,8 +79,9 @@ func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 	o.filterValidTombstones()
 	results := make([]reviseResult, 0, len(o.segObjects)+1)
 	for _, objs := range o.segObjects {
-		if objs = controlMem(objs, mem); objs != nil {
+		if ok, eSize := controlMem(objs, mem); ok {
 			results = append(results, reviseResult{objs, TaskHostDN})
+			mem -= eSize
 		}
 	}
 	if len(o.tombstones) > 0 {
