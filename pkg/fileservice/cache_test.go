@@ -27,11 +27,13 @@ import (
 )
 
 func Test_readCache(t *testing.T) {
+	ctx := context.Background()
+
 	slowCacheReadThreshold = time.Second
 
 	size := int64(128)
 	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
-	defer m.Close()
+	defer m.Close(ctx)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
 	defer cancel()
@@ -42,8 +44,8 @@ func Test_readCache(t *testing.T) {
 			Entries: []IOEntry{
 				{
 					Size: 3,
-					ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-						cacheData := allocator.AllocateCacheData(1)
+					ToCacheData: func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+						cacheData := allocator.AllocateCacheData(ctx, 1)
 						cacheData.Bytes()[0] = 42
 						return cacheData, nil
 					},
@@ -65,7 +67,7 @@ func Test_readCache(t *testing.T) {
 			Entries: []IOEntry{
 				{
 					Size: 3,
-					ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					ToCacheData: func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 						return nil, context.DeadlineExceeded
 					},
 				},
@@ -92,7 +94,7 @@ func (cache *testCache) Update(ctx context.Context, vector *IOVector, async bool
 	panic("implement me")
 }
 
-func (cache *testCache) Flush() {
+func (cache *testCache) Flush(ctx context.Context) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -102,18 +104,20 @@ func (cache *testCache) DeletePaths(ctx context.Context, paths []string) error {
 	panic("implement me")
 }
 
-func (cache *testCache) Evict(done chan int64) {
+func (cache *testCache) Evict(ctx context.Context, done chan int64) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (cache *testCache) Close() {}
+func (cache *testCache) Close(ctx context.Context) {}
 
 func Test_readCache2(t *testing.T) {
+	ctx := context.Background()
+
 	slowCacheReadThreshold = time.Second
 
 	m := &testCache{}
-	defer m.Close()
+	defer m.Close(ctx)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
 	defer cancel()
@@ -124,8 +128,8 @@ func Test_readCache2(t *testing.T) {
 			Entries: []IOEntry{
 				{
 					Size: 3,
-					ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-						cacheData := allocator.AllocateCacheData(1)
+					ToCacheData: func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+						cacheData := allocator.AllocateCacheData(ctx, 1)
 						cacheData.Bytes()[0] = 42
 						return cacheData, nil
 					},
