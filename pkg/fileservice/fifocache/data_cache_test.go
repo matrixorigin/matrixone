@@ -15,7 +15,10 @@
 package fifocache
 
 import (
+	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -51,4 +54,75 @@ func TestShardCacheKey(t *testing.T) {
 			t.Fatal("not good")
 		}
 	}
+}
+
+func TestShardCacheKeyAllocs(t *testing.T) {
+	key := fscache.CacheKey{
+		Sz:     42,
+		Offset: 3,
+		Path:   strings.Repeat("abc", 42),
+	}
+	if n := testing.AllocsPerRun(64, func() {
+		shardCacheKey(key)
+	}); n != 0 {
+		t.Fatalf("should not allocate")
+	}
+}
+
+func BenchmarkDataCacheSet(b *testing.B) {
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil, nil, nil,
+	)
+	b.ResetTimer()
+	for i := range b.N {
+		cache.Set(
+			context.Background(),
+			fscache.CacheKey{
+				Path:   "foo" + strconv.Itoa(i),
+				Sz:     int64(i % 65536),
+				Offset: int64(i),
+			},
+			testBytes([]byte("foo")),
+		)
+	}
+}
+
+func BenchmarkDataCacheGet(b *testing.B) {
+	cache := NewDataCache(
+		fscache.ConstCapacity(1024),
+		nil, nil, nil,
+	)
+	key := fscache.CacheKey{
+		Path:   "foo",
+		Sz:     42,
+		Offset: 42,
+	}
+	cache.Set(
+		context.Background(),
+		key,
+		testBytes([]byte("foo")),
+	)
+	b.ResetTimer()
+	for range b.N {
+		cache.Get(context.Background(), key)
+	}
+}
+
+type testBytes []byte
+
+var _ fscache.Data = testBytes{}
+
+func (t testBytes) Bytes() []byte {
+	return t
+}
+
+func (t testBytes) Release() {
+}
+
+func (t testBytes) Retain() {
+}
+
+func (t testBytes) Slice(length int) fscache.Data {
+	return t[:length]
 }
