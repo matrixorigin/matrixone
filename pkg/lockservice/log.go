@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -558,7 +559,6 @@ func logLocalBindsInvalid(
 
 func logUnlockTxn(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 ) func() {
 	if logger == nil {
@@ -577,7 +577,6 @@ func logUnlockTxn(
 
 func logTxnReadyToClose(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 ) {
 	if logger == nil {
@@ -595,7 +594,6 @@ func logTxnReadyToClose(
 
 func logTxnUnlockTable(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 	table uint64,
 ) {
@@ -615,7 +613,6 @@ func logTxnUnlockTable(
 
 func logTxnUnlockTableCompleted(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 	table uint64,
 	cs *cowSlice,
@@ -639,7 +636,6 @@ func logTxnUnlockTableCompleted(
 
 func logUnlockTableOnLocal(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 	bind pb.LockTable,
 ) {
@@ -659,7 +655,6 @@ func logUnlockTableOnLocal(
 
 func logUnlockTableOnRemote(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 	bind pb.LockTable,
 ) {
@@ -679,7 +674,6 @@ func logUnlockTableOnRemote(
 
 func logUnlockTableOnRemoteFailed(
 	logger *log.MOLogger,
-	serviceID string,
 	txn *activeTxn,
 	bind pb.LockTable,
 	err error,
