@@ -600,13 +600,13 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			}
 		}
 
-		newExprList := plan2.DeepCopyExprList(inExprList)
+		newList := plan2.DeepCopyExprList(inExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+			newList = append(newList, s.DataSource.BlockFilterList...)
 		}
 
 		crs := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList, crs)
+		relData, err := c.expandRanges(s.DataSource.node, newList, crs)
 		if err != nil {
 			return err
 		}
