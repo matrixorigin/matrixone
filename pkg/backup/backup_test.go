@@ -198,8 +198,8 @@ func TestBackupData2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	db.Opts = config.WithLongScanAndCKPOpts(db.Opts)
-	db.Restart(ctx)
+	opts = config.WithLongScanAndCKPOpts(db.Opts)
+	db.Restart(ctx, opts)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	deletedRows := 0
 	{
