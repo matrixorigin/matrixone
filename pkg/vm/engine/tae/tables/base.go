@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -268,7 +269,15 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	var dedupFn any
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, getRowIDAlkFunctions, data.Vecs[0], rowIDs, blkID, maxVisibleRow, obj.LoadPersistedCommitTS, txn, skipCommittedBeforeTxnForAblk,
+			keys.GetType().Oid,
+			getRowIDAlkFunctions,
+			data.Vecs[0],
+			rowIDs,
+			blkID,
+			maxVisibleRow,
+			obj.LoadPersistedCommitTS,
+			txn,
+			skipCommittedBeforeTxnForAblk,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
@@ -314,6 +323,11 @@ func (obj *baseObject) containsWithLoad(
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
 			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
+			func(vrowID any) *model.TransDels {
+				rowID := vrowID.(types.Rowid)
+				blkID := rowID.BorrowBlockID()
+				return obj.rt.TransferDelsMap.GetDelsForBlk(*blkID)
+			},
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
