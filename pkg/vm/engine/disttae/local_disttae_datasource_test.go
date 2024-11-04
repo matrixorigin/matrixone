@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,21 +150,58 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	}
 }
 
-func TestXxx1(t *testing.T) {
-	txnOp, closeFunc := client.NewTestTxnOperator(context.Background())
-	defer closeFunc()
-	txnOp.AddWorkspace(&Transaction{})
+func TestBigS3WorkspaceIterMissingData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
 
-	ls := &LocalDisttaeDataSource{
-		table: &txnTable{
-			tableName: "mo_increment_columns",
-			db: &txnDatabase{
-				op: txnOp,
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	// This batch can be obtained by 'insert into db.t1 select result from generate_series(1, 67117056) g;'
+	s3Bat := batch.NewWithSize(2)
+	s3Bat.SetRowCount(8193)
+	s3Bat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
+	txn := &Transaction{
+		op:            txnOp,
+		deletedBlocks: &deletedBlocks{},
+		writes: []Entry{
+			{
+				typ:        INSERT,
+				databaseId: 11,
+				tableId:    22,
+				fileName:   "a-s3-file-name",
+				bat:        s3Bat,
 			},
 		},
 	}
-	writes := make([]Entry, 200)
-	writes = append(writes, Entry{typ: INSERT}, Entry{typ: INSERT, bat: batch.EmptyBatch})
-	checkTxnLastInsertRow(ls, writes, 42, batch.EmptyBatch)
-	checkTxnOffsetZero(ls, writes)
+
+	// This batch can be obtained by 'insert into db.t2 values (1);'
+	normalBat := batch.NewWithSize(1)
+	normalBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	m := mpool.MustNewZero()
+	normalBat.SetRowCount(1)
+	vector.AppendFixed(normalBat.Vecs[0], int32(1), false, m)
+	txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+
+	txnOp.AddWorkspace(txn)
+
+	// query t2 table
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: len(txn.writes),
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 23,
+		},
+	}
+
+	outBatch := batch.NewWithSize(1)
+	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, m, outBatch)
+	require.NoError(t, err)
+	require.Equal(t, 1, outBatch.RowCount())
+	require.Equal(t, 1, outBatch.Vecs[0].Length())
 }
