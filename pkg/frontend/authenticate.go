@@ -1642,12 +1642,8 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 	return fmt.Sprintf(getPasswordOfUserFormat, user), nil
 }
 
-func getSqlForUpdatePasswordHistoryOfUser(ctx context.Context, passwordHistory, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updatePasswordHistoryOfUserFormat, passwordHistory, user), nil
+func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
+	return fmt.Sprintf(updatePasswordHistoryOfUserFormat, passwordHistory, user)
 }
 
 func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (string, error) {
@@ -1658,36 +1654,20 @@ func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (
 	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
 }
 
-func getSqlForUpdateUnlcokStatusOfUser(ctx context.Context, status, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, status, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user), nil
+func getSqlForUpdateUnlcokStatusOfUser(status, user string) string {
+	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user)
 }
 
-func getSqlForUpdateLoginAttemptsOfUser(ctx context.Context, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user), nil
+func getSqlForUpdateLoginAttemptsOfUser(user string) string {
+	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user)
 }
 
-func getSqlForUpdateLockTimeOfUser(ctx context.Context, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateLockTimeOfUserFormat, user), nil
+func getSqlForUpdateLockTimeOfUser(user string) string {
+	return fmt.Sprintf(updateLockTimeOfUserFormat, user)
 }
 
-func getSqlForUpdateStatusLockOfUser(ctx context.Context, status, user string) (string, error) {
-	err := inputNameIsInvalid(ctx, status, user)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user), nil
+func getSqlForUpdateStatusLockOfUser(status, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2733,6 +2713,15 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	userName, err := normalizeName(ctx, user.Username)
 	if err != nil {
 		return err
@@ -2753,15 +2742,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		if err != nil {
 			return err
 		}
-	}
-
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
 	}
 
 	if !user.AuthExist {

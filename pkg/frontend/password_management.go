@@ -307,17 +307,9 @@ func getPasswordReuseInfo(session *Session) (*passwordReuseInfo, error) {
 		return nil, err
 	}
 
-	if passwordHistory == nil {
-		return nil, nil
-	}
-
 	passwordReuseInterval, err := session.GetGlobalSysVar(PasswordReuseInterval)
 	if err != nil {
 		return nil, err
-	}
-
-	if passwordReuseInterval == nil {
-		return nil, nil
 	}
 
 	return &passwordReuseInfo{
@@ -331,9 +323,6 @@ func whetherSavePasswordHistory(ses *Session) (bool, error) {
 	passwordReuseInfo, err := getPasswordReuseInfo(ses)
 	if err != nil {
 		return false, err
-	}
-	if passwordReuseInfo == nil {
-		return false, nil
 	}
 
 	return passwordReuseInfo.PasswordHisoty > 0 && passwordReuseInfo.PasswordReuseInterval > 0, nil
@@ -578,10 +567,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	}
 
 	// update the password history
-	sql, err = getSqlForUpdatePasswordHistoryOfUser(ctx, string(passwordHistory), user)
-	if err != nil {
-		return err
-	}
+	sql = getSqlForUpdatePasswordHistoryOfUser(string(passwordHistory), user)
 
 	err = bh.Exec(ctx, sql)
 	if err != nil {

@@ -2102,10 +2102,7 @@ func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) erro
 		sql string
 		err error
 	)
-	sql, err = getSqlForUpdateUnlcokStatusOfUser(ctx, userStatusUnlock, userName)
-	if err != nil {
-		return err
-	}
+	sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -2118,10 +2115,7 @@ func increaseLoginAttempts(ctx context.Context, userName string, bh BackgroundEx
 		sql string
 		err error
 	)
-	sql, err = getSqlForUpdateLoginAttemptsOfUser(ctx, userName)
-	if err != nil {
-		return err
-	}
+	sql = getSqlForUpdateLoginAttemptsOfUser(userName)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -2134,10 +2128,7 @@ func updateLockTime(ctx context.Context, userName string, bh BackgroundExec) err
 		sql string
 		err error
 	)
-	sql, err = getSqlForUpdateLockTimeOfUser(ctx, userName)
-	if err != nil {
-		return err
-	}
+	sql = getSqlForUpdateLockTimeOfUser(userName)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -2150,10 +2141,7 @@ func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error 
 		sql string
 		err error
 	)
-	sql, err = getSqlForUpdateStatusLockOfUser(ctx, userStatusLock, userName)
-	if err != nil {
-		return err
-	}
+	sql = getSqlForUpdateStatusLockOfUser(userStatusLock, userName)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
