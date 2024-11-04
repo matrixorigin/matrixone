@@ -180,9 +180,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
 	}()
 
 	// update the top context with some trace information and values.
@@ -343,7 +340,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 		}
 	}()
 	// temporary workaround for issue #20005, will be remove soon
-	if defChanged || true {
+	if defChanged {
 		var pn *plan2.Plan
 		pn, e = c.buildPlanFunc(topContext)
 		if e != nil {
