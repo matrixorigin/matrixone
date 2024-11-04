@@ -1188,6 +1188,8 @@ const (
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history, status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
+	getPasswordHistoty = `select password_history from mo_catalog.mo_user where user_name = "%s";`
+
 	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
 
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
@@ -1640,6 +1642,10 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(getPasswordOfUserFormat, user), nil
+}
+
+func getPasswordHistotyOfUserSql(user string) string {
+	return fmt.Sprintf(getPasswordOfUserFormat, user)
 }
 
 func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
@@ -2800,14 +2806,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			if err != nil {
 				return err
 			}
-		}
-
-		if !user.AuthExist {
-			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
-		}
-
-		if user.IdentTyp != tree.AccountIdentifiedByPassword {
-			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 		}
 
 		//encryption the password

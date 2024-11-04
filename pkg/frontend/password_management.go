@@ -351,10 +351,7 @@ func getUserPassword(ctx context.Context, bh BackgroundExec, user string) ([]pas
 		passowrdHistory string
 	)
 	// get the number of password records for the current user
-	sql, err = getSqlForPasswordOfUser(ctx, user)
-	if err != nil {
-		return nil, err
-	}
+	sql = getPasswordHistotyOfUserSql(user)
 
 	bh.ClearExecResultSet()
 	bh.Exec(ctx, sql)
@@ -366,13 +363,12 @@ func getUserPassword(ctx context.Context, bh BackgroundExec, user string) ([]pas
 
 	var records []passwordHistoryRecord
 	if execResultArrayHasData(erArray) {
-		passowrdHistory, err = erArray[0].GetString(ctx, 0, 4)
+		passowrdHistory, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
 
 		// parse the password history to get the number of password records
-
 		err = json.Unmarshal([]byte(passowrdHistory), &records)
 		if err != nil {
 			return nil, err
@@ -385,10 +381,6 @@ func getUserPassword(ctx context.Context, bh BackgroundExec, user string) ([]pas
 }
 
 func checkPasswordHistoryRule(ctx context.Context, reuseInfo *passwordReuseInfo, userPasswords []passwordHistoryRecord, pwd string) (canUse bool, err error) {
-	if reuseInfo.PasswordHisoty <= 0 {
-		return true, nil
-	}
-
 	if len(userPasswords) == 0 {
 		return true, nil
 	}
@@ -408,10 +400,6 @@ func checkPasswordHistoryRule(ctx context.Context, reuseInfo *passwordReuseInfo,
 }
 
 func checkPasswordIntervalRule(ctx context.Context, reuseInfo *passwordReuseInfo, userPasswords []passwordHistoryRecord, pwd string) (canUse bool, err error) {
-	if reuseInfo.PasswordReuseInterval <= 0 {
-		return true, nil
-	}
-
 	if len(userPasswords) == 0 {
 		return true, nil
 	}
@@ -450,10 +438,6 @@ func passwordVerification(ctx context.Context, reuseInfo *passwordReuseInfo, pwd
 	canDeleteNum := userPasswordNum - reuseInfo.PasswordHisoty + 1
 	if canDeleteNum < 0 {
 		canDeleteNum = 0
-	}
-
-	if reuseInfo.PasswordHisoty <= 0 && reuseInfo.PasswordReuseInterval <= 0 {
-		return true, canDeleteNum, nil
 	}
 
 	// check the password history and password interval

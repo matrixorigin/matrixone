@@ -216,9 +216,91 @@ func Test_HandleTenantUpgrade(t *testing.T) {
 			}, txnOperator)
 
 			upg_mo_user_add_password_last_changed.Upgrade(executor, uint32(0))
-			upg_mo_user_add_password_history.Upgrade(executor, uint32(0))
-			upg_mo_user_add_login_attempts.Upgrade(executor, uint32(0))
 			upg_mo_user_add_lock_time.Upgrade(executor, uint32(0))
+		},
+	)
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(strings.ToLower(sql), strings.ToLower("SELECT")) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 50, 0),
+						types.New(types.T_varchar, 50, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int32, 32, 0),
+						types.New(types.T_varchar, 10, 0),
+						types.New(types.T_varchar, 10, 0),
+						types.New(types.T_varchar, 10, 0),
+					}
+
+					memRes := executor.NewMemResult(
+						typs,
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{"TEXT"})
+					executor.AppendStringRows(memRes, 1, []string{"YES"})
+					executor.AppendFixedRows(memRes, 2, []int64{64})
+					executor.AppendFixedRows(memRes, 3, []int64{0})
+					executor.AppendFixedRows(memRes, 4, []int64{0})
+					executor.AppendFixedRows(memRes, 5, []int64{0})
+					executor.AppendFixedRows(memRes, 6, []int32{0})
+					executor.AppendStringRows(memRes, 7, []string{""})
+					executor.AppendStringRows(memRes, 8, []string{""})
+					executor.AppendStringRows(memRes, 9, []string{""})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			upg_mo_user_add_password_history.Upgrade(executor, uint32(0))
+		},
+	)
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(strings.ToLower(sql), strings.ToLower("SELECT")) {
+					typs := []types.Type{
+						types.New(types.T_varchar, 50, 0),
+						types.New(types.T_varchar, 50, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int64, 64, 0),
+						types.New(types.T_int32, 32, 0),
+						types.New(types.T_varchar, 10, 0),
+						types.New(types.T_varchar, 10, 0),
+						types.New(types.T_varchar, 10, 0),
+					}
+
+					memRes := executor.NewMemResult(
+						typs,
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{"INT UNSIGNED"})
+					executor.AppendStringRows(memRes, 1, []string{"YES"})
+					executor.AppendFixedRows(memRes, 2, []int64{64})
+					executor.AppendFixedRows(memRes, 3, []int64{0})
+					executor.AppendFixedRows(memRes, 4, []int64{0})
+					executor.AppendFixedRows(memRes, 5, []int64{0})
+					executor.AppendFixedRows(memRes, 6, []int32{0})
+					executor.AppendStringRows(memRes, 7, []string{""})
+					executor.AppendStringRows(memRes, 8, []string{""})
+					executor.AppendStringRows(memRes, 9, []string{""})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			upg_mo_user_add_login_attempts.Upgrade(executor, uint32(0))
 		},
 	)
 }
@@ -237,6 +319,18 @@ func Test_HandleTenantUpgradeError(t *testing.T) {
 
 			if err := Handler.HandleTenantUpgrade(context.Background(), 0, executor); err == nil {
 				t.Errorf("HandleTenantUpgrade() should reprot error")
+			}
+
+			if err := upg_mo_user_add_password_history.Upgrade(executor, uint32(0)); err == nil {
+				t.Errorf("upg_mo_user_add_password_history.Upgrade() should reprot error")
+			}
+
+			if err := upg_mo_user_add_login_attempts.Upgrade(executor, uint32(0)); err == nil {
+				t.Errorf("upg_mo_user_add_login_attempts.Upgrade() should reprot error")
+			}
+
+			if err := upg_mo_user_add_lock_time.Upgrade(executor, uint32(0)); err == nil {
+				t.Errorf("upg_mo_user_add_lock_time.Upgrade() should reprot error")
 			}
 		},
 	)
