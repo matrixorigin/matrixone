@@ -242,9 +242,10 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 	})
 	objs := o.objects
 
-	isStandalone := common.IsStandaloneBoost.Load()
-	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
-
+	/*
+		isStandalone := common.IsStandaloneBoost.Load()
+		mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
+	*/
 	if ok, _ := controlMem(objs, mem); !ok {
 		return nil
 	}
@@ -265,24 +266,24 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 		return nil
 	}
 
-	schedCN := func() []reviseResult {
-		if ok, _ := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load())); !ok {
-			return nil
+	/*
+		schedCN := func() []reviseResult {
+			if ok, _ := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load())); !ok {
+				return nil
+			}
+			cnobjs := o.optimize(objs, config)
+			return []reviseResult{{cnobjs, TaskHostCN}}
 		}
-		cnobjs := o.optimize(objs, config)
-		return []reviseResult{{cnobjs, TaskHostCN}}
-	}
-
-	if isStandalone && mergeOnDNIfStandalone {
-		return schedDN()
-	}
-
-	// CNs come into the picture in two cases:
-	// 1.cluster deployed
-	// 2.standalone deployed but it's asked to merge on cn
-	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
-		return schedCN()
-	}
+		if isStandalone && mergeOnDNIfStandalone {
+			return schedDN()
+		}
+		// CNs come into the picture in two cases:
+		// 1.cluster deployed
+		// 2.standalone deployed but it's asked to merge on cn
+		if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
+			return schedCN()
+		}
+	*/
 
 	// CNs don't take over the task, leave it on dn.
 	return schedDN()
