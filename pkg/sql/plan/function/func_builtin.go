@@ -1175,15 +1175,16 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	op.tryExpand(length, proc.Mp())
-
-	bitMap := new(nulls.Nulls)
-
 	for _, v := range parameters {
-		if v.IsConstNull() {
-			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+		if v.AllNull() {
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
+	}
+
+	op.tryExpand(length, proc.Mp())
+	bitMap := new(nulls.Nulls)
+	for _, v := range parameters {
 		SerialHelper(v, bitMap, op.ps, false)
 	}
 
