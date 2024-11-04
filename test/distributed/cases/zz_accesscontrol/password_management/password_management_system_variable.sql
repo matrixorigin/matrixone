@@ -8,7 +8,6 @@ SET GLOBAL validate_password.number_count = default;
 SET GLOBAL validate_password.special_char_count = default;
 
 select @@validate_password;
-select @@validate_password.check_user_name;
 select @@validate_password.changed_characters_percentage;
 select @@validate_password.policy;
 select @@validate_password.length;
