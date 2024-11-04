@@ -68,6 +68,8 @@ type Routine struct {
 
 	restricted atomic.Bool
 
+	expired atomic.Bool
+
 	printInfoOnce bool
 
 	mc *migrateController
@@ -87,6 +89,14 @@ func (rt *Routine) setResricted(val bool) {
 
 func (rt *Routine) isRestricted() bool {
 	return rt.restricted.Load()
+}
+
+func (rt *Routine) setExpired(val bool) {
+	rt.expired.Store(val)
+}
+
+func (rt *Routine) isExpired() bool {
+	return rt.expired.Load()
 }
 
 func (rt *Routine) increaseCount(counter func()) {

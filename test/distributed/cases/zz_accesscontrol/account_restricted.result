@@ -10,15 +10,15 @@ mysql
 system
 system_metrics
 create table r_test(c1 int);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into r_test values(3);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 update r_test set c1=5;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 truncate table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop account if exists acc1;
 create account if not exists acc1 ADMIN_NAME 'admin' IDENTIFIED BY '123efg' comment 'account comment';
 create database res_test;
@@ -28,38 +28,38 @@ insert into r_test values(3,'a'),(4,'b'),(7,'h');
 update r_test set c1=2 where c2='a';
 alter account acc1 restricted;
 create database rdb;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop database rdb;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create table r1(c1 int,c2 varchar(20));
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into r_test values(8,'c');
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 update r_test set c1=5 where c2='h';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 delete from r_test where c1=4;
 select * from r_test;
 c1    c2
 7    h
 2    a
 truncate table r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create view r_view as select * from r_test;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop view r_view;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into ti1 values (1,1,1), (2,2,2);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 insert into ti2 values (1,1,1), (2,2,2);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 show databases;
 Database
 information_schema
@@ -186,7 +186,7 @@ show full tables from res_test;;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 privilege_name    obj_type    privilege_level
 values    table    *.*
@@ -194,25 +194,25 @@ select user_name from mo_catalog.mo_user;
 user_name
 admin
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter table r_test drop index ui;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create role role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant all on table *.* to role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant create table, drop table on database *.* to role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 create user user1 identified by 'pass1';
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 grant role1 to user1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop user user1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop role role1;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 drop database account_res;
-internal error: do not have privilege to execute the statement
+internal error: do not have enough storage to execute the statement
 alter account acc1 suspend;
 select account_name,status,comments from mo_catalog.mo_account where account_name='acc1';
 account_name    status    comments
