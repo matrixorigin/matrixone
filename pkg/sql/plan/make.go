@@ -150,6 +150,33 @@ func makePlan2BoolConstExprWithType(v bool) *plan.Expr {
 	}
 }
 
+func makePlan2Int8ConstExpr(v int8) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_I8Val{
+			I8Val: int32(v),
+		},
+	}}
+}
+
+func makePlan2Int16ConstExpr(v int16) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_I16Val{
+			I16Val: int32(v),
+		},
+	}}
+}
+
+func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_I32Val{
+			I32Val: v,
+		},
+	}}
+}
+
 func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
 	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
@@ -159,8 +186,126 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
 	}}
 }
 
+func makePlan2TimeConstExpr(v int64) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Timeval{
+			Timeval: v,
+		},
+	}}
+}
+
+func makePlan2DateConstExpr(v int32) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Dateval{
+			Dateval: v,
+		},
+	}}
+}
+
+func makePlan2DateTimeConstExpr(v int64) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Datetimeval{
+			Datetimeval: v,
+		},
+	}}
+}
+
+func makePlan2TimestampConstExpr(v int64) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Timestampval{
+			Timestampval: v,
+		},
+	}}
+}
+
+var MakePlan2BoolConstExprWithType = makePlan2BoolConstExprWithType
+var MakePlan2Int8ConstExprWithType = makePlan2Int8ConstExprWithType
+var MakePlan2Int16ConstExprWithType = makePlan2Int16ConstExprWithType
+var MakePlan2Int32ConstExprWithType = makePlan2Int32ConstExprWithType
 var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+var MakePlan2Uint8ConstExprWithType = makePlan2Uint8ConstExprWithType
+var MakePlan2Uint16ConstExprWithType = makePlan2Uint16ConstExprWithType
+var MakePlan2Uint32ConstExprWithType = makePlan2Uint32ConstExprWithType
 var MakePlan2Uint64ConstExprWithType = makePlan2Uint64ConstExprWithType
+
+var MakePlan2TimeConstExprWithType = makePlan2TimeConstExprWithType
+var MakePlan2DateConstExprWithType = makePlan2DateConstExprWithType
+var MakePlan2DateTimeConstExprWithType = makePlan2DateTimeConstExprWithType
+var MakePlan2TimestampConstExprWithType = makePlan2TimestampConstExprWithType
+
+func makePlan2Int8ConstExprWithType(v int8) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Int8ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_int8),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Int16ConstExprWithType(v int16) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Int16ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_int16),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Int32ConstExprWithType(v int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Int32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2TimeConstExprWithType(v int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2TimeConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_time),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2DateConstExprWithType(v int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2DateConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_date),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2DateTimeConstExprWithType(v int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2DateTimeConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_datetime),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2TimestampConstExprWithType(v int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2TimestampConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_timestamp),
+			NotNullable: true,
+		},
+	}
+}
 
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
@@ -236,6 +381,33 @@ func makePlan2Int64VecExprWithType(mp *mpool.MPool, vals ...int64) *plan.Expr {
 	}
 }
 
+func makePlan2Uint8ConstExpr(v uint8) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_U8Val{
+			U8Val: uint32(v),
+		},
+	}}
+}
+
+func makePlan2Uint16ConstExpr(v uint16) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_U16Val{
+			U16Val: uint32(v),
+		},
+	}}
+}
+
+func makePlan2Uint32ConstExpr(v uint32) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_U32Val{
+			U32Val: v,
+		},
+	}}
+}
+
 func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_Lit {
 	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
@@ -255,6 +427,45 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
+func makePlan2Uint8ConstExprWithType(v uint8) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Uint8ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_uint8),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Uint16ConstExprWithType(v uint16) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Uint16ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_uint16),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Uint32ConstExprWithType(v uint32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Uint32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_uint32),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Float32ConstExpr(v float32) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Fval{
+			Fval: v,
+		},
+	}}
+}
+
 func makePlan2Float64ConstExpr(v float64) *plan.Expr_Lit {
 	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
@@ -264,6 +475,7 @@ func makePlan2Float64ConstExpr(v float64) *plan.Expr_Lit {
 	}}
 }
 
+var MakePlan2Float32ConstExprWithType = makePlan2Float32ConstExprWithType
 var MakePlan2Float64ConstExprWithType = makePlan2Float64ConstExprWithType
 
 func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
@@ -271,6 +483,16 @@ func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
 		Expr: makePlan2Float64ConstExpr(v),
 		Typ: plan.Type{
 			Id:          int32(types.T_float64),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Float32ConstExprWithType(v float32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Float32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_float32),
 			NotNullable: true,
 		},
 	}
@@ -435,6 +657,7 @@ func makePlan2TypeValue(typ *types.Type) plan.Type {
 }
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
+var MakePlan2TypeValue = makePlan2TypeValue
 
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
 	oid := types.T(typ.Id)

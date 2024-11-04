@@ -1289,7 +1289,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		op.(*table_scan.TableScan).ProjectList = opr.ProjectList
 	case vm.ValueScan:
-		op = value_scan.NewValueScanFromProcess()
+		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
 			bat := batch.NewOffHeapEmpty()
