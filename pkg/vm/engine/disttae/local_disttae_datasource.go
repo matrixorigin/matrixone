@@ -21,6 +21,8 @@ import (
 	"slices"
 	"sort"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -268,7 +271,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	filter any,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
-) (*objectio.BlockInfo, engine.DataState, error) {
+) (info *objectio.BlockInfo, state engine.DataState, err error) {
 
 	if ls.memPKFilter == nil {
 		ff := filter.(engine_util.MemPKFilter)
@@ -276,7 +279,48 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	if len(cols) == 0 {
-		return nil, engine.End, nil
+		state = engine.End
+		return
+	}
+
+	injected, logLevel := objectio.LogReaderInjected(ls.table.tableName)
+	if injected && logLevel > 0 {
+		defer func() {
+			if err != nil {
+				logutil.Error(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+					zap.Error(err),
+				)
+				return
+			}
+			if state == engine.End {
+				return
+			}
+			if info != nil {
+				logutil.Info(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+					zap.String("blk", info.String()),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logutil.Info(
+					"LOGREADER-INJECTED-2",
+					zap.String("table", ls.table.tableName),
+					zap.String("txn", ls.table.db.op.Txn().DebugString()),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+					zap.String("ps", fmt.Sprintf("%p", ls.pState)),
+				)
+			}
+		}()
 	}
 
 	// bathed prefetch block data and deletes
@@ -286,9 +330,11 @@ func (ls *LocalDisttaeDataSource) Next(
 		switch ls.iteratePhase {
 		case engine.InMem:
 			outBatch.CleanOnlyData()
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, outBatch, mp)
-			if err != nil {
-				return nil, engine.InMem, err
+			if err = ls.iterateInMemData(
+				ctx, cols, types, seqNums, outBatch, mp,
+			); err != nil {
+				state = engine.InMem
+				return
 			}
 
 			if outBatch.RowCount() == 0 {
@@ -296,26 +342,30 @@ func (ls *LocalDisttaeDataSource) Next(
 				continue
 			}
 
-			return nil, engine.InMem, nil
+			state = engine.InMem
+			return
 
 		case engine.Persisted:
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				state = engine.End
+				return
 			}
 
 			ls.handleOrderBy()
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
-				return nil, engine.End, nil
+				state = engine.End
+				return
 			}
 
-			blk := ls.rangeSlice.Get(ls.rangesCursor)
+			info = ls.rangeSlice.Get(ls.rangesCursor)
 			ls.rangesCursor++
-
-			return blk, engine.Persisted, nil
+			state = engine.Persisted
+			return
 
 		case engine.End:
-			return nil, ls.iteratePhase, nil
+			state = ls.iteratePhase
+			return
 		}
 	}
 }

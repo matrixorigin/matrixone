@@ -78,6 +78,10 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 		}, 0)))
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	// Do not resume the txn client for now.
 	// c.Resume()
 	var wg sync.WaitGroup
@@ -109,6 +113,10 @@ func TestNewTxnWithNormalStateNoWait(t *testing.T) {
 		}, 0)))
 	runtime.SetupServiceBasedRuntime("", rt)
 	c := NewTxnClient("", newTestTxnSender(), WithNormalStateNoWait(true))
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	// Do not resume the txn client.
 	// c.Resume()
 	var wg sync.WaitGroup
