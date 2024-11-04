@@ -69,7 +69,8 @@ func newBaseObject(
 		appendMVCC: updates.NewAppendMVCCHandle(meta),
 	}
 	obj.meta.Store(meta)
-	obj.appendMVCC.SetAppendListener(obj.OnApplyAppend)
+	obj.appendMVCC.SetAppendListener(
+		obj.OnApplyAppend)
 	obj.RWMutex = obj.appendMVCC.RWMutex
 	return obj
 }
@@ -235,7 +236,8 @@ func (obj *baseObject) ResolvePersistedColumnData(
 	col int,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	err = obj.Scan(ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
+	err = obj.Scan(
+		ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	return
 }
 
@@ -281,7 +283,11 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, getDuplicatedRowIDNABlkFunctions, data.Vecs[0], rowIDs, blkID,
+			keys.GetType().Oid,
+			getDuplicatedRowIDNABlkFunctions,
+			data.Vecs[0],
+			rowIDs,
+			blkID,
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
@@ -331,7 +337,10 @@ func (obj *baseObject) containsWithLoad(
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, containsNABlkFunctions, data.Vecs[0], keys,
+			keys.GetType().Oid,
+			containsNABlkFunctions,
+			data.Vecs[0],
+			keys,
 		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
@@ -377,7 +386,8 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			continue
 		}
-		err = obj.getDuplicateRowsWithLoad(ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, skipCommittedBeforeTxnForAblk, maxVisibleRow, mp)
+		err = obj.getDuplicateRowsWithLoad(
+			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, skipCommittedBeforeTxnForAblk, maxVisibleRow, mp)
 		if err != nil {
 			return err
 		}
@@ -415,7 +425,8 @@ func (obj *baseObject) persistedContains(
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			continue
 		}
-		err = obj.containsWithLoad(ctx, txn, keys, sels, uint16(i), isAblk, isCommitting, mp)
+		err = obj.containsWithLoad(
+			ctx, txn, keys, sels, uint16(i), isAblk, isCommitting, mp)
 		if err != nil {
 			return err
 		}
@@ -470,7 +481,8 @@ func (obj *baseObject) Scan(
 ) (err error) {
 	node := obj.PinNode()
 	defer node.Unref()
-	return node.Scan(ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
+	return node.Scan(
+		ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
 }
 
 func (obj *baseObject) FillBlockTombstones(
@@ -532,12 +544,14 @@ func (obj *baseObject) GetValue(
 	if !obj.meta.Load().IsTombstone && !skipCheckDelete {
 		var bat *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
-		err = HybridScanByBlock(ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
+		err = HybridScanByBlock(
+			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
 		if err != nil {
 			return
 		}
 		defer bat.Close()
-		err = txn.GetStore().FillInWorkspaceDeletes(obj.meta.Load().AsCommonID(), &bat.Deletes, uint64(0))
+		err = txn.GetStore().FillInWorkspaceDeletes(
+			obj.meta.Load().AsCommonID(), &bat.Deletes, uint64(0))
 		if err != nil {
 			return
 		}
@@ -552,7 +566,8 @@ func (obj *baseObject) GetValue(
 		return
 	}
 	var bat *containers.Batch
-	err = obj.Scan(ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
+	err = obj.Scan(
+		ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	if err != nil {
 		return
 	}
