@@ -57,7 +57,7 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
 	// cancel the context to stop its pre-pipelines.
-	proc.Cancel()
+	proc.Cancel(err)
 
 	// do special cleanup for the pipeline at a loop.
 	if isMergeCte, isSpecial := p.isCtePipelineAtLoop(); isSpecial {

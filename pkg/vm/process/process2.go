@@ -147,9 +147,9 @@ func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 // BuildPipelineContext cleans the old pipeline context and creates a new one from the input parent context.
 func (proc *Process) BuildPipelineContext(parentContext context.Context) context.Context {
 	if proc.Cancel != nil {
-		proc.Cancel()
+		proc.Cancel(nil)
 	}
-	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
+	proc.Ctx, proc.Cancel = context.WithCancelCause(parentContext)
 	return proc.Ctx
 }
 
@@ -193,7 +193,7 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 // ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
 // It's a very dangerous operation, should be used with caution.
 // And we only use it for the newly built pipeline by the pipeline's ParallelRun method.
-func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
+func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelCauseFunc) {
 	proc.Ctx = ctx
 	proc.Cancel = cancel
 }
