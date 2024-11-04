@@ -565,16 +565,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 				if indexDef.Unique {
 					// 1. Unique Index related logic
-					err = s.handleUniqueIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleUniqueIndexTableV2(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 					// 2. Regular Secondary index
-					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleRegularSecondaryIndexTableV2(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 					// 3. Master index
-					err = s.handleMasterIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleMasterIndexTableV2(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
 					// 3. FullText index
-					err = s.handleFullTextIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+					err = s.handleFullTextIndexTableV2(c, dbSource, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 					// 4. IVF indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
@@ -593,7 +593,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndexV2(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -701,7 +701,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
+					err = s.handleVectorIvfFlatIndexV2(c, dbSource, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -1725,7 +1725,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndexV2(c, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1823,17 +1823,10 @@ func (s *Scope) handleVectorIvfFlatIndexV2(c *Compile, dbSource engine.Database,
 
 	// 2. create hidden tables
 	if indexInfo != nil {
-		err := indexTableBuild(c, indexInfo.GetIndexTables()[0], dbSource)
-		if err != nil {
-			return err
-		}
-		err = indexTableBuild(c, indexInfo.GetIndexTables()[1], dbSource)
-		if err != nil {
-			return err
-		}
-		err = indexTableBuild(c, indexInfo.GetIndexTables()[2], dbSource)
-		if err != nil {
-			return err
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, table, dbSource); err != nil {
+				return err
+			}
 		}
 
 		//tables := make([]string, 3)
