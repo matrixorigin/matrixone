@@ -273,8 +273,6 @@ func Test_doRestorePitr(t *testing.T) {
 			TimeStamp:   nanoTimeFormat(ts),
 		}
 
-		ses.SetTenantInfo(tenant)
-
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
