@@ -510,7 +510,7 @@ func CopyGCDir(
 		filesList := make([]*taeFile, 0)
 		needCopy := true
 		for _, object := range objects {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), dir)
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
 			if err != nil {
 				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
 				err = nil
@@ -518,7 +518,7 @@ func CopyGCDir(
 				break
 			}
 			filesList = append(filesList, &taeFile{
-				path:     dir + string(os.PathSeparator) + name,
+				path:     name,
 				size:     files[metaFile.GetIndex()].Size,
 				checksum: checksum,
 				needCopy: true,
