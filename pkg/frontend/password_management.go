@@ -70,8 +70,8 @@ func needValidatePwd(session *Session) (bool, error) {
 		return false, nil
 	}
 
-	validatePassword, ok := value.(int8)
-	if !ok || validatePassword != 1 {
+	validatePasswordConfig, ok := value.(int8)
+	if !ok || validatePasswordConfig != 1 {
 		return false, nil
 	}
 
@@ -110,8 +110,8 @@ func validateCheckUserNameInPassword(ctx context.Context, pwd, authUserName, cur
 		return nil
 	}
 
-	checkUserName, ok := value.(int8)
-	if !ok || checkUserName != 1 {
+	checkUserNameConfig, ok := value.(int8)
+	if !ok || checkUserNameConfig != 1 {
 		return nil
 	}
 
@@ -146,8 +146,8 @@ func validatePasswordCheckCasePercentage(ctx context.Context, password string, s
 		return nil
 	}
 
-	percentage, ok := value.(int64)
-	if !ok || percentage == 0 {
+	percentageConfig, ok := value.(int64)
+	if !ok || percentageConfig == 0 {
 		return nil
 	}
 
@@ -159,7 +159,7 @@ func validatePasswordCheckCasePercentage(ctx context.Context, password string, s
 		}
 	}
 
-	if changed*100/len(password) < int(percentage) {
+	if changed*100/len(password) < int(percentageConfig) {
 		return moerr.NewInvalidInputf(ctx, "Password '%s' does not contain enough changed characters", password)
 	}
 
@@ -167,7 +167,13 @@ func validatePasswordCheckCasePercentage(ctx context.Context, password string, s
 }
 
 func validatePasswordPolicyInPassword(ctx context.Context, password string, session *Session) error {
-	value, err := session.GetGlobalSysVar(ValidatePasswordPolicy)
+	var (
+		err          error
+		value        interface{}
+		policyConfig int64
+		ok           bool
+	)
+	value, err = session.GetGlobalSysVar(ValidatePasswordPolicy)
 	if err != nil {
 		return err
 	}
@@ -176,20 +182,20 @@ func validatePasswordPolicyInPassword(ctx context.Context, password string, sess
 		return nil
 	}
 
-	policy, ok := value.(int64)
+	policyConfig, ok = value.(int64)
 	if !ok {
 		return moerr.NewInvalidArg(ctx, "Invalid value for validate_password.policy", value)
 	}
 
-	if policy == 0 {
+	if policyConfig == 0 {
 		// low policy
-		err := validatePasswordLengthInPassword(ctx, password, session)
+		err = validatePasswordLengthInPassword(ctx, password, session)
 		if err != nil {
 			return err
 		}
 	} else {
 		// medium policy
-		err := validatePasswordLengthInPassword(ctx, password, session)
+		err = validatePasswordLengthInPassword(ctx, password, session)
 		if err != nil {
 			return err
 		}
@@ -199,7 +205,7 @@ func validatePasswordPolicyInPassword(ctx context.Context, password string, sess
 			return err
 		}
 	}
-	return nil
+	return err
 }
 
 func validatePasswordLengthInPassword(ctx context.Context, password string, session *Session) error {
@@ -212,13 +218,13 @@ func validatePasswordLengthInPassword(ctx context.Context, password string, sess
 		return nil
 	}
 
-	length, ok := value.(int64)
+	lengthConfig, ok := value.(int64)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "Invalid value for validate_password.length")
 	}
 
-	if int64(len([]rune(password))) < length {
-		return moerr.NewInvalidInputf(ctx, "Password '%s' is too short, require at least %d characters", password, length)
+	if int64(len([]rune(password))) < lengthConfig {
+		return moerr.NewInvalidInputf(ctx, "Password '%s' is too short, require at least %d characters", password, lengthConfig)
 	}
 
 	return nil
@@ -226,17 +232,17 @@ func validatePasswordLengthInPassword(ctx context.Context, password string, sess
 
 func validatePassWordMediumPolicyInPassword(ctx context.Context, password string, session *Session) error {
 
-	var lowerCaseCount, upperCaseCount, numberCount, specialCharCount int64
+	var lowerCaseCnt, upperCaseCnt, numberCnt, specialCharCnt int64
 	pwds := []rune(password)
 	for i := 0; i < len(pwds); i++ {
 		if unicode.IsUpper(pwds[i]) {
-			upperCaseCount++
+			upperCaseCnt++
 		} else if unicode.IsLower(pwds[i]) {
-			lowerCaseCount++
+			lowerCaseCnt++
 		} else if unicode.IsDigit(pwds[i]) {
-			numberCount++
+			numberCnt++
 		} else {
-			specialCharCount++
+			specialCharCnt++
 		}
 	}
 
@@ -250,14 +256,14 @@ func validatePassWordMediumPolicyInPassword(ctx context.Context, password string
 		return nil
 	}
 
-	mixedCase, ok := value.(int64)
+	mixedCaseConfig, ok := value.(int64)
 	if !ok {
 		return moerr.NewInvalidArg(ctx, "Invalid value for validate_password.uppercase_count", value)
 	}
 
-	if lowerCaseCount < mixedCase {
+	if lowerCaseCnt < mixedCaseConfig {
 		return moerr.NewInvalidInputf(ctx, "Password '%s' does not meet the Lowercase requirements", password)
-	} else if upperCaseCount < mixedCase {
+	} else if upperCaseCnt < mixedCaseConfig {
 		return moerr.NewInvalidInputf(ctx, "Password '%s' does not meet the Uppercase requirements", password)
 	}
 
@@ -271,12 +277,12 @@ func validatePassWordMediumPolicyInPassword(ctx context.Context, password string
 		return nil
 	}
 
-	number, ok := value.(int64)
+	numberConfig, ok := value.(int64)
 	if !ok {
 		return moerr.NewInvalidArg(ctx, "Invalid value for validate_password.number_count", value)
 	}
 
-	if number > 0 && numberCount < number {
+	if numberConfig > 0 && numberCnt < numberConfig {
 		return moerr.NewInvalidInputf(ctx, "Password '%s' does not meet the Number requirements", password)
 	}
 
@@ -290,12 +296,12 @@ func validatePassWordMediumPolicyInPassword(ctx context.Context, password string
 		return nil
 	}
 
-	special, ok := value.(int64)
+	specialConfig, ok := value.(int64)
 	if !ok {
 		return moerr.NewInvalidArg(ctx, "Invalid value for validate_password.special_char_count", value)
 	}
 
-	if special > 0 && specialCharCount < special {
+	if specialConfig > 0 && specialCharCnt < specialConfig {
 		return moerr.NewInvalidInputf(ctx, "Password '%s' does not meet the Special Char requirements", password)
 	}
 	return nil
