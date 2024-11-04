@@ -4049,15 +4049,10 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) handleRelationAndContext1(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	//var ranges engine.Ranges
-	var relData engine.RelData
-	var partialResults []any
-	var partialResultTypes []types.T
-	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4112,6 +4107,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				Mcpu: 1,
 			},
 		}
+	}
+
+	return rel, db, ctx, nil
+}
+
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+	var relData engine.RelData
+	var partialResults []any
+	var partialResultTypes []types.T
+	var nodes engine.Nodes
+
+	rel, _, ctx, err := c.handleRelationAndContext1(n)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	if c.determinExpandRanges(n) {
