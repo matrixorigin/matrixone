@@ -133,11 +133,9 @@ func (l *lockedEntries) calculateHits(r int64) []float64 {
 			hits[i] += 1
 		}
 	}
-	slices.DeleteFunc(hits, func(f float64) bool {
+	return slices.DeleteFunc(hits, func(f float64) bool {
 		return f == 0
 	})
-
-	return hits
 }
 
 func (l *lockedEntries) size() int {
@@ -165,9 +163,7 @@ func (l *lockedEntries) segments() [4][]*entry {
 
 	for _, segment := range segments {
 		level := merge.SegLevel(len(segment))
-		for _, e := range segment {
-			leveledObjects[level] = append(leveledObjects[level], e)
-		}
+		leveledObjects[level] = append(leveledObjects[level], segment...)
 	}
 
 	return leveledObjects
@@ -528,11 +524,10 @@ func mergeEntries(inputs []*entry, targetSize int) ([]*entry, int) {
 		}
 		if totalSize < 2*targetSize {
 			entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, entryMax, totalSize))
-			i++
 			break
 		}
 		entries = append(entries, newEntryWithSegmentID(segmentID, i, minValue, entryMax, targetSize))
-		i++
+		i += 1
 		minValue += interval
 		minValue += 1
 		if minValue > maxValue {
