@@ -187,6 +187,7 @@ const (
 	FPRestartCDC
 	FPResumeCDC
 	FPShowCDC
+	FPCommitUnsafeBeforeRollbackWhenCommitPanic
 )
 
 type (

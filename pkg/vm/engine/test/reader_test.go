@@ -39,6 +39,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -78,6 +79,11 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(tableName, 0)
+	require.NoError(t, err)
+	defer rmFault()
 
 	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
 	require.NoError(t, err)
