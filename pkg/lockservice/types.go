@@ -127,6 +127,13 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+type ResumeLockService interface {
+	LockService
+
+	// Resume resume the current cn.
+	Resume() error
+}
+
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
 // by LockTableAllocator.
 //
@@ -180,6 +187,10 @@ type LockTableAllocator interface {
 	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
 	// AddCannotCommit add cannot commit txn.
 	AddCannotCommit(values []pb.OrphanTxn) [][]byte
+	// AddInvalidService add invalid service
+	AddInvalidService(serviceID string)
+	// HasInvalidService has invalid service
+	HasInvalidService(serviceID string) bool
 	// Close close the lock table allocator
 	Close() error
 
