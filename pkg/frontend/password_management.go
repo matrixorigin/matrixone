@@ -489,10 +489,6 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return err
 	}
 
-	if reuseInfo == nil {
-		return nil
-	}
-
 	if reuseInfo.PasswordHisoty <= 0 || reuseInfo.PasswordReuseInterval <= 0 {
 		return nil
 	}

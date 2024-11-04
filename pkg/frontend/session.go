@@ -1356,8 +1356,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if yes, return error
 	*/
 	if needCheckLock && userStatus == userStatusLock {
-		lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime)
-		if err != nil {
+		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
 			return nil, err
 		}
 
@@ -1388,16 +1387,13 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				return nil, err
 			}
 			if expired {
-				ses.Debug(tenantCtx, "user password has expired")
 				ses.getRoutine().setExpired(true)
 			}
 
 			// if need check lock
 			if needCheckLock && userStatus == userStatusLock {
 				// if user lock status is locked, update status to unlock
-				ses.Debug(tenantCtx, "user is unlocked")
-				err = setUserUnlock(tenantCtx, tenant.GetUser(), bh)
-				if err != nil {
+				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
 					return nil, err
 				}
 			}
@@ -1407,30 +1403,24 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if !isSuperUser(tenant.GetUser()) && needCheckLock {
 			if userStatus != userStatusLock {
 				loginAttempts++
-				maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses)
-				if err != nil {
+				if maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses); err != nil {
 					return nil, err
 				}
 				if int64(loginAttempts) >= maxLoginAttempts {
 					// if login attempts is greater than max login attempts, update user status to lock
-					ses.Debug(tenantCtx, "user is locked")
-					err = setUserLock(tenantCtx, tenant.GetUser(), bh)
-					if err != nil {
+					if err = setUserLock(tenantCtx, tenant.GetUser(), bh); err != nil {
 						return nil, err
 					}
 				} else {
 					// if login attempts is less than max login attempts, update login_attempts
-					err = increaseLoginAttempts(tenantCtx, tenant.GetUser(), bh)
-					if err != nil {
+					if err = increaseLoginAttempts(tenantCtx, tenant.GetUser(), bh); err != nil {
 						return nil, err
 					}
 				}
 
 			} else {
 				// if user lock status is locked, update lock_time to now
-				ses.Debug(tenantCtx, "user is locked, update lock_time")
-				err = updateLockTime(tenantCtx, tenant.GetUser(), bh)
-				if err != nil {
+				if err = updateLockTime(tenantCtx, tenant.GetUser(), bh); err != nil {
 					return nil, err
 				}
 			}
