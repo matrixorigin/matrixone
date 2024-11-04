@@ -658,7 +658,17 @@ func (sm *SnapshotMeta) Update(
 				return
 			}
 			if deleteTS.IsEmpty() {
-				panic(any("deleteTS is empty"))
+				// Compatible with the cluster restored by backup
+				logutil.Warn(
+					"GC-SnapshotMeta-Update-Collector-Skip",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", stats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+					zap.String("start", startts.ToString()),
+					zap.String("end", endts.ToString()),
+				)
+				return
 			}
 			logutil.Info(
 				"GC-SnapshotMeta-Update-Collector",
