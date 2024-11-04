@@ -18,13 +18,11 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"encoding/csv"
 	"golang.org/x/exp/constraints"
 	"math"
 	"math/rand"
 	"os"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -81,12 +79,7 @@ var MergeSimulationCmd = &cobra.Command{
 			panic(err)
 		}
 
-		writeToCSV, err := cmd.Flags().GetBool("write_to_csv")
-		if err != nil {
-			panic(err)
-		}
-
-		sim(maxValue, mergeInterval, entryIntervalFactory, writeToCSV)
+		sim(maxValue, mergeInterval, entryIntervalFactory)
 	},
 }
 
@@ -95,7 +88,6 @@ func init() {
 	MergeSimulationCmd.Flags().StringP("new_entry_distribution", "d", "M", "distribution of entry arrival in Kendall's notation")
 	MergeSimulationCmd.Flags().Float64P("new_entry_distribution_arg", "a", 100, "arguments for distribution")
 	MergeSimulationCmd.Flags().DurationP("merge_interval", "i", 100*time.Millisecond, "set merge interval in ms")
-	MergeSimulationCmd.Flags().BoolP("write_to_csv", "c", false, "write result to csv file")
 }
 
 type entry struct {
@@ -320,16 +312,7 @@ func (r *recentRecords[T]) getMax() T {
 	return r.maxRecord
 }
 
-func createCSVWriter(filename string) (*csv.Writer, *os.File, error) {
-	f, err := os.Create(filename)
-	if err != nil {
-		return nil, nil, err
-	}
-	writer := csv.NewWriter(f)
-	return writer, f, nil
-}
-
-func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func() time.Duration, writeToCSV bool) {
+func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func() time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	entryChan := make(chan *entry, 1)
@@ -359,27 +342,8 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 	entries := newLockedEntries()
 	recentMergedSize := newRecentRecords[int](25)
 	go func() {
-
 		ticker := time.NewTicker(mergeInterval)
 		defer ticker.Stop()
-
-		var csvWriter *csv.Writer
-		if writeToCSV {
-			var f *os.File
-			var err error
-			csvWriter, f, err = createCSVWriter("output.csv")
-			if err != nil {
-				panic(err)
-			}
-			defer f.Close()
-			defer func() {
-				csvWriter.Flush()
-				if err = csvWriter.Error(); err != nil {
-					panic(err)
-				}
-			}()
-
-		}
 
 		i := 0
 		for {
@@ -387,23 +351,6 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 			case e := <-entryChan:
 				entries.append(e)
 			case <-ticker.C:
-			}
-
-			if writeToCSV {
-				hits := entries.calculateHits(maxValue)
-				mean, variance := stat.MeanVariance(hits, nil)
-				record := []string{
-					strconv.Itoa(i),
-					strconv.FormatFloat(mean, 'f', -1, 64),
-					strconv.FormatFloat(variance, 'f', -1, 64),
-					strconv.FormatFloat(mean/float64(entries.size()), 'f', -1, 64),
-					strconv.FormatInt(int64(recentMergedSize.mean()), 10),
-				}
-				err := csvWriter.Write(record)
-				if err != nil {
-					panic(err)
-				}
-				csvWriter.Flush()
 			}
 
 			if entries.size() == 0 {

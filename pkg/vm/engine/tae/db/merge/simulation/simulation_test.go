@@ -50,5 +50,5 @@ func TestSimulation(t *testing.T) {
 
 	sim(10000, 100*time.Millisecond, func() time.Duration {
 		return time.Duration(rand.ExpFloat64()*100) * time.Millisecond
-	}, false)
+	})
 }
