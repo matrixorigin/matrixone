@@ -497,6 +497,8 @@ func CopyGCDir(
 		return nil, err
 	}
 
+	copyFiles := make([]*checkpoint.MetaFile, 0)
+
 	for _, metaFile := range metaFiles {
 		name := metaFile.GetName()
 		window := gc.NewGCWindow(common.DebugAllocator, srcFs)
@@ -505,12 +507,17 @@ func CopyGCDir(
 			return nil, err
 		}
 		objects := window.GetObjectStats()
+		filesList := make([]*taeFile, 0)
+		needCopy := true
 		for _, object := range objects {
 			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), dir)
 			if err != nil {
-				return nil, err
+				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				err = nil
+				needCopy = false
+				break
 			}
-			taeFileList = append(taeFileList, &taeFile{
+			filesList = append(filesList, &taeFile{
 				path:     dir + string(os.PathSeparator) + name,
 				size:     files[metaFile.GetIndex()].Size,
 				checksum: checksum,
@@ -518,9 +525,13 @@ func CopyGCDir(
 				ts:       backup,
 			})
 		}
+		if needCopy {
+			copyFiles = append(copyFiles, metaFile)
+			taeFileList = append(taeFileList, filesList...)
+		}
 	}
 
-	for i, metaFile := range metaFiles {
+	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {
 			end := metaFile.GetEnd()
