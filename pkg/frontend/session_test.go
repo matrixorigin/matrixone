@@ -743,6 +743,6 @@ func Test_OperatorLock(t *testing.T) {
 	assert.NoError(t, err)
 
 	// unlock
-	err = setUserUnlock(ctx, "user1", bh)
+	err = setUserLock(ctx, "user1", bh)
 	assert.NoError(t, err)
 }
