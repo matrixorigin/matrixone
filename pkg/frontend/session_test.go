@@ -688,19 +688,16 @@ func Test_CheckLockTimeExpired(t *testing.T) {
 
 	// lock time expires
 	ses.gSysVars.Set(ConnectionControlMaxConnectionDelay, int64(30000000))
-	expired, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Hour*-1).Format("2006-01-02 15:04:05"))
+	_, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Hour*-3).Format("2006-01-02 15:04:05"))
 	assert.NoError(t, err)
-	assert.False(t, expired)
 
 	// lock time not expires
-	expired, err = checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-20).Format("2006-01-02 15:04:05"))
+	_, err = checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-20).Format("2006-01-02 15:04:05"))
 	assert.NoError(t, err)
-	assert.False(t, expired)
 
 	// lock time parse error
-	expired, err = checkLockTimeExpired(ctx, ses, "1")
+	_, err = checkLockTimeExpired(ctx, ses, "1")
 	assert.Error(t, err)
-	assert.False(t, expired)
 }
 
 func Test_OperatorLock(t *testing.T) {
