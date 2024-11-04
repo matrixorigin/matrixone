@@ -156,13 +156,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		cancel()
 
 		if err != nil || !succeed {
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.

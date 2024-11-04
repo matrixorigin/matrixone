@@ -315,7 +315,7 @@ type Process struct {
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context
-	Cancel context.CancelFunc
+	Cancel context.CancelCauseFunc
 }
 
 type sqlHelper interface {

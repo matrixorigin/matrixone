@@ -118,10 +118,10 @@ func validateCheckUserNameInPassword(ctx context.Context, pwd, authUserName, cur
 	pwdBytes := Slice(pwd)
 	for _, userName := range []string{authUserName, curUserName} {
 		userNameBytes := Slice(userName)
-		if bytes.Contains(pwdBytes, userNameBytes) {
-			return moerr.NewInvalidInputf(ctx, "Password '%s' contains the user name '%s'", pwd, userName)
-		} else if bytes.Contains(pwdBytes, reverseBytes(userNameBytes)) {
-			return moerr.NewInvalidInputf(ctx, "Password '%s' contains the reversed user name '%s'", pwd, userName)
+		if bytes.Equal(pwdBytes, userNameBytes) {
+			return moerr.NewInvalidInputf(ctx, "Password '%s' euqals the user name '%s'", pwd, userName)
+		} else if bytes.Equal(pwdBytes, reverseBytes(userNameBytes)) {
+			return moerr.NewInvalidInputf(ctx, "Password '%s' euqals the reversed user name '%s'", pwd, userName)
 		}
 	}
 	return nil
