@@ -518,7 +518,7 @@ func CopyGCDir(
 				break
 			}
 			filesList = append(filesList, &taeFile{
-				path:     name,
+				path:     object.ObjectName().String(),
 				size:     files[metaFile.GetIndex()].Size,
 				checksum: checksum,
 				needCopy: true,
