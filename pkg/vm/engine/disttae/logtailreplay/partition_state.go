@@ -625,7 +625,7 @@ func NewPartitionState(
 	opts := btree.Options{
 		Degree: 64,
 	}
-	return &PartitionState{
+	ps := &PartitionState{
 		service:                   service,
 		tid:                       tid,
 		noData:                    noData,
@@ -639,6 +639,13 @@ func NewPartitionState(
 		shared:                    new(sharedStates),
 		start:                     types.MaxTs(),
 	}
+	logutil.Info(
+		"PS-CREATED",
+		zap.Uint64("table-id", tid),
+		zap.String("service", service),
+		zap.String("addr", fmt.Sprintf("%p", ps)),
+	)
+	return ps
 }
 
 func (p *PartitionState) truncateTombstoneObjects(

@@ -33,8 +33,9 @@ import (
 )
 
 var (
-	defaultRPCTimeout    = time.Second * 10
-	defaultHandleWorkers = 16
+	defaultRPCTimeout          = time.Second * 10
+	defaultHandleWorkers       = 12
+	defaultHandleGetTxnWorkers = 4
 )
 
 func acquireRequest() *pb.Request {
@@ -238,8 +239,9 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
-	requests chan requestCtx
-	stopper  *stopper.Stopper
+	requests             chan requestCtx
+	getActiveTxnRequests chan requestCtx
+	stopper              *stopper.Stopper
 
 	options struct {
 		filter func(*pb.Request) bool
@@ -255,11 +257,12 @@ func NewServer(
 ) (Server, error) {
 	logger := getLogger(service)
 	s := &server{
-		logger:   logger,
-		cfg:      &cfg,
-		address:  address,
-		handlers: make(map[pb.Method]RequestHandleFunc),
-		requests: make(chan requestCtx, 10240),
+		logger:               logger,
+		cfg:                  &cfg,
+		address:              address,
+		handlers:             make(map[pb.Method]RequestHandleFunc),
+		requests:             make(chan requestCtx, 10240),
+		getActiveTxnRequests: make(chan requestCtx, 10240),
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
 	}
@@ -284,11 +287,8 @@ func NewServer(
 }
 
 func (s *server) Start() error {
-	for i := 0; i < defaultHandleWorkers; i++ {
-		if err := s.stopper.RunTask(s.handle); err != nil {
-			panic(err)
-		}
-	}
+	s.setupRemoteHandles(defaultHandleWorkers, s.requests)
+	s.setupRemoteHandles(defaultHandleGetTxnWorkers, s.getActiveTxnRequests)
 	return s.rpc.Start()
 }
 
@@ -298,6 +298,7 @@ func (s *server) Close() error {
 	}
 	s.stopper.Stop()
 	close(s.requests)
+	close(s.getActiveTxnRequests)
 	return nil
 }
 
@@ -345,7 +346,6 @@ func (s *server) onMessage(
 			cs.RemoteAddress(),
 			s.address)
 		writeResponse(
-			ctx,
 			s.logger,
 			msg.Cancel,
 			getResponse(req),
@@ -367,18 +367,25 @@ func (s *server) onMessage(
 	default:
 	}
 
-	s.requests <- requestCtx{
+	c := s.requests
+	if req.Method == pb.Method_GetActiveTxn {
+		c = s.getActiveTxnRequests
+	}
+	c <- requestCtx{
 		req:     req,
 		handler: handler,
 		cs:      cs,
 		cancel:  msg.Cancel,
 		ctx:     ctx,
 	}
-	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests)))
+	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
 	return nil
 }
 
-func (s *server) handle(ctx context.Context) {
+func (s *server) handle(
+	ctx context.Context,
+	requests chan requestCtx,
+) {
 	fn := func(ctx requestCtx) {
 		start := time.Now()
 		defer func() {
@@ -395,8 +402,8 @@ func (s *server) handle(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case ctx := <-s.requests:
-			v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests)))
+		case ctx := <-requests:
+			v2.TxnLockRPCQueueSizeGauge.Set(float64(len(requests)))
 			fn(ctx)
 		}
 	}
@@ -410,7 +417,6 @@ func getResponse(req *pb.Request) *pb.Response {
 }
 
 func writeResponse(
-	ctx context.Context,
 	logger *log.MOLogger,
 	cancel context.CancelFunc,
 	resp *pb.Response,
@@ -435,6 +441,20 @@ func writeResponse(
 		logger.Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))
+	}
+}
+
+func (s *server) setupRemoteHandles(
+	workers int,
+	requests chan requestCtx,
+) {
+	for i := 0; i < workers; i++ {
+		if err := s.stopper.RunTask(
+			func(ctx context.Context) {
+				s.handle(ctx, requests)
+			}); err != nil {
+			panic(err)
+		}
 	}
 }
 

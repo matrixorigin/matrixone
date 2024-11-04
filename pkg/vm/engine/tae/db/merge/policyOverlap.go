@@ -82,10 +82,9 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
 
 		objs, taskHostKind := m.reviseLeveledObjs(i)
-		objs = controlMem(objs, mem)
-
-		if len(objs) > 1 {
+		if ok, eSize := controlMem(objs, mem); ok && len(objs) > 1 {
 			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+			mem -= eSize
 		}
 	}
 	return reviseResults

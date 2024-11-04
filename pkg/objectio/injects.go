@@ -30,7 +30,88 @@ const (
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 
 	FJ_Debug19524 = "fj/debug/19524"
+
+	FJ_LogReader    = "fj/log/reader"
+	FJ_LogWorkspace = "fj/log/workspace"
 )
+
+const (
+	FJ_C_AllNames = "_%_all_"
+)
+
+func LogWorkspaceInjected(name string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogWorkspace)
+	if !injected {
+		return false, 0
+	}
+	if sarg == name || sarg == FJ_C_AllNames {
+		return true, int(iarg)
+	}
+	return false, 0
+}
+
+// `name` is the table name
+// return injected, logLevel
+func LogReaderInjected(name string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogReader)
+	if !injected {
+		return false, 0
+	}
+	if sarg != name {
+		return false, 0
+	}
+	return true, int(iarg)
+}
+
+// inject log reader and partition state
+// `name` is the table name
+func InjectLog1(
+	name string,
+	level int,
+) (rmFault func(), err error) {
+	rmFault = func() {}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogReader,
+		":::",
+		"echo",
+		int64(level),
+		name,
+	); err != nil {
+		return
+	}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TracePartitionState,
+		":::",
+		"echo",
+		0,
+		name,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		return
+	}
+
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogWorkspace,
+		":::",
+		"echo",
+		int64(level),
+		name,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		return
+	}
+
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogWorkspace)
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+	}
+	return
+}
 
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)

@@ -41,7 +41,7 @@ func TestLockRemote(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -74,7 +74,7 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -109,7 +109,7 @@ func TestUnlockRemote(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -140,11 +140,11 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 					cs morpc.ClientSession) {
 					n++
 					if n == 1 {
-						writeResponse(ctx, getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+						writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
 					close(c)
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 			s.RegisterMethodHandler(
@@ -159,7 +159,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 						ServiceID: "s1",
 						Valid:     true,
 					}
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -196,7 +196,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 
@@ -209,7 +209,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 
@@ -222,7 +222,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
