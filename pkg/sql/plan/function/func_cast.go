@@ -3401,7 +3401,7 @@ func decimal64ToTimestamp(
 				return err
 			}
 		} else {
-			ts := types.Timestamp(int64(v))
+			ts := types.UnixToTimestamp(int64(v))
 			if err := to.Append(ts, false); err != nil {
 				return err
 			}
