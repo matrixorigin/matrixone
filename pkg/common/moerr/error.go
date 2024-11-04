@@ -240,6 +240,8 @@ const (
 	ErrLockConflict uint16 = 20706
 	// ErrLockNeedUpgrade row level lock is too large that need upgrade to table level lock
 	ErrLockNeedUpgrade uint16 = 20707
+	// ErrCannotCommitOnInvalidCN cannot commit transaction on invalid CN
+	ErrCannotCommitOnInvalidCN uint16 = 20708
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -466,13 +468,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
-	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
-	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
-	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
-	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
-	ErrLockNeedUpgrade:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
+	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrCannotCommitOrphan:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
+	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1264,6 +1267,10 @@ func NewDeadlockCheckBusy(ctx context.Context) *Error {
 
 func NewCannotCommitOrphan(ctx context.Context) *Error {
 	return newError(ctx, ErrCannotCommitOrphan)
+}
+
+func NewCannotCommitOnInvalidCN(ctx context.Context) *Error {
+	return newError(ctx, ErrCannotCommitOnInvalidCN)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {
