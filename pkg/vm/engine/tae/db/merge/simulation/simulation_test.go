@@ -15,11 +15,10 @@
 package simulation
 
 import (
-	"github.com/stretchr/testify/require"
-	"math/rand/v2"
 	"os"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestSimulation(t *testing.T) {
@@ -28,16 +27,7 @@ func TestSimulation(t *testing.T) {
 
 	defer os.Remove(tmpFile.Name()) // clean up
 
-	_, err = tmpFile.Write([]byte("w\n"))
-	require.NoError(t, err)
-
-	_, err = tmpFile.Write([]byte("a\n"))
-	require.NoError(t, err)
-
-	_, err = tmpFile.Write([]byte("p\n"))
-	require.NoError(t, err)
-
-	_, err = tmpFile.Write([]byte("q\n"))
+	_, err = tmpFile.Write([]byte("w\na\np\nq\n"))
 	require.NoError(t, err)
 
 	_, err = tmpFile.Seek(0, 0)
@@ -48,7 +38,5 @@ func TestSimulation(t *testing.T) {
 
 	os.Stdin = tmpFile
 
-	sim(10000, 100*time.Millisecond, func() time.Duration {
-		return time.Duration(rand.ExpFloat64()*100) * time.Millisecond
-	})
+	MergeSimulationCmd.Run(MergeSimulationCmd, nil)
 }
