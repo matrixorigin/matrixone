@@ -268,7 +268,7 @@ func TestObjOverlap(t *testing.T) {
 	entry6 := newTestObjectEntry(t, overlapSizeThreshold, false)
 	require.False(t, policy.onObject(entry5, defaultBasicConfig))
 	require.False(t, policy.onObject(entry6, defaultBasicConfig))
-	require.Equal(t, 6, len(policy.leveledObjects))
+	require.Equal(t, len(levels), len(policy.leveledObjects))
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
@@ -293,7 +293,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
 	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
-	require.Equal(t, 6, len(objs))
+	require.Equal(t, len(levels), len(objs))
 	require.Equal(t, 3, len(objs[0].objs))
 	require.Equal(t, TaskHostDN, objs[0].kind)
 
