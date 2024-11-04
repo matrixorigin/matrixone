@@ -345,7 +345,6 @@ func (s *server) onMessage(
 			cs.RemoteAddress(),
 			s.address)
 		writeResponse(
-			ctx,
 			s.logger,
 			msg.Cancel,
 			getResponse(req),
@@ -410,7 +409,6 @@ func getResponse(req *pb.Request) *pb.Response {
 }
 
 func writeResponse(
-	ctx context.Context,
 	logger *log.MOLogger,
 	cancel context.CancelFunc,
 	resp *pb.Response,

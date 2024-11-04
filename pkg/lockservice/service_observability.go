@@ -33,7 +33,6 @@ func (s *service) GetWaitingList(
 		txn.fetchWhoWaitingMe(
 			s.serviceID,
 			txnID,
-			s.activeTxnHolder,
 			func(w pb.WaitTxn) bool {
 				values = append(values, w)
 				return true
