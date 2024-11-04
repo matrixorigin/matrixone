@@ -19,7 +19,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/csv"
-	"fmt"
 	"golang.org/x/exp/constraints"
 	"math"
 	"math/rand"
@@ -32,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -43,9 +43,9 @@ import (
 var MergeSimulationCmd = &cobra.Command{
 	Use: "merge-simulation",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Simulation is running background...")
-		fmt.Println("Please input 'a' to check performance or 'p' to print object status.")
-		fmt.Println("Press Ctrl-C to quit.")
+		logutil.Info("Simulation is running background...\n")
+		logutil.Info("Please input 'a' to check performance or 'p' to print object status.\n")
+		logutil.Info("Press Ctrl-C to quit.\n")
 		maxValue, err := cmd.Flags().GetInt64("max")
 		if err != nil {
 			panic(err)
@@ -435,7 +435,7 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
-		fmt.Printf("input: ")
+		logutil.Info("input: ")
 		for scanner.Scan() {
 			switch scanner.Text() {
 			case "p":
@@ -465,25 +465,25 @@ func sim(maxValue int64, mergeInterval time.Duration, entryIntervalFactory func(
 						return a.zm.CompareMax(b.zm)
 					})
 
-					fmt.Printf("%s(%d): ", id.ShortString(), merge.SegLevel(len(segment)))
+					logutil.Infof("%s(%d): ", id.ShortString(), merge.SegLevel(len(segment)))
 					for _, e := range segment {
-						fmt.Printf("(%d, %d), ", e.zm.GetMin(), e.zm.GetMax())
+						logutil.Infof("(%d, %d), ", e.zm.GetMin(), e.zm.GetMax())
 					}
-					fmt.Printf("\n")
+					logutil.Infof("\n")
 				}
 
 			case "a":
 				hits := entries.calculateHits(maxValue)
-				fmt.Printf("Ave(hit)=%f, Max(hit)=%f\n", stat.Mean(hits, nil), slices.Max(hits))
-				fmt.Printf("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean()))
-				fmt.Printf("Max(mergedSize)=%d\n", recentMergedSize.getMax())
+				logutil.Infof("Ave(hit)=%f, Max(hit)=%f\n", stat.Mean(hits, nil), slices.Max(hits))
+				logutil.Infof("Ave(mergedSize)=%f\n", float64(recentMergedSize.mean()))
+				logutil.Infof("Max(mergedSize)=%d\n", recentMergedSize.getMax())
 			case "q":
 				cancel()
 			case "w":
 				time.Sleep(10 * time.Second)
 			}
 
-			fmt.Printf("input: ")
+			logutil.Info("input: ")
 
 		}
 
