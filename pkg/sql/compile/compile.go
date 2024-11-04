@@ -4086,37 +4086,39 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, nil, nil, err
+		}
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+
+		// if temporary table, just scan at local cn.
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: 1,
+			},
+		}
+	}
+
 	if c.determinExpandRanges(n) {
 		if c.isPrepare {
 			return nil, nil, nil, cantCompileForPrepareErr
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-		if err != nil {
-			if txnOp.IsSnapOp() {
-				return nil, nil, nil, err
-			}
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-			if e != nil {
-				return nil, nil, nil, err
-			}
 
-			// if temporary table, just scan at local cn.
-			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-			if e != nil {
-				return nil, nil, nil, err
-			}
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Mcpu: 1,
-				},
-			}
-		}
 		//@todo need remove expandRanges from Compile.
 		// all expandRanges should be called by Run
 		var filterExpr []*plan.Expr
