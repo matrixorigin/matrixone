@@ -514,7 +514,6 @@ func CopyGCDir(
 			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
 			if err != nil {
 				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
-				err = nil
 				needCopy = false
 				break
 			}
