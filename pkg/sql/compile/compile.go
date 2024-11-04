@@ -3907,12 +3907,10 @@ func collectTombstones(
 	return tombstone, nil
 }
 
-func (c *Compile) expandRanges(
-	n *plan.Node,
-	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
+func (c *Compile) handleRelationAndContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
+	var rel engine.Relation
 	var err error
 	var db engine.Database
-	var relData engine.RelData
 	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
@@ -3947,25 +3945,24 @@ func (c *Compile) expandRanges(
 
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	var rel engine.Relation
 	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
 		if txnOp.IsSnapOp() {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		var e error // avoid contamination of error messages
 		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
 		if e != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 
 		// if temporary table, just scan at local cn.
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 		if e != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		c.cnList = engine.Nodes{
 			engine.Node{
@@ -3973,6 +3970,17 @@ func (c *Compile) expandRanges(
 				Mcpu: 1,
 			},
 		}
+	}
+	return rel, db, ctx, nil
+}
+
+func (c *Compile) expandRanges(
+	n *plan.Node,
+	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
+
+	rel, db, ctx, err := c.handleRelationAndContext(n)
+	if err != nil {
+		return nil, err
 	}
 
 	preAllocSize := 2
@@ -3985,6 +3993,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+	var relData engine.RelData
 	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
