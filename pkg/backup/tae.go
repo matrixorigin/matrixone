@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"io"
 	"os"
 	"path"
@@ -495,6 +496,30 @@ func CopyGCDir(
 	if err != nil {
 		return nil, err
 	}
+
+	for _, metaFile := range metaFiles {
+		name := metaFile.GetName()
+		window := gc.NewGCWindow(common.DebugAllocator, srcFs)
+		err = window.ReadTable(ctx, gc.GCMetaDir+name, srcFs)
+		if err != nil {
+			return nil, err
+		}
+		objects := window.GetObjectStats()
+		for _, object := range objects {
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), dir)
+			if err != nil {
+				return nil, err
+			}
+			taeFileList = append(taeFileList, &taeFile{
+				path:     dir + string(os.PathSeparator) + name,
+				size:     files[metaFile.GetIndex()].Size,
+				checksum: checksum,
+				needCopy: true,
+				ts:       backup,
+			})
+		}
+	}
+
 	for i, metaFile := range metaFiles {
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {

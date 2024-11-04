@@ -344,7 +344,7 @@ func (c *checkpointCleaner) Replay() (err error) {
 	for _, dir := range gcMetaDirs {
 		start := time.Now()
 		window := NewGCWindow(c.mp, c.fs.Service)
-		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, c.fs)
+		err = window.ReadTable(c.ctx, GCMetaDir+dir.Name, c.fs.Service)
 		if err != nil {
 			logger = logutil.Error
 		}
@@ -704,7 +704,7 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 		}
 		gcWindow := NewGCWindow(c.mp, c.fs.Service)
 		defer gcWindow.Close()
-		if err = gcWindow.ReadTable(c.ctx, GCMetaDir+metaFile.Name(), c.fs); err != nil {
+		if err = gcWindow.ReadTable(c.ctx, GCMetaDir+metaFile.Name(), c.fs.Service); err != nil {
 			logutil.Error(
 				"GC-WINDOW-READ-ERROR",
 				zap.Error(err),
