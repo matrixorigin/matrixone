@@ -5,7 +5,7 @@ SET GLOBAL validate_password = on;
 SET GLOBAL validate_password.check_user_name = ON;
 SET GLOBAL validate_password.changed_characters_percentage = 10;
 SET GLOBAL validate_password.policy = 0;
-SET GLOBAL validate_password.length = 16;
+SET GLOBAL validate_password.length = 12;
 
 -- user name in password
 alter user 'user1' identified by 'user1';
