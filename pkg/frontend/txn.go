@@ -410,10 +410,21 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	th.txnOp, err = getPu(execCtx.ses.GetService()).TxnClient.New(
-		th.txnCtx,
-		execCtx.ses.getLastCommitTS(),
-		opts...)
+	txnClient := getPu(execCtx.ses.GetService()).TxnClient
+	if th.txnOp == nil {
+		th.txnOp, err = txnClient.New(
+			th.txnCtx,
+			execCtx.ses.getLastCommitTS(),
+			opts...)
+	} else if th.txnOp.Txn().Status != txn.TxnStatus_Active {
+		_, err = txnClient.RestartTxn(
+			th.txnCtx,
+			th.txnOp,
+			execCtx.ses.getLastCommitTS(),
+			opts...)
+	} else {
+		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txn is already active")
+	}
 	if err != nil {
 		return err
 	}
