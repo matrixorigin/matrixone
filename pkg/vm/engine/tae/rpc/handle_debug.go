@@ -271,6 +271,10 @@ func (h *Handle) HandleBackup(
 		return nil, err
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	compact := h.db.BGCheckpointRunner.GetCompacted()
+	if compact != nil {
+		data = append(data, compact)
+	}
 	locations += location + ";"
 	for i := range data {
 		locations += data[i].GetLocation().String()
