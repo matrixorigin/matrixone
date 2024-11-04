@@ -3905,7 +3905,6 @@ func collectTombstones(
 
 func (c *Compile) expandRanges(
 	n *plan.Node,
-	rel engine.Relation,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 	var err error
 	var db engine.Database
@@ -3946,6 +3945,32 @@ func (c *Compile) expandRanges(
 	if err != nil {
 		return nil, err
 	}
+
+	var rel engine.Relation
+	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, err
+		}
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
+		if e != nil {
+			return nil, err
+		}
+
+		// if temporary table, just scan at local cn.
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+		if e != nil {
+			return nil, err
+		}
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: 1,
+			},
+		}
+	}
+
 	preAllocSize := 2
 	if !c.IsTpQuery() {
 		if len(blockFilterList) > 0 {
@@ -4099,7 +4124,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 
 		crs := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, rel, filterExpr, crs)
+		relData, err = c.expandRanges(n, filterExpr, crs)
 		if err != nil {
 			return nil, nil, nil, err
 		}
