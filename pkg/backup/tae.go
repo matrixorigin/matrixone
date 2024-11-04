@@ -506,6 +506,7 @@ func CopyGCDir(
 		if err != nil {
 			return nil, err
 		}
+		defer window.Close()
 		objects := window.GetObjectStats()
 		filesList := make([]*taeFile, 0)
 		needCopy := true
