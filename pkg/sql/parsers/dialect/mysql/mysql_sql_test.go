@@ -3097,6 +3097,10 @@ var (
 			input:  "create table t1 (a int) with retention period 3 second",
 			output: "create table t1 (a int) with retention period 3 second",
 		},
+		{
+			input:  "alter user user1 unlock",
+			output: "alter user user1 unlock",
+		},
 	}
 )
 
