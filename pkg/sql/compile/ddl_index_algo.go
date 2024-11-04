@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,49 +37,11 @@ func (s *Scope) handleUniqueIndexTableV2(c *Compile, dbSource engine.Database,
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
+
 	def := indexInfo.GetIndexTables()[0]
-
-	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
-	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
+	if err := indexTableBuild(c, def, dbSource); err != nil {
 		return err
 	}
-	if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-	}
-	if err = dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	err = maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		dbSource,
-		def,
-		c.proc.GetTxnOperator(),
-		nil,
-	)
-
-	if err != nil {
-		return err
-	}
-
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
 	// it will be processed when inserting into the hidden table.
 
@@ -110,16 +70,6 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTableV2(c *Compile, indexD
 	return nil
 }
 
-func (s *Scope) handleUniqueIndexTable(c *Compile,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-
-	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
-	// it will be processed when inserting into the hidden table.
-
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-}
-
 func (s *Scope) handleRegularSecondaryIndexTableV2(c *Compile, dbSource engine.Database,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
@@ -127,79 +77,13 @@ func (s *Scope) handleRegularSecondaryIndexTableV2(c *Compile, dbSource engine.D
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
+
 	def := indexInfo.GetIndexTables()[0]
-
-	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
-	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-	if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-	}
-	if err = dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	err = maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		dbSource,
-		def,
-		c.proc.GetTxnOperator(),
-		nil,
-	)
-
-	if err != nil {
+	if err := indexTableBuild(c, def, dbSource); err != nil {
 		return err
 	}
 
 	return s.createAndInsertForUniqueOrRegularIndexTableV2(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-}
-
-func (s *Scope) handleRegularSecondaryIndexTable(c *Compile,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-}
-
-func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-
-	if len(indexInfo.GetIndexTables()) != 1 {
-		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-	}
-
-	def := indexInfo.GetIndexTables()[0]
-	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
-	err := c.runSql(createSQL)
-	if err != nil {
-		return err
-	}
-
-	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
-	err = c.runSql(insertSQL)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *Scope) handleMasterIndexTableV2(c *Compile, dbSource engine.Database,
@@ -207,69 +91,9 @@ func (s *Scope) handleMasterIndexTableV2(c *Compile, dbSource engine.Database,
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
-	def := indexInfo.GetIndexTables()[0]
-
-	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
-	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-	if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-	}
-	if err = dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	err = maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		dbSource,
-		def,
-		c.proc.GetTxnOperator(),
-		nil,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
-	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-
-	if len(indexInfo.GetIndexTables()) != 1 {
-		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-	}
 
 	def := indexInfo.GetIndexTables()[0]
-	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
-	err := c.runSql(createSQL)
+	err := indexTableBuild(c, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -295,79 +119,8 @@ func (s *Scope) handleFullTextIndexTableV2(c *Compile, dbSource engine.Database,
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
-	//def := indexInfo.GetIndexTables()[0]
-	//createSQL := genCreateIndexTableSqlForFullTextIndex(def, indexDef, qryDatabase)
-	//err := c.runSql(createSQL)
-	//if err != nil {
-	//	return err
-	//}
-
 	def := indexInfo.GetIndexTables()[0]
-	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
-	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-	if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-	}
-	if err = dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
-		return err
-	}
-
-	err = maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		dbSource,
-		def,
-		c.proc.GetTxnOperator(),
-		nil,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
-	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Scope) handleFullTextIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
-	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
-	}
-	if len(indexInfo.GetIndexTables()) != 1 {
-		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-	}
-
-	def := indexInfo.GetIndexTables()[0]
-	createSQL := genCreateIndexTableSqlForFullTextIndex(def, indexDef, qryDatabase)
-	err := c.runSql(createSQL)
+	err := indexTableBuild(c, def, dbSource)
 	if err != nil {
 		return err
 	}
