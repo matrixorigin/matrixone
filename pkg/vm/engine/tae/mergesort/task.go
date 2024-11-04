@@ -94,7 +94,7 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
-	fromSize := uint32(0)
+	fromSize := float64(0)
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
 		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
@@ -102,7 +102,7 @@ func DoMergeAndWrite(
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
-		fromSize += obj.OriginSize()
+		fromSize += float64(obj.OriginSize())
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -111,7 +111,7 @@ func DoMergeAndWrite(
 		common.AnyField("host", mergehost.HostHintName()),
 		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),
-		zap.String("from-size", units.BytesSize(float64(fromSize))),
+		zap.String("from-size", units.BytesSize(fromSize)),
 	)
 	defer func() {
 		if err != nil {
@@ -139,7 +139,7 @@ func DoMergeAndWrite(
 	}
 
 	toObjsDesc := ""
-	toSize := uint32(0)
+	toSize := float64(0)
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
@@ -147,14 +147,14 @@ func DoMergeAndWrite(
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
-		toSize += obj.OriginSize()
+		toSize += float64(obj.OriginSize())
 	}
 
 	logutil.Info(
 		"[MERGE-END]",
 		zap.String("task", mergehost.Name()),
 		common.AnyField("to-objs", toObjsDesc),
-		common.AnyField("to-size", units.BytesSize(float64(toSize))),
+		common.AnyField("to-size", units.BytesSize(toSize)),
 		common.DurationField(time.Since(now)),
 	)
 	return nil
