@@ -118,7 +118,7 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		}
 	} else {
 		if execErr == nil {
-			// if commitTxnFunc failed, we roll back the transaction internally
+			// if commitTxnFunc failed, we already roll back the transaction in commitTxnFunc internally
 			return commitTxnFunc(ses, execCtx)
 		}
 
