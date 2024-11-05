@@ -10122,6 +10122,48 @@ func TestTransferInMerge(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestDeleteAndMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	var appendTxn txnif.AsyncTxn
+	{
+		tae.DeleteAll(true)
+		appendTxn, err = tae.StartTxn(nil)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CompactBlocks(true)
+	tae.DoAppendWithTxn(bat, appendTxn, false)
+
+	assert.NoError(t, appendTxn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestTransferInMerge2(t *testing.T) {
 	ctx := context.Background()
 
