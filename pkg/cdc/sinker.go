@@ -115,17 +115,11 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	}
 }
 
-func (s *consoleSinker) SendBegin() {
-	return
-}
+func (s *consoleSinker) SendBegin() {}
 
-func (s *consoleSinker) SendCommit() {
-	return
-}
+func (s *consoleSinker) SendCommit() {}
 
-func (s *consoleSinker) SendRollback() {
-	return
-}
+func (s *consoleSinker) SendRollback() {}
 
 func (s *consoleSinker) SendDummy() {}
 
@@ -250,47 +244,44 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		logutil.Infof("cdc mysqlSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
-	for {
-		select {
-		case sqlBuf := <-s.sqlBufSendCh:
-			// already have error, skip
-			if s.err.Load() != nil {
+	for sqlBuf := range s.sqlBufSendCh {
+		// already have error, skip
+		if s.err.Load() != nil {
+			continue
+		}
+
+		// dummy sql
+		if len(sqlBuf) == 0 {
+			continue
+		}
+
+		if sql := util.UnsafeBytesToString(sqlBuf); sql == "begin" {
+			if err := s.mysql.SendBegin(ctx); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
 				continue
 			}
-
-			// dummy sql
-			if len(sqlBuf) == 0 {
+		} else if sql == "commit" {
+			if err := s.mysql.SendCommit(ctx); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
 				continue
 			}
-
-			if sql := util.UnsafeBytesToString(sqlBuf); sql == "begin" {
-				if err := s.mysql.SendBegin(ctx); err != nil {
-					logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
-					// record error
-					s.err.Store(err)
-					continue
-				}
-			} else if sql == "commit" {
-				if err := s.mysql.SendCommit(ctx); err != nil {
-					logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
-					// record error
-					s.err.Store(err)
-					continue
-				}
-			} else if sql == "rollback" {
-				if err := s.mysql.SendRollback(ctx); err != nil {
-					logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
-					// record error
-					s.err.Store(err)
-					continue
-				}
-			} else {
-				if err := s.mysql.Send(ctx, ar, sql); err != nil {
-					logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v", s.dbTblInfo, err)
-					// record error
-					s.err.Store(err)
-					continue
-				}
+		} else if sql == "rollback" {
+			if err := s.mysql.SendRollback(ctx); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
+				continue
+			}
+		} else {
+			if err := s.mysql.Send(ctx, ar, sql); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
+				continue
 			}
 		}
 	}
@@ -386,6 +377,8 @@ func (s *mysqlSinker) Reset() {
 }
 
 func (s *mysqlSinker) Close() {
+	// stop Run goroutine
+	close(s.sqlBufSendCh)
 	s.mysql.Close()
 	s.sqlBufs[0] = nil
 	s.sqlBufs[1] = nil
@@ -429,7 +422,6 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
 			return
 		}
 	}
-	return
 }
 
 // insertBatch and deleteBatch is sorted by ts
@@ -485,7 +477,6 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-	return
 }
 
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
