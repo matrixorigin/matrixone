@@ -339,9 +339,20 @@ func (r *runner) DebugUpdateOptions(opts ...Option) {
 }
 
 func (r *runner) onGlobalCheckpointEntries(items ...any) {
+	maxEnd := types.TS{}
 	for _, item := range items {
 		ctx := item.(*globalCheckpointContext)
 		doCheckpoint := false
+		maxCkp := r.MaxGlobalCheckpoint()
+		if maxCkp != nil {
+			maxEnd = maxCkp.end
+		}
+		if ctx.end.LE(&maxEnd) {
+			logutil.Warn(
+				"OnGlobalCheckpointEntries-Skip",
+				zap.String("checkpoint", ctx.end.ToString()))
+			continue
+		}
 		if ctx.force {
 			doCheckpoint = true
 		} else {
@@ -636,14 +647,15 @@ func (r *runner) doGlobalCheckpoint(
 	entry.truncateLSN = truncateLSN
 
 	logutil.Info(
-		"Checkpoint-Start",
+		"GCKP-Start",
 		zap.String("entry", entry.String()),
+		zap.String("ts", end.ToString()),
 	)
 
 	defer func() {
 		if err != nil {
 			logutil.Error(
-				"Checkpoint-Error",
+				"GCKP-Error",
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
@@ -653,7 +665,7 @@ func (r *runner) doGlobalCheckpoint(
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
-				"Checkpoint-End",
+				"GCKP-End",
 				fields...,
 			)
 		}

@@ -137,6 +137,40 @@ func (txn *Transaction) WriteBatch(
 		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
+	if injected, logLevel := objectio.LogWorkspaceInjected(tableName); injected {
+		if logLevel == 0 {
+			rowCnt := 0
+			if bat != nil {
+				rowCnt = bat.RowCount()
+			}
+			logutil.Info(
+				"INJECT-LOG-WORKSPACE",
+				zap.String("table", tableName),
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.String("typ", typesNames[typ]),
+				zap.Int("offset", len(txn.writes)),
+				zap.Int("rows", rowCnt),
+			)
+		} else {
+			maxCnt := 10
+			if logLevel > 1 && bat != nil {
+				maxCnt = bat.RowCount()
+			}
+			var dataStr string
+			if bat != nil {
+				dataStr = common.MoBatchToString(bat, maxCnt)
+			}
+			logutil.Info(
+				"INJECT-LOG-WORKSPACE",
+				zap.String("table", tableName),
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.String("typ", typesNames[typ]),
+				zap.Int("offset", len(txn.writes)),
+				zap.String("data", dataStr),
+			)
+		}
+	}
+
 	e := Entry{
 		typ:          typ,
 		accountId:    accountId,

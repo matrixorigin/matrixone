@@ -382,6 +382,10 @@ func NewCannotCommitOrphanNoCtx() *Error {
 	return NewCannotCommitOrphan(Context())
 }
 
+func NewCannotCommitOnInvalidCNNoCtx() *Error {
+	return NewCannotCommitOnInvalidCN(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
