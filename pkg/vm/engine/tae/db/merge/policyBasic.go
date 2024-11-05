@@ -57,15 +57,13 @@ func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (g *policyGroup) revise(cpu, mem int64) []reviseResult {
+func (g *policyGroup) revise(rc *resourceController) []reviseResult {
 	results := make([]reviseResult, 0, len(g.policies))
 	for _, p := range g.policies {
-		pResult := p.revise(cpu, mem, g.config)
+		pResult := p.revise(rc, g.config)
 		for _, r := range pResult {
 			if len(r.objs) > 0 {
 				results = append(results, r)
-				_, eSize := estimateMergeConsume(r.objs)
-				mem -= int64(eSize)
 			}
 		}
 	}
@@ -236,7 +234,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 	return false
 }
 
-func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
 		return cmp.Compare(a.Rows(), b.Rows())
 	})
@@ -246,21 +244,23 @@ func (o *basic) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult
 		isStandalone := common.IsStandaloneBoost.Load()
 		mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
 	*/
-	if ok, _ := controlMem(objs, mem); !ok {
+	dnobjs := o.optimize(objs, config)
+
+	if !rc.resourceAvailable(objs) {
 		return nil
 	}
-	dnobjs := o.optimize(objs, config)
 
 	dnosize, _ := estimateMergeConsume(dnobjs)
 
 	schedDN := func() []reviseResult {
-		if cpu > 85 {
+		if rc.cpuPercent > 85 {
 			if dnosize > 25*common.Const1MBytes {
-				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
+				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %f", rc.cpuPercent)
 				return nil
 			}
 		}
 		if len(dnobjs) > 1 {
+			rc.reserveResources(dnobjs)
 			return []reviseResult{{dnobjs, TaskHostDN}}
 		}
 		return nil
@@ -321,17 +321,6 @@ func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig)
 	objs = objs[:i]
 
 	return objs
-}
-
-func controlMem(objs []*catalog.ObjectEntry, mem int64) (bool, int64) {
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-	_, eSize := estimateMergeConsume(objs)
-	if eSize > int(2*mem/3) {
-		return false, 0
-	}
-	return true, int64(eSize)
 }
 
 func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {

@@ -61,7 +61,7 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	return true
 }
 
-func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	for _, objects := range m.segments {
 		segLevel := segLevel(len(objects))
 		for obj := range objects {
@@ -75,16 +75,16 @@ func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []r
 			continue
 		}
 
-		if cpu > 80 {
+		if rc.cpuPercent > 80 {
 			continue
 		}
 
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
 
 		objs, taskHostKind := m.reviseLeveledObjs(i)
-		if ok, eSize := controlMem(objs, mem); ok && len(objs) > 1 {
+		if len(objs) > 1 && rc.resourceAvailable(objs) {
+			rc.reserveResources(objs)
 			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
-			mem -= eSize
 		}
 	}
 	return reviseResults
