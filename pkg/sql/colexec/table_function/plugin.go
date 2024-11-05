@@ -98,6 +98,9 @@ func pluginPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) 
 	st := &pluginState{}
 	st.plugin_cache = make(map[string][]byte)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	if err != nil {
+		return nil, err
+	}
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
 	for i := range arg.Attrs {
