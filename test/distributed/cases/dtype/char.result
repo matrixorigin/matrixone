@@ -111,9 +111,9 @@ cage
 27
 29
 select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge asc;
-cage
-1
-1
+cAge
+true
+true
 CREATE TABLE employees (
 employeeNumber int(11) NOT NULL,
 lastName char(50) NOT NULL,
