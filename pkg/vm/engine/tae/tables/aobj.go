@@ -256,7 +256,8 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 			return 0, err
 		}
 		defer vec.Close()
-		tsVec := vector.MustFixedColNoTypeCheck[types.TS](vec.GetDownstreamVector())
+		tsVec := vector.MustFixedColNoTypeCheck[types.TS](
+			vec.GetDownstreamVector())
 		for i := range tsVec {
 			if tsVec[i].GT(&ts) {
 				return uint32(i), nil

@@ -14,11 +14,23 @@
 
 package malloc
 
-type Hints uint64
-
-const (
-	NoHints    Hints = 0
-	DoNotReuse Hints = 1 << iota
-	NoClear
-	IgnoreMunmapError
+import (
+	"io"
+	"testing"
 )
+
+func TestCheckMunmap(t *testing.T) {
+	checkMunmap(io.EOF, IgnoreMunmapError)
+	func() {
+		defer func() {
+			p := recover()
+			if p == nil {
+				t.Fatal("should panic")
+			}
+			if p != io.EOF {
+				t.Fatalf("got %v", p)
+			}
+		}()
+		checkMunmap(io.EOF, NoHints)
+	}()
+}
