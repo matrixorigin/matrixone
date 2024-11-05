@@ -431,7 +431,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -440,7 +439,6 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -467,7 +465,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	//c.printPipeline()
+	c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
@@ -4095,9 +4093,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		})
 	} else {
 		// add current CN
+		mcpu := c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
+		if forceSingle {
+			mcpu = 1
+		}
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
-			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+			Mcpu: mcpu,
 		})
 		nodes[0].NeedExpandRanges = true
 		return nodes, nil
@@ -4110,7 +4112,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes[i] = engine.Node{
 				Id:   node.Id,
 				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				Mcpu: 1,
 				Data: engine.BuildEmptyRelData(),
 			}
 		}
