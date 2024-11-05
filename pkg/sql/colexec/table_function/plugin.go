@@ -61,9 +61,10 @@ import (
 //
 
 type pluginState struct {
-	inited       bool
-	called       bool
-	plugin_cache map[string][]byte
+	inited        bool
+	called        bool
+	plugin_cache  map[string][]byte
+	allowed_hosts []string
 
 	// holding one call batch, pluginState owns it.
 	batch *batch.Batch
@@ -102,6 +103,13 @@ func pluginPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) 
 	for i := range arg.Attrs {
 		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
 	}
+
+	val, err := proc.GetResolveVariableFunc()("moplugin_allowed_hosts", true, false)
+	if err != nil {
+		return nil, err
+	}
+	st.allowed_hosts = strings.Split(val.(string), ",")
+
 	return st, err
 
 }
@@ -222,7 +230,7 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 				},
 			},
 			Config:       cfgmap,
-			AllowedHosts: []string{"localhost"},
+			AllowedHosts: u.allowed_hosts,
 		}
 	} else {
 		image, ok := u.plugin_cache[wasmurl]
@@ -246,7 +254,7 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 				},
 			},
 			Config:       cfgmap,
-			AllowedHosts: []string{"localhost"},
+			AllowedHosts: u.allowed_hosts,
 		}
 	}
 
