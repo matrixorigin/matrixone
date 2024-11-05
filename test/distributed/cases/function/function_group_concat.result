@@ -287,3 +287,8 @@ SELECT COUNT(*), GROUP_CONCAT(DISTINCT group_concat_17.somename SEPARATOR ' |')
 FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_17.bID;
 count(*)    group_concat(distinct group_concat_17.somename,  |)
 2    test
+drop table if exists g18;
+create table g18 (a int);
+select group_concat(a order by a) from g18;
+group_concat(a, ,order by a)
+drop table if exists g18;
