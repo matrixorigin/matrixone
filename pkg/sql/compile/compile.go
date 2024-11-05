@@ -4059,16 +4059,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 		//@todo need remove expandRanges from Compile.
 		// all expandRanges should be called by Run
-		var filterExpr []*plan.Expr
+		var newFilterExpr []*plan.Expr
 		if len(n.BlockFilterList) > 0 {
-			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
-			for _, e := range filterExpr {
+			newFilterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range newFilterExpr {
 				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
-			for _, e := range filterExpr {
+			for _, e := range newFilterExpr {
 				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
@@ -4076,20 +4076,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		crs := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, filterExpr, crs)
+		counterset := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, newFilterExpr, counterset)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.CompileExpandRangesS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			List:      counterset.FileService.S3.List.Load(),
+			Head:      counterset.FileService.S3.Head.Load(),
+			Put:       counterset.FileService.S3.Put.Load(),
+			Get:       counterset.FileService.S3.Get.Load(),
+			Delete:    counterset.FileService.S3.Delete.Load(),
+			DeleteMul: counterset.FileService.S3.DeleteMulti.Load(),
 		})
 	} else {
 		// add current CN
