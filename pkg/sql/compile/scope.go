@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"strings"
 	"sync"
 	"time"
@@ -891,8 +892,15 @@ func (s *Scope) aggOptimize(c *Compile) error {
 			}
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
-				s.PartialResults = partialResults
-				s.PartialResultTypes = partialResultTypes
+				//find the last mergegroup
+				child := s.RootOp.GetOperatorBase().GetChildren(0)
+				op := vm.GetLeafOpGrandParent(s.RootOp, child, child.GetOperatorBase().GetChildren(0))
+				if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+				} else {
+					panic("can't find merge group operator for agg optimize!")
+				}
 			}
 		}
 	}
