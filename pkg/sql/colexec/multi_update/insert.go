@@ -98,8 +98,13 @@ func (update *MultiUpdate) insert_secondary_index_table(
 
 	// init buf
 	if ctr.insertBuf[tableIndex] == nil {
-		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
-		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		attrs := make([]string, 0, len(update.MultiUpdateCtx[tableIndex].TableDef.Cols))
+		for _, col := range update.MultiUpdateCtx[tableIndex].TableDef.Cols {
+			if col.Name != catalog.Row_ID {
+				attrs = append(attrs, col.Name)
+			}
+		}
+		ctr.insertBuf[tableIndex] = batch.New(attrs)
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
 		}
