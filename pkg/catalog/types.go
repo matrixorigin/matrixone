@@ -186,6 +186,7 @@ const (
 	MO_DATABASE = "mo_database"
 	MO_TABLES   = "mo_tables"
 	MO_COLUMNS  = "mo_columns"
+	MO_USER     = "mo_user"
 
 	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"
