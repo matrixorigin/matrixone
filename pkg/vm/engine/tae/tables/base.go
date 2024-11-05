@@ -224,8 +224,7 @@ func (obj *baseObject) Prefetch(blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(
-			obj.rt.SID(), obj.rt.Fs.Service, key)
+		return blockio.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
 	}
 }
 
