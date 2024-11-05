@@ -439,7 +439,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -448,7 +447,6 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -475,7 +473,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	//c.printPipeline()
+	c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
@@ -3762,10 +3760,14 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if len(probeScopes) == 1 && len(buildScopes) > 1 {
-		cnlist = []engine.Node{probeScopes[0].NodeInfo}
-		//build side is larger than probe side, seems only for dedup join, merge build side to avoid bugs
-		buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+		//merge build side to avoid bugs
+		if !c.IsSingleScope(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
 	}
 
 	dop := plan2.GetShuffleDop(ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
