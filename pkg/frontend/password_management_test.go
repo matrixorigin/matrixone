@@ -237,3 +237,67 @@ func TestCheckInvitedNodes(t *testing.T) {
 	err = checkInvitedNodes(ctx, "192.168.1.1, *")
 	assert.Error(t, err)
 }
+
+func TestCheckValidIpInInvitedNodes(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		invitedNodes string
+		ip           string
+		expectedErr  bool
+	}{
+		{
+			invitedNodes: "192.168.1.0/24",
+			ip:           "192.168.1.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.1.0/24",
+			ip:           "192.168.0.1",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "192.168.0.1",
+			ip:           "192.168.0.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1",
+			ip:           "192.168.0.2",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "*",
+			ip:           "192.168.0.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "192.168.0.3",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "192.168.0.4",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "",
+			ip:           "	",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "127.0.0.1",
+			expectedErr:  false,
+		},
+	}
+	for _, test := range tests {
+		err := checkValidIpInInvitedNodes(ctx, test.invitedNodes, test.ip)
+		if test.expectedErr {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
+	}
+}

@@ -624,3 +624,48 @@ func checkInvitedNodes(ctx context.Context, invitedNodes string) error {
 	}
 	return nil
 }
+
+// isIpInCidr check if the ip is in the cidr
+func isIpInCidr(ip, cidr string) bool {
+	ipAddr := net.ParseIP(ip)
+	_, cidrNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	return cidrNet.Contains(ipAddr)
+}
+
+func isIpInNodes(ip string, nodes []string) bool {
+	if ip == "127.0.0.1" {
+		// allow localhost
+		return true
+	}
+
+	for _, node := range nodes {
+		if node == "*" {
+			// allow all ips
+			return true
+		}
+		if strings.Contains(node, "/") {
+			if isIpInCidr(ip, node) {
+				return true
+			}
+		} else {
+			if ip == node {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip string) error {
+	if len(invitedNodes) == 0 {
+		return moerr.NewInvalidInputf(ctx, "invited_nodes is empty")
+	}
+	nodes := parseInvitedNodes(invitedNodes)
+	if isIpInNodes(ip, nodes) {
+		return nil
+	}
+	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip)
+}
