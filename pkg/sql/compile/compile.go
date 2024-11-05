@@ -3899,10 +3899,6 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	// Each time the three tables are opened, a new txnTable is created, which can result in Compile and Run holding different partition states. To avoid this, delay opening the three tables until the Run phase
-	if n.ObjRef.SchemaName == catalog.MO_CATALOG && n.TableDef.Name != catalog.MO_TABLES && n.TableDef.Name != catalog.MO_COLUMNS && n.TableDef.Name != catalog.MO_DATABASE {
-		return true //avoid bugs
-	}
 	if len(n.AggList) > 0 {
 		partialResult, _, _ := checkAggOptimize(n)
 		if partialResult != nil {
@@ -4005,78 +4001,11 @@ func collectTombstones(
 	return tombstone, nil
 }
 
-func (c *Compile) handleRelationAndContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
-	var rel engine.Relation
-	var err error
-	var db engine.Database
-	var txnOp client.TxnOperator
-
-	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
-	txnOp = c.proc.GetTxnOperator()
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
-	//-----------------------------------------------------------------------------------------------------
-
-	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
-	}
-	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
-	}
-	return rel, db, ctx, nil
-}
-
 func (c *Compile) expandRanges(
 	n *plan.Node,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 
-	rel, db, ctx, err := c.handleRelationAndContext(n)
+	rel, db, ctx, err := c.handleDbRelContext(n)
 	if err != nil {
 		return nil, err
 	}
@@ -4147,15 +4076,10 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	//var ranges engine.Ranges
-	var relData engine.RelData
-	var partialResults []any
-	var partialResultTypes []types.T
-	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4184,49 +4108,65 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, nil, nil, err
+		}
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+
+		// if temporary table, just scan at local cn.
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: 1,
+			},
+		}
+	}
+
+	return rel, db, ctx, nil
+}
+
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+	var relData engine.RelData
+	var partialResults []any
+	var partialResultTypes []types.T
+	var nodes engine.Nodes
+
+	rel, _, ctx, err := c.handleDbRelContext(n)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	if c.determinExpandRanges(n) {
 		if c.isPrepare {
 			return nil, nil, nil, cantCompileForPrepareErr
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-		if err != nil {
-			if txnOp.IsSnapOp() {
-				return nil, nil, nil, err
-			}
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-			if e != nil {
-				return nil, nil, nil, err
-			}
 
-			// if temporary table, just scan at local cn.
-			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-			if e != nil {
-				return nil, nil, nil, err
-			}
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Mcpu: 1,
-				},
-			}
-		}
 		//@todo need remove expandRanges from Compile.
 		// all expandRanges should be called by Run
-		var filterExpr []*plan.Expr
+		var newFilterExpr []*plan.Expr
 		if len(n.BlockFilterList) > 0 {
-			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
-			for _, e := range filterExpr {
+			newFilterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range newFilterExpr {
 				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
-			for _, e := range filterExpr {
+			for _, e := range newFilterExpr {
 				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
@@ -4234,20 +4174,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		crs := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, filterExpr, crs)
+		counterset := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, newFilterExpr, counterset)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.CompileExpandRangesS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			List:      counterset.FileService.S3.List.Load(),
+			Head:      counterset.FileService.S3.Head.Load(),
+			Put:       counterset.FileService.S3.Put.Load(),
+			Get:       counterset.FileService.S3.Get.Load(),
+			Delete:    counterset.FileService.S3.Delete.Load(),
+			DeleteMul: counterset.FileService.S3.DeleteMulti.Load(),
 		})
 	} else {
 		// add current CN
