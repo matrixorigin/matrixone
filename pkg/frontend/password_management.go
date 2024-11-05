@@ -663,6 +663,9 @@ func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip str
 	if len(invitedNodes) == 0 {
 		return moerr.NewInvalidInputf(ctx, "invited_nodes is empty")
 	}
+	if len(ip) == 0 {
+		return moerr.NewInvalidInputf(ctx, "IP is empty")
+	}
 	nodes := parseInvitedNodes(invitedNodes)
 	if isIpInNodes(ip, nodes) {
 		return nil

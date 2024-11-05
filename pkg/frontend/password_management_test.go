@@ -283,13 +283,18 @@ func TestCheckValidIpInInvitedNodes(t *testing.T) {
 		},
 		{
 			invitedNodes: "",
-			ip:           "	",
+			ip:           "127.0.0.1",
 			expectedErr:  true,
 		},
 		{
 			invitedNodes: "192.168.0.1, 192.168.0.3",
 			ip:           "127.0.0.1",
 			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "",
+			expectedErr:  true,
 		},
 	}
 	for _, test := range tests {
