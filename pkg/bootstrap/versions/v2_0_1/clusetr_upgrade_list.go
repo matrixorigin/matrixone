@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package v2_0_1
 
-type Hints uint64
+import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 
-const (
-	NoHints    Hints = 0
-	DoNotReuse Hints = 1 << iota
-	NoClear
-	IgnoreMunmapError
-)
+var clusterUpgEntries = []versions.UpgradeEntry{}
