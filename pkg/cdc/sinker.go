@@ -256,21 +256,21 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		}
 
 		if sql := util.UnsafeBytesToString(sqlBuf); sql == "begin" {
-			if err := s.mysql.SendBegin(ctx); err != nil {
+			if err := s.mysql.SendBegin(ctx, ar); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
 				continue
 			}
 		} else if sql == "commit" {
-			if err := s.mysql.SendCommit(ctx); err != nil {
+			if err := s.mysql.SendCommit(ctx, ar); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
 				continue
 			}
 		} else if sql == "rollback" {
-			if err := s.mysql.SendRollback(ctx); err != nil {
+			if err := s.mysql.SendRollback(ctx, ar); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
 				// record error
 				s.err.Store(err)
@@ -628,6 +628,8 @@ func (s *mysqlSinker) getDeleteRowBuf(ctx context.Context) (err error) {
 	return
 }
 
+var _ Sink = new(mysqlSink)
+
 type mysqlSink struct {
 	conn           *sql.DB
 	tx             *sql.Tx
@@ -657,12 +659,62 @@ var NewMysqlSink = func(
 	return ret, err
 }
 
+func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) error {
+	return s.retry(ctx, ar, func() (err error) {
+		if s.tx != nil {
+			_, err = s.tx.Exec(sql)
+		} else {
+			_, err = s.conn.Exec(sql)
+		}
+
+		if err != nil {
+			logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sql[:min(len(sql), sqlPrintLen)])
+		}
+		//logutil.Errorf("----cdc mysqlSink send sql----, success, sql: %s", sql)
+		return
+	})
+}
+
+func (s *mysqlSink) SendBegin(ctx context.Context, ar *ActiveRoutine) (err error) {
+	return s.retry(ctx, ar, func() (err error) {
+		s.tx, err = s.conn.BeginTx(ctx, nil)
+		return err
+	})
+}
+
+func (s *mysqlSink) SendCommit(ctx context.Context, ar *ActiveRoutine) error {
+	defer func() {
+		s.tx = nil
+	}()
+
+	return s.retry(ctx, ar, func() error {
+		return s.tx.Commit()
+	})
+}
+
+func (s *mysqlSink) SendRollback(ctx context.Context, ar *ActiveRoutine) error {
+	defer func() {
+		s.tx = nil
+	}()
+
+	return s.retry(ctx, ar, func() error {
+		return s.tx.Rollback()
+	})
+}
+
+func (s *mysqlSink) Close() {
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+}
+
 func (s *mysqlSink) connect() (err error) {
 	s.conn, err = openDbConn(s.user, s.password, s.ip, s.port)
 	return err
 }
 
-func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (err error) {
+func (s *mysqlSink) retry(ctx context.Context, ar *ActiveRoutine, fn func() error) (err error) {
 	needRetry := func(retry int, startTime time.Time) bool {
 		// retryTimes == -1 means retry forever
 		// do not exceed retryTimes and retryDuration
@@ -680,51 +732,19 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		}
 
 		start := time.Now()
-		if s.tx != nil {
-			_, err = s.tx.Exec(sql)
-		} else {
-			_, err = s.conn.Exec(sql)
-		}
+		err = fn()
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
+
 		// return if success
 		if err == nil {
-			//logutil.Errorf("----cdc mysqlSink send sql----, success, sql: %s", sql)
 			return
 		}
 
-		logutil.Errorf("----cdc mysqlSink send sql----, failed, err: %v, sql: %s", err, sql[:min(len(sql), sqlPrintLen)])
+		logutil.Errorf("cdc mysqlSink retry failed, err: %v", err)
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
 	return moerr.NewInternalError(ctx, "cdc mysqlSink retry exceed retryTimes or retryDuration")
-}
-
-func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
-	s.tx, err = s.conn.BeginTx(ctx, nil)
-	return
-}
-
-func (s *mysqlSink) SendCommit(_ context.Context) (err error) {
-	defer func() {
-		s.tx = nil
-	}()
-
-	return s.tx.Commit()
-}
-
-func (s *mysqlSink) SendRollback(_ context.Context) (err error) {
-	defer func() {
-		s.tx = nil
-	}()
-
-	return s.tx.Rollback()
-}
-
-func (s *mysqlSink) Close() {
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
-	}
 }
 
 //type matrixoneSink struct {

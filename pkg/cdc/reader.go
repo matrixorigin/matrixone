@@ -112,7 +112,7 @@ func (reader *tableReader) Run(
 		}
 
 		if err := reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("cdc tableReader(%v) failed, err: %v\n", reader.info, err)
+			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 
 			// if stale read, try to restart reader
 			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
@@ -120,14 +120,14 @@ func (reader *tableReader) Run(
 				reader.sinker.Reset()
 				// reset watermark
 				if err = reader.resetWatermarkFunc(reader.info); err != nil {
-					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v\n", reader.info, err)
+					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v", reader.info, err)
 					return
 				}
-				logutil.Errorf("cdc tableReader(%v) restart successfully\n", reader.info)
+				logutil.Errorf("cdc tableReader(%v) restart successfully", reader.info)
 				continue
 			}
 
-			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit\n", reader.info)
+			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit", reader.info)
 			return
 		}
 	}

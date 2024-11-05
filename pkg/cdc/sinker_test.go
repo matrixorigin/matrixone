@@ -357,7 +357,11 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	go s.Run(ctx, ar)
-	defer s.Close()
+	defer func() {
+		// call dummy to guarantee sqls has been sent, then close
+		s.SendDummy()
+		s.Close()
+	}()
 
 	// test insert
 	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
@@ -485,7 +489,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar)
 	go sinker.Run(ctx, ar)
-	defer sinker.Close()
+	defer func() { sinker.Close() }()
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -613,7 +617,7 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	s.preSqlBufLen = 128
 	s.sqlBufSendCh = make(chan []byte)
 	go s.Run(ctx, ar)
-	defer s.Close()
+	defer func() { s.Close() }()
 
 	s.Sink(ctx, &DecoderOutput{
 		noMoreData: true,
@@ -883,7 +887,7 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		sqlBufSendCh: make(chan []byte),
 	}
 	go sinker.Run(context.Background(), ar)
-	defer sinker.Close()
+	defer func() { sinker.Close() }()
 
 	sinker.SendBegin()
 	assert.NoError(t, err)
