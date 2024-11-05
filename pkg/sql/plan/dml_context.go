@@ -48,7 +48,7 @@ func NewDMLContext() *DMLContext {
 }
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
-	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil)
+	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil, false)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	return nil
 }
 
-func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string) error {
+func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
 		for _, cte := range with.CTEs {
@@ -140,7 +140,7 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 	}
 
 	for _, tbl := range tableExprs {
-		err := dmlCtx.ResolveSingleTable(ctx, tbl, aliasMap, cteMap)
+		err := dmlCtx.ResolveSingleTable(ctx, tbl, aliasMap, cteMap, respectFKCheck)
 		if err != nil {
 			return err
 		}
@@ -149,7 +149,7 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 	return nil
 }
 
-func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string][2]string, withMap map[string]bool) error {
+func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string][2]string, withMap map[string]bool, respectFKCheck bool) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -217,9 +217,13 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
-	checkFK, err := IsForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
+	var err error
+	checkFK := true
+	if respectFKCheck {
+		checkFK, err = IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	if checkFK && (len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {

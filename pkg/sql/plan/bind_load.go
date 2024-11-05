@@ -44,7 +44,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewTag()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
 		return -1, nil, err
 	}

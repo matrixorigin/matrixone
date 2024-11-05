@@ -41,7 +41,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
 		return 0, err
 	}

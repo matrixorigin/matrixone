@@ -40,7 +40,7 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap)
+	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
