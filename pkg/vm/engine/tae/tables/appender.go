@@ -120,7 +120,8 @@ func (appender *objectAppender) ApplyAppend(
 			continue
 		}
 		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
+			if err = node.pkIndex.BatchUpsert(
+				bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}
 		}
