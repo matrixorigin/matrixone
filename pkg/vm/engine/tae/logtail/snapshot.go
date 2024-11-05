@@ -626,24 +626,24 @@ func (sm *SnapshotMeta) Update(
 	}
 
 	collector := func(
-		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
 		mapFun := func(
-			objects map[objectio.Segmentid]*objectInfo,
+			objects1 map[objectio.Segmentid]*objectInfo,
 		) {
-			if objects == nil {
-				objects = make(map[objectio.Segmentid]*objectInfo)
+			if objects1 == nil {
+				objects1 = make(map[objectio.Segmentid]*objectInfo)
 			}
 			id := stats.ObjectName().SegmentId()
-			if objects[id] == nil {
+			if objects1[id] == nil {
 				if !deleteTS.IsEmpty() {
 					return
 				}
-				objects[id] = &objectInfo{
+				objects1[id] = &objectInfo{
 					stats:    stats,
 					createAt: createTS,
 				}
@@ -658,7 +658,17 @@ func (sm *SnapshotMeta) Update(
 				return
 			}
 			if deleteTS.IsEmpty() {
-				panic(any("deleteTS is empty"))
+				// Compatible with the cluster restored by backup
+				logutil.Warn(
+					"GC-SnapshotMeta-Update-Collector-Skip",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", stats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+					zap.String("start", startts.ToString()),
+					zap.String("end", endts.ToString()),
+				)
+				return
 			}
 			logutil.Info(
 				"GC-SnapshotMeta-Update-Collector",
@@ -667,7 +677,7 @@ func (sm *SnapshotMeta) Update(
 				zap.String("delete-at", deleteTS.ToString()),
 			)
 
-			delete(objects, id)
+			delete(objects1, id)
 		}
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
@@ -675,10 +685,10 @@ func (sm *SnapshotMeta) Update(
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
-		if (*objects)[tid] == nil {
-			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
+		if (*objects1)[tid] == nil {
+			(*objects1)[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
-		mapFun((*objects)[tid])
+		mapFun((*objects1)[tid])
 	}
 	collectObjects(
 		&sm.objects,
