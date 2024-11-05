@@ -2414,6 +2414,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("min_examined_row_limit", 0, 4294967295, false),
 		Default:           int64(0),
 	},
+	"moplugin_allowed_hosts": {
+		Name:              "moplugin_allowed_hosts",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("moplugin_allowed_hosts"),
+		Default:           "localhost",
+	},
 	"myisam_data_pointer_size": {
 		Name:              "myisam_data_pointer_size",
 		Scope:             ScopeGlobal,
