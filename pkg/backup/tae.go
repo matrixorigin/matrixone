@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"io"
 	"os"
 	"path"
@@ -495,7 +496,42 @@ func CopyGCDir(
 	if err != nil {
 		return nil, err
 	}
-	for i, metaFile := range metaFiles {
+
+	copyFiles := make([]*checkpoint.MetaFile, 0)
+
+	for _, metaFile := range metaFiles {
+		name := metaFile.GetName()
+		window := gc.NewGCWindow(common.DebugAllocator, srcFs)
+		err = window.ReadTable(ctx, gc.GCMetaDir+name, srcFs)
+		if err != nil {
+			return nil, err
+		}
+		defer window.Close()
+		objects := window.GetObjectStats()
+		filesList := make([]*taeFile, 0)
+		needCopy := true
+		for _, object := range objects {
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
+			if err != nil {
+				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				needCopy = false
+				break
+			}
+			filesList = append(filesList, &taeFile{
+				path:     object.ObjectName().String(),
+				size:     files[metaFile.GetIndex()].Size,
+				checksum: checksum,
+				needCopy: true,
+				ts:       backup,
+			})
+		}
+		if needCopy {
+			copyFiles = append(copyFiles, metaFile)
+			taeFileList = append(taeFileList, filesList...)
+		}
+	}
+
+	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
 		if i == len(metaFiles)-1 {
 			end := metaFile.GetEnd()
