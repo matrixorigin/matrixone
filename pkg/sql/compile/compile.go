@@ -1795,7 +1795,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		stats.AddCompileTableScanConsumption(time.Since(compileStart))
 	}()
 
-	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
+	nodes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
 	}
@@ -1815,8 +1815,6 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		ss[0].NodeInfo.Mcpu = 1
 	}
 
-	ss[0].PartialResults = partialResults
-	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
 }
 
@@ -3801,12 +3799,6 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	if len(n.AggList) > 0 {
-		partialResult, _, _ := checkAggOptimize(n)
-		if partialResult != nil {
-			return true
-		}
-	}
 	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
 }
 
@@ -4041,20 +4033,17 @@ func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Data
 	return rel, db, ctx, nil
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var relData engine.RelData
-	var partialResults []any
-	var partialResultTypes []types.T
 	var nodes engine.Nodes
 
 	rel, _, ctx, err := c.handleDbRelContext(n)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-
 	if c.determinExpandRanges(n) {
 		if c.isPrepare {
-			return nil, nil, nil, cantCompileForPrepareErr
+			return nil, cantCompileForPrepareErr
 		}
 
 		//@todo need remove expandRanges from Compile.
@@ -4065,13 +4054,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			for _, e := range newFilterExpr {
 				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
-					return nil, nil, nil, err
+					return nil, err
 				}
 			}
 			for _, e := range newFilterExpr {
 				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
-					return nil, nil, nil, err
+					return nil, err
 				}
 			}
 		}
@@ -4079,7 +4068,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		counterset := new(perfcounter.CounterSet)
 		relData, err = c.expandRanges(n, newFilterExpr, counterset)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 
 		stats := statistic.StatsInfoFromContext(ctx)
@@ -4098,59 +4087,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 		})
 		nodes[0].NeedExpandRanges = true
-		return nodes, nil, nil, nil
+		return nodes, nil
 	}
-
-	if len(n.AggList) > 0 && relData.DataCnt() > 1 {
-		var columnMap map[int]int
-		partialResults, partialResultTypes, columnMap = checkAggOptimize(n)
-		if partialResults != nil {
-			newRelData := relData.BuildEmptyRelData(1)
-			blk := relData.GetBlockInfo(0)
-			newRelData.AppendBlockInfo(&blk)
-
-			tombstones, err := collectTombstones(c, n, rel)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-
-			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
-			//otherwise put it into newRelData.
-			var (
-				hasTombstone bool
-				err2         error
-			)
-			if err = engine.ForRangeBlockInfo(1, relData.DataCnt(), relData, func(blk *objectio.BlockInfo) (bool, error) {
-				if hasTombstone, err2 = tombstones.HasBlockTombstone(
-					ctx, &blk.BlockID, fs,
-				); err2 != nil {
-					return false, err2
-				} else if blk.IsAppendable() || hasTombstone {
-					newRelData.AppendBlockInfo(blk)
-					return true, nil
-				}
-				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
-					partialResults = nil
-					return false, nil
-				}
-				return true, nil
-			}); err != nil {
-				return nil, nil, nil, err
-			}
-			if partialResults != nil {
-				relData = newRelData
-			}
-		}
-	}
-
-	// some log for finding a bug.
-	tblId := rel.GetTableID(ctx)
-	expectedLen := relData.DataCnt()
-	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.DataCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
@@ -4163,7 +4101,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				Data: engine.BuildEmptyRelData(),
 			}
 		}
-		return nodes, partialResults, partialResultTypes, nil
+		return nodes, nil
 	}
 
 	engineType := rel.GetEngineType()
@@ -4171,11 +4109,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	// or sometimes force on one CN
 	// if not disttae engine, just put all payloads in current CN
 	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae {
-		return putBlocksInCurrentCN(c, relData), partialResults, partialResultTypes, nil
+		return putBlocksInCurrentCN(c, relData), nil
 	}
 	// only support disttae engine for now
 	nodes, err = shuffleBlocksToMultiCN(c, rel, relData, n)
-	return nodes, partialResults, partialResultTypes, err
+	return nodes, err
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {

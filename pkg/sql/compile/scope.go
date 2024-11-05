@@ -21,6 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -611,8 +614,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			return err
 		}
 
-		ctx1 := c.proc.GetTopContext()
-		stats := statistic.StatsInfoFromContext(ctx1)
+		ctx := c.proc.GetTopContext()
+		stats := statistic.StatsInfoFromContext(ctx)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      counterSet.FileService.S3.List.Load(),
 			Head:      counterSet.FileService.S3.Head.Load(),
@@ -631,6 +634,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	err = s.aggOptimize(c)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -833,6 +841,62 @@ func removeStringBetween(s, start, end string) string {
 		startIndex = strings.Index(s, start)
 	}
 	return s
+}
+
+func (s *Scope) aggOptimize(c *Compile) error {
+	scanNode := s.DataSource.node
+	rel, _, ctx, err := c.handleDbRelContext(scanNode)
+	if err != nil {
+		return err
+	}
+	if len(scanNode.AggList) > 0 {
+
+		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
+		if partialResults != nil {
+			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
+			blk := s.NodeInfo.Data.GetBlockInfo(0)
+			newRelData.AppendBlockInfo(&blk)
+
+			tombstones, err := collectTombstones(c, scanNode, rel)
+			if err != nil {
+				return err
+			}
+
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return err
+			}
+			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
+			//otherwise put it into newRelData.
+			var (
+				hasTombstone bool
+				err2         error
+			)
+			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
+				if hasTombstone, err2 = tombstones.HasBlockTombstone(
+					ctx, &blk.BlockID, fs,
+				); err2 != nil {
+					return false, err2
+				} else if blk.IsAppendable() || hasTombstone {
+					newRelData.AppendBlockInfo(blk)
+					return true, nil
+				}
+				if c.evalAggOptimize(scanNode, blk, partialResults, partialResultTypes, columnMap) != nil {
+					partialResults = nil
+					return false, nil
+				}
+				return true, nil
+			}); err != nil {
+				return err
+			}
+			if partialResults != nil {
+				s.NodeInfo.Data = newRelData
+				s.PartialResults = partialResults
+				s.PartialResultTypes = partialResultTypes
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
