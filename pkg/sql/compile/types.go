@@ -180,8 +180,7 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	PartialResults     []any
-	PartialResultTypes []types.T
+	HasPartialResults bool
 }
 
 func canScopeOpRemote(rootOp vm.Operator) bool {

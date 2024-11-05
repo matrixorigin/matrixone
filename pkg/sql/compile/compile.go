@@ -1040,7 +1040,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
 			return ss, nil
-		} else if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
+		} else if c.IsSingleScope(ss) {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else {
@@ -1811,8 +1811,11 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 
-	if len(n.OrderBy) > 0 {
-		ss[0].NodeInfo.Mcpu = 1
+	if len(n.AggList) > 0 {
+		partialResults, _, _ := checkAggOptimize(n)
+		if partialResults != nil {
+			ss[0].HasPartialResults = true
+		}
 	}
 
 	return ss, nil
@@ -2981,9 +2984,19 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
-	op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, 0, c.proc)
-	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	ss[0].setRootOperator(op)
+	if ss[0].HasPartialResults {
+		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[0].setRootOperator(op)
+		arg := constructMergeGroup(true)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[0].setRootOperator(arg)
+	} else {
+		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		ss[0].setRootOperator(op)
+	}
+	ss[0].HasPartialResults = false
 	c.anal.isFirst = false
 	return ss
 }
@@ -3011,12 +3024,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 
 		currentFirstFlag = c.anal.isFirst
 		arg := constructMergeGroup(true)
-		if ss[0].PartialResults != nil {
-			arg.PartialResults = ss[0].PartialResults
-			arg.PartialResultTypes = ss[0].PartialResultTypes
-			ss[0].PartialResults = nil
-			ss[0].PartialResultTypes = nil
-		}
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -3036,12 +3043,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 
 		currentFirstFlag = c.anal.isFirst
 		arg := constructMergeGroup(true)
-		if ss[0].PartialResults != nil {
-			arg.PartialResults = ss[0].PartialResults
-			arg.PartialResultTypes = ss[0].PartialResultTypes
-			ss[0].PartialResults = nil
-			ss[0].PartialResultTypes = nil
-		}
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -4041,6 +4042,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	forceSingle := false
+	if len(n.AggList) > 0 {
+		partialResults, _, _ := checkAggOptimize(n)
+		if partialResults != nil {
+			forceSingle = true
+		}
+	}
+	if len(n.OrderBy) > 0 {
+		forceSingle = true
+	}
+
 	if c.determinExpandRanges(n) {
 		if c.isPrepare {
 			return nil, cantCompileForPrepareErr
@@ -4108,8 +4121,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
 	// if not disttae engine, just put all payloads in current CN
-	if len(c.cnList) == 1 || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae {
-		return putBlocksInCurrentCN(c, relData), nil
+	if len(c.cnList) == 1 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae || forceSingle {
+		return putBlocksInCurrentCN(c, relData, forceSingle), nil
 	}
 	// only support disttae engine for now
 	nodes, err = shuffleBlocksToMultiCN(c, rel, relData, n)
@@ -4625,12 +4638,16 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, relData engine.RelData) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
+	mcpu := c.generateCPUNumber(ncpu, relData.DataCnt())
+	if forceSingle {
+		mcpu = 1
+	}
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
+		Mcpu: mcpu,
 	})
 	nodes[0].Data = relData
 	return nodes

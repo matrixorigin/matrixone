@@ -615,16 +615,3 @@ func GetLeafOpParent(parentOp Operator, op Operator) Operator {
 	}
 	return GetLeafOpParent(op, op.GetOperatorBase().GetChildren(0))
 }
-
-// suppose that the op tree is like a list, only one leaf child
-// return grand parent of leaf op
-func GetLeafOpGrandParent(grandParentOp, parentOp, op Operator) Operator {
-	if op == nil || parentOp == nil {
-		return nil
-	}
-	if op.GetOperatorBase().NumChildren() == 0 {
-		return grandParentOp
-	}
-	child := op.GetOperatorBase().GetChildren(0)
-	return GetLeafOpGrandParent(parentOp, op, child)
-}

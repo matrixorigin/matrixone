@@ -17,10 +17,13 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -851,7 +854,6 @@ func (s *Scope) aggOptimize(c *Compile) error {
 		return err
 	}
 	if len(scanNode.AggList) > 0 {
-
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
 		if partialResults != nil {
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
@@ -893,9 +895,8 @@ func (s *Scope) aggOptimize(c *Compile) error {
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
 				//find the last mergegroup
-				child := s.RootOp.GetOperatorBase().GetChildren(0)
-				op := vm.GetLeafOpGrandParent(s.RootOp, child, child.GetOperatorBase().GetChildren(0))
-				if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+				mergeGroup := findMergeGroup(s.RootOp)
+				if mergeGroup != nil {
 					mergeGroup.PartialResults = partialResults
 					mergeGroup.PartialResultTypes = partialResultTypes
 				} else {
@@ -905,6 +906,26 @@ func (s *Scope) aggOptimize(c *Compile) error {
 		}
 	}
 	return nil
+}
+
+// find scan->proj->group->mergegroup
+func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
+	if op == nil {
+		return nil
+	}
+	if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+		child := op.GetOperatorBase().GetChildren(0)
+		if _, ok = child.(*group.Group); ok {
+			child = child.GetOperatorBase().GetChildren(0)
+			if _, ok = child.(*projection.Projection); ok {
+				child = child.GetOperatorBase().GetChildren(0)
+				if _, ok = child.(*table_scan.TableScan); ok {
+					return mergeGroup
+				}
+			}
+		}
+	}
+	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
