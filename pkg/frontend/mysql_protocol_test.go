@@ -186,17 +186,19 @@ func TestKill(t *testing.T) {
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second * 10}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
-			txnOp := newTestTxnOp()
-			return txnOp, nil
-		}).AnyTimes()
-	txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error) {
-			tTxnOp := txnOp.(*testTxnOp)
-			tTxnOp.meta.Status = txn.TxnStatus_Active
-			return txnOp, nil
-		}).AnyTimes()
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, commitTS any, options ...any) (client.TxnOperator, error) {
+		wp := newTestWorkspace()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(wp).AnyTimes()
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOp.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOp.EXPECT().ExitRunSql().Return().AnyTimes()
+		return txnOp, nil
+	}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true

@@ -28,7 +28,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -236,6 +235,7 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 
 // invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
 func (th *TxnHandler) invalidateTxnUnsafe() {
+	th.txnOp = nil
 	resetBits(&th.serverStatus, defaultServerStatus)
 	resetBits(&th.optionBits, defaultOptionBits)
 }
@@ -252,7 +252,7 @@ func (th *TxnHandler) inActiveTxnUnsafe() bool {
 	if th.txnOp != nil && th.txnCtx == nil {
 		panic("txnOp != nil and txnCtx == nil")
 	}
-	return th.txnOp != nil && th.txnOp.Txn().Status == txn.TxnStatus_Active && th.txnCtx != nil
+	return th.txnOp != nil && th.txnCtx != nil
 }
 
 // Create starts a new txn.
@@ -411,27 +411,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	txnClient := getPu(execCtx.ses.GetService()).TxnClient
-	if th.txnOp == nil {
-		err, hasRecovered = ExecuteFuncWithRecover(func() error {
-			th.txnOp, err2 = txnClient.New(
-				th.txnCtx,
-				execCtx.ses.getLastCommitTS(),
-				opts...)
-			return err2
-		})
-	} else if th.txnOp.Txn().Status != txn.TxnStatus_Active {
-		err, hasRecovered = ExecuteFuncWithRecover(func() error {
-			_, err2 = txnClient.RestartTxn(
-				th.txnCtx,
-				th.txnOp,
-				execCtx.ses.getLastCommitTS(),
-				opts...)
-			return err2
-		})
-	} else {
-		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txn is already active")
-	}
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
+		th.txnOp, err2 = getPu(execCtx.ses.GetService()).TxnClient.New(
+			th.txnCtx,
+			execCtx.ses.getLastCommitTS(),
+			opts...)
+		return err2
+	})
 	if err != nil || hasRecovered {
 		return err
 	}
