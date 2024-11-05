@@ -205,3 +205,35 @@ func Test_PasswordVerification(t *testing.T) {
 	_, _, err := passwordVerification(ctx, reuseInfo, "123456", userPasswords)
 	assert.NoError(t, err)
 }
+
+func TestCheckInvitedNodes(t *testing.T) {
+	ctx := context.Background()
+
+	// test empty invited nodes
+	err := checkInvitedNodes(ctx, "")
+	assert.Error(t, err)
+
+	// test
+	err = checkInvitedNodes(ctx, "192.168.1.1, 10.0.0.1")
+	assert.NoError(t, err)
+
+	// test invalid invited nodes
+	err = checkInvitedNodes(ctx, "192.168.1.1, invalid_ip")
+	assert.Error(t, err)
+
+	// test CIDR
+	err = checkInvitedNodes(ctx, "192.168.1.1, 10.0.0.0/33")
+	assert.Error(t, err)
+
+	// test CIDR
+	err = checkInvitedNodes(ctx, "192.168.1.0/24")
+	assert.NoError(t, err)
+
+	// test "*"
+	err = checkInvitedNodes(ctx, "*")
+	assert.NoError(t, err)
+
+	// test "*," should fail
+	err = checkInvitedNodes(ctx, "192.168.1.1, *")
+	assert.Error(t, err)
+}
