@@ -67,11 +67,11 @@ type resourceController struct {
 }
 
 func (c *resourceController) setMemLimit(total int64) {
-	cMLimit, err := memlimit.FromCgroup()
-	if cMLimit != 0 && int64(cMLimit) < total {
-		c.limit = int64(float64(cMLimit) * 0.9)
+	cgroup, err := memlimit.FromCgroup()
+	if cgroup != 0 && int64(cgroup) < total {
+		c.limit = int64(cgroup / 10 * 9)
 	} else {
-		c.limit = int64(float64(total) * 0.9)
+		c.limit = total / 10 * 9
 	}
 
 	if c.limit > 200*common.Const1GBytes {
@@ -86,7 +86,7 @@ func (c *resourceController) setMemLimit(total int64) {
 
 	logutil.Info(
 		"MergeExecutorMemoryInfo",
-		common.AnyField("container-limit", common.HumanReadableBytes(int(cMLimit))),
+		common.AnyField("container-limit", common.HumanReadableBytes(int(cgroup))),
 		common.AnyField("host-memory", common.HumanReadableBytes(int(total))),
 		common.AnyField("process-limit", common.HumanReadableBytes(int(c.limit))),
 		common.AnyField("transfer-page-limit", common.HumanReadableBytes(int(c.transferPageLimit))),
@@ -96,7 +96,7 @@ func (c *resourceController) setMemLimit(total int64) {
 
 func (c *resourceController) refresh() {
 	if c.limit == 0 {
-		c.limit = memInfo("MemTotal")
+		c.setMemLimit(memInfo("MemTotal"))
 	}
 
 	if c.proc == nil {
