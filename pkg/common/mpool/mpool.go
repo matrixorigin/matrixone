@@ -646,7 +646,8 @@ func (mp *MPool) Free(bs []byte) {
 		if pHdr.offHeap {
 			allocator().Deallocate(
 				unsafe.Slice((*byte)(hdr), 1),
-				malloc.NoHints,
+				// issue: https://github.com/matrixorigin/matrixone/issues/19758
+				malloc.IgnoreMunmapError,
 			)
 		}
 	}
