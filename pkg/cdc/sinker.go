@@ -141,7 +141,7 @@ type mysqlSinker struct {
 	// buf of sql statement
 	sqlBuf []byte
 	// buf of row data from batch, e.g. values part of insert statement (insert into xx values (a), (b), (c))
-	// or where ... in part of delete statement (delete from xx where pk in ((a), (b), (c)))
+	// or `where ... in ... ` part of delete statement (delete from xx where pk in ((a), (b), (c)))
 	rowBuf         []byte
 	insertPrefix   []byte
 	deletePrefix   []byte
@@ -224,8 +224,8 @@ var NewMysqlSinker = func(
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) (err error) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceTblIdStr)
 	if data.toTs.LE(&watermark) {
-		logutil.Errorf("^^^^^ Sinker: unexpected watermark: %s, current watermark: %s",
-			data.toTs.ToString(), watermark.ToString())
+		logutil.Errorf("cdc task mysqlSinker(%v): unexpected watermark: %s, current watermark: %s",
+			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
 		return
 	}
 
@@ -586,15 +586,15 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sql string) (er
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		// return if success
 		if err == nil {
-			//logutil.Errorf("----mysql send sql----, success, sql: %s", sql)
+			//logutil.Errorf("----cdc task mysqlSink send sql----, success, sql: %s", sql)
 			return
 		}
 
-		logutil.Errorf("----mysql send sql----, failed, err: %v, sql: %s", err, sql[:min(len(sql), sqlPrintLen)])
+		logutil.Errorf("----cdc task mysqlSink send sql----, failed, err: %v, sql: %s", err, sql[:min(len(sql), sqlPrintLen)])
 		v2.CdcMysqlSinkErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	return moerr.NewInternalError(ctx, "mysql sink retry exceed retryTimes or retryDuration")
+	return moerr.NewInternalError(ctx, "cdc task mysqlSink retry exceed retryTimes or retryDuration")
 }
 
 func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
