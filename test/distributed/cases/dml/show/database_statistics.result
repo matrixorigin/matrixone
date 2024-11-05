@@ -76,7 +76,7 @@ Number of columns in tables_priv
 use mo_catalog;
 show column_number from mo_user;
 Number of columns in mo_user
-11
+15
 show column_number from mo_account;
 Number of columns in mo_account
 9
@@ -415,7 +415,7 @@ Number of columns in tables_priv
 use mo_catalog;
 show column_number from mo_user;
 Number of columns in mo_user
-11
+15
 show column_number from mo_role;
 Number of columns in mo_role
 6
