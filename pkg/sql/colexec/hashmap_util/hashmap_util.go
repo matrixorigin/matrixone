@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -284,7 +285,18 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					case plan.Node_ERROR:
 						var rowStr string
 						if len(hb.DedupColTypes) == 1 {
-							rowStr = hb.vecs[vecIdx1][0].RowToString(vecIdx2 + k)
+							if hb.DedupColName == catalog.IndexTableIndexColName {
+								if hb.vecs[vecIdx1][0].GetType().Oid == types.T_varchar {
+									t, _, schema, err := types.DecodeTuple(hb.vecs[vecIdx1][0].GetBytesAt(vecIdx2 + k))
+									if err == nil && len(schema) > 1 {
+										rowStr = t.ErrString(make([]int32, len(schema)))
+									}
+								}
+							}
+
+							if len(rowStr) == 0 {
+								rowStr = hb.vecs[vecIdx1][0].RowToString(vecIdx2 + k)
+							}
 						} else {
 							rowItems, err := types.StringifyTuple(hb.vecs[vecIdx1][0].GetBytesAt(vecIdx2+k), hb.DedupColTypes)
 							if err != nil {

@@ -92,10 +92,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	idxTableDefs := make([][]*plan.TableDef, len(dmlCtx.tableDefs))
 
 	for _, tableDef := range dmlCtx.tableDefs {
-		if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Metadata ||
-			tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Centroids ||
-			tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into ivfflat index table")
+		if tableDef.TableType != catalog.SystemOrdinaryRel &&
+			tableDef.TableType != catalog.SystemIndexRel {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
 		}
 
 		for _, idxDef := range tableDef.Indexes {

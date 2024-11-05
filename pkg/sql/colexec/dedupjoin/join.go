@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -253,7 +254,18 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if isPessimistic {
 					var rowStr string
 					if len(ap.DedupColTypes) == 1 {
-						rowStr = ctr.vecs[0].RowToString(i + k)
+						if ap.DedupColName == catalog.IndexTableIndexColName {
+							if ctr.vecs[0].GetType().Oid == types.T_varchar {
+								t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
+								if err == nil && len(schema) > 1 {
+									rowStr = t.ErrString(make([]int32, len(schema)))
+								}
+							}
+						}
+
+						if len(rowStr) == 0 {
+							rowStr = ctr.vecs[0].RowToString(i + k)
+						}
 					} else {
 						rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
 						if err != nil {
