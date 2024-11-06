@@ -26,8 +26,8 @@ import (
 
 var _ policy = (*objOverlapPolicy)(nil)
 
-var levels = [4]int{
-	1, 2, 4, 16,
+var levels = [6]int{
+	1, 2, 4, 16, 64, 256,
 }
 
 type objOverlapPolicy struct {
@@ -176,7 +176,7 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 }
 
 func SegLevel(length int) int {
-	l := 3
+	l := len(levels) - 1
 	for i, level := range levels {
 		if length < level {
 			l = i - 1

@@ -142,7 +142,7 @@ func (l *lockedEntries) remove(del func(*entry) bool) {
 	l.entries = slices.DeleteFunc(l.entries, del)
 }
 
-func (l *lockedEntries) segments() [4][]*entry {
+func (l *lockedEntries) segments() [6][]*entry {
 	l.RLock()
 	defer l.RUnlock()
 	entries := l.entries
@@ -151,7 +151,7 @@ func (l *lockedEntries) segments() [4][]*entry {
 		segments[*e.id.Segment()] = append(segments[*e.id.Segment()], e)
 	}
 
-	leveledObjects := [4][]*entry{}
+	leveledObjects := [6][]*entry{}
 
 	for _, segment := range segments {
 		level := merge.SegLevel(len(segment))
@@ -204,10 +204,10 @@ func (s *entrySet) add(obj *entry) {
 	}
 }
 
-func (l *lockedEntries) checkOverlaps() [4][]*entry {
+func (l *lockedEntries) checkOverlaps() [6][]*entry {
 
 	leveledEntries := l.segments()
-	leveledOutputs := [4][]*entry{}
+	leveledOutputs := [6][]*entry{}
 
 	for i, entries := range leveledEntries {
 		overlappingSet := make([][]*entry, 0)
