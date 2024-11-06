@@ -2417,7 +2417,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	"moplugin_allowed_hosts": {
 		Name:              "moplugin_allowed_hosts",
 		Scope:             ScopeGlobal,
-		Dynamic:           false,
+		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("moplugin_allowed_hosts"),
 		Default:           "localhost",
