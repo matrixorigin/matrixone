@@ -4156,6 +4156,7 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 			if !ok {
 				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
 					agg.F.Func.ObjName = "starcount"
+					return partialResults, partialResultTypes, columnMap
 				}
 				return nil, nil, nil
 			} else {
