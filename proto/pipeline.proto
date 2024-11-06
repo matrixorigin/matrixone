@@ -52,6 +52,7 @@ message Message {
   uint64  id = 7;
   bytes   uuid = 8;
   bool    needNotReply = 9;
+  string debugMsg = 10;
 }
 
 message Connector {
