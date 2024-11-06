@@ -852,7 +852,7 @@ func (s *Scope) aggOptimize(c *Compile) error {
 	scanNode := s.DataSource.node
 	if scanNode != nil && len(scanNode.AggList) > 0 {
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
-		if partialResults != nil {
+		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			rel, _, ctx, err := c.handleDbRelContext(scanNode)
 			if err != nil {
 				return err
