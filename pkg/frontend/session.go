@@ -1423,7 +1423,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if !isSuperUser(tenant.GetUser()) && needCheckLock {
 			if userStatus != userStatusLock {
 				loginAttempts++
-				if maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses); err != nil {
+				maxLoginAttempts, err = getLoginAttemptMaxTimes(tenantCtx, ses)
+				if err != nil {
 					return nil, err
 				}
 				if int64(loginAttempts) >= maxLoginAttempts {
@@ -2066,7 +2067,7 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 	return true, nil
 }
 
-func getLoginAttempts(ctx context.Context, ses *Session) (int64, error) {
+func getLoginAttemptMaxTimes(ctx context.Context, ses *Session) (int64, error) {
 	value, err := ses.GetGlobalSysVar(ConnectionControlFailedConnectionsThreshold)
 	if err != nil {
 		return 0, err
@@ -2096,11 +2097,11 @@ func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
 
 func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
 	var (
-		loginTimes    int64
+		loginMaxTimes int64
 		err           error
 		loginMaxDelay int64
 	)
-	loginTimes, err = getLoginAttempts(ctx, ses)
+	loginMaxTimes, err = getLoginAttemptMaxTimes(ctx, ses)
 	if err != nil {
 		return false, err
 	}
@@ -2109,7 +2110,7 @@ func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	return loginTimes > 0 && loginMaxDelay > 0, nil
+	return loginMaxTimes > 0 && loginMaxDelay > 0, nil
 }
 
 func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {
