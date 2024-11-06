@@ -431,6 +431,7 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
+/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -439,6 +440,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
+*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -465,7 +467,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	c.printPipeline()
+	//c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
