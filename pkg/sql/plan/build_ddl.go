@@ -1751,6 +1751,19 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			PkeyColName: keyName,
 		}
 
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemIndexRel,
+			},
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+
 		// append to createTable.IndexTables and createTable.TableDef
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
@@ -1861,6 +1874,19 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemIndexRel,
+			},
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 
 		//indexDef.IndexName = indexInfo.Name
 		indexDef.IndexName = indexInfo.GetIndexName()
@@ -1980,6 +2006,20 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		}
 		tableDef.Cols = append(tableDef.Cols, pkColDef)
 	}
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemIndexRel,
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		}})
+
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.ColName()
 		nameCount[firstPart]++
@@ -2129,6 +2169,19 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDef.Cols = append(tableDef.Cols, colDef)
 	}
 
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemIndexRel,
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		}})
+
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.ColName()
 		nameCount[firstPart]++
@@ -2249,6 +2302,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Names:       []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
 			PkeyColName: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+			},
+		}
+		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	// 2. create ivf-flat `centroids` table
@@ -2327,6 +2393,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			PkeyColName: catalog.CPrimaryKeyColName,
 			CompPkeyCol: tableDefs[1].Cols[3],
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+			},
+		}
+		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	// 3. create ivf-flat `entries` table
@@ -2424,6 +2503,19 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			PkeyColName: catalog.CPrimaryKeyColName,
 			CompPkeyCol: tableDefs[2].Cols[4],
 		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemSI_IVFFLAT_TblType_Entries,
+			},
+		}
+		tableDefs[2].Defs = append(tableDefs[2].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
 	}
 
 	return indexDefs, tableDefs, nil
@@ -2836,6 +2928,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
+// In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
 	createIndex := &plan.CreateIndex{}
 	if len(stmt.Table.SchemaName) == 0 {
