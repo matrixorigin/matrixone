@@ -1117,3 +1117,18 @@ func Test_service_copy(t *testing.T) {
 	require.Falsef(t, unsafe.Pointer(&srcLock.Rows) == unsafe.Pointer(&got.Rows), "copyTxnInfo Rows should diff. src: %p, got: %p", srcLock.Rows, got.Rows)
 	require.Falsef(t, unsafe.Pointer(&srcLock.Options) == unsafe.Pointer(got.Options), "copyTxnInfo Options should diff. src: %p, got: %p", &srcLock.Options, got.Options)
 }
+
+func Test_service_handleMetadataCacheRequest(t *testing.T) {
+	ctx := context.Background()
+	s := &service{}
+	var resp query.Response
+	err := s.handleMetadataCacheRequest(ctx, &query.Request{
+		MetadataCacheRequest: query.MetadataCacheRequest{
+			CacheSize: 42,
+		},
+	}, &resp, nil)
+	require.Nil(t, err)
+	if resp.MetadataCacheResponse.CacheCapacity != 42 {
+		t.Fatal()
+	}
+}
