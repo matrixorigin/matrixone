@@ -1117,6 +1117,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		tenantID             int64
 		userID               int64
 		pwd, accountStatus   string
+		psw                  []byte
 		accountVersion       uint64
 		createVersion        string
 		lastChangedTime      string
@@ -1317,7 +1318,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
-	psw, err := GetPassWord(pwd)
+	psw, err = GetPassWord(pwd)
 	if err != nil {
 		return nil, err
 	}
@@ -1410,7 +1411,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 	} else {
-		if needCheckLock && !isSuperUser(tenant.GetUser()) {
+		if !isSuperUser(tenant.GetUser()) && needCheckLock {
 			if userStatus != userStatusLock {
 				loginAttempts++
 				if maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses); err != nil {
