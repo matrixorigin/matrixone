@@ -101,6 +101,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
 	}
+
+	if tableScan.ProjectList != nil {
+		tableScan.FreeProjection(proc)
+	}
 }
 
 func (tableScan *TableScan) closeReader() {
