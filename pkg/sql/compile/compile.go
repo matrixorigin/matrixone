@@ -3805,7 +3805,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 
 func collectTombstones(
 	c *Compile,
-	n *plan.Node,
+	node *plan.Node,
 	rel engine.Relation,
 ) (engine.Tombstoner, error) {
 	var err error
@@ -3817,35 +3817,35 @@ func collectTombstones(
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
 		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
-		if !n.ScanSnapshot.TS.Equal(zeroTS) && n.ScanSnapshot.TS.Less(snapTS) {
+		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
 			if c.proc.GetCloneTxnOperator() != nil {
 				txnOp = c.proc.GetCloneTxnOperator()
 			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 
-			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+			if node.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
 	//-----------------------------------------------------------------------------------------------------
 
-	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	if node.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.GetTenantId()))
 	}
-	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -3854,9 +3854,9 @@ func collectTombstones(
 		return nil, err
 	}
 
-	if n.TableDef.Partition != nil {
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for _, partitionItem := range n.PartitionPrune.SelectedPartitions {
+	if node.TableDef.Partition != nil {
+		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
+			for _, partitionItem := range node.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
 				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
@@ -3872,7 +3872,7 @@ func collectTombstones(
 				}
 			}
 		} else {
-			partitionInfo := n.TableDef.Partition
+			partitionInfo := node.TableDef.Partition
 			partitionNum := int(partitionInfo.PartitionNum)
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
@@ -3897,10 +3897,10 @@ func collectTombstones(
 }
 
 func (c *Compile) expandRanges(
-	n *plan.Node,
+	node *plan.Node,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 
-	rel, db, ctx, err := c.handleDbRelContext(n)
+	rel, db, ctx, err := c.handleDbRelContext(node)
 	if err != nil {
 		return nil, err
 	}
@@ -3910,7 +3910,7 @@ func (c *Compile) expandRanges(
 		if len(blockFilterList) > 0 {
 			preAllocSize = 64
 		} else {
-			preAllocSize = int(n.Stats.BlockNum)
+			preAllocSize = int(node.Stats.BlockNum)
 		}
 	}
 
@@ -3922,9 +3922,9 @@ func (c *Compile) expandRanges(
 	}
 	//tombstones, err := rel.CollectTombstones(ctx, c.TxnOffset)
 
-	if n.TableDef.Partition != nil {
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+	if node.TableDef.Partition != nil {
+		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
+			for i, partitionItem := range node.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
 				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
@@ -3943,7 +3943,7 @@ func (c *Compile) expandRanges(
 					})
 			}
 		} else {
-			partitionInfo := n.TableDef.Partition
+			partitionInfo := node.TableDef.Partition
 			partitionNum := int(partitionInfo.PartitionNum)
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
@@ -3971,7 +3971,7 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
+func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
@@ -3980,34 +3980,34 @@ func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Data
 	//------------------------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
+		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 
-			txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+			txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 			c.proc.SetCloneTxnOperator(txnOp)
 
-			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+			if node.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
 	//-------------------------------------------------------------------------------------------------------------
-	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	if node.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.GetTenantId()))
 	}
-	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 	if err != nil {
 		if txnOp.IsSnapOp() {
 			return nil, nil, nil, err
@@ -4019,7 +4019,7 @@ func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Data
 		}
 
 		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+		rel, e = db.Relation(ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
 		if e != nil {
 			return nil, nil, nil, err
 		}
@@ -4114,7 +4114,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			nodes[i] = engine.Node{
 				Id:   node.Id,
 				Addr: node.Addr,
-				Mcpu: 1,
+				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
 				Data: engine.BuildEmptyRelData(),
 			}
 		}
