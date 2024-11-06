@@ -181,7 +181,7 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 }
 
 func segLevel(length int) int {
-	l := 5
+	l := len(levels) - 1
 	for i, level := range levels {
 		if length < level {
 			l = i - 1

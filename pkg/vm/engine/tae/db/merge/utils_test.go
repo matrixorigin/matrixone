@@ -22,8 +22,8 @@ import (
 func TestResourceController(t *testing.T) {
 	rc := new(resourceController)
 	rc.setMemLimit(10000)
-	require.Equal(t, int64(9000), rc.limit)
-	require.Equal(t, int64(9000), rc.availableMem())
+	require.Equal(t, int64(7500), rc.limit)
+	require.Equal(t, int64(7500), rc.availableMem())
 
 	rc.refresh()
 	rc.limit = rc.using + 1

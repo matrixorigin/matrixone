@@ -30,18 +30,15 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const estimateMemUsagePerRow = 12
+const estimateMemUsagePerRow = 20
 
-func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) {
-	if len(mobjs) == 0 {
-		return
-	}
-	for _, m := range mobjs {
-		origSize += int(m.OriginSize())
+func estimateMergeConsume(objs []*catalog.ObjectEntry) (origSize, estSize int) {
+	for _, o := range objs {
+		origSize += int(o.OriginSize())
 
 		// the main memory consumption is transfer table.
-		// each row uses 12B, so estimate size is 12 * rows.
-		estSize += int(m.Rows()) * estimateMemUsagePerRow * 2
+		// each row uses ~20B, so estimate size is 20 * rows.
+		estSize += int(o.Rows()) * estimateMemUsagePerRow
 	}
 	return
 }
@@ -68,9 +65,9 @@ type resourceController struct {
 func (c *resourceController) setMemLimit(total int64) {
 	cgroup, err := memlimit.FromCgroup()
 	if cgroup != 0 && int64(cgroup) < total {
-		c.limit = int64(cgroup / 10 * 9)
+		c.limit = int64(cgroup / 4 * 3)
 	} else {
-		c.limit = total / 10 * 9
+		c.limit = total / 4 * 3
 	}
 
 	if c.limit > 200*common.Const1GBytes {
@@ -137,7 +134,7 @@ func (c *resourceController) printStats() {
 func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 	for _, obj := range objs {
 		c.reservedMergeRows += int64(obj.Rows())
-		c.reserved += estimateMemUsagePerRow * int64(obj.Rows()) * 2
+		c.reserved += estimateMemUsagePerRow * int64(obj.Rows())
 		c.reservedMergeBlks += uint64(obj.BlkCnt())
 	}
 }

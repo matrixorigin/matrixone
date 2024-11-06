@@ -231,7 +231,7 @@ func TestObjOverlap(t *testing.T) {
 	// empty policy
 	policy := newObjOverlapPolicy()
 	rc := new(resourceController)
-	rc.setMemLimit(estimateMemUsagePerRow * 17 * 2)
+	rc.setMemLimit(estimateMemUsagePerRow * 20)
 	objs := policy.revise(rc, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
