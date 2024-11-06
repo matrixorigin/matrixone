@@ -32,6 +32,10 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_schemata,
 	upg_system_stmt_info_add_column_conn_id,
 	upg_system_stmt_info_add_column_cu,
+	upg_mo_user_add_password_last_changed,
+	upg_mo_user_add_password_history,
+	upg_mo_user_add_login_attempts,
+	upg_mo_user_add_lock_time,
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
@@ -112,4 +116,75 @@ var upg_information_schema_schemata = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "SCHEMATA"),
+}
+
+var upg_mo_user_add_password_last_changed = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_USER,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_user add column password_last_changed timestamp default utc_timestamp",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "password_last_changed")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.ColType == "TIMESTAMP" {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_user_add_password_history = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_USER,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_user add column password_history text default '[]'",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "password_history")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.ColType == "TEXT" {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_user_add_login_attempts = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_USER,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_user add column login_attempts int unsigned default 0",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "login_attempts")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.ColType == "INT UNSIGNED" {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_user_add_lock_time = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_USER,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    "alter table mo_catalog.mo_user add column lock_time timestamp default utc_timestamp",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_USER, "lock_time")
+		if err != nil {
+			return false, err
+		}
+		if colInfo.ColType == "TIMESTAMP" {
+			return true, nil
+		}
+		return false, nil
+	},
 }
