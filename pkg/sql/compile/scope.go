@@ -512,7 +512,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
-	var inExprList []*plan.Expr
+	var runtimeInExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
 	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
@@ -538,7 +538,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					return nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					inExprList = append(inExprList, inExpr)
+					runtimeInExprList = append(runtimeInExprList, inExpr)
 
 					// TODO: implement BETWEEN expression
 				}
@@ -549,15 +549,15 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	var appendNotPkFilter []*plan.Expr
-	for i := range inExprList {
-		fn := inExprList[i].GetF()
+	for i := range runtimeInExprList {
+		fn := runtimeInExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
 		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
 		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
 		}
 	}
 
@@ -579,8 +579,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	// reset datasource
-	if len(inExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(inExprList)
+	if len(runtimeInExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
@@ -600,33 +600,33 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			}
 		}
 
-		newList := plan2.DeepCopyExprList(inExprList)
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newList = append(newList, s.DataSource.BlockFilterList...)
+			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
-		crs := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, newList, crs)
+		counterSet := new(perfcounter.CounterSet)
+		relData, err := c.expandRanges(s.DataSource.node, newExprList, counterSet)
 		if err != nil {
 			return err
 		}
 
-		ctx := c.proc.GetTopContext()
-		stats := statistic.StatsInfoFromContext(ctx)
+		ctx1 := c.proc.GetTopContext()
+		stats := statistic.StatsInfoFromContext(ctx1)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			List:      counterSet.FileService.S3.List.Load(),
+			Head:      counterSet.FileService.S3.Head.Load(),
+			Put:       counterSet.FileService.S3.Put.Load(),
+			Get:       counterSet.FileService.S3.Get.Load(),
+			Delete:    counterSet.FileService.S3.Delete.Load(),
+			DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
 		})
 
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
 
-	} else if len(inExprList) > 0 {
+	} else if len(runtimeInExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err

@@ -89,6 +89,10 @@ type GCWindow struct {
 	}
 }
 
+func (w *GCWindow) GetObjectStats() []objectio.ObjectStats {
+	return w.files
+}
+
 func (w *GCWindow) Clone() GCWindow {
 	w2 := *w
 	w2.files = make([]objectio.ObjectStats, len(w.files))
@@ -455,7 +459,7 @@ func (w *GCWindow) replayData(
 }
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
-func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
+func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.FileService) error {
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -466,7 +470,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.Obje
 	start, end, _ := blockio.DecodeGCMetadataFileName(name)
 	w.tsRange.start = start
 	w.tsRange.end = end
-	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
+	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
