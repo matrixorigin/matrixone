@@ -245,7 +245,18 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 	}
 }
 
-// MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
+// MergeRun
+// case 1 :
+//
+//	specific run for Tp query without merge operator.
+//
+// case 2 :
+//
+//	normal merge run.
+//	1. start n goroutines from pool to run the pre-scope.
+//	2. send notify message to remote node for its data producer.
+//	3. run itself.
+//	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
 func (s *Scope) MergeRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -253,6 +264,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	// specific case.
 	if c.IsTpQuery() && !c.hasMergeOp {
 		lenPrescopes := len(s.PreScopes)
 		for i := lenPrescopes - 1; i >= 0; i-- {
@@ -264,51 +276,60 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
+	// Merge Run normally.
 	var wg sync.WaitGroup
-	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
+	resultList1 := make(chan error, len(s.PreScopes))
+	resultList2 := make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
+
+	// step 1.
 	for i := range s.PreScopes {
 		wg.Add(1)
-		scope := s.PreScopes[i]
-		errSubmit := ants.Submit(func() {
-			defer func() {
-				wg.Done()
-			}()
 
-			switch scope.Magic {
-			case Normal:
-				preScopeResultReceiveChan <- scope.Run(c)
-			case Merge, MergeInsert:
-				preScopeResultReceiveChan <- scope.MergeRun(c)
-			case Remote:
-				preScopeResultReceiveChan <- scope.RemoteRun(c)
-			default:
-				preScopeResultReceiveChan <- moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-			}
-		})
-		if errSubmit != nil {
-			preScopeResultReceiveChan <- errSubmit
+		scope := s.PreScopes[i]
+
+		submitPreScope := ants.Submit(
+			func() {
+				switch scope.Magic {
+				case Normal:
+					resultList1 <- scope.Run(c)
+				case Merge, MergeInsert:
+					resultList1 <- scope.MergeRun(c)
+				case Remote:
+					resultList1 <- scope.RemoteRun(c)
+				default:
+					err := moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
+					resultList1 <- err
+				}
+				wg.Done()
+			})
+
+		// build routine failed.
+		if submitPreScope != nil {
+			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			resultList1 <- submitPreScope
 			wg.Done()
 		}
 	}
 
-	var notifyMessageResultReceiveChan chan notifyMessageResult
+	// step 2.
 	if len(s.RemoteReceivRegInfos) > 0 {
-		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
-		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
+		s.sendNotifyMessage(&wg, resultList2)
 	}
 
+	// step 3.
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
 
 		// not necessary, but we still clean the preScope error channel here.
-		for len(preScopeResultReceiveChan) > 0 {
-			<-preScopeResultReceiveChan
+		for len(resultList1) > 0 {
+			<-resultList1
 		}
 
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
-		for len(notifyMessageResultReceiveChan) > 0 {
-			result := <-notifyMessageResultReceiveChan
+		for len(resultList2) > 0 {
+			result := <-resultList2
 			result.clean(s.Proc)
 		}
 	}()
@@ -325,7 +346,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err := <-preScopeResultReceiveChan; err != nil {
+			if err = <-resultList1; err != nil {
 				return err
 			}
 		}
@@ -334,13 +355,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err := <-preScopeResultReceiveChan:
+		case err = <-resultList1:
 			if err != nil {
 				return err
 			}
 			preScopeCount--
 
-		case result := <-notifyMessageResultReceiveChan:
+		case result := <-resultList2:
 			result.clean(s.Proc)
 			if result.err != nil {
 				return result.err
@@ -354,20 +375,40 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 }
 
+// cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
+func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
+	p := pipeline.New(0, nil, sp.RootOp)
+	p.Cleanup(sp.Proc, true, isPrepare, fail)
+}
+
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	if s.ipAddrMatch(c.addr) {
+		return s.MergeRun(c)
+	}
+	if err := s.holdAnyCannotRemoteOperator(); err != nil {
+		return err
+	}
+
+	// In fact, it's not a safe way to convert this pipeline to run at local.
+	//
+	// Just image this case,
+	// pipelineA holds an operator `dispatch d1`, d1 want to send data to pipelineB at node1.
+	// for this operator `d1`, it takes a remote-receiver (the pipelineB), and it will call a rpc for sending.
+	// but now, the pipelineB is not a remote-receiver but in local, the rpc will fail and the B cannot receive anything.
+	// This will cause a hung.
+	//
+	// we should avoid to generate this format pipeline, or do a suitable conversion for the dispatch operator,
+	// or refactor the dispatch operator for no need to know a receiver is local or remote.
+	if !checkPipelineStandaloneExecutableAtRemote(s) {
+		return s.MergeRun(c)
+	}
+
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
-
-	if !s.canRemote(c, true) {
-		return s.MergeRun(c)
-	}
-	if !checkPipelineStandaloneExecutableAtRemote(s) {
-		return s.MergeRun(c)
-	}
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
@@ -716,7 +757,7 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, s.Proc.Mp())
+		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
 
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -774,8 +815,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 		)
 
 		if errSubmit != nil {
-			resultChan <- notifyMessageResult{err: errSubmit, sender: nil}
-			wg.Done()
+			closeWithError(errSubmit, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 		}
 	}
 }
@@ -787,7 +827,7 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, sender.mp)
+		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
 	}
 }
 
