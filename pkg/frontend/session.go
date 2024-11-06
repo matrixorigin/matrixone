@@ -1333,17 +1333,23 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if needCheckLock {
-		userStatus, err = userRsset[0].GetString(tenantCtx, 0, 5)
+		// get user status, login_attempts, lock_time
+		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+		userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userLockInfoSql)
+		if err != nil {
+			return nil, err
+		}
+		userStatus, err = userRsset[0].GetString(tenantCtx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
 
-		loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 6)
+		loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 1)
 		if err != nil {
 			return nil, err
 		}
 
-		lockTime, err = userRsset[0].GetString(tenantCtx, 0, 7)
+		lockTime, err = userRsset[0].GetString(tenantCtx, 0, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -1388,7 +1394,12 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 
 			if defPwdLife > 0 {
-				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 3)
+				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
+				userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userExpiredSql)
+				if err != nil {
+					return nil, err
+				}
+				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 0)
 				if err != nil {
 					return nil, err
 				}
