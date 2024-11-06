@@ -94,7 +94,7 @@ func CnServerMessageHandler(
 		panic("cn server receive a message with unexpected type")
 	}
 	if msg.DebugMsg != "" {
-		logutil.Infof("%s, goRountineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
+		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
