@@ -70,7 +70,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 	}
 
 	reviseResults := make([]reviseResult, len(levels))
-	for i := range len(levels) {
+	for i := range 4 {
 		if len(m.leveledObjects[i]) < 2 {
 			continue
 		}
@@ -144,7 +144,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 		return nil, TaskHostDN
 	}
 
-	if level < 2 && len(objs) > levels[3] {
+	if level < 3 && len(objs) > levels[3] {
 		objs = objs[:levels[3]]
 	}
 

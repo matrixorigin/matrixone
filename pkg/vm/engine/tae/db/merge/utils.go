@@ -36,14 +36,13 @@ func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) 
 	if len(mobjs) == 0 {
 		return
 	}
-	rows := 0
 	for _, m := range mobjs {
-		rows += int(m.Rows())
 		origSize += int(m.OriginSize())
+
+		// the main memory consumption is transfer table.
+		// each row uses 12B, so estimate size is 12 * rows.
+		estSize += int(m.Rows()) * estimateMemUsagePerRow * 2
 	}
-	// the main memory consumption is transfer table.
-	// each row uses 12B, so estimate size is 12 * rows.
-	estSize = rows * 12
 	return
 }
 
@@ -127,8 +126,7 @@ func (c *resourceController) printStats() {
 		return
 	}
 
-	logutil.Info(
-		"MergeExecutorMemoryStats",
+	logutil.Info("MergeExecutorMemoryStats",
 		common.AnyField("process-limit", common.HumanReadableBytes(int(c.limit))),
 		common.AnyField("process-mem", common.HumanReadableBytes(int(c.using))),
 		common.AnyField("inuse-mem", common.HumanReadableBytes(int(c.reserved))),
@@ -139,7 +137,7 @@ func (c *resourceController) printStats() {
 func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 	for _, obj := range objs {
 		c.reservedMergeRows += int64(obj.Rows())
-		c.reserved += estimateMemUsagePerRow * int64(obj.Rows())
+		c.reserved += estimateMemUsagePerRow * int64(obj.Rows()) * 2
 		c.reservedMergeBlks += uint64(obj.BlkCnt())
 	}
 }

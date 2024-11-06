@@ -54,7 +54,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 	}
 
 	if kind == TaskHostCN {
-		osize, esize := estimateMergeConsume(mobjs)
+		_, esize := estimateMergeConsume(mobjs)
 		blkCnt := 0
 		for _, obj := range mobjs {
 			blkCnt += obj.BlockCnt()
@@ -83,7 +83,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.Object
 		}
 		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
 			ActiveCNObj.AddActiveCNObj(mobjs)
-			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
+			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt)
 		} else {
 			logutil.Info(
 				"MergeExecutorError",
@@ -138,14 +138,14 @@ func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.Obj
 		}
 		return
 	}
-	osize, esize := estimateMergeConsume(mobjs)
-	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
+	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt)
 	entry.Stats.SetLastMergeTime()
 }
 
-func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
+func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn int) {
 	rows := 0
 	infoBuf := &bytes.Buffer{}
+	osize, esize := estimateMergeConsume(merges)
 	for _, obj := range merges {
 		r := int(obj.Rows())
 		rows += r
