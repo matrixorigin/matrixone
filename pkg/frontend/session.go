@@ -1358,7 +1358,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	/*
 		if user lock status is locked
 		check if the lock_time is not expired
-		if yes, return error
 	*/
 	if needCheckLock && userStatus == userStatusLock {
 		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
@@ -1412,7 +1411,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				}
 			}
 
-			// if need check lock
 			if needCheckLock && userStatus == userStatusLock {
 				// if user lock status is locked, update status to unlock
 				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
