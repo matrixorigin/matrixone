@@ -722,7 +722,10 @@ func (parser *CSVParser) readColumns() error {
 		return nil
 	}
 
-	parser.columns = make([]string, 0, len(parser.fieldIndexes))
+	parser.columns = parser.columns[:0]
+	if cap(parser.columns) < len(parser.fieldIndexes) {
+		parser.columns = make([]string, 0, len(parser.fieldIndexes))
+	}
 	str := string(parser.recordBuffer) // Convert to string once to batch allocations
 	var preIdx int
 	for i, idx := range parser.fieldIndexes {
