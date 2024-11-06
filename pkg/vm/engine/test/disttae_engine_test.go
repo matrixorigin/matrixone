@@ -1116,3 +1116,27 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }
+
+func TestCache3Tables(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	dbname, tname, rel, err := p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_DATABASE_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_DATABASE, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_TABLES_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_TABLES, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_COLUMNS_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_COLUMNS, tname)
+	require.NotNil(t, rel)
+}
