@@ -136,6 +136,7 @@ type TxnAsyncer interface {
 type TxnTest interface {
 	MockIncWriteCnt() int
 	MockStartTS(types.TS)
+	SetFreezeFn(func(AsyncTxn) error)
 	SetPrepareCommitFn(func(AsyncTxn) error)
 	SetPrepareRollbackFn(func(AsyncTxn) error)
 	SetApplyCommitFn(func(AsyncTxn) error)
