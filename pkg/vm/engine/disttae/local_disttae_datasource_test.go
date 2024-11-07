@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,7 +84,9 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
 	defer closeFunc()
 
-	txnOp.AddWorkspace(&Transaction{})
+	txnOp.AddWorkspace(&Transaction{
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+	})
 
 	txnDB := txnDatabase{
 		op: txnOp,
@@ -162,6 +165,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	s3Bat.SetRowCount(8193)
 	s3Bat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
 		writes: []Entry{
