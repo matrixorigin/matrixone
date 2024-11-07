@@ -1966,3 +1966,174 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	}
 	return fields
 }
+func checkPasswordExpired(ctx context.Context, ses *Session, lastChangedTime string) (bool, error) {
+	var (
+		defaultPasswordLifetime int
+		err                     error
+		lastChanged             time.Time
+	)
+	// get the default password lifetime
+	defaultPasswordLifetime, err = getPasswordLifetime(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+
+	// if the default password lifetime is 0, the password never expires
+	if defaultPasswordLifetime == 0 {
+		return false, nil
+	}
+
+	// get the last password change time as utc time
+	lastChanged, err = time.ParseInLocation("2006-01-02 15:04:05", lastChangedTime, time.UTC)
+	if err != nil {
+		return false, err
+	}
+
+	// get the current time as utc time
+	now := time.Now().UTC()
+	if lastChanged.AddDate(0, 0, defaultPasswordLifetime).Before(now) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func getPasswordLifetime(ctx context.Context, ses *Session) (int, error) {
+	value, err := ses.GetGlobalSysVar(DefaultPasswordLifetime)
+	if err != nil {
+		return 0, err
+	}
+
+	lifetime, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", DefaultPasswordLifetime)
+	}
+
+	return int(lifetime), nil
+}
+
+func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (bool, error) {
+	var (
+		maxDelay int64
+		err      error
+		lt       time.Time
+	)
+
+	// get the lock time as utc time
+	lt, err = time.ParseInLocation("2006-01-02 15:04:05", lockTime, time.UTC)
+	if err != nil {
+		return false, err
+	}
+
+	// get the max connection delay
+	maxDelay, err = getLoginMaxDelay(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+
+	// get the current time as utc time
+	now := time.Now().UTC()
+	if lt.Add(time.Duration(maxDelay) * time.Microsecond).After(now) {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func getLoginAttempts(ctx context.Context, ses *Session) (int64, error) {
+	value, err := ses.GetGlobalSysVar(ConnectionControlFailedConnectionsThreshold)
+	if err != nil {
+		return 0, err
+	}
+
+	attempts, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", ConnectionControlFailedConnectionsThreshold)
+	}
+
+	return attempts, nil
+}
+
+func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
+	value, err := ses.GetGlobalSysVar(ConnectionControlMaxConnectionDelay)
+	if err != nil {
+		return 0, err
+	}
+
+	delay, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", ConnectionControlMaxConnectionDelay)
+	}
+
+	return delay, nil
+}
+
+func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
+	var (
+		loginTimes    int64
+		err           error
+		loginMaxDelay int64
+	)
+	loginTimes, err = getLoginAttempts(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+
+	loginMaxDelay, err = getLoginMaxDelay(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+	return loginTimes > 0 && loginMaxDelay > 0, nil
+}
+
+func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func increaseLoginAttempts(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateLoginAttemptsOfUser(userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateLockTime(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateLockTimeOfUser(userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateStatusLockOfUser(userStatusLock, userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
