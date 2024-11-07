@@ -912,13 +912,10 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	newBackSes := newBackSession(backSes, txnOp, "", fakeDataSetFetcher2)
-	bh := &backExec{
-		backSes: newBackSes,
-	}
+	backSes.BackExec(txnOp, "", fakeDataSetFetcher2)
 	//the derived statement execute in a shared transaction in background session
-	bh.backSes.ReplaceDerivedStmt(true)
-	return bh
+	backSes.backExecReuse.backSes.ReplaceDerivedStmt(true)
+	return backSes.backExecReuse
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
