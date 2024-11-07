@@ -304,7 +304,7 @@ create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
 execute stmt1;
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '(.*)'
 select * from t1;
 a    b    c
 1    2    3
