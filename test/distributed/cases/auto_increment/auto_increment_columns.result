@@ -821,7 +821,7 @@ select last_insert_id();
 last_insert_id()
 10
 Insert into auto_increment02 values(10);
-Duplicate entry '10' for key '__mo_index_idx_col'
+Duplicate entry '10' for key '(.*)'
 Select * from auto_increment02;
 col1
 10
