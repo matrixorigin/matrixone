@@ -22,7 +22,7 @@ Select * from auto_increment02;
 col1
 10
 Insert into auto_increment02 values(10);
-Duplicate entry '10' for key '__mo_index_idx_col'
+Duplicate entry '10' for key '(.*)'
 insert into auto_increment02 values(100);
 select last_insert_id();
 last_insert_id()
@@ -83,9 +83,9 @@ col1
 10001
 10002
 Insert into auto_increment05 values(10001);
-Duplicate entry '10001' for key '__mo_index_idx_col'
+Duplicate entry '10001' for key '(.*)'
 Insert into auto_increment05 values(10002);
-Duplicate entry '10002' for key '__mo_index_idx_col'
+Duplicate entry '10002' for key '(.*)'
 Select * from auto_increment05;
 col1
 10000
