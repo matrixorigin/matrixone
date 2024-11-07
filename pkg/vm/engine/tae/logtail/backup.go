@@ -78,6 +78,10 @@ func NewBackupDeltaLocDataSource(
 	}
 }
 
+func (d *BackupDeltaLocDataSource) String() string {
+	return "BackupDeltaLocDataSource"
+}
+
 func (d *BackupDeltaLocDataSource) SetTS(
 	ts types.TS,
 ) {
