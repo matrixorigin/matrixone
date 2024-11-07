@@ -205,6 +205,30 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	return nil, nil
 }
 
+func (h *Handle) HandleGetChangedTableList(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.GetChangedTableListReq,
+	resp *cmd_util.GetChangedTableListResp,
+) (func(), error) {
+	memo := h.db.GetUsageMemo()
+
+	memo.EnterProcessing()
+	defer func() {
+		memo.LeaveProcessing()
+	}()
+
+	var newest types.TS
+	resp.AccIds, resp.DatabaseIds, resp.TableIds, newest =
+		memo.CollectTableChangeListByTS(
+			types.TimestampToTS(*req.From))
+
+	tt := newest.ToTimestamp()
+	resp.Newest = &tt
+
+	return nil, nil
+}
+
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,

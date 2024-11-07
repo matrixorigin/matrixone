@@ -114,6 +114,18 @@ type RowEntry struct {
 	PrimaryIndexBytes []byte
 }
 
+func (r RowEntry) String() string {
+	pk, _ := types.Unpack(r.PrimaryIndexBytes)
+
+	return fmt.Sprintf("RID(%s)-TS(%s)-EID(%d)-DEL(%v)-PK(%v | %v)",
+		r.RowID.String(),
+		r.Time.ToString(),
+		r.ID,
+		r.Deleted,
+		r.PrimaryIndexBytes,
+		pk.SQLStrings(nil))
+}
+
 func (r RowEntry) Less(than RowEntry) bool {
 	// asc
 	if cmp := r.BlockID.Compare(&than.BlockID); cmp != 0 {

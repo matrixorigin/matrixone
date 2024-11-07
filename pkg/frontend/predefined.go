@@ -284,17 +284,17 @@ var (
     			primary key(account_id, key_id)
 			)`
 
-	MoCatalogMoTableStatsDDL = `create table mo_catalog.mo_table_stats (
+	MoCatalogMoTableStatsDDL = fmt.Sprintf(`create table mo_catalog.%s (
     			account_id bigint unsigned,
     			database_id bigint unsigned,
     			table_id bigint unsigned,
     			database_name varchar(255),
     			table_name varchar(255),
     			table_stats json,
-    			update_time timestamp not null default current_timestamp on update current_timestamp,
-    			took bigint unsigned,
+    			update_time datetime(6) not null,
+    			takes bigint unsigned,
     			primary key(account_id, database_id, table_id)
-			)`
+			)`, catalog.MO_TABLE_STATS)
 )
 
 // `mo_catalog` database system tables

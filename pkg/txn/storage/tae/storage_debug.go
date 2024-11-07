@@ -143,6 +143,9 @@ func (s *taeStorage) Debug(ctx context.Context,
 			return nil, err
 		}
 		return resp.Read()
+	case uint32(api.OpCode_OpGetChangedTableList):
+		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetChangedTableList)
+		return resp.Read()
 	default:
 		return nil, moerr.NewNotSupportedNoCtxf("TAEStorage not support ctl method %d", opCode)
 	}
