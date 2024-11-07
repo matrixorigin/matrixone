@@ -1966,6 +1966,7 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	}
 	return fields
 }
+
 func checkPasswordExpired(ctx context.Context, ses *Session, lastChangedTime string) (bool, error) {
 	var (
 		defaultPasswordLifetime int
