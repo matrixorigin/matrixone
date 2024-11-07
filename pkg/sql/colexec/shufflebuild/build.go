@@ -17,9 +17,8 @@ package shufflebuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,6 +43,10 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
+	shuffleBuild.ctr.hashmapBuilder.IsDedup = shuffleBuild.IsDedup
+	shuffleBuild.ctr.hashmapBuilder.OnDuplicateAction = shuffleBuild.OnDuplicateAction
+	shuffleBuild.ctr.hashmapBuilder.DedupColName = shuffleBuild.DedupColName
+	shuffleBuild.ctr.hashmapBuilder.DedupColTypes = shuffleBuild.DedupColTypes
 	return shuffleBuild.ctr.hashmapBuilder.Prepare(shuffleBuild.Conditions, proc)
 }
 
