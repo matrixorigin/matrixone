@@ -325,7 +325,7 @@ func (sm *SnapshotMeta) copyTablesLocked() map[uint32]map[uint64]*tableInfo {
 	return tables
 }
 
-func isMoTable(tid uint64) bool {
+func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
@@ -353,7 +353,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
-		if !isMoTable(tid) {
+		if !IsMoTable(tid) {
 			return
 		}
 		if !stats.GetAppendable() {
@@ -546,7 +546,10 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			panic(fmt.Sprintf("table %v has more than one entry, tables len %d", pk, len(tables)))
+			logutil.Warn("UpdateSnapTable-Error",
+				zap.String("table", pk),
+				zap.Int("len", len(tables)),
+			)
 		}
 		if len(tables) == 0 {
 			continue
@@ -1140,7 +1143,9 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			panic(fmt.Sprintf("pk %s already exists, table: %d", pk, tid))
+			logutil.Warn("RebuildTableInfo-PK-Exists",
+				zap.String("pk", pk),
+				zap.Uint64("table", tid))
 		}
 		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
 		sm.tablePKIndex[pk][0] = table
@@ -1197,7 +1202,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			panic(fmt.Sprintf("commitTs %v already exists", commitTs.ToString()))
+			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
