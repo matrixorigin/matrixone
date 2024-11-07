@@ -30,12 +30,8 @@ select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
--- @bvt:issue#3280
 select 10.0+cast('a' as decimal);
--- @bvt:issue
--- @bvt:issue#3276
 select 10E+0+'a';
--- @bvt:issue
 
 # out-of-range cases
 select cast('18446744073709551616' as unsigned);
@@ -204,10 +200,8 @@ INSERT INTO t1 SET f1 = +1.0e+30 ;
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
 DROP TABLE t1;					   
 
--- @bvt:issue#3257
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
--- @bvt:issue
 #echo End of 4.1 tests
 
 
@@ -218,11 +212,10 @@ select cast(cast('1.2' as decimal(3,2)) as signed);
 
 select cast(-1e18 as decimal(22,2));
 
+set time_zone="+00:00";
 create table t1(s1 timestamp);
 insert into t1 values ('2020-12-03 11:11:11');
--- @bvt:issue#3257
 select cast(s1 as decimal(7,2)) from t1;
--- @bvt:issue
 drop table t1;
 
 #
@@ -253,9 +246,7 @@ select cast(NULL as decimal(6)) as t1;
 #
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
--- @bvt:issue#3293
 SELECT cast(date(d1) as signed) FROM t1;
--- @bvt:issue
 drop table t1;
 
 #
@@ -446,9 +437,7 @@ SELECT CAST(col_char AS DATE) FROM t;
 
 #echo
 #skip_if_hypergraph  # Different warnings.
--- @bvt:issue#3253
 SELECT col_char <> col_date FROM t;
--- @bvt:issue
 #SELECT CAST(col_char as TIME) FROM t;
 
 DROP TABLE t;
@@ -461,10 +450,8 @@ CREATE TABLE `CC` ( `pk` int, `col_datetime_key` datetime);
 INSERT INTO `BB` VALUES ('X');
 INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
 #skip_if_hypergraph  # Different warnings.
--- @bvt:issue#3254
 SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
 WHERE (table3.col_char_key < table2.col_datetime_key);
--- @bvt:issue
 DROP TABLE `BB`;
 DROP TABLE `CC`;
 
@@ -617,17 +604,11 @@ drop table t1;
 
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');
--- @bvt:issue#3253
 select * from t1 where field < '2006-11-06 04:08:36.0';
 select * from t1 where field = '2006-11-06 04:08:36.0';
 select * from t1 where field = '2006-11-06';
--- @bvt:issue
--- @bvt:issue#3254
 select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
--- @bvt:issue
--- @bvt:issue#3253
 select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
--- @bvt:issue
 drop table t1;
 
 create table t1 (a int(11) unsigned, b int(11) unsigned);

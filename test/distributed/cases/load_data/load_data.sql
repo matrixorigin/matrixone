@@ -13,6 +13,10 @@ col8 bigint unsigned
 );
 
 -- load data
+load data infile '$resources/load_data/integer_numbers_4.csv' into table t1 fields terminated by ',';
+select * from t1;
+delete from t1;
+
 load data infile '$resources/load_data/integer_numbers_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 

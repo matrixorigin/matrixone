@@ -26,9 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -84,6 +82,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -342,11 +342,19 @@ func (c *Compile) run(s *Scope) error {
 		}
 		mergeArg := s.RootOp.(*mergedelete.MergeDelete)
 		if mergeArg.AddAffectedRows {
-			c.addAffectedRows(mergeArg.AffectedRows())
+			c.addAffectedRows(mergeArg.GetAffectedRows())
 		}
 		return nil
 	case Remote:
 		err := s.RemoteRun(c)
+		//@FIXME not a good choice
+		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
+			if len(s.PreScopes) > 0 {
+				for _, ps := range s.PreScopes[0].PreScopes {
+					c.addAffectedRows(ps.affectedRows())
+				}
+			}
+		}
 		c.addAffectedRows(s.affectedRows())
 		return err
 	case CreateDatabase:
@@ -864,16 +872,15 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}()
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		var scopes []*Scope
-		var scope *Scope
 		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
 			return nil, err
 		}
-		scope, err = c.compileSteps(qry, scopes, qry.Steps[i])
+		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
-		steps = append(steps, scope)
+		steps = append(steps, scopes...)
 	}
 
 	return steps, err
@@ -906,21 +913,15 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
-func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
-		return ss[0], nil
+		return ss, nil
 	}
 
 	switch qry.StmtType {
-	case plan.Query_DELETE:
+	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE:
 		updateScopesLastFlag(ss)
-		return ss[0], nil
-	case plan.Query_INSERT:
-		updateScopesLastFlag(ss)
-		return ss[0], nil
-	case plan.Query_UPDATE:
-		updateScopesLastFlag(ss)
-		return ss[0], nil
+		return ss, nil
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
@@ -936,7 +937,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 				WithFunc(c.fill).
 				WithBlock(c.needBlock),
 		)
-		return rs, nil
+		return []*Scope{rs}, nil
 	}
 }
 
@@ -1242,6 +1243,18 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		n.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(ns, n, ss)
+	case plan.Node_MULTI_UPDATE:
+		for _, updateCtx := range n.UpdateCtxList {
+			c.appendMetaTables(updateCtx.ObjRef)
+		}
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
+		n.NotCacheable = true
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileMultiUpdate(ns, n, ss)
 	case plan.Node_LOCK_OP:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
@@ -2267,8 +2280,8 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 
-	rs := c.compileProbeSideForBoradcastJoin(node, left, right, probeScopes)
-	return c.compileBuildSideForBoradcastJoin(node, rs, buildScopes)
+	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
@@ -2346,6 +2359,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
 		}
+	case plan.Node_DEDUP:
+		for i := range shuffleJoins {
+			op := constructDedupJoin(node, rightTyps, c.proc)
+			op.ShuffleIdx = int32(i)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			shuffleJoins[i].setRootOperator(op)
+		}
+
 	default:
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
@@ -2378,7 +2399,7 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 	return probeScopes
 }
 
-func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
+func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2546,6 +2567,15 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		}
+	case plan.Node_DEDUP:
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		currentFirstFlag := c.anal.isFirst
+		for i := range rs {
+			op := constructDedupJoin(node, rightTyps, c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			rs[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
 	case plan.Node_MARK:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
@@ -2569,7 +2599,7 @@ func (c *Compile) compileProbeSideForBoradcastJoin(node, left, right *plan.Node,
 	return rs
 }
 
-func (c *Compile) compileBuildSideForBoradcastJoin(node *plan.Node, rs, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildScopes []*Scope) []*Scope {
 	if !c.IsSingleScope(buildScopes) { // first merge scopes of build side, will optimize this in the future
 		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
 		buildScopes = []*Scope{c.newMergeScope(buildScopes)}
@@ -3242,6 +3272,64 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	return ss, nil
 }
 
+func (c *Compile) compileMultiUpdate(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Determine whether to Write S3
+	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
+		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+
+	currentFirstFlag := c.anal.isFirst
+	if toWriteS3 {
+		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
+			mcpu := c.getParallelSizeForExternalScan(n, ncpu)
+			if mcpu > 1 {
+				oldScope := ss[0]
+
+				ss = make([]*Scope, mcpu)
+				for i := 0; i < mcpu; i++ {
+					ss[i] = c.newEmptyMergeScope()
+					mergeArg := merge.NewArgument()
+					mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+					ss[i].setRootOperator(mergeArg)
+					ss[i].Proc = c.proc.NewNoContextChildProc(1)
+					ss[i].NodeInfo = engine.Node{Addr: oldScope.NodeInfo.Addr, Mcpu: 1}
+				}
+				_, dispatchOp := constructDispatchLocalAndRemote(0, ss, oldScope)
+				dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
+				dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+				oldScope.setRootOperator(dispatchOp)
+
+				ss[0].PreScopes = append(ss[0].PreScopes, oldScope)
+			}
+		}
+
+		for i := range ss {
+			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg.Action = multi_update.UpdateWriteS3
+			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(multiUpdateArg)
+		}
+
+		rs := ss[0]
+		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
+			rs = c.newMergeScope(ss)
+		}
+
+		multiUpdateArg := constructMultiUpdate(n, c.e)
+		multiUpdateArg.Action = multi_update.UpdateFlushS3Info
+		rs.setRootOperator(multiUpdateArg)
+		ss = []*Scope{rs}
+	} else {
+		for i := range ss {
+			multiUpdateArg := constructMultiUpdate(n, c.e)
+			multiUpdateArg.Action = multi_update.UpdateWriteTable
+			multiUpdateArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(multiUpdateArg)
+		}
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -3664,7 +3752,8 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
-	if len(c.cnList) <= 1 {
+	cnlist := c.cnList
+	if len(cnlist) <= 1 {
 		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
@@ -3673,10 +3762,19 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
+	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+		//merge build side to avoid bugs
+		if !c.IsSingleScope(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.IsSingleScope(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+	}
 
-	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
 
-	bucketNum := len(c.cnList) * dop
+	bucketNum := len(cnlist) * dop
 	shuffleJoins := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
@@ -3684,7 +3782,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	lenRight := len(buildScopes)
 
 	if !reuse {
-		for _, cn := range c.cnList {
+		for _, cn := range cnlist {
 			probes := make([]*Scope, dop)
 			builds := make([]*Scope, dop)
 			for i := range probes {
@@ -3732,7 +3830,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			probeScopes[i].setRootOperator(shuffleProbeOp)
 
-			if len(c.cnList) > 1 && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			if len(cnlist) > 1 && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 			}
 
@@ -3757,7 +3855,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
 
-		if len(c.cnList) > 1 && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+		if len(cnlist) > 1 && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
@@ -3801,10 +3899,6 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	// Each time the three tables are opened, a new txnTable is created, which can result in Compile and Run holding different partition states. To avoid this, delay opening the three tables until the Run phase
-	if n.ObjRef.SchemaName == catalog.MO_CATALOG && n.TableDef.Name != catalog.MO_TABLES && n.TableDef.Name != catalog.MO_COLUMNS && n.TableDef.Name != catalog.MO_DATABASE {
-		return true //avoid bugs
-	}
 	if len(n.AggList) > 0 {
 		partialResult, _, _ := checkAggOptimize(n)
 		if partialResult != nil {
@@ -3907,78 +4001,11 @@ func collectTombstones(
 	return tombstone, nil
 }
 
-func (c *Compile) handleRelationAndContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
-	var rel engine.Relation
-	var err error
-	var db engine.Database
-	var txnOp client.TxnOperator
-
-	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
-	txnOp = c.proc.GetTxnOperator()
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
-	//-----------------------------------------------------------------------------------------------------
-
-	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-	if n.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
-	}
-	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
-	}
-	return rel, db, ctx, nil
-}
-
 func (c *Compile) expandRanges(
 	n *plan.Node,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
 
-	rel, db, ctx, err := c.handleRelationAndContext(n)
+	rel, db, ctx, err := c.handleDbRelContext(n)
 	if err != nil {
 		return nil, err
 	}
@@ -4049,15 +4076,10 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) handleDbRelContext(n *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	//var ranges engine.Ranges
-	var relData engine.RelData
-	var partialResults []any
-	var partialResultTypes []types.T
-	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4086,49 +4108,65 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, nil, nil, err
+		}
+		var e error // avoid contamination of error messages
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+
+		// if temporary table, just scan at local cn.
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+		if e != nil {
+			return nil, nil, nil, err
+		}
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: 1,
+			},
+		}
+	}
+
+	return rel, db, ctx, nil
+}
+
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+	var relData engine.RelData
+	var partialResults []any
+	var partialResultTypes []types.T
+	var nodes engine.Nodes
+
+	rel, _, ctx, err := c.handleDbRelContext(n)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	if c.determinExpandRanges(n) {
 		if c.isPrepare {
 			return nil, nil, nil, cantCompileForPrepareErr
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
-		if err != nil {
-			if txnOp.IsSnapOp() {
-				return nil, nil, nil, err
-			}
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-			if e != nil {
-				return nil, nil, nil, err
-			}
 
-			// if temporary table, just scan at local cn.
-			rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
-			if e != nil {
-				return nil, nil, nil, err
-			}
-			c.cnList = engine.Nodes{
-				engine.Node{
-					Addr: c.addr,
-					Mcpu: 1,
-				},
-			}
-		}
 		//@todo need remove expandRanges from Compile.
 		// all expandRanges should be called by Run
-		var filterExpr []*plan.Expr
+		var newFilterExpr []*plan.Expr
 		if len(n.BlockFilterList) > 0 {
-			filterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
-			for _, e := range filterExpr {
+			newFilterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range newFilterExpr {
 				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
-			for _, e := range filterExpr {
+			for _, e := range newFilterExpr {
 				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 				if err != nil {
 					return nil, nil, nil, err
@@ -4136,20 +4174,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			}
 		}
 
-		crs := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, filterExpr, crs)
+		counterset := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, newFilterExpr, counterset)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.CompileExpandRangesS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			List:      counterset.FileService.S3.List.Load(),
+			Head:      counterset.FileService.S3.Head.Load(),
+			Put:       counterset.FileService.S3.Put.Load(),
+			Get:       counterset.FileService.S3.Get.Load(),
+			Delete:    counterset.FileService.S3.Delete.Load(),
+			DeleteMul: counterset.FileService.S3.DeleteMulti.Load(),
 		})
 	} else {
 		// add current CN
@@ -4784,9 +4822,9 @@ func (s *Scope) affectedRows() uint64 {
 	for op != nil {
 		if arg, ok := op.(vm.ModificationArgument); ok {
 			if marg, ok := arg.(*mergeblock.MergeBlock); ok {
-				return marg.AffectedRows()
+				return marg.GetAffectedRows()
 			}
-			affectedRows += arg.AffectedRows()
+			affectedRows += arg.GetAffectedRows()
 		}
 		if op.GetOperatorBase().NumChildren() == 0 {
 			op = nil
