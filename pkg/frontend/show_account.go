@@ -276,8 +276,10 @@ func updateStorageUsageCache_V2(usages *cmd_util.StorageUsageResp_V2) {
 	// step 2: update
 	for x := range usages.AccIds {
 		usage := logtail.UsageData{
-			AccId: uint64(usages.AccIds[x]),
-			Size:  usages.Sizes[x],
+			TablePair: logtail.TablePair{
+				AccId: uint64(usages.AccIds[x]),
+			},
+			Size: usages.Sizes[x],
 			ObjectAbstract: logtail.ObjectAbstract{
 				TotalObjCnt: int(usages.ObjCnts[x]),
 				TotalBlkCnt: int(usages.BlkCnts[x]),
@@ -304,7 +306,9 @@ func updateStorageUsageCache(usages *cmd_util.StorageUsageResp_V3) {
 	// step 2: update
 	for x := range usages.AccIds {
 		usage := logtail.UsageData{
-			AccId:        uint64(usages.AccIds[x]),
+			TablePair: logtail.TablePair{
+				AccId: uint64(usages.AccIds[x]),
+			},
 			Size:         usages.Sizes[x],
 			SnapshotSize: usages.SnapshotSizes[x],
 			ObjectAbstract: logtail.ObjectAbstract{
