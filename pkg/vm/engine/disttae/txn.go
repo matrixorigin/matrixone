@@ -1443,6 +1443,7 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		cnBlkId_Pos:     map[types.Blockid]Pos{},
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 
 	ws.readOnly.Store(true)
