@@ -161,7 +161,7 @@ a    b
 2    2
 2    3
 insert into t1 values(2, '3');
-Duplicate entry '(2,3)' for key '__mo_cpkey_col'
+Duplicate entry '(2,3)' for key '(a,b)'
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(1, 2, 3) on duplicate key update a=5;
@@ -248,7 +248,7 @@ insert into t1 values("这是一个字节数超过五十的字符串，但是utf
 drop table if exists t1;
 create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
 insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
-Duplicate entry '13456789872' for key '__mo_index_idx_col'
+Duplicate entry '13456789872' for key 'col2'
 drop table if exists t;
 create table t(a int);
 insert into t values(1);
@@ -503,14 +503,14 @@ drop table if exists indup_11;
 create table indup_11(a int, b varchar(20), primary key(a, b));
 insert into indup_11(a, b) values (1, "2");
 insert into indup_11(b, a) values ("2", 1);
-Duplicate entry '(1,2)' for key '__mo_cpkey_col'
+Duplicate entry '(1,2)' for key '(a,b)'
 drop table indup_11;
 drop table if exists t4;
 create table t4(col1 int, col2 decimal, col3 smallint, primary key(col1, col3));
 insert into t4 (col1, col2, col3) values(6, 6, 8);
 insert into t4 (col2, col3, col1) values(2, 3, 1);
 insert into t4 (col3, col1) values (8, 6);
-Duplicate entry '(6,8)' for key '__mo_cpkey_col'
+Duplicate entry '(6,8)' for key '(col1,col3)'
 select * from t4;
 col1    col2    col3
 6    6    8
