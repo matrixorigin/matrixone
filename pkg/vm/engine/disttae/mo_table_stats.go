@@ -132,7 +132,11 @@ func queryStats(
 		intsJoin(dbs, ","),
 		intsJoin(tbls, ","))
 
-	ret := executor.Query(ctx, sql, opts)
+	// tricky here, only sys can visit this table,
+	// but there should have not any privilege leak, since the [acc, dbs, tbls] already checked.
+	sysCtx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+
+	ret := executor.Query(sysCtx, sql, opts)
 	if err = ret.Error(); err != nil {
 		return
 	}
@@ -419,7 +423,7 @@ func tableStatsExecutor(
 				return err
 			}
 
-			executeTicker.Reset(alphaCycleDur / 10)
+			executeTicker.Reset(alphaCycleDur)
 		}
 	}
 }
@@ -520,6 +524,9 @@ func getChangedTableList(
 
 	for i := range resp.AccIds {
 		item := cc.GetTableById(uint32(resp.AccIds[i]), resp.DatabaseIds[i], resp.TableIds[i])
+		if item == nil {
+			continue
+		}
 
 		tbls = append(tbls, tablePair{
 			acc:     uint64(item.AccountId),
