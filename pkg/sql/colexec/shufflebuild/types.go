@@ -16,9 +16,8 @@ package shufflebuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,9 +43,15 @@ type ShuffleBuild struct {
 	NeedBatches       bool
 	NeedAllocateSels  bool
 	Conditions        []*plan.Expr
-	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	JoinMapTag        int32
 	ShuffleIdx        int32
+
+	IsDedup           bool
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
+	DedupColTypes     []plan.Type
+
 	vm.OperatorBase
 }
 
