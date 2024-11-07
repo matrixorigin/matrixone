@@ -259,7 +259,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		nextChannel <- process.NewPipelineSignalToDirectly(bat, mp)
+		nextChannel <- process.NewPipelineSignalToDirectly(bat, nil, mp)
 	}
 }
 
