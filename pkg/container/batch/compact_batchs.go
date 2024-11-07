@@ -15,6 +15,8 @@
 package batch
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -49,9 +51,47 @@ func (bats *CompactBatchs) Get(idx int) *Batch {
 	return bats.batchs[idx]
 }
 
-// Push  push one batch to CompactBatchs
-// CompactBatchs donot obtain ownership of inBatch
+// Push  append inBatch to CompactBatchs.
+// CompactBatchs will obtain ownership of inBatch
 func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
+	batLen := bats.Length()
+	var err error
+
+	// empty input
+	if inBatch.rowCount == 0 {
+		return nil
+	}
+
+	// empty bats
+	if batLen == 0 {
+		bats.batchs = append(bats.batchs, inBatch)
+		return nil
+	}
+
+	// fast path 1
+	lastBatRowCount := bats.batchs[batLen-1].rowCount
+	if lastBatRowCount == 0 {
+		bats.batchs = append(bats.batchs, inBatch)
+		return nil
+	}
+
+	defer func() {
+		inBatch.Clean(mpool)
+	}()
+
+	// fast path 2
+	if lastBatRowCount+inBatch.RowCount() <= DefaultBatchMaxRow {
+		bats.batchs[batLen-1], err = bats.batchs[batLen-1].Append(context.TODO(), mpool, inBatch)
+		return err
+	}
+
+	// slow path
+	return bats.fillData(mpool, inBatch)
+}
+
+// Extend  extend one batch'data to CompactBatchs
+// CompactBatchs donot obtain ownership of inBatch
+func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 	batLen := bats.Length()
 	var err error
 	var tmpBat *Batch
@@ -71,12 +111,40 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 		return nil
 	}
 
+	return bats.fillData(mpool, inBatch)
+}
+
+func (bats *CompactBatchs) RowCount() int {
+	rowCount := 0
+	for _, bat := range bats.batchs {
+		rowCount += bat.rowCount
+	}
+	return rowCount
+}
+
+func (bats *CompactBatchs) Clean(mpool *mpool.MPool) {
+	for _, bat := range bats.batchs {
+		bat.Clean(mpool)
+	}
+	bats.batchs = nil
+}
+
+func (bats *CompactBatchs) TakeBatchs() []*Batch {
+	batchs := bats.batchs
+	bats.batchs = nil
+	return batchs
+}
+
+func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
+	batLen := bats.Length()
+	var tmpBat *Batch
+	var err error
+
 	if len(bats.ufs) == 0 {
 		for i := 0; i < inBatch.VectorCount(); i++ {
 			typ := *inBatch.GetVector(int32(i)).GetType()
 			bats.ufs = append(bats.ufs, vector.GetUnionAllFunction(typ, mpool))
 		}
-
 	}
 
 	//fill data
@@ -123,25 +191,4 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 	}
 
 	return nil
-}
-
-func (bats *CompactBatchs) RowCount() int {
-	rowCount := 0
-	for _, bat := range bats.batchs {
-		rowCount += bat.rowCount
-	}
-	return rowCount
-}
-
-func (bats *CompactBatchs) Clean(mpool *mpool.MPool) {
-	for _, bat := range bats.batchs {
-		bat.Clean(mpool)
-	}
-	bats.batchs = nil
-}
-
-func (bats *CompactBatchs) TakeBatchs() []*Batch {
-	batchs := bats.batchs
-	bats.batchs = nil
-	return batchs
 }
