@@ -65,6 +65,7 @@ type Sinker interface {
 	SendBegin()
 	SendCommit()
 	SendRollback()
+	// SendDummy to guarantee the last sql is sent
 	SendDummy()
 	// Error must be called after Sink
 	Error() error
@@ -74,7 +75,7 @@ type Sinker interface {
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
+	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) error
 	SendBegin(ctx context.Context, ar *ActiveRoutine) error
 	SendCommit(ctx context.Context, ar *ActiveRoutine) error
 	SendRollback(ctx context.Context, ar *ActiveRoutine) error

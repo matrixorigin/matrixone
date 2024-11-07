@@ -254,15 +254,17 @@ func (reader *tableReader) readTableWithTxn(
 				reader.sinker.SendCommit()
 				// so send a dummy sql to guarantee previous commit is sent successfully
 				reader.sinker.SendDummy()
-				err = reader.sinker.Error()
-			}
-
-			if err != nil {
+				if reader.sinker.Error() == nil {
+					reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
+				}
+			} else {
 				reader.sinker.SendRollback()
 			}
+			return
 		}
 
-		if err == nil {
+		reader.sinker.SendDummy()
+		if err == nil && reader.sinker.Error() == nil {
 			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
 		}
 	}()
