@@ -331,7 +331,7 @@ func whetherSavePasswordHistory(ses *Session) (bool, error) {
 		return false, err
 	}
 
-	return passwordReuseInfo.PasswordHisoty > 0 && passwordReuseInfo.PasswordReuseInterval > 0, nil
+	return passwordReuseInfo.PasswordHisoty > 0 || passwordReuseInfo.PasswordReuseInterval > 0, nil
 }
 
 func generateSinglePasswordRecod(pwd string) ([]byte, error) {
@@ -495,7 +495,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return err
 	}
 
-	if reuseInfo.PasswordHisoty <= 0 || reuseInfo.PasswordReuseInterval <= 0 {
+	if reuseInfo.PasswordHisoty <= 0 && reuseInfo.PasswordReuseInterval <= 0 {
 		return nil
 	}
 
