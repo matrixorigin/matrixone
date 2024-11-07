@@ -73,6 +73,19 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 }
 
 // Composite unique index
+func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	sqls := []string{
+		"insert into dept values(), (), ()",
+		"insert into dept select * from dept where deptno = 10",
+		"insert into dept select * from dept where dname = 'RESEARCH'",
+		"insert into dept select * from dept where deptno = 10 order by dname limit 1",
+	}
+
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

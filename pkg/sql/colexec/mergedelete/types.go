@@ -108,6 +108,6 @@ func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool,
 	}
 }
 
-func (mergeDelete *MergeDelete) AffectedRows() uint64 {
+func (mergeDelete *MergeDelete) GetAffectedRows() uint64 {
 	return mergeDelete.ctr.affectedRows
 }
