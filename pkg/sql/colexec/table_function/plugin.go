@@ -63,7 +63,7 @@ import (
 type pluginState struct {
 	inited        bool
 	called        bool
-	plugin_cache  map[string][]byte
+	plugin        *extism.Plugin
 	allowed_hosts []string
 
 	// holding one call batch, pluginState owns it.
@@ -96,7 +96,6 @@ func (u *pluginState) free(tf *TableFunction, proc *process.Process, pipelineFai
 func pluginPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &pluginState{}
-	st.plugin_cache = make(map[string][]byte)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	if err != nil {
 		return nil, err
@@ -140,6 +139,10 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		return moerr.NewInternalError(proc.Ctx, "wasm URL only support varchar, char, text and datalink type")
 	}
 
+	if !wasmVec.IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "wasm URL must be a constant")
+	}
+
 	if wasmVec.IsNull(uint64(nthRow)) {
 		u.batch.SetRowCount(0)
 		return nil
@@ -157,6 +160,11 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 	// config
 	var cfgbytes []byte
 	cfgVec := tf.ctr.argVecs[2]
+
+	if !cfgVec.IsConst() {
+		return moerr.NewInternalError(proc.Ctx, "config must be a constant string")
+	}
+
 	if !cfgVec.IsNull(uint64(nthRow)) {
 		switch cfgVec.GetType().Oid {
 		case types.T_json:
@@ -223,54 +231,52 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		return err
 	}
 
-	var manifest extism.Manifest
-	if wurl.Scheme == "https" || wurl.Scheme == "http" {
+	if u.plugin == nil {
+		var manifest extism.Manifest
+		if wurl.Scheme == "https" || wurl.Scheme == "http" {
 
-		manifest = extism.Manifest{
-			Wasm: []extism.Wasm{
-				extism.WasmUrl{
-					Url: wasmurl,
+			manifest = extism.Manifest{
+				Wasm: []extism.Wasm{
+					extism.WasmUrl{
+						Url: wasmurl,
+					},
 				},
-			},
-			Config:       cfgmap,
-			AllowedHosts: u.allowed_hosts,
-		}
-	} else {
-		image, ok := u.plugin_cache[wasmurl]
-		if !ok {
+				Config:       cfgmap,
+				AllowedHosts: u.allowed_hosts,
+			}
+		} else {
 			// treat as datalink
 			wasmdl, err := datalink.NewDatalink(wasmurl, proc)
 			if err != nil {
 				return err
 			}
-			image, err = wasmdl.GetBytes(proc)
+			image, err := wasmdl.GetBytes(proc)
 			if err != nil {
 				return err
 			}
 
-			u.plugin_cache[wasmurl] = image
-		}
-		manifest = extism.Manifest{
-			Wasm: []extism.Wasm{
-				extism.WasmData{
-					Data: image,
+			manifest = extism.Manifest{
+				Wasm: []extism.Wasm{
+					extism.WasmData{
+						Data: image,
+					},
 				},
-			},
-			Config:       cfgmap,
-			AllowedHosts: u.allowed_hosts,
+				Config:       cfgmap,
+				AllowedHosts: u.allowed_hosts,
+			}
+		}
+
+		config := extism.PluginConfig{
+			EnableWasi:                true,
+			EnableHttpResponseHeaders: true,
+		}
+		u.plugin, err = extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
+		if err != nil {
+			return err
 		}
 	}
 
-	config := extism.PluginConfig{
-		EnableWasi:                true,
-		EnableHttpResponseHeaders: true,
-	}
-	plugin, err := extism.NewPlugin(proc.Ctx, manifest, config, []extism.HostFunction{})
-	if err != nil {
-		return err
-	}
-
-	exit, out, err := plugin.Call(funcname, bytes)
+	exit, out, err := u.plugin.Call(funcname, bytes)
 	if err != nil {
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("plugin exit with error %d. err %v", exit, err))
 	}
