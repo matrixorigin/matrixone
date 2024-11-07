@@ -2034,7 +2034,7 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 
 	// get the current time as utc time
 	now := time.Now().UTC()
-	if lt.Add(time.Duration(maxDelay) * time.Microsecond).After(now) {
+	if lt.Add(time.Duration(maxDelay) * time.Millisecond).After(now) {
 		return false, nil
 	}
 
