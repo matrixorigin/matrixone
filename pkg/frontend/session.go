@@ -1104,7 +1104,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 }
 
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
-func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
+func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool, originHost string) ([]byte, error) {
 	var (
 		defaultRoleID        int64
 		defaultRole          string
@@ -1125,6 +1125,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		lockTimeExpired      bool
 		needCheckLock        bool
 		maxLoginAttempts     int64
+		needCheckHost        bool
 	)
 
 	//Get tenant info
@@ -1343,6 +1344,19 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// TO Check password
 	if err = ses.InitSystemVariables(tenantCtx); err != nil {
 		return nil, err
+	}
+
+	// check if the host is allowed to connect
+	needCheckHost, err = whetherNeedToCheckIp(ses)
+	if err != nil {
+		return nil, err
+	}
+
+	if needCheckHost {
+		err = whetherValidIpInInvitedNodes(tenantCtx, ses, originHost)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	needCheckLock, err = whetherCheckLoginAttempts(tenantCtx, ses)
@@ -2137,4 +2151,41 @@ func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error 
 		return err
 	}
 	return nil
+}
+
+func whetherNeedToCheckIp(ses *Session) (bool, error) {
+	var (
+		ValidnodeVal interface{}
+		err          error
+	)
+	ValidnodeVal, err = ses.GetGlobalSysVar(ValidnodeChecking)
+	if err != nil {
+		return false, err
+	}
+
+	validatePasswordConfig, ok := ValidnodeVal.(int8)
+	if !ok || validatePasswordConfig != 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, ip string) error {
+	var (
+		invitedNodesVal interface{}
+		err             error
+	)
+
+	invitedNodesVal, err = ses.GetGlobalSysVar(InvitedNodes)
+	if err != nil {
+		return err
+	}
+	invitedNodes, ok := invitedNodesVal.(string)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
+	}
+
+	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
+
 }
