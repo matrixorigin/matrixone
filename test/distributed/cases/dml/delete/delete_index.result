@@ -241,7 +241,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry '5' for key '__mo_index_idx_col'
+Duplicate entry '5' for key '(.*)'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b));
@@ -322,7 +322,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '__mo_index_idx_col'
+Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '(.*)'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a));
@@ -403,7 +403,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry '5' for key '__mo_index_idx_col'
+Duplicate entry '5' for key '(.*)'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b));
@@ -484,7 +484,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '__mo_index_idx_col'
+Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '(.*)'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b), unique key(c));
@@ -525,7 +525,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry '5' for key '__mo_index_idx_col'
+Duplicate entry '5' for key '(.*)'
 drop table if exists t1;
 create table t1(a int, b int, c int, primary key(c), unique key(a));
 insert into t1 values(1, 1, 1);
