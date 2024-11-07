@@ -291,7 +291,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	//selectAst.Format(ftCtx)
 	//sql := ftCtx.String()
 	//fmt.Print(sql)
-	lastNodeId, err := builder.buildSelect(selectAst, bindCtx, false)
+	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
 	}

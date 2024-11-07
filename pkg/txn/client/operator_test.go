@@ -129,6 +129,7 @@ func TestCommitWithNoWrite(t *testing.T) {
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
+		assert.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
 	})
 }
 
@@ -137,6 +138,7 @@ func TestCommitReadOnly(t *testing.T) {
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
+		assert.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
 	}, WithTxnReadyOnly())
 }
 
@@ -209,6 +211,7 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 				err = tc.Commit(ctx)
 				assert.Error(t, err)
+				assert.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
 
 				// table 1 will be removed
 				bind, err := s.GetLockTableBind(0, tableID1)
