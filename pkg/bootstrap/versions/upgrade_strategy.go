@@ -85,6 +85,7 @@ const (
 	DROP_PRIMARY_KEY
 	DROP_FOREIGN_KEY
 	CREATE_NEW_TABLE
+	DROP_TABLE
 
 	// alter view definition
 	MODIFY_VIEW
