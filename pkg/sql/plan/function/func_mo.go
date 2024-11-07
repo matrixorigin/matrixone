@@ -182,10 +182,16 @@ func MoTableSizeRows(
 		}
 
 		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewInternalErrorNoCtxf("db not exist: %s", dbName)
+			}
 			return err
 		}
 
 		if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewNoSuchTableNoCtx(dbName, tblName)
+			}
 			return err
 		}
 
