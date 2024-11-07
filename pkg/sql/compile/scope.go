@@ -266,8 +266,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	// specific case.
 	if c.IsTpQuery() && !c.hasMergeOp {
-		lenPrescopes := len(s.PreScopes)
-		for i := lenPrescopes - 1; i >= 0; i-- {
+		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
 				return err
@@ -278,8 +277,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	// Merge Run normally.
 	var wg sync.WaitGroup
-	resultList1 := make(chan error, len(s.PreScopes))
-	resultList2 := make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
+	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -291,15 +289,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 			func() {
 				switch scope.Magic {
 				case Normal:
-					resultList1 <- scope.Run(c)
+					preScopeResultReceiveChan <- scope.Run(c)
 				case Merge, MergeInsert:
-					resultList1 <- scope.MergeRun(c)
+					preScopeResultReceiveChan <- scope.MergeRun(c)
 				case Remote:
-					resultList1 <- scope.RemoteRun(c)
+					preScopeResultReceiveChan <- scope.RemoteRun(c)
 				default:
 					err := moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
-					resultList1 <- err
+					preScopeResultReceiveChan <- err
 				}
 				wg.Done()
 			})
@@ -307,14 +305,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// build routine failed.
 		if submitPreScope != nil {
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
-			resultList1 <- submitPreScope
+			preScopeResultReceiveChan <- submitPreScope
 			wg.Done()
 		}
 	}
 
 	// step 2.
+	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
-		s.sendNotifyMessage(&wg, resultList2)
+		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
+		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
 
 	// step 3.
@@ -323,13 +323,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 		wg.Wait()
 
 		// not necessary, but we still clean the preScope error channel here.
-		for len(resultList1) > 0 {
-			<-resultList1
+		for len(preScopeResultReceiveChan) > 0 {
+			<-preScopeResultReceiveChan
 		}
 
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
-		for len(resultList2) > 0 {
-			result := <-resultList2
+		for len(notifyMessageResultReceiveChan) > 0 {
+			result := <-notifyMessageResultReceiveChan
 			result.clean(s.Proc)
 		}
 	}()
@@ -346,7 +346,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err = <-resultList1; err != nil {
+			if err = <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
 		}
@@ -355,13 +355,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err = <-resultList1:
+		case err := <-preScopeResultReceiveChan:
 			if err != nil {
 				return err
 			}
 			preScopeCount--
 
-		case result := <-resultList2:
+		case result := <-notifyMessageResultReceiveChan:
 			result.clean(s.Proc)
 			if result.err != nil {
 				return result.err
@@ -383,6 +383,12 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
@@ -403,12 +409,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
-
-	if s.ScopeAnalyzer == nil {
-		s.ScopeAnalyzer = NewScopeAnalyzer()
-	}
-	s.ScopeAnalyzer.Start()
-	defer s.ScopeAnalyzer.Stop()
 
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
