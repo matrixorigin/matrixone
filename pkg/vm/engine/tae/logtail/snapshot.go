@@ -1143,7 +1143,9 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			panic(fmt.Sprintf("pk %s already exists, table: %d", pk, tid))
+			logutil.Warn("RebuildTableInfo-PK-Exists",
+				zap.String("pk", pk),
+				zap.Uint64("table", tid))
 		}
 		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
 		sm.tablePKIndex[pk][0] = table
