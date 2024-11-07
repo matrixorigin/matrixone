@@ -616,18 +616,18 @@ func TestCheckPasswordExpired(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 
 	// password never expires
-	expired, err := checkPasswordExpired(ctx, ses, "2022-01-01 00:00:00")
+	expired, err := checkPasswordExpired(0, "2022-01-01 00:00:00")
 	assert.NoError(t, err)
 	assert.False(t, expired)
 
 	// password not expires
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
-	expired, err = checkPasswordExpired(ctx, ses, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
 	assert.NoError(t, err)
 	assert.False(t, expired)
 
 	// password not expires
-	expired, err = checkPasswordExpired(ctx, ses, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
 	assert.NoError(t, err)
 	assert.True(t, expired)
 
@@ -651,7 +651,7 @@ func TestCheckPasswordExpired(t *testing.T) {
 
 	// getPasswordLifetime error
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
-	_, err = checkPasswordExpired(ctx, ses, "1")
+	_, err = checkPasswordExpired(1, "1")
 	assert.Error(t, err)
 	assert.True(t, expired)
 }
