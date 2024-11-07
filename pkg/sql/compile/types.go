@@ -205,7 +205,7 @@ func (s *Scope) ipAddrMatch(local string) bool {
 // If more operators need to be rejected in the future, please use recursion honestly to check each operator.
 func (s *Scope) holdAnyCannotRemoteOperator() error {
 	if _, isCTE := pipeline2.IsCtePipelineAtLoop(s.RootOp); isCTE {
-		return moerr.NewInternalErrorf(s.Proc.Ctx, "remote running of cyclic CTE is not supported.")
+		return moerr.NewInternalErrorNoCtx("remote running of cyclic CTE is not supported.")
 	}
 
 	for _, pre := range s.PreScopes {
