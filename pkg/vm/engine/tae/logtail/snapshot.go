@@ -325,7 +325,7 @@ func (sm *SnapshotMeta) copyTablesLocked() map[uint32]map[uint64]*tableInfo {
 	return tables
 }
 
-func isMoTable(tid uint64) bool {
+func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
@@ -353,7 +353,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
-		if !isMoTable(tid) {
+		if !IsMoTable(tid) {
 			return
 		}
 		if !stats.GetAppendable() {
@@ -546,7 +546,10 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			panic(fmt.Sprintf("table %v has more than one entry, tables len %d", pk, len(tables)))
+			logutil.Warn("UpdateSnapTable-Error",
+				zap.String("table", pk),
+				zap.Int("len", len(tables)),
+			)
 		}
 		if len(tables) == 0 {
 			continue
