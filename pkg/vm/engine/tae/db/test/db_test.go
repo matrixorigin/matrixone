@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -6430,7 +6431,6 @@ func TestAppendAndGC2(t *testing.T) {
 	opts.CheckpointCfg.GlobalMinCount = 5
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
 	db := tae.DB
 
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -6494,7 +6494,10 @@ func TestAppendAndGC2(t *testing.T) {
 			files[file] = struct{}{}
 		}
 	}
-	db.Wal.Replay(loadFiles)
+	dir := tae.Dir
+	tae.Close()
+	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
+	wal.Replay(loadFiles)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
