@@ -10192,3 +10192,46 @@ func TestTransferInMerge2(t *testing.T) {
 	tae.CheckRowsByScan(9, true)
 	t.Log(tae.Catalog.SimplePPString(3))
 }
+
+func TestMergeAndTransfer(t *testing.T) {
+	/*
+		append, flush
+		merge1, merge2
+		delete
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	tae.MergeBlocks(true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel := tae.GetRelation()
+	id := testutil.GetOneBlockMeta(rel).AsCommonID()
+	txn.Commit(ctx)
+
+	txn, rel = tae.GetRelation()
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		err := at.GetStore().Freeze(ctx)
+		assert.NoError(t, err)
+		tae.MergeBlocks(true)
+		tae.MergeBlocks(true)
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+
+}
