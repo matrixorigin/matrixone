@@ -57,6 +57,8 @@ select * from src where match(body, title) against('+red +(<blue >is)' in boolea
 
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 
+select * from src where match(body, title) against('"red"' in boolean mode);
+
 -- phrase exact match.  double space cannot be matched and empty result
 select * from src where match(body, title) against('"is  not red"' in boolean mode);
 
