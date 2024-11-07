@@ -268,8 +268,8 @@ func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float
 	for docid := range arg {
 		var pos []int32
 		for j, c := range p.Children {
-			wacc, _ := s.WordAccums[c.Text]
-			word, _ := wacc.Words[docid]
+			wacc := s.WordAccums[c.Text]
+			word := wacc.Words[docid]
 			currpos := word.Position
 			if j == 0 {
 				pos = word.Position
