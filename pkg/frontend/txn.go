@@ -123,9 +123,9 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 				return err
 			}
 			// if commitTxnFunc failed, we will roll back the transaction.
+			// if commit panic, rollback below executed at the second time.
 			execErr = err
 		}
-
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
 	return
