@@ -413,12 +413,12 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				continue
 			}
 
-			if result.RowCount() == 0 {
+			if showRet.RowCount() == 0 {
 				logger.Warn("failed to fetch new account size, not exist.")
 				continue
 			}
 
-			sizeMB, err = result.GetFloat64(ctx, 0, sizeIdx)
+			sizeMB, err = showRet.GetFloat64(ctx, 0, sizeIdx)
 			if err != nil {
 				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 				continue
@@ -427,7 +427,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			if snapshotSizeIdx == math.MaxUint64 {
 				snapshotSizeMB = 0.0
 			} else {
-				snapshotSizeMB, err = result.GetFloat64(ctx, 0, snapshotSizeIdx)
+				snapshotSizeMB, err = showRet.GetFloat64(ctx, 0, snapshotSizeIdx)
 				if err != nil {
 					logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 					continue

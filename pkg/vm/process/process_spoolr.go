@@ -40,6 +40,7 @@ type PipelineSignal struct {
 	// for case: GetDirectly
 	mp       *mpool.MPool
 	directly *batch.Batch
+	errInfo  error
 }
 
 // NewPipelineSignalToGetFromSpool return a signal indicate the receiver to get data from source by index.
@@ -54,27 +55,27 @@ func NewPipelineSignalToGetFromSpool(source *pSpool.PipelineSpool, index int) Pi
 }
 
 // NewPipelineSignalToDirectly return a signal indicates the receiver to get data from signal directly.
-// But users should watch that, the data shouldn't be allocated from mpool.
-func NewPipelineSignalToDirectly(data *batch.Batch, mp *mpool.MPool) PipelineSignal {
+func NewPipelineSignalToDirectly(data *batch.Batch, err error, mp *mpool.MPool) PipelineSignal {
 	return PipelineSignal{
 		typ:      GetDirectly,
 		source:   nil,
 		index:    0,
 		directly: data,
 		mp:       mp,
+		errInfo:  err,
 	}
 }
 
 // Action will get the input batch from one place according to which type this signal is.
 //
 // the result batch of this function is an READ-ONLY one.
-func (signal PipelineSignal) Action() (data *batch.Batch, info error, skipThis bool) {
+func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 	if signal.typ == GetFromIndex {
 		data, info = signal.source.ReceiveBatch(signal.index)
-		return data, info, false
+		return data, info
 	}
 
-	return signal.directly, nil, false
+	return signal.directly, signal.errInfo
 }
 
 type PipelineSignalReceiver struct {
@@ -148,7 +149,6 @@ func (receiver *PipelineSignalReceiver) releaseCurrent() {
 
 func (receiver *PipelineSignalReceiver) GetNextBatch(
 	analyzer Analyzer) (content *batch.Batch, info error) {
-	var skipThisSignal bool
 	var chosen int
 	var msg PipelineSignal
 
@@ -174,10 +174,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			}
 		}
 
-		content, info, skipThisSignal = msg.Action()
-		if skipThisSignal {
-			continue
-		}
+		content, info = msg.Action()
 		if content == nil {
 			receiver.removeIdxReceiver(chosen)
 

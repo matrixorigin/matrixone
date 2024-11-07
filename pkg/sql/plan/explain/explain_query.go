@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -78,7 +77,8 @@ const (
 	Label_Unique            = "Unique"
 	Label_Replace           = "Replace"
 	Label_Unknown           = "Unknown"
-	Label_Meterial          = "Meterial"
+	Label_Material          = "Material"
+	Label_Dedup_Join        = "Dedup join"
 	Label_Apply             = "Apply"
 	Label_PostDml           = "PostDml"
 )
@@ -277,6 +277,16 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 						buf.WriteString("Row level lock")
 					}
 					settings.buffer.PushNewLine(buf.String(), false, settings.level)
+				}
+			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_MULTI_UPDATE {
+				msgInfo, err := nodedescImpl.GetUpdateCtxInfo(ctx, options)
+				if err != nil {
+					return err
+				}
+				for _, line := range msgInfo {
+					settings.buffer.PushNewLine(line, false, settings.level)
 				}
 			}
 
