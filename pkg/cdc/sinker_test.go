@@ -489,9 +489,13 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	sinker := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar)
-	go sinker.Run(ctx, ar)
-	defer func() { sinker.Close() }()
+	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar)
+	go s.Run(ctx, ar)
+	defer func() {
+		// call dummy to guarantee sqls has been sent, then close
+		s.SendDummy()
+		s.Close()
+	}()
 
 	packerPool := fileservice.NewPool(
 		128,
@@ -515,14 +519,14 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	ckpBat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	ckpBat.SetRowCount(3)
 
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		outputTyp:     OutputTypeSnapshot,
 		fromTs:        t0,
 		toTs:          t1,
 		checkpointBat: ckpBat,
 	})
 	assert.NoError(t, err)
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		noMoreData: true,
 		fromTs:     t0,
 		toTs:       t1,
@@ -544,7 +548,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	deleteBat.SetRowCount(1)
 	deleteAtomicBat.Append(packer, deleteBat, 1, 0)
 
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeTail,
 		fromTs:         t1,
 		toTs:           t2,
@@ -553,7 +557,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeTail,
 		fromTs:         t1,
 		toTs:           t2,
@@ -562,7 +566,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeTail,
 		fromTs:         t1,
 		toTs:           t2,
@@ -571,7 +575,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	sinker.Sink(ctx, &DecoderOutput{
+	s.Sink(ctx, &DecoderOutput{
 		noMoreData: true,
 		fromTs:     t1,
 		toTs:       t2,
@@ -619,7 +623,11 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	s.preSqlBufLen = 128
 	s.sqlBufSendCh = make(chan []byte)
 	go s.Run(ctx, ar)
-	defer func() { s.Close() }()
+	defer func() {
+		// call dummy to guarantee sqls has been sent, then close
+		s.SendDummy()
+		s.Close()
+	}()
 
 	s.Sink(ctx, &DecoderOutput{
 		noMoreData: true,
@@ -879,7 +887,7 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	mock.ExpectRollback()
 
 	ar := NewCdcActiveRoutine()
-	sinker := &mysqlSinker{
+	s := &mysqlSinker{
 		mysql: &mysqlSink{
 			retryTimes:    3,
 			retryDuration: 3 * time.Second,
@@ -888,17 +896,21 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		ar:           ar,
 		sqlBufSendCh: make(chan []byte),
 	}
-	go sinker.Run(context.Background(), ar)
-	defer func() { sinker.Close() }()
+	go s.Run(context.Background(), ar)
+	defer func() {
+		// call dummy to guarantee sqls has been sent, then close
+		s.SendDummy()
+		s.Close()
+	}()
 
-	sinker.SendBegin()
+	s.SendBegin()
 	assert.NoError(t, err)
-	sinker.SendCommit()
+	s.SendCommit()
 	assert.NoError(t, err)
 
-	sinker.SendBegin()
+	s.SendBegin()
 	assert.NoError(t, err)
-	sinker.SendRollback()
+	s.SendRollback()
 	assert.NoError(t, err)
 }
 
