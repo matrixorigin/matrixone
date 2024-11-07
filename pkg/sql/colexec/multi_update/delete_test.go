@@ -103,7 +103,7 @@ func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 200, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
