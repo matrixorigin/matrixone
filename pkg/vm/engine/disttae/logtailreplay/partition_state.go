@@ -906,3 +906,93 @@ func (p *PartitionState) IsValid() bool {
 func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
 }
+
+func (p *PartitionState) GetDTBlockCnt() (
+	dBlkCnt, tBlkCnt int,
+	dRowCnt, tRowCnt int) {
+	p.dataObjectsNameIndex.Scan(func(item ObjectEntry) bool {
+		dBlkCnt += int(item.BlkCnt())
+		dRowCnt += int(item.Rows())
+		return true
+	})
+
+	p.tombstoneObjectsNameIndex.Scan(func(item ObjectEntry) bool {
+		tBlkCnt += int(item.BlkCnt())
+		tRowCnt += int(item.Rows())
+		return true
+	})
+
+	return
+}
+
+func (p *PartitionState) LogAllEntryRows() string {
+	var buf bytes.Buffer
+	p.rows.Scan(func(item RowEntry) bool {
+		buf.WriteString(item.String())
+		buf.WriteString("\n")
+		return true
+	})
+
+	return buf.String()
+}
+
+func (p *PartitionState) ScanVisibleObjects(
+	snapshot types.TS,
+	scanTombstones bool,
+	onItem func(ObjectEntry) (bool, error),
+) (err error) {
+	var ok bool
+
+	if !scanTombstones {
+		p.dataObjectsNameIndex.Scan(func(item ObjectEntry) bool {
+			if !item.Visible(snapshot) {
+				return true
+			}
+
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+
+			return true
+		})
+	} else {
+		p.tombstoneObjectsNameIndex.Scan(func(item ObjectEntry) bool {
+			if !item.Visible(snapshot) {
+				return true
+			}
+
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+
+			return true
+		})
+	}
+
+	return
+}
+
+func (p *PartitionState) ScanRows(
+	reverse bool,
+	onItem func(entry RowEntry) (bool, error),
+) (err error) {
+	var ok bool
+
+	if !reverse {
+		p.rows.Scan(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	} else {
+		p.rows.Reverse(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	}
+
+	return
+}

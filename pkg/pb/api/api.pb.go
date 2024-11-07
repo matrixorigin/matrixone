@@ -47,6 +47,7 @@ const (
 	OpCode_OpReader              OpCode = 2013
 	OpCode_OpGetLatestCheckpoint OpCode = 2014
 	OpCode_OpSnapshotRead        OpCode = 2015
+	OpCode_OpGetChangedTableList OpCode = 2016
 )
 
 var OpCode_name = map[int32]string{
@@ -68,6 +69,7 @@ var OpCode_name = map[int32]string{
 	2013: "OpReader",
 	2014: "OpGetLatestCheckpoint",
 	2015: "OpSnapshotRead",
+	2016: "OpGetChangedTableList",
 }
 
 var OpCode_value = map[string]int32{
@@ -89,6 +91,7 @@ var OpCode_value = map[string]int32{
 	"OpReader":              2013,
 	"OpGetLatestCheckpoint": 2014,
 	"OpSnapshotRead":        2015,
+	"OpGetChangedTableList": 2016,
 }
 
 func (x OpCode) String() string {

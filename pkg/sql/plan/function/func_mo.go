@@ -15,12 +15,12 @@
 package function
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -46,205 +47,187 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-// MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	rs := vector.MustFunctionResult[int64](result)
-	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
-	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
+// MoTableSize/Rows get the estimated table size/rows in bytes
+// an account can only query these tables that belongs to it.
+// some special cases:
+// 1. cluster table
 
-	// XXX WTF
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.GetTxnOperator() == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
+type GetMoTableSizeRowsFuncType = func() func(context.Context, string, []uint64, []uint64, []uint64) ([]uint64, error)
+
+var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
+var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
+
+func waitStatsReady() (ok bool) {
+	if GetMoTableSizeFunc.Load() != nil {
+		return true
 	}
-	txn := proc.GetTxnOperator()
 
-	var ok bool
-	// XXX old code starts a new transaction.   why?
-	for i := uint64(0); i < uint64(length); i++ {
-		foolCtx := proc.Ctx
+	ctx, cel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cel()
 
-		db, dbnull := dbs.GetStrValue(i)
-		tbl, tblnull := tbls.GetStrValue(i)
-		if dbnull || tblnull {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			var rel engine.Relation
-			dbStr := functionUtil.QuickBytesToStr(db)
-			tblStr := functionUtil.QuickBytesToStr(tbl)
+	ticker := time.NewTicker(time.Millisecond * 100)
+	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return false
 
-			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
-				if err = rs.Append(int64(0), false); err != nil {
-					return err
-				}
-				continue
-			}
-
-			if err != nil {
-				return err
-			}
-
-			var dbo engine.Database
-			dbo, err = e.Database(foolCtx, dbStr, txn)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					var buf bytes.Buffer
-					for j := uint64(0); j < uint64(length); j++ {
-						db2, _ := dbs.GetStrValue(j)
-						tbl2, _ := tbls.GetStrValue(j)
-
-						dbStr2 := functionUtil.QuickBytesToStr(db2)
-						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
-
-						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
-					}
-
-					logutil.Error(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
-				}
-				return err
-			}
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
-			}
-
-			// get the table definition information and check whether the current table is a partition table
-			var engineDefs []engine.TableDef
-			engineDefs, err = rel.TableDefs(foolCtx)
-			if err != nil {
-				return err
-			}
-			var partitionInfo *plan.PartitionByDef
-			for _, def := range engineDefs {
-				if partitionDef, ok := def.(*engine.PartitionDef); ok {
-					if partitionDef.Partitioned > 0 {
-						p := &plan.PartitionByDef{}
-						err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-						if err != nil {
-							return err
-						}
-						partitionInfo = p
-					}
-				}
-			}
-
-			var rows uint64
-			// check if the current table is partitioned
-			if partitionInfo != nil {
-				var prel engine.Relation
-				var prows uint64
-				// for partition table,  the table rows is equal to the sum of the partition tables.
-				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(foolCtx, partitionTable, nil)
-					if err != nil {
-						return err
-					}
-					prows, err = prel.Rows(foolCtx)
-					if err != nil {
-						return err
-					}
-					rows += prows
-				}
-			} else {
-				if rows, err = rel.Rows(foolCtx); err != nil {
-					return err
-				}
-			}
-
-			if err = rs.Append(int64(rows), false); err != nil {
-				return err
+		default:
+			if GetMoTableSizeFunc.Load() != nil {
+				return true
 			}
 		}
 	}
-	return nil
+
+	return false
 }
 
-// MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	rs := vector.MustFunctionResult[int64](result)
-	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
-	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
+func MoTableSizeRows(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+) (err error) {
 
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.GetTxnOperator() == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
+	if !waitStatsReady() {
+		return moerr.NewInternalError(proc.Ctx, "wait table stats done time out")
 	}
-	txn := proc.GetTxnOperator()
 
-	var ok bool
-	// XXX old code starts a new transaction.   why?
+	var (
+		ok  bool
+		db  engine.Database
+		rel engine.Relation
+
+		dbNull, tblNull   bool
+		dbBytes, tblBytes []byte
+
+		dbName, tblName string
+
+		eng engine.Engine
+		txn client.TxnOperator
+
+		ret                   []uint64
+		accIds, dbIds, tblIds []uint64
+
+		rs   *vector.FunctionResult[int64]
+		dbs  vector.FunctionParameterWrapper[types.Varlena]
+		tbls vector.FunctionParameterWrapper[types.Varlena]
+	)
+
+	rs = vector.MustFunctionResult[int64](result)
+	dbs = vector.GenerateFunctionStrParameter(iVecs[0])
+	tbls = vector.GenerateFunctionStrParameter(iVecs[1])
+
+	eng = proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if eng == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: mo table engine is nil")
+	}
+
+	if proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: txn operator is nil")
+	}
+
+	accountId := proc.Ctx.Value(defines.TenantIDKey{}).(uint32)
+
+	decodeNames := func(i uint64) (string, string, bool) {
+		dbBytes, dbNull = dbs.GetStrValue(i)
+		tblBytes, tblNull = tbls.GetStrValue(i)
+		if dbNull || tblNull {
+			return "", "", false
+		}
+
+		d := functionUtil.QuickBytesToStr(dbBytes)
+		t := functionUtil.QuickBytesToStr(tblBytes)
+
+		return d, t, true
+	}
+
+	defer func() {
+		if err != nil {
+			var names []string
+			for i := uint64(0); i < uint64(length); i++ {
+				d, t, _ := decodeNames(i)
+				names = append(names, fmt.Sprintf("%s-%s", d, t))
+			}
+
+			logutil.Error("MoTableSizeRows",
+				zap.Error(err),
+				zap.String("db", dbName),
+				zap.String("table", tblName),
+				zap.Uint32("account id", accountId),
+				zap.String("tbl list", strings.Join(names, ",")))
+		}
+	}()
+
+	txn = proc.GetTxnOperator()
+
 	for i := uint64(0); i < uint64(length); i++ {
-		foolCtx := proc.Ctx
-
-		db, dbnull := dbs.GetStrValue(i)
-		tbl, tblnull := tbls.GetStrValue(i)
-		if dbnull || tblnull {
+		if dbName, tblName, ok = decodeNames(i); !ok {
 			if err = rs.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			var rel engine.Relation
-			dbStr := functionUtil.QuickBytesToStr(db)
-			tblStr := functionUtil.QuickBytesToStr(tbl)
+			continue
+		}
 
-			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
-				if err = rs.Append(int64(0), false); err != nil {
-					return err
-				}
-				continue
-			}
-
-			if err != nil {
+		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+			if err = rs.Append(int64(0), false); err != nil {
 				return err
 			}
+			continue
+		}
 
-			var dbo engine.Database
-			dbo, err = e.Database(foolCtx, dbStr, txn)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					var buf bytes.Buffer
-					for j := uint64(0); j < uint64(length); j++ {
-						db2, _ := dbs.GetStrValue(j)
-						tbl2, _ := tbls.GetStrValue(j)
+		if err != nil {
+			return err
+		}
 
-						dbStr2 := functionUtil.QuickBytesToStr(db2)
-						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
+			return err
+		}
 
-						buf.WriteString(fmt.Sprintf("%s#%s; ", dbStr2, tblStr2))
-					}
+		if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			return err
+		}
 
-					originalAccId, _ := defines.GetAccountId(proc.Ctx)
-					attachedAccId, _ := defines.GetAccountId(foolCtx)
+		accIds = append(accIds, uint64(accountId))
+		dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+		tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+	}
 
-					logutil.Error(
-						fmt.Sprintf("db not found when mo_table_size: %s#%s, acc: %d-%d, extra: %s",
-							dbStr, tblStr, attachedAccId, originalAccId, buf.String()))
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
-				}
-				return err
-			}
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
-			}
+	ret, err = (*executor.Load())()(proc.Ctx, proc.GetService(), accIds, dbIds, tblIds)
+	if err != nil {
+		return err
+	}
 
-			var oSize, iSize uint64
-			if oSize, err = originalTableSize(foolCtx, dbo, rel); err != nil {
-				return err
-			}
-			if iSize, err = indexesTableSize(foolCtx, dbo, rel); err != nil {
-				return err
-			}
-
-			if err = rs.Append(int64(oSize+iSize), false); err != nil {
-				return err
-			}
+	for _, val := range ret {
+		if err = rs.Append(int64(val), false); err != nil {
+			return err
 		}
 	}
+
 	return nil
+}
+
+func MoTableSize(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	return MoTableSizeRows(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+}
+
+func MoTableRows(
+	iVecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
+	return MoTableSizeRows(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
 }
 
 var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
@@ -265,86 +248,6 @@ func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (boo
 	}
 
 	return false, nil
-}
-
-func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
-	return getTableSize(ctx, db, rel)
-}
-
-func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
-	// get the table definition information and check whether the current table is a partition table
-	var engineDefs []engine.TableDef
-	engineDefs, err = rel.TableDefs(ctx)
-	if err != nil {
-		return 0, err
-	}
-	var partitionInfo *plan.PartitionByDef
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return 0, err
-				}
-				partitionInfo = p
-			}
-		}
-	}
-
-	// check if the current table is partitioned
-	if partitionInfo != nil {
-		var prel engine.Relation
-		var psize uint64
-		// for partition table, the table size is equal to the sum of the partition tables.
-		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			prel, err = db.Relation(ctx, partitionTable, nil)
-			if err != nil {
-				return 0, err
-			}
-			if psize, err = prel.Size(ctx, AllColumns); err != nil {
-				return 0, err
-			}
-			size += psize
-		}
-	} else {
-		if size, err = rel.Size(ctx, AllColumns); err != nil {
-			return 0, err
-		}
-	}
-
-	return size, nil
-}
-
-func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (totalSize uint64, err error) {
-	var irel engine.Relation
-	var size uint64
-	for _, idef := range rel.GetTableDef(ctx).Indexes {
-		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
-			logutil.Info("indexesTableSize->Relation",
-				zap.String("originTable", rel.GetTableName()),
-				zap.String("indexTableName", idef.IndexTableName),
-				zap.Error(err))
-			continue
-		}
-
-		if size, err = getTableSize(ctx, db, irel); err != nil {
-			logutil.Info("indexesTableSize->getTableSize",
-				zap.String("originTable", rel.GetTableName()),
-				zap.String("indexTableName", idef.IndexTableName),
-				zap.Error(err))
-			continue
-		}
-
-		totalSize += size
-	}
-
-	// this is a quick fix for the issue of the indexTableName is empty.
-	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
-	// then the mo_table_size call will fail.
-	// this fix does not fix the issue but only avoids the failure caused by it.
-	err = nil
-	return totalSize, err
 }
 
 // MoTableColMax return the max value of the column
@@ -585,6 +488,7 @@ var (
 		"mo_stages":                   0,
 		"mo_snapshots":                0,
 		"mo_pitr":                     0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 )
 
