@@ -23,7 +23,7 @@ cert-files = ["/etc/ssl/cert.pem"]
 
 [fileservice.cache]
 memory-capacity = "512MB"
-disk-capacity = "8GB"
+disk-capacity = "1GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
 disk-evict-target = 0.8
