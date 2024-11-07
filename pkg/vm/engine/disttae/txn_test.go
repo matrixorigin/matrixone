@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 
@@ -33,11 +34,12 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	}
 
 	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: struct {
-			sync.RWMutex
-			data []objectio.ObjectStats
-		}{data: []objectio.ObjectStats{statsList[0], statsList[1], statsList[2]}},
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
+
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
 
 	objectSlice := objectio.ObjectStatsSlice{}
 
@@ -46,8 +48,17 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	}))
 	require.Equal(t, len(statsList), objectSlice.Len())
 
-	for i, ss := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
-		require.Equal(t, ss[:], objectSlice.Get(i)[:])
-	}
+	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
+		ss := key.(objectio.ObjectStats)
+		found := false
+		for i := range objectSlice.Len() {
+			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
+				found = true
+				break
+			}
+		}
 
+		require.True(t, found)
+		return true
+	})
 }
