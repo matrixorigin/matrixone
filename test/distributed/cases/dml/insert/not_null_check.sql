@@ -20,4 +20,7 @@ insert into t values (1, null);
 insert into t values (2, null);
 insert into t values (3, null);
 update t set a=null;
+drop table if exists t1;
+create table t1 (a int primary key, b int, c int, unique key(b,c));
+INSERT INTO t1 SELECT result,result,null FROM generate_series(1,1000000) g;
 drop database if exists test;
