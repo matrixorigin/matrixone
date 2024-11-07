@@ -1091,12 +1091,12 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 func (txn *Transaction) getUncommittedS3Tombstone(
 	appendTo func(stats *objectio.ObjectStats),
 ) (err error) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.RLock()
-	defer txn.cn_flushed_s3_tombstone_object_stats_list.RUnlock()
 
-	for _, stats := range txn.cn_flushed_s3_tombstone_object_stats_list.data {
-		appendTo(&stats)
-	}
+	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(k, v any) bool {
+		ss := k.(objectio.ObjectStats)
+		appendTo(&ss)
+		return true
+	})
 
 	return nil
 }
@@ -1339,7 +1339,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseMap = nil
 	txn.deletedDatabaseMap = nil
-	txn.cn_flushed_s3_tombstone_object_stats_list.data = nil
+	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
