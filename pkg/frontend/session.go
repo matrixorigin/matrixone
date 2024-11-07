@@ -254,6 +254,9 @@ type Session struct {
 
 	// create version
 	createVersion string
+
+	//reuse backExec
+	backExec *backExec
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
@@ -658,6 +661,8 @@ func (ses *Session) Close() {
 		ses.buf = nil
 	}
 
+	ses.backExec.Close()
+
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
 	pool := ses.GetMemPool()
@@ -796,28 +801,30 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	backSes := newBackSession(ses, txnOp, ses.respr.GetStr(DBNAME), callback)
-	bh := &backExec{
-		backSes: backSes,
-	}
+	ses.BackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
-	bh.backSes.ReplaceDerivedStmt(true)
-	return bh
+	ses.backExec.backSes.ReplaceDerivedStmt(true)
+	return ses.backExec
 }
 
-var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) BackgroundExec {
-	return ses.GetRawBatchBackgroundExec(ctx)
+func (ses *Session) BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+	if ses.backExec == nil {
+		ses.backExec = &backExec{}
+	}
+	if ses.backExec.backSes == nil {
+		ses.backExec.backSes = newBackSession(ses, txnOp, db, callBack)
+	} else {
+		ses.backExec.backSes.reInit(ses, txnOp, db, callBack)
+	}
+	ses.backExec.backSes.upstream = ses
+	return ses.backExec
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
 	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
 	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
 
-	backSes := newBackSession(ses, nil, "", batchFetcher2)
-	bh := &backExec{
-		backSes: backSes,
-	}
-	return bh
+	return ses.BackExec(nil, "", batchFetcher2)
 }
 
 func (ses *Session) GetIsInternal() bool {

@@ -67,7 +67,6 @@ func (back *backExec) Close() {
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
-	back.backSes = nil
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
@@ -507,15 +506,7 @@ var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
 ) BackgroundExec {
-	backSes := newBackSession(upstream, nil, "", fakeDataSetFetcher2)
-	if up, ok := upstream.(*Session); ok {
-		backSes.upstream = up
-	}
-	bh := &backExec{
-		backSes: backSes,
-	}
-
-	return bh
+	return upstream.BackExec(nil, "", fakeDataSetFetcher2)
 }
 
 // ExeSqlInBgSes for mock stub
@@ -667,6 +658,8 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
+	txnOpReuse    TxnOperator
+	backExecReuse *backExec
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -695,11 +688,59 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	return backSes
 }
 
+func (backSes *backSession) reInit(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
+	service := ses.GetService()
+	var txnHandler *TxnHandler
+	if txnOp != nil {
+		txnHandler = InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	} else {
+		txnHandler = InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), nil)
+		txnHandler.txnOp = backSes.txnOpReuse
+	}
+	backSes.pool = ses.GetMemPool()
+	backSes.buf = buffer.New()
+	backSes.stmtProfile = process.StmtProfile{}
+	backSes.tenant = nil
+	backSes.txnHandler = txnHandler
+	backSes.txnCompileCtx = InitTxnCompilerContext(db)
+	backSes.mrs = nil
+	backSes.outputCallback = callBack
+	backSes.allResultSet = nil
+	backSes.resultBatches = nil
+	backSes.derivedStmt = false
+	backSes.label = make(map[string]string)
+	backSes.timeZone = time.Local
+	backSes.respr = defResper
+	backSes.service = service
+	return backSes
+}
+
+func (backSes *backSession) BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+	if backSes.backExecReuse == nil {
+		backSes.backExecReuse = &backExec{}
+	}
+	if backSes.backExecReuse.backSes == nil {
+		backSes.backExecReuse.backSes = newBackSession(backSes, txnOp, db, callBack)
+	} else {
+		backSes.backExecReuse.backSes.reInit(backSes, txnOp, db, callBack)
+	}
+	return backSes.backExecReuse
+}
+
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 	return nil
 }
 
 func (backSes *backSession) Close() {
+	txnHandler := backSes.GetTxnHandler()
+	if backSes.txnOpReuse == nil &&
+		txnHandler != nil &&
+		!txnHandler.IsShareTxn() {
+		txnOp := txnHandler.GetTxn()
+		if txnOp != nil {
+			backSes.txnOpReuse = txnOp
+		}
+	}
 	backSes.feSessionImpl.Close()
 	backSes.upstream = nil
 }

@@ -538,6 +538,15 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
+	/*
+		Reset release resources like buffer,memory,handles,etc.
+		It also reserves some necessary resources that are carefully designed.
+
+		With regard to Close and Clear, Close release all resources.
+		Clear mostly releases buffer,memory.
+	*/
+	Reset()
+	BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
 	SessionLogger
 }
 
@@ -623,7 +632,6 @@ func (execCtx *ExecCtx) Close() {
 //	batch.Batch
 type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
-// TODO: shared component among the session implmentation
 type feSessionImpl struct {
 	pool          *mpool.MPool
 	buf           *buffer.Buffer
@@ -737,6 +745,32 @@ func (ses *feSessionImpl) Close() {
 		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
 	}
+	ses.Reset()
+}
+
+func (ses *feSessionImpl) Clear() {
+	if ses == nil {
+		return
+	}
+	ses.ClearAllMysqlResultSet()
+	ses.ClearResultBatches()
+}
+
+// Reset release resources like buffer,memory,handles,etc.
+//
+//	It also reserves some necessary resources that are carefully designed.
+func (ses *feSessionImpl) Reset() {
+	if ses == nil {
+		return
+	}
+	ses.Clear()
+
+	ses.mrs = nil
+	if ses.txnHandler != nil {
+		//ses.txnHandler.Reset()
+	}
+
+	ses.txnCompileCtx = nil
 	ses.sql = ""
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
@@ -753,14 +787,6 @@ func (ses *feSessionImpl) Close() {
 		ses.buf = nil
 	}
 	ses.upstream = nil
-}
-
-func (ses *feSessionImpl) Clear() {
-	if ses == nil {
-		return
-	}
-	ses.ClearAllMysqlResultSet()
-	ses.ClearResultBatches()
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
