@@ -209,7 +209,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.source = nil
 }
 
-func (deletion *Deletion) AffectedRows() uint64 {
+func (deletion *Deletion) GetAffectedRows() uint64 {
 	return deletion.ctr.affectedRows
 }
 
