@@ -1202,7 +1202,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			panic(fmt.Sprintf("commitTs %v already exists", commitTs.ToString()))
+			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
