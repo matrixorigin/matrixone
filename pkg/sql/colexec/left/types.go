@@ -39,7 +39,7 @@ type container struct {
 	state         int
 	itr           hashmap.Iterator
 	batchRowCount int64
-	lastrow       int
+	lastRow       int
 	inbat         *batch.Batch
 	rbat          *batch.Batch
 
@@ -114,7 +114,7 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.resetExprExecutor()
 	ctr.cleanHashMap()
 	ctr.inbat = nil
-	ctr.lastrow = 0
+	ctr.lastRow = 0
 	ctr.state = Build
 	ctr.batchRowCount = 0
 

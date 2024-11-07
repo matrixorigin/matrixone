@@ -18,13 +18,10 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
