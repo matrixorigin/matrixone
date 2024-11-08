@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -98,14 +99,43 @@ func shardMetaCacheKey(key mataCacheKey) uint64 {
 	return xxhash.Sum64(key[:])
 }
 
+var GlobalCacheCapacityHint atomic.Int64
+
+func cacheCapacityFunc(size int64) fscache.CapacityFunc {
+	return func() int64 {
+		if n := GlobalCacheCapacityHint.Load(); n > 0 {
+			return n
+		}
+		return size
+	}
+}
+
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
+	metaCache = fifocache.New[mataCacheKey, []byte](
+		cacheCapacityFunc(metaCacheSize()),
+		shardMetaCacheKey,
+		nil, nil, nil,
+	)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
+		metaCache = fifocache.New[mataCacheKey, []byte](
+			cacheCapacityFunc(size),
+			shardMetaCacheKey,
+			nil, nil, nil,
+		)
 	})
+}
+
+func EvictCache() (target int64) {
+	ch := make(chan int64, 1)
+	metaCache.Evict(ch)
+	target = <-ch
+	logutil.Info("metadata cache forced evicted",
+		zap.Any("target", target),
+	)
+	return
 }
 
 func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
