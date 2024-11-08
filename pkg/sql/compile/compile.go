@@ -4616,7 +4616,6 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
-	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
