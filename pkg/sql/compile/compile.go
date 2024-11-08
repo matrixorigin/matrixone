@@ -4141,15 +4141,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		return nil, err
 	}
 
-	//for temporary table or non tae storage engine, just return empty block list
-	if n.TableDef.TableType != catalog.SystemOrdinaryRel || rel.GetEngineType() != engine.Disttae {
-		nodes = append(nodes, engine.Node{
-			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-			Data: engine.BuildEmptyRelData(),
-		})
-		return nodes, nil
-	}
-
 	forceSingle := false
 	if len(n.AggList) > 0 {
 		partialResults, _, _ := checkAggOptimize(n)
