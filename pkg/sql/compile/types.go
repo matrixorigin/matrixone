@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -126,6 +127,8 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
+	Ctx                    context.Context
+	Db                     engine.Database
 	Rel                    engine.Relation
 	FilterExpr             *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList             []*plan.Expr //from node.FilterList, use for reader
