@@ -556,7 +556,7 @@ var openDbConn = func(
 var openDb = sql.Open
 
 var tryConn = func(dsn string) (*sql.DB, error) {
-	db, err := openDb("mysql", dsn)
+	db, err := openDb("mysql-mo", dsn)
 	if err != nil {
 		return nil, err
 	} else {
