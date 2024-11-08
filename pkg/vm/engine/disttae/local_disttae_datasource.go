@@ -859,33 +859,31 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	}
 	defer release()
 
+	var tombstones []objectio.ObjectStats
 	s3FlushedDeletes.Range(func(key, value any) bool {
-		first := true
-		getTombstone := func() (*objectio.ObjectStats, error) {
-			if first {
-				first = false
-				ss := key.(objectio.ObjectStats)
-				return &ss, nil
-			}
-
-			return nil, nil
-		}
-
-		if err = blockio.GetTombstonesByBlockId(
-			ls.ctx,
-			&ls.snapshotTS,
-			bid,
-			getTombstone,
-			deletedRows,
-			ls.fs,
-		); err != nil {
-			return false
-		}
-
+		tombstones = append(tombstones, key.(objectio.ObjectStats))
 		return true
 	})
 
-	if err != nil {
+	curr := 0
+	getTombstone := func() (*objectio.ObjectStats, error) {
+		if curr >= len(tombstones) {
+			return nil, nil
+		}
+
+		i := curr
+		curr++
+		return &tombstones[i], nil
+	}
+
+	if err = blockio.GetTombstonesByBlockId(
+		ls.ctx,
+		&ls.snapshotTS,
+		bid,
+		getTombstone,
+		deletedRows,
+		ls.fs,
+	); err != nil {
 		return nil, err
 	}
 
