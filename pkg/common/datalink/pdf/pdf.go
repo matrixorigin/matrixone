@@ -15,12 +15,41 @@ package pdf
 
 import (
 	"bytes"
+	"os/exec"
 	"strings"
 
 	gopdf "github.com/dslipak/pdf"
+	pdftotext "github.com/heussd/pdftotext-go"
 )
 
+func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
+
+	pages, err := pdftotext.Extract(data)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	for i, p := range pages {
+		if i > 0 {
+			buf.WriteString("\n")
+		}
+		buf.WriteString(p.Content)
+	}
+
+	return []byte(strings.TrimSpace(buf.String())), nil
+}
+
 func GetPlainText(data []byte) ([]byte, error) {
+
+	_, err := exec.LookPath("pdftotext")
+	if err != nil {
+		return GetPlainTextFromDslipakPdf(data)
+	}
+	return GetPlainTextFromPdfToText(data)
+}
+
+func GetPlainTextFromDslipakPdf(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	pdfr, err := gopdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
