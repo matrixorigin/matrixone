@@ -91,6 +91,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
@@ -533,6 +534,17 @@ func (s *service) handleGoMemLimit(
 	return nil
 }
 
+func (s *service) handleGoGCPercent(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GoGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GoGCPercentRequest.Percent)))
+	logutil.Info("QueryService::GOGCPercent",
+		zap.Int32("in", req.GoGCPercentRequest.Percent),
+		zap.Int32("out", resp.GoGCPercentResponse.Percent),
+	)
+	return nil
+}
+
 func (s *service) handleFileServiceCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
@@ -557,6 +569,9 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("file service cache evict",
+		zap.String("type", req.FileServiceCacheEvictRequest.Type.String()))
+
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
@@ -565,7 +580,12 @@ func (s *service) handleFileServiceCacheEvictRequest(
 		ret = fileservice.EvictMemoryCaches(ctx)
 	}
 
-	for _, target := range ret {
+	for name, target := range ret {
+		logutil.Info("file service cache evict",
+			zap.String("type", req.FileServiceCacheEvictRequest.Type.String()),
+			zap.Int64("size", target),
+			zap.String("name", name),
+		)
 		resp.FileServiceCacheEvictResponse.CacheSize = target
 		resp.FileServiceCacheEvictResponse.CacheCapacity = target
 		// usually one instance
@@ -578,6 +598,8 @@ func (s *service) handleFileServiceCacheEvictRequest(
 func (s *service) handleMetadataCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
+
+	logutil.Info("metadata cache", zap.Int64("size", req.MetadataCacheRequest.CacheSize))
 
 	// set capacity hint
 	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)

@@ -46,6 +46,7 @@ const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1
 	MORPCVersion2      int64 = 2
-	MORPCVersion3      int64 = 3 // start from 1.3.0, 1.2.3
-	MORPCLatestVersion       = MORPCVersion3
+	MORPCVersion3      int64 = 3 // start from 1.3.0
+	MORPCVersion4      int64 = 4 // start from 2.0.1
+	MORPCLatestVersion       = MORPCVersion4
 )

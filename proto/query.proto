@@ -94,6 +94,8 @@ enum CmdMethod {
   FileServiceCacheEvict = 29;
   // MetadataCache handle metadata cache related operations
   MetadataCache = 30;
+  // GOGCPercent calling debug.SetGCPercent()
+  GOGCPercent = 31;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -229,6 +231,7 @@ message Request {
   FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
+  GoGCPercentRequest GoGCPercentRequest = 34 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -288,6 +291,7 @@ message Response {
   FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
+  GoGCPercentResponse GoGCPercentResponse = 34 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -598,4 +602,16 @@ message MetadataCacheRequest {
 
 message MetadataCacheResponse {
   int64 CacheCapacity = 1;
+}
+
+
+message GoGCPercentRequest {
+  int32 Percent = 1;
+}
+
+// GoMemLimitResponse is the response of calling https://pkg.go.dev/runtime/debug#SetGCPercent
+// The Percent is previous setting.
+// Same meaning as calling debug.SetGCPercent
+message GoGCPercentResponse {
+  int32 Percent = 1;
 }
