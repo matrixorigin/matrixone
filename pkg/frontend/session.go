@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -1128,6 +1129,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		lockTimeExpired      bool
 		needCheckLock        bool
 		maxLoginAttempts     int64
+		needCheckHost        bool
 	)
 
 	//Get tenant info
@@ -1326,6 +1328,20 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// TO Check password
 	if err = ses.InitSystemVariables(tenantCtx); err != nil {
 		return nil, err
+	}
+
+	// check if the host is allowed to connect
+	needCheckHost, err = whetherNeedToCheckIp(ses)
+	if err != nil {
+		return nil, err
+	}
+
+	if needCheckHost {
+		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
@@ -1634,7 +1650,7 @@ func (ses *Session) StatusSession() *status.Session {
 // getStatusAfterTxnIsEnded
 // !!! only used after the txn is ended.
 // it may be called in the active txn. so, we
-func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
+func (ses *Session) getStatusAfterTxnIsEnded() uint16 {
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
@@ -2059,7 +2075,7 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 
 	// get the current time as utc time
 	now := time.Now().UTC()
-	if lt.Add(time.Duration(maxDelay) * time.Microsecond).After(now) {
+	if lt.Add(time.Duration(maxDelay) * time.Millisecond).After(now) {
 		return false, nil
 	}
 
@@ -2162,4 +2178,47 @@ func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error 
 		return err
 	}
 	return nil
+}
+
+func whetherNeedToCheckIp(ses *Session) (bool, error) {
+	var (
+		ValidnodeVal interface{}
+		err          error
+	)
+	ValidnodeVal, err = ses.GetGlobalSysVar(ValidnodeChecking)
+	if err != nil {
+		return false, err
+	}
+
+	validatePasswordConfig, ok := ValidnodeVal.(int8)
+	if !ok || validatePasswordConfig != 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, clientAddr string) error {
+	var (
+		invitedNodesVal interface{}
+		err             error
+		ip              string
+	)
+
+	invitedNodesVal, err = ses.GetGlobalSysVar(InvitedNodes)
+	if err != nil {
+		return err
+	}
+	invitedNodes, ok := invitedNodesVal.(string)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
+	}
+
+	// get the ip address of the client
+	ip, _, err = net.SplitHostPort(clientAddr)
+	if err != nil {
+		return err
+	}
+
+	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
 }
