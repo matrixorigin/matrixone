@@ -2021,8 +2021,8 @@ func consumeCkpsAndLogTail(
 		ctx,
 		engine.service,
 		lt.CkpLocation,
-		tableId, "",
-		databaseId, "", engine.mp, engine.fs); err != nil {
+		tableId, lt.Table.TbName,
+		databaseId, lt.Table.DbName, engine.mp, engine.fs); err != nil {
 		return
 	}
 	defer func() {

@@ -337,18 +337,15 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			return err
 		}
 
-		tableName := ""
+		tableName := b.tname
 		switch kind {
 		case TableRespKind_Data:
-			tableName = b.tname
 			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		case TableRespKind_DataMeta:
-			tableName = fmt.Sprintf("_%d_data_meta", b.tid)
 			logutil.Debugf("[logtail] table data meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		case TableRespKind_TombstoneMeta:
-			tableName = fmt.Sprintf("_%d_tombstone_meta", b.tid)
 			logutil.Debugf("[logtail] table tombstone meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		}
@@ -381,10 +378,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 
 	empty := api.SyncLogTailResp{}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_DataMeta, b.dataMetaBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_DataObject, TableRespKind_DataMeta, b.dataMetaBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_TombstoneMeta, b.tombstoneMetaBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_TombstoneObject, TableRespKind_TombstoneMeta, b.tombstoneMetaBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
@@ -428,7 +425,7 @@ func LoadCheckpointEntries(
 	sid string,
 	metLoc string,
 	tableID uint64,
-	_ string,
+	tableName string,
 	dbID uint64,
 	dbName string,
 	mp *mpool.MPool,
@@ -558,7 +555,7 @@ func LoadCheckpointEntries(
 			continue
 		}
 		data := datas[i]
-		ins, del, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, dataBats[i])
+		_, _, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, dataBats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
@@ -567,34 +564,11 @@ func LoadCheckpointEntries(
 			}
 			return nil, nil, err
 		}
-		tableName := fmt.Sprintf("_%d_meta", tableID)
-		if ins != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          ins,
-			}
-			entries = append(entries, entry)
-		}
-		if del != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          del,
-			}
-			entries = append(entries, entry)
-		}
 		if dataObj != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
+				EntryType:    api.Entry_DataObject,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_data_meta", tableID),
+				TableName:    tableName,
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          dataObj,
@@ -603,9 +577,9 @@ func LoadCheckpointEntries(
 		}
 		if tombstoneObj != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
+				EntryType:    api.Entry_TombstoneObject,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_tombstone_meta", tableID),
+				TableName:    tableName,
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          tombstoneObj,
