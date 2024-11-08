@@ -104,7 +104,7 @@ func Test_PrepareRollback(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
-	defer service.Close()
+	defer service.Close(ctx)
 	fs := objectio.NewObjectFS(service, serviceDir)
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),

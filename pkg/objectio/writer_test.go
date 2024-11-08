@@ -78,7 +78,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
@@ -299,7 +299,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
