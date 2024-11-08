@@ -42,6 +42,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -90,6 +91,9 @@ func CnServerMessageHandler(
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
+	}
+	if msg.DebugMsg != "" {
+		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
