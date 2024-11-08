@@ -107,6 +107,10 @@ func (w *Ws) Readonly() bool {
 	return false
 }
 
+func (w *Ws) Snapshot() bool {
+	return false
+}
+
 func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
@@ -225,6 +229,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -308,7 +313,7 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 	}
 	reldata := &engine_util.BlockListRelData{}
 	reldata.SetBlockList(s)
-	putBlocksInCurrentCN(testCompile, reldata)
+	putBlocksInCurrentCN(testCompile, reldata, true)
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {

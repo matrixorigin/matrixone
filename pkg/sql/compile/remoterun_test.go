@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -561,7 +562,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
@@ -572,7 +573,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
@@ -583,7 +584,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = moerr.NewInternalErrorNoCtx("timeout")
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.NotNil(t, err)
 	}
 }
