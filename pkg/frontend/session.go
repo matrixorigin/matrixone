@@ -1342,19 +1342,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 	}
 
-	// check if the host is allowed to connect
-	needCheckHost, err = whetherNeedToCheckIp(ses)
-	if err != nil {
-		return nil, err
-	}
-
-	if needCheckHost {
-		err = whetherValidIpInInvitedNodes(tenantCtx, ses, originHost)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
 	if err != nil {
 		return nil, err
