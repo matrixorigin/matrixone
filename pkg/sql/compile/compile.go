@@ -1962,6 +1962,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Timestamp = ts
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
+	s.DataSource.Ctx = ctx
+	s.DataSource.Db = db
 	s.DataSource.Rel = rel
 	s.DataSource.RelationName = n.TableDef.Name
 	s.DataSource.PartitionRelationNames = partitionRelNames
@@ -3985,13 +3987,8 @@ func collectTombstones(
 }
 
 func (c *Compile) expandRanges(
-	node *plan.Node,
+	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
-
-	rel, db, ctx, err := c.handleDbRelContext(node)
-	if err != nil {
-		return nil, err
-	}
 
 	preAllocSize := 2
 	if !c.IsTpQuery() {
@@ -4003,8 +4000,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-	var relData engine.RelData
-	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
+	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -4122,7 +4118,19 @@ func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.D
 	return rel, db, ctx, nil
 }
 
+<<<<<<< HEAD
 func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
+=======
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+	var relData engine.RelData
+	var nodes engine.Nodes
+
+	rel, db, ctx, err := c.handleDbRelContext(n)
+	if err != nil {
+		return nil, err
+	}
+
+>>>>>>> dafa51b631d696b2869ef990a42578cb7dc37f41
 	forceSingle := false
 	if len(n.AggList) > 0 {
 		partialResults, _, _ := checkAggOptimize(n)
@@ -4134,9 +4142,53 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 		forceSingle = true
 	}
 
+<<<<<<< HEAD
 	var nodes engine.Nodes
 	// scan on current CN
 	if len(c.cnList) == 1 || n.Stats.ForceOneCN || forceSingle || n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+=======
+	if c.determinExpandRanges(n) {
+		if c.isPrepare {
+			return nil, cantCompileForPrepareErr
+		}
+
+		//@todo need remove expandRanges from Compile.
+		// all expandRanges should be called by Run
+		var newFilterExpr []*plan.Expr
+		if len(n.BlockFilterList) > 0 {
+			newFilterExpr = plan2.DeepCopyExprList(n.BlockFilterList)
+			for _, e := range newFilterExpr {
+				_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, err
+				}
+			}
+			for _, e := range newFilterExpr {
+				err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		counterset := new(perfcounter.CounterSet)
+		relData, err = c.expandRanges(n, rel, db, ctx, newFilterExpr, counterset)
+		if err != nil {
+			return nil, err
+		}
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.CompileExpandRangesS3Request(statistic.S3Request{
+			List:      counterset.FileService.S3.List.Load(),
+			Head:      counterset.FileService.S3.Head.Load(),
+			Put:       counterset.FileService.S3.Put.Load(),
+			Get:       counterset.FileService.S3.Get.Load(),
+			Delete:    counterset.FileService.S3.Delete.Load(),
+			DeleteMul: counterset.FileService.S3.DeleteMulti.Load(),
+		})
+	} else {
+		// add current CN
+>>>>>>> dafa51b631d696b2869ef990a42578cb7dc37f41
 		mcpu := c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 		if forceSingle {
 			mcpu = 1
