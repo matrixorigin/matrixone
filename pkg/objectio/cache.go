@@ -19,6 +19,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"go.uber.org/zap"
 
 	"github.com/cespare/xxhash/v2"
@@ -121,9 +123,11 @@ func LoadObjectMetaByExtent(
 	policy fileservice.Policy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
 	v, ok := metaCache.Get(key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return MustObjectMeta(v), nil
 	}
 	if extent.Length() == 0 {
@@ -145,9 +149,11 @@ func FastLoadBF(
 	isPrefetch bool,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
 	}
 	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
@@ -163,9 +169,11 @@ func LoadBFWithMeta(
 	location Location,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
