@@ -4162,12 +4162,6 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 			CNIDX:            int32(i),
 			NeedExpandRanges: true,
 		})
-		if nodes[i].Addr == c.addr {
-			var relData engine.RelData
-			//add memdata in current CN
-			nodes[i].Data = relData.BuildEmptyRelData(1)
-			nodes[i].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
-		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 	return nodes
