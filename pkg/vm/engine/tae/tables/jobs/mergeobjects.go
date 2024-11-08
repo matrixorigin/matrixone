@@ -192,7 +192,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 	return task.rt.VectorPool.Transient.GetMPool()
 }
 
-func (task *mergeObjectsTask) HostHintName() string { return "DN" }
+func (task *mergeObjectsTask) HostHintName() string { return "TN" }
 
 func (task *mergeObjectsTask) LoadNextBatch(
 	ctx context.Context, objIdx uint32,
@@ -377,7 +377,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
-	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task, task.isTombstone); err != nil {
+	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}
 
