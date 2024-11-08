@@ -93,7 +93,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 		}
 		return allocator
 
-	case "go-syncPool":
+	case "go":
 		// go sync.Pool allocator
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
