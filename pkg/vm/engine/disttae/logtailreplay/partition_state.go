@@ -945,42 +945,6 @@ func (p *PartitionState) LogAllEntryRows() string {
 	return buf.String()
 }
 
-func (p *PartitionState) ScanVisibleObjects(
-	snapshot types.TS,
-	scanTombstones bool,
-	onItem func(ObjectEntry) (bool, error),
-) (err error) {
-	var ok bool
-
-	if !scanTombstones {
-		p.dataObjectsNameIndex.Scan(func(item ObjectEntry) bool {
-			if !item.Visible(snapshot) {
-				return true
-			}
-
-			if ok, err = onItem(item); err != nil || !ok {
-				return false
-			}
-
-			return true
-		})
-	} else {
-		p.tombstoneObjectsNameIndex.Scan(func(item ObjectEntry) bool {
-			if !item.Visible(snapshot) {
-				return true
-			}
-
-			if ok, err = onItem(item); err != nil || !ok {
-				return false
-			}
-
-			return true
-		})
-	}
-
-	return
-}
-
 func (p *PartitionState) ScanRows(
 	reverse bool,
 	onItem func(entry RowEntry) (bool, error),
