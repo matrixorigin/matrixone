@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -49,6 +50,8 @@ type DiskCache struct {
 	}
 
 	cache *fifocache.Cache[string, struct{}]
+
+	capacityBytes prometheus.Gauge
 }
 
 func NewDiskCache(
@@ -71,6 +74,10 @@ func NewDiskCache(
 	}
 
 	seed := maphash.MakeSeed()
+
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "disk")
+
+	capacityBytes.Set(float64(capacity()))
 
 	ret = &DiskCache{
 		path:               path,
@@ -627,6 +634,9 @@ func (d *DiskCache) removeOnePath(path string) (err error) {
 }
 
 func (d *DiskCache) Evict(done chan int64) {
+	if d.capacityBytes != nil {
+		d.capacityBytes.Set(float64(d.cache.Capacity()))
+	}
 	d.cache.Evict(done)
 }
 

@@ -19,8 +19,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"golang.org/x/sys/cpu"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 const numShards = 256
@@ -304,4 +305,8 @@ func (c *Cache[K, V]) Evict(done chan int64) {
 		panic("should be buffered chan")
 	}
 	c.evict(done, 0)
+}
+
+func (c *Cache[K, V]) Capacity() int64 {
+	return c.capacity()
 }

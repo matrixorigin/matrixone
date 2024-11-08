@@ -160,3 +160,26 @@ var (
 		},
 	)
 )
+
+var (
+	fsCacheBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_bytes",
+			Help:      "Total bytes of fs cache.",
+		}, []string{"name", "type"})
+	FSCacheInuseMemBytes  = fsCacheBytes.WithLabelValues("inuse-mem")
+	FSCacheInuseDiskBytes = fsCacheBytes.WithLabelValues("inuse-disk")
+	FSCacheInuseMetaBytes = fsCacheBytes.WithLabelValues("inuse-meta")
+	FSCacheCapMemBytes    = fsCacheBytes.WithLabelValues("cap-mem")
+	FSCacheCapDiskBytes   = fsCacheBytes.WithLabelValues("cap-disk")
+	FSCacheCapMetaBytes   = fsCacheBytes.WithLabelValues("cap-meta")
+)
+
+// GetFsCacheBytesGauge return inuse, cap Gauge metric
+// {typ} should be [mem, disk, meta]
+func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
+	return fsCacheBytes.WithLabelValues(name, "inuse-"+typ),
+		fsCacheBytes.WithLabelValues(name, "cap-"+typ)
+}

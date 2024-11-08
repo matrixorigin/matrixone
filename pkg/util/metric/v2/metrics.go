@@ -89,6 +89,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(fsCacheBytes)
 	registry.MustRegister(S3ConnectCounter)
 	registry.MustRegister(S3DNSResolveCounter)
 

@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -26,6 +28,8 @@ import (
 type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
+
+	capacityBytes prometheus.Gauge
 }
 
 func NewMemCache(
@@ -35,7 +39,11 @@ func NewMemCache(
 	name string,
 ) *MemCache {
 
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
+	capacityBytes.Set(float64(capacity()))
+
 	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
+		inuseBytes.Add(float64(len(value.Bytes())))
 		value.Retain()
 
 		if callbacks != nil {
@@ -56,6 +64,7 @@ func NewMemCache(
 	}
 
 	postEvictFn := func(key fscache.CacheKey, value fscache.Data) {
+		inuseBytes.Sub(float64(len(value.Bytes())))
 		value.Release()
 
 		if callbacks != nil {
@@ -78,6 +87,8 @@ func NewMemCache(
 	return &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
+
+		capacityBytes: capacityBytes,
 	}
 }
 
@@ -180,6 +191,9 @@ func (m *MemCache) DeletePaths(
 }
 
 func (m *MemCache) Evict(done chan int64) {
+	if m.capacityBytes != nil {
+		m.capacityBytes.Set(float64(m.cache.Capacity()))
+	}
 	m.cache.Evict(done)
 }
 
