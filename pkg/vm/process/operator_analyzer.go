@@ -354,6 +354,7 @@ func (ps *OperatorStats) String() string {
 		"ScanBytes:%dbytes "+
 		"NetworkIO:%dbytes "+
 		"DiskIO:%dbytes "+
+		"WrittenRows:%d "+
 		"S3List:%d "+
 		"S3Head:%d "+
 		"S3Put:%d "+
@@ -373,6 +374,7 @@ func (ps *OperatorStats) String() string {
 		ps.ScanBytes,
 		ps.NetworkIO,
 		ps.DiskIO,
+		ps.WrittenRows,
 		ps.S3List,
 		ps.S3Head,
 		ps.S3Put,
