@@ -353,7 +353,6 @@ func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *blockio.Bloc
 	} else {
 		stats = blockWriter.GetObjectStats(objectio.WithCNCreated())
 	}
-	stats.BlkCnt()
 	return blkInfos, stats, err
 }
 
