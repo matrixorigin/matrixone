@@ -636,50 +636,57 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
 	}
 
-	if s.NodeInfo.NeedExpandRanges {
-		scanNode := s.DataSource.node
-		if scanNode == nil {
-			panic("can not expand ranges on remote pipeline!")
-		}
+	//expand ranges
+	scanNode := s.DataSource.node
+	if scanNode == nil {
+		panic("can not expand ranges on remote pipeline!")
+	}
 
-		for _, e := range s.DataSource.BlockFilterList {
-			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+	for _, e := range s.DataSource.BlockFilterList {
+		err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		if err != nil {
+			return err
+		}
+	}
+
+	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(s.DataSource.node.BlockFilterList) > 0 {
+		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+	}
+
+	counterSet := new(perfcounter.CounterSet)
+	relData, err := c.expandRanges(s.DataSource.node, newExprList, counterSet)
+	if err != nil {
+		return err
+	}
+
+	ctx := c.proc.GetTopContext()
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddScopePrepareS3Request(statistic.S3Request{
+		List:      counterSet.FileService.S3.List.Load(),
+		Head:      counterSet.FileService.S3.Head.Load(),
+		Put:       counterSet.FileService.S3.Put.Load(),
+		Get:       counterSet.FileService.S3.Get.Load(),
+		Delete:    counterSet.FileService.S3.Delete.Load(),
+		DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
+	})
+
+	if s.NodeInfo.CNCNT > 1 {
+		//need to shuffle blocks
+		//todo: optimize this, shuffle blocks in expand ranges
+		// add memory table block
+		newRelData := relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
+		if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+			err = shuffleBlocksByRange(c.proc, relData, newRelData, s.DataSource.node, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 			if err != nil {
 				return err
 			}
+		} else {
+			shuffleBlocksByHash(relData, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 		}
-
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-		}
-
-		counterSet := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, newExprList, counterSet)
-		if err != nil {
-			return err
-		}
-
-		ctx := c.proc.GetTopContext()
-		stats := statistic.StatsInfoFromContext(ctx)
-		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:      counterSet.FileService.S3.List.Load(),
-			Head:      counterSet.FileService.S3.Head.Load(),
-			Put:       counterSet.FileService.S3.Put.Load(),
-			Get:       counterSet.FileService.S3.Get.Load(),
-			Delete:    counterSet.FileService.S3.Delete.Load(),
-			DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
-		})
-
-		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
-		//relData.AttachTombstones()
+		s.NodeInfo.Data = newRelData
+	} else {
 		s.NodeInfo.Data = relData
-
-	} else if len(runtimeInExprList) > 0 {
-		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
-		if err != nil {
-			return err
-		}
 	}
 
 	err = s.aggOptimize(c)
