@@ -327,8 +327,7 @@ const (
 	MO_TABLE_COL_MAX // table column max value
 	MO_TABLE_COL_MIN // table column min value
 
-	MO_LOG_DATE // parse date from string, like __mo_filepath
-	MO_CHECH_LEVEL
+	MO_LOG_DATE   // parse date from string, like __mo_filepath
 	PURGE_LOG     // purge mo internal log, like rawlog, statement_info, metric
 	MO_ADMIN_NAME // get mo admin name of account
 	MO_CU
@@ -662,7 +661,6 @@ var functionIdRegister = map[string]int32{
 	"trim":                           TRIM,
 	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,
-	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
 	"mo_admin_name":                  MO_ADMIN_NAME,
 	"mo_cu":                          MO_CU,
