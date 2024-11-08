@@ -3538,7 +3538,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `current_timestamp`, `now`
 	{
 		functionId: CURRENT_TIMESTAMP,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 0 {
