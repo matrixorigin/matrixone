@@ -1421,7 +1421,6 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		ses.Debugf(ctx, "authenticate user 1")
-		// get origin host
 		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), CheckPassword)
 		if err != nil {
 			return err
