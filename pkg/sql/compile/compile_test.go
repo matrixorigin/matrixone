@@ -313,7 +313,7 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 	}
 	reldata := &engine_util.BlockListRelData{}
 	reldata.SetBlockList(s)
-	putBlocksInCurrentCN(testCompile, reldata)
+	putBlocksInCurrentCN(testCompile, reldata, true)
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {
