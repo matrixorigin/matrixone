@@ -484,7 +484,14 @@ func (tbl *txnTable) recurTransferDelete(
 	//check if the target block had been soft deleted and committed before ts,
 	//if not, transfer the deletes to the target block,
 	//otherwise recursively transfer the deletes to the next target block.
-	err := tbl.store.warChecker.checkOne(newID, ts)
+	obj, err := tbl.store.warChecker.CacheGet(newID.DbID, newID.TableID, newID.ObjectID(), false)
+	if err != nil {
+		return err
+	}
+	err = readWriteConfilictCheck(
+		obj,
+		ts,
+	)
 	if err == nil {
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
