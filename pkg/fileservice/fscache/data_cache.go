@@ -22,13 +22,13 @@ import (
 type CacheKey = pb.CacheKey
 
 type DataCache interface {
-	EnsureNBytes(want int)
+	EnsureNBytes(ctx context.Context, want int)
 	Capacity() int64
 	Used() int64
 	Available() int64
 	Get(context.Context, CacheKey) (Data, bool)
 	Set(context.Context, CacheKey, Data) error
 	DeletePaths(context.Context, []string)
-	Flush()
-	Evict(chan int64)
+	Flush(ctx context.Context)
+	Evict(ctx context.Context, done chan int64)
 }

@@ -47,7 +47,7 @@ func Test_CleanUpUselessFiles(t *testing.T) {
 
 	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	ent := &api.MergeCommitEntry{
 		BookingLoc: []string{"abc"},

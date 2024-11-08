@@ -30,9 +30,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -41,6 +38,7 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"go.uber.org/zap"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -151,25 +149,25 @@ func NewS3FS(
 	return fs, nil
 }
 
-func (s *S3FS) AllocateCacheData(size int) fscache.Data {
+func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(size)
+		s.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheData(size)
+	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
-func (s *S3FS) AllocateCacheDataWithHint(size int, hints malloc.Hints) fscache.Data {
+func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(size)
+		s.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(size, hints)
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
-func (s *S3FS) CopyToCacheData(data []byte) fscache.Data {
+func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(len(data))
+		s.memCache.cache.EnsureNBytes(ctx, len(data))
 	}
-	return DefaultCacheDataAllocator().CopyToCacheData(data)
+	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -958,18 +956,18 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
-func (s *S3FS) Close() {
+func (s *S3FS) Close(ctx context.Context) {
 	if s.memCache != nil {
-		s.memCache.Close()
+		s.memCache.Close(ctx)
 	}
 	if s.diskCache != nil {
-		s.diskCache.Close()
+		s.diskCache.Close(ctx)
 	}
 }
 
-func (s *S3FS) FlushCache() {
+func (s *S3FS) FlushCache(ctx context.Context) {
 	if s.memCache != nil {
-		s.memCache.Flush()
+		s.memCache.Flush(ctx)
 	}
 }
 
