@@ -33,9 +33,9 @@ type Cache[K comparable, V any] struct {
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
 
-	postSet   func(key K, value V)
-	postGet   func(key K, value V)
-	postEvict func(key K, value V)
+	postSet   func(key K, value V, size int64)
+	postGet   func(key K, value V, size int64)
+	postEvict func(key K, value V, size int64)
 
 	shards [numShards]struct {
 		sync.Mutex
@@ -88,9 +88,9 @@ func (c *_CacheItem[K, V]) dec() {
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
-	postSet func(key K, value V),
-	postGet func(key K, value V),
-	postEvict func(key K, value V),
+	postSet func(key K, value V, size int64),
+	postGet func(key K, value V, size int64),
+	postEvict func(key K, value V, size int64),
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,
@@ -128,7 +128,7 @@ func (c *Cache[K, V]) set(key K, value V, size int64) *_CacheItem[K, V] {
 	}
 	shard.values[key] = item
 	if c.postSet != nil {
-		c.postSet(key, value)
+		c.postSet(key, value, size)
 	}
 
 	return item
@@ -183,7 +183,7 @@ func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 		return
 	}
 	if c.postGet != nil {
-		c.postGet(item.key, item.value)
+		c.postGet(item.key, item.value, item.size)
 	}
 	shard.Unlock()
 	item.inc()
@@ -200,7 +200,7 @@ func (c *Cache[K, V]) Delete(key K) {
 	}
 	delete(shard.values, key)
 	if c.postEvict != nil {
-		c.postEvict(item.key, item.value)
+		c.postEvict(item.key, item.value, item.size)
 	}
 	// queues will be update in evict
 }
@@ -275,7 +275,7 @@ func (c *Cache[K, V]) deleteItem(item *_CacheItem[K, V]) {
 	defer shard.Unlock()
 	delete(shard.values, item.key)
 	if c.postEvict != nil {
-		c.postEvict(item.key, item.value)
+		c.postEvict(item.key, item.value, item.size)
 	}
 }
 

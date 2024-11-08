@@ -99,9 +99,14 @@ func NewDiskCache(
 				return maphash.String(seed, key)
 			},
 
+			func(_ string, _ struct{}, size int64) { // postSet
+				inuseBytes.Add(float64(size))
+			},
+
 			nil,
-			nil,
-			func(path string, _ struct{}) {
+
+			func(path string, _ struct{}, size int64) {
+				inuseBytes.Add(float64(-size))
 				err := os.Remove(path)
 				if err == nil {
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {

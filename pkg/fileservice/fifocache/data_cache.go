@@ -30,9 +30,9 @@ type DataCache struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(key fscache.CacheKey, value fscache.Data),
-	postGet func(key fscache.CacheKey, value fscache.Data),
-	postEvict func(key fscache.CacheKey, value fscache.Data),
+	postSet func(key fscache.CacheKey, value fscache.Data, size int64),
+	postGet func(key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(key fscache.CacheKey, value fscache.Data, size int64),
 ) *DataCache {
 	return &DataCache{
 		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
@@ -84,7 +84,7 @@ func (d *DataCache) deletePath(shardIndex int, path string) {
 		if key.Path == path {
 			delete(shard.values, key)
 			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(item.key, item.value)
+				d.fifo.postEvict(item.key, item.value, item.size)
 			}
 		}
 	}

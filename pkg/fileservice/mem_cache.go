@@ -42,8 +42,8 @@ func NewMemCache(
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
-	postSetFn := func(key fscache.CacheKey, value fscache.Data) {
-		inuseBytes.Add(float64(len(value.Bytes())))
+	postSetFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
+		inuseBytes.Add(float64(size))
 		value.Retain()
 
 		if callbacks != nil {
@@ -53,7 +53,7 @@ func NewMemCache(
 		}
 	}
 
-	postGetFn := func(key fscache.CacheKey, value fscache.Data) {
+	postGetFn := func(key fscache.CacheKey, value fscache.Data, _ int64) {
 		value.Retain()
 
 		if callbacks != nil {
@@ -63,8 +63,8 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(key fscache.CacheKey, value fscache.Data) {
-		inuseBytes.Sub(float64(len(value.Bytes())))
+	postEvictFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
+		inuseBytes.Add(float64(-size))
 		value.Release()
 
 		if callbacks != nil {
