@@ -172,8 +172,9 @@ message CheckpointEntryResp {
 
 message GetChangedTableListReq {
     option (gogoproto.typedecl)     = false;
-    timestamp.Timestamp From = 1;
-    bytes Extra = 2;
+    int32 Limit = 1;
+    timestamp.Timestamp From = 2;
+    bytes Extra = 3;
 }
 
 message GetChangedTableListResp {

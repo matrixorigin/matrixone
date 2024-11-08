@@ -211,20 +211,59 @@ func (h *Handle) HandleGetChangedTableList(
 	req *cmd_util.GetChangedTableListReq,
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error) {
-	memo := h.db.GetUsageMemo()
 
-	memo.EnterProcessing()
-	defer func() {
-		memo.LeaveProcessing()
-	}()
+	// TODO(ghs) Limit
 
-	var newest types.TS
-	resp.AccIds, resp.DatabaseIds, resp.TableIds, newest =
-		memo.CollectTableChangeListByTS(
-			types.TimestampToTS(*req.From))
+	from := types.TimestampToTS(*req.From)
+	now := types.BuildTS(time.Now().UnixNano(), 0)
 
-	tt := newest.ToTimestamp()
+	rr := h.db.LogtailMgr.GetReader(from, now)
+
+	cc := h.GetDB().Catalog
+
+	tree, _ := rr.GetDirty()
+	for _, val := range tree.Tables {
+		dbId := val.DbID
+		tblId := val.ID
+
+		dbEntry, err := cc.GetDatabaseByID(dbId)
+		if err != nil {
+			return nil, err
+		}
+
+		if dbEntry == nil {
+			continue
+		}
+
+		resp.TableIds = append(resp.TableIds, tblId)
+		resp.DatabaseIds = append(resp.DatabaseIds, dbId)
+		resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
+	}
+
+	// TODO
+	tt := now.ToTimestamp()
 	resp.Newest = &tt
+
+	truncated := h.GetDB().LogtailMgr.LastTruncatedTS()
+	if truncated.GE(&from) {
+		// TODO
+		// collect from ckp
+	}
+
+	//memo := h.db.GetUsageMemo()
+	//
+	//memo.EnterProcessing()
+	//defer func() {
+	//	memo.LeaveProcessing()
+	//}()
+	//
+	//var newest types.TS
+	//resp.AccIds, resp.DatabaseIds, resp.TableIds, newest =
+	//	memo.CollectTableChangeListByTS(
+	//		types.TimestampToTS(*req.From))
+	//
+	//tt := newest.ToTimestamp()
+	//resp.Newest = &tt
 
 	return nil, nil
 }

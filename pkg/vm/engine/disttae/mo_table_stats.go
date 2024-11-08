@@ -18,14 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,15 +44,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // considerations:
-// 1. truncate table
-// 2. truncate database
-// 3. index table size, rows
-// 4. negative rows, size
-// 5. waiting too long to get correct rows
-// 6. why size remain 0 after load into table? (waiting a longer???)
+// 1. task restart from very old lastUpdateTS causing huge number of subscribe/update stats.
+//		a. getChangeTableList request carries a Limit parameter. this requires strongly the changed table list
+//     		collecting according their ts.
+// 2. get changed table list: [from, now], but the [from, truncate] deleted from memory.
+// 		a. collect from checkpoints
+// 3. user can stop this task or force update some tables' stats.
+//
 
 const (
 	TableStatsTableSize = iota
@@ -76,11 +78,11 @@ const (
 				on duplicate key update
 					table_stats = '%s', update_time = '%s', takes = %d;`
 
-	lastUpdateTSSQL = `select min(update_time) from %s.%s;`
+	lastUpdateTSSQL = `select max(update_time) from %s.%s;`
 
 	getTableStatsSQL = `
 				select 
-    				table_id, COALESCE(table_stats, CAST('{}' AS JSON)) from  %s.%s
+    				table_id, update_time, COALESCE(table_stats, CAST('{}' AS JSON)) from  %s.%s
               	where 
                 	account_id in (%v) and 
                 	database_id in (%v) and 
@@ -91,6 +93,9 @@ const (
 const (
 	alphaCycleDur = time.Minute
 	betaCycleDur  = time.Second * 5
+
+	defaultGetTableListLimit = 100
+	defaultForceUpdateGap    = time.Minute * 5
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -100,6 +105,18 @@ var TableStatsName = [TableStatsCnt]string{
 	"dobject_cnt",
 	"tblock_cnt",
 	"dblock_cnt",
+}
+
+var dynamicConfig struct {
+	tblQueue chan *tablePair
+
+	de                   *Engine
+	service              string
+	forceUpdateGap       time.Duration
+	initialized          bool
+	objIdsPool           sync.Pool
+	sqlExecFactory       func() ie.InternalExecutor
+	changeTableListLimit int
 }
 
 ////////////////// MoTableStats Interface //////////////////
@@ -122,21 +139,24 @@ func queryStats(
 	accs, dbs, tbls []uint64,
 ) (statsVals []any, err error) {
 
-	executor := moTableStats.sqlExecutor()
-	opts := ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
+	execSQL := func(inputAccId, inputDbIds, inputTblIds []uint64) ie.InternalExecResult {
+		opts := ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 
-	sql := fmt.Sprintf(getTableStatsSQL,
-		catalog.MO_CATALOG,
-		catalog.MO_TABLE_STATS,
-		intsJoin(accs, ","),
-		intsJoin(dbs, ","),
-		intsJoin(tbls, ","))
+		sql := fmt.Sprintf(getTableStatsSQL,
+			catalog.MO_CATALOG,
+			catalog.MO_TABLE_STATS,
+			intsJoin(inputAccId, ","),
+			intsJoin(inputDbIds, ","),
+			intsJoin(inputTblIds, ","))
 
-	// tricky here, only sys can visit this table,
-	// but there should have not any privilege leak, since the [acc, dbs, tbls] already checked.
-	sysCtx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+		// tricky here, only sys can visit this table,
+		// but there should have not any privilege leak, since the [acc, dbs, tbls] already checked.
+		sysCtx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
 
-	ret := executor.Query(sysCtx, sql, opts)
+		return dynamicConfig.sqlExecFactory().Query(sysCtx, sql, opts)
+	}
+
+	ret := execSQL(accs, dbs, tbls)
 	if err = ret.Error(); err != nil {
 		return
 	}
@@ -146,10 +166,17 @@ func queryStats(
 		gotTIds []uint64
 		stats   map[string]any
 		val     interface{}
+
+		tblIdColIdx  = uint64(0)
+		updateColIdx = uint64(1)
+		statsColIdx  = uint64(2)
+
+		now     = time.Now()
+		updates []time.Time
 	)
 
 	for i := range ret.RowCount() {
-		if val, err = ret.Value(ctx, i, 0); err != nil {
+		if val, err = ret.Value(ctx, i, tblIdColIdx); err != nil {
 			return
 		}
 
@@ -157,15 +184,17 @@ func queryStats(
 		gotTIds = append(gotTIds, val.(uint64))
 	}
 
+	// scan update time and stats val
 	for i := range tbls {
 		idx, found := sort.Find(len(gotTIds), func(j int) int { return int(tbls[i]) - int(gotTIds[j]) })
 
 		if !found {
+			updates = append(updates, now)
 			statsVals = append(statsVals, defaultVal)
 			continue
 		}
 
-		if val, err = ret.Value(ctx, idxes[idx], 1); err != nil {
+		if val, err = ret.Value(ctx, idxes[idx], statsColIdx); err != nil {
 			return
 		}
 
@@ -174,9 +203,78 @@ func queryStats(
 		}
 
 		statsVals = append(statsVals, stats[TableStatsName[statsIdx]])
+
+		if val, err = ret.Value(ctx, idxes[idx], updateColIdx); err != nil {
+			return
+		}
+
+		var ud time.Time
+		ud, err = time.Parse("2006-01-02 15:04:05.000000", val.(string))
+		if err != nil {
+			return
+		}
+
+		updates = append(updates, ud)
 	}
 
-	return
+	recordForceUpdateErr := func(tp *tablePair, err error) {
+		logutil.Info("force update old stats failed",
+			zap.Error(err),
+			zap.String("table", fmt.Sprintf("%s(%d)-%s(%d)", tp.dbName, tp.db, tp.tblName, tp.tbl)))
+	}
+
+	// for too old stats, we force launch an update
+	for i := range tbls {
+		if now.Sub(updates[i]) > dynamicConfig.forceUpdateGap {
+			// force update
+			tblItem := dynamicConfig.de.
+				GetLatestCatalogCache().
+				GetTableById(uint32(accs[i]), dbs[i], tbls[i])
+
+			tp := allocateTablePair()
+			tp.acc = uint64(accs[i])
+			tp.db = dbs[i]
+			tp.tbl = tbls[i]
+			tp.snapshot = types.BuildTS(now.UnixNano(), 0)
+			tp.tblName = tblItem.Name
+			tp.dbName = tblItem.DatabaseName
+			tp.pkSequence = tblItem.PrimarySeqnum
+
+			tp.pState, err = subscribeTable(ctx, dynamicConfig.service, dynamicConfig.de, tp)
+			if err != nil {
+				recordForceUpdateErr(tp, err)
+				continue
+			}
+
+			dynamicConfig.tblQueue <- tp
+
+			if err = tp.Wait(); err != nil {
+				recordForceUpdateErr(tp, err)
+				continue
+			}
+
+			// reread from table
+			ret = execSQL([]uint64{accs[i]}, []uint64{dbs[i]}, []uint64{tbls[i]})
+			if err = ret.Error(); err != nil {
+				recordForceUpdateErr(tp, err)
+				continue
+			}
+
+			if val, err = ret.Value(ctx, 0, statsColIdx); err != nil {
+				recordForceUpdateErr(tp, err)
+				continue
+			}
+
+			if err = json.Unmarshal([]byte(val.(bytejson.ByteJson).String()), &stats); err != nil {
+				recordForceUpdateErr(tp, err)
+				continue
+			}
+
+			statsVals[i] = stats[TableStatsName[statsIdx]]
+		}
+	}
+
+	return statsVals, nil
 }
 
 func MTSTableSize(
@@ -216,13 +314,54 @@ func MTSTableRows(
 /////////////// MoTableStats Implementation ///////////////
 
 type tablePair struct {
+	waiter struct {
+		cond     sync.Cond
+		err      error
+		errQueue chan error
+	}
+
+	pkSequence int
+
 	acc, db, tbl    uint64
 	dbName, tblName string
+
+	snapshot types.TS
+	pState   *logtailreplay.PartitionState
 }
 
-func (tp tablePair) String() string {
+func allocateTablePair() *tablePair {
+	tp := tablePair{}
+	tp.waiter.cond = *sync.NewCond(new(sync.Mutex))
+	return &tp
+}
+
+func (tp *tablePair) String() string {
 	return fmt.Sprintf("%d-%s(%d)-%s(%d)",
 		tp.acc, tp.dbName, tp.db, tp.tblName, tp.tbl)
+}
+
+func (tp *tablePair) Done(err error) {
+	tp.waiter.err = err
+	if tp.waiter.errQueue != nil {
+		select {
+		// un blocking
+		// full or closed
+		case tp.waiter.errQueue <- err:
+		}
+	}
+
+	tp.waiter.cond.Broadcast()
+}
+
+func (tp *tablePair) Wait() error {
+	tp.waiter.cond.L.Lock()
+	defer tp.waiter.cond.L.Unlock()
+
+	tp.waiter.cond.Wait()
+	if tp.waiter.errQueue != nil && len(tp.waiter.errQueue) != 0 {
+		return <-tp.waiter.errQueue
+	}
+	return tp.waiter.err
 }
 
 type statsList struct {
@@ -230,135 +369,102 @@ type statsList struct {
 	stats map[string]any
 }
 
-type MoTableStats struct {
-	stats map[tablePair]*statsList
+type betaCycleStash struct {
+	snapshot types.TS
 
-	sqlExecutor  func() ie.InternalExecutor
-	lastUpdateTS types.TS
+	born time.Time
 
-	// alphaCycleStash
-	acs struct {
-		snapshot types.TS
+	dataObjIds []types.Objectid
 
-		dataBlkNeedToLoad      int
-		tombstoneBlkNeedToLoad int
-		blkNeedToLoadDelta     int
+	totalSize   float64
+	totalRows   float64
+	deletedRows float64
 
-		pStateStack []*logtailreplay.PartitionState
-
-		dObjIterStack []logtailreplay.ObjectsIter
-		tObjIterStack []logtailreplay.ObjectsIter
-		dRowIterStack []logtailreplay.RowsIter
-		tRowIterStack []logtailreplay.RowsIter
-
-		tblInfoStack []tablePair
-	}
-
-	// betaCycleStash
-	bcs struct {
-		took time.Duration
-
-		//vec        *vector.Vector
-		dataObjIds []types.Objectid
-
-		totalSize   float64
-		totalRows   float64
-		deletedRows float64
-
-		tblockCnt, dblockCnt   int
-		tobjectCnt, dobjectCnt int
-	}
+	tblockCnt, dblockCnt   int
+	tobjectCnt, dobjectCnt int
 }
 
-func (mts *MoTableStats) stashToStats(pair tablePair) {
+func stashToStats(bcs betaCycleStash) statsList {
 	var (
-		ok bool
-		sl *statsList
+		sl statsList
 	)
 
-	if sl, ok = moTableStats.stats[pair]; !ok {
-		sl = new(statsList)
-		sl.stats = make(map[string]any)
-		moTableStats.stats[pair] = sl
-	}
+	sl.stats = make(map[string]any)
 
 	// table rows
 	{
-		leftRows := mts.bcs.totalRows - mts.bcs.deletedRows
+		leftRows := bcs.totalRows - bcs.deletedRows
 		sl.stats[TableStatsName[TableStatsTableRows]] = leftRows
 	}
 
 	// table size
 	{
 		deletedSize := float64(0)
-		if mts.bcs.totalRows > 0 && mts.bcs.deletedRows > 0 {
-			deletedSize = mts.bcs.totalSize / mts.bcs.totalRows * mts.bcs.deletedRows
+		if bcs.totalRows > 0 && bcs.deletedRows > 0 {
+			deletedSize = bcs.totalSize / bcs.totalRows * bcs.deletedRows
 		}
 
-		leftSize := math.Round((mts.bcs.totalSize-deletedSize)*1000) / 1000
+		leftSize := math.Round((bcs.totalSize-deletedSize)*1000) / 1000
 		sl.stats[TableStatsName[TableStatsTableSize]] = leftSize
 	}
 
 	// data object, block count
 	// tombstone object, block count
 	{
-		sl.stats[TableStatsName[TableStatsTObjectCnt]] = mts.bcs.tobjectCnt
-		sl.stats[TableStatsName[TableStatsTBlockCnt]] = mts.bcs.tblockCnt
-		sl.stats[TableStatsName[TableStatsDObjectCnt]] = mts.bcs.dobjectCnt
-		sl.stats[TableStatsName[TableStatsDBlockCnt]] = mts.bcs.dblockCnt
+		sl.stats[TableStatsName[TableStatsTObjectCnt]] = bcs.tobjectCnt
+		sl.stats[TableStatsName[TableStatsTBlockCnt]] = bcs.tblockCnt
+		sl.stats[TableStatsName[TableStatsDObjectCnt]] = bcs.dobjectCnt
+		sl.stats[TableStatsName[TableStatsDBlockCnt]] = bcs.dblockCnt
 	}
 
-	sl.took = mts.bcs.took
+	sl.took = time.Since(bcs.born)
+
+	return sl
 }
 
-func (mts *MoTableStats) cleanStash() {
-	mts.bcs.took = 0
-
-	mts.bcs.tblockCnt = 0
-	mts.bcs.tobjectCnt = 0
-
-	mts.bcs.dblockCnt = 0
-	mts.bcs.dobjectCnt = 0
-
-	mts.bcs.totalRows = 0
-	mts.bcs.totalSize = 0
-	mts.bcs.deletedRows = 0
-
-	//mts.bcs.vec.CleanOnlyData()
-	mts.bcs.dataObjIds = mts.bcs.dataObjIds[:0]
-}
-
-func (mts *MoTableStats) freeStash(mp *mpool.MPool) {
-	mts.acs.dRowIterStack = nil
-	mts.acs.dObjIterStack = nil
-	mts.acs.tObjIterStack = nil
-	mts.acs.tRowIterStack = nil
-	mts.acs.tblInfoStack = nil
-	mts.acs.pStateStack = nil
-
-	mts.bcs.dataObjIds = nil
-	//if mts.bcs.vec != nil {
-	//	mts.bcs.vec.Free(mp)
-	//}
-	mts.stats = nil
-}
-
-func (mts *MoTableStats) init(
+func initialize(
+	ctx context.Context,
+	server string,
 	eng engine.Engine,
+	listLimit int,
+	forceGap time.Duration,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
-	if mts.stats != nil {
+
+	if dynamicConfig.initialized {
 		return
 	}
 
-	moTableStats.stats = make(map[tablePair]*statsList)
-	//moTableStats.bcs.vec = vector.NewVec(types.T_Rowid.ToType())
-	//err = moTableStats.bcs.vec.PreExtend(options.DefaultBlockMaxRows, eng.(*Engine).mp)
-	//if err != nil {
-	//	return err
-	//}
+	go func() {
+		if err = betaTask(ctx, server, eng, sqlExecutor); err != nil {
+			return
+		}
+	}()
 
-	moTableStats.sqlExecutor = sqlExecutor
+	if err != nil {
+		return
+	}
+
+	dynamicConfig.de = eng.(*Engine)
+	dynamicConfig.initialized = true
+	dynamicConfig.sqlExecFactory = sqlExecutor
+	if listLimit <= 0 {
+		dynamicConfig.changeTableListLimit = defaultGetTableListLimit
+	}
+
+	if forceGap <= 0 {
+		dynamicConfig.forceUpdateGap = defaultForceUpdateGap
+	}
+
+	dynamicConfig.objIdsPool = sync.Pool{
+		New: func() interface{} {
+			return make([]types.Objectid, 0)
+		},
+	}
+
+	// the queue length also decides the parallelism of subscription
+	dynamicConfig.tblQueue = make(chan *tablePair,
+		min(10, dynamicConfig.changeTableListLimit/5))
 
 	{
 		ff1 := func() func(
@@ -377,8 +483,6 @@ func (mts *MoTableStats) init(
 	return nil
 }
 
-var moTableStats MoTableStats
-
 func GetMOTableStatsExecutor(
 	service string,
 	eng engine.Engine,
@@ -396,17 +500,20 @@ func tableStatsExecutor(
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
 
-	if err = moTableStats.init(eng, sqlExecutor); err != nil {
+	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+
+	if err = initialize(ctx, service, eng, 0, 0, sqlExecutor); err != nil {
 		return
 	}
 
 	defer func() {
-		moTableStats.freeStash(eng.(*Engine).mp)
+		for len(dynamicConfig.tblQueue) > 0 {
+			tbl := <-dynamicConfig.tblQueue
+			tbl.Done(nil)
+		}
 	}()
-
-	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
 
 	tickerDur := time.Second
 	executeTicker := time.NewTicker(tickerDur)
@@ -414,21 +521,28 @@ func tableStatsExecutor(
 	for {
 		select {
 		case <-ctx.Done():
-			logutil.Info("table stats executor exit by ctx.Done")
-			return ctx.Err()
+			logutil.Info("table stats executor exit by ctx.Done", zap.Error(ctx.Err()))
+			err = ctx.Err()
+			break
 
 		case <-executeTicker.C:
-			if err = statsCalculator(ctx, service, eng, sqlExecutor); err != nil {
-				logutil.Infof("table stats executor exit by err: %v", err)
-				return err
+			if err = alphaTask(ctx, service, eng, sqlExecutor); err != nil {
+				logutil.Info("table stats alpha exit by err", zap.Error(err))
+				break
 			}
 
-			executeTicker.Reset(alphaCycleDur)
+			executeTicker.Reset(alphaCycleDur / 10)
+		}
+
+		if err != nil {
+			break
 		}
 	}
+
+	return err
 }
 
-func statsCalculator(
+func alphaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
@@ -438,6 +552,14 @@ func statsCalculator(
 	var (
 		newCtx context.Context
 		cancel context.CancelFunc
+
+		ticker  *time.Ticker
+		procIdx int
+
+		tbls         []*tablePair
+		newestTS     types.TS
+		lastUpdateTS types.TS
+		pState       *logtailreplay.PartitionState
 	)
 
 	if _, ok := ctx.Deadline(); !ok {
@@ -445,25 +567,110 @@ func statsCalculator(
 		defer cancel()
 	}
 
-	if err = prepare(newCtx, service, eng, sqlExecutor); err != nil {
+	if lastUpdateTS, err = getLastUpdateTS(newCtx, sqlExecutor); err != nil {
 		return err
 	}
 
-	var done bool
-
-	ticker := time.NewTicker(time.Millisecond * 100)
-	for range ticker.C {
-		if done, err =
-			betaCycleScheduler(newCtx, service, eng, sqlExecutor); err != nil || done {
-			break
-		}
-		ticker.Reset(betaCycleDur)
-	}
+	tbls, newestTS, err = getChangedTableList(newCtx, service, eng, lastUpdateTS)
 
 	if err != nil {
 		return err
 	}
+
+	errQueue := make(chan error, 10)
+	ticker = time.NewTicker(time.Millisecond * 10)
+
+	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case err = <-errQueue:
+			return err
+
+		default:
+			if procIdx >= len(tbls) {
+				return
+			}
+
+			if pState, err = subscribeTable(ctx, service, eng, tbls[procIdx]); err != nil {
+				return err
+			} else if pState == nil {
+				continue
+			}
+			pState = pState.Copy()
+
+			tbls[procIdx].pState = pState
+			tbls[procIdx].snapshot = newestTS
+			tbls[procIdx].waiter.errQueue = errQueue
+			dynamicConfig.tblQueue <- tbls[procIdx]
+
+			procIdx++
+			ticker.Reset(time.Millisecond * 10)
+		}
+	}
+
 	return nil
+}
+
+func betaTask(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	sqlExecutor func() ie.InternalExecutor,
+) (err error) {
+
+	var (
+		de       = eng.(*Engine)
+		taskPool *ants.Pool
+	)
+
+	if taskPool, err = ants.NewPool(2); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case tbl := <-dynamicConfig.tblQueue:
+			op := func() {
+				defer func() {
+					tbl.Done(err)
+				}()
+
+				bcs := betaCycleStash{
+					born:       time.Now(),
+					snapshot:   tbl.snapshot,
+					dataObjIds: dynamicConfig.objIdsPool.Get().([]types.Objectid),
+				}
+
+				defer func() {
+					bcs.dataObjIds = bcs.dataObjIds[:0]
+					dynamicConfig.objIdsPool.Put(bcs.dataObjIds)
+				}()
+
+				if err = collectVisibleData(&bcs, tbl.pState); err != nil {
+					return
+				}
+
+				if err = applyTombstones(ctx, &bcs, de.fs, tbl.pState); err != nil {
+					return
+				}
+
+				sl := stashToStats(bcs)
+				if err = updateStatsTable(ctx, service, tbl, sl, sqlExecutor); err != nil {
+					return
+				}
+			}
+
+			if err = taskPool.Submit(op); err != nil {
+				logutil.Info("stats beta task exist", zap.Error(err))
+				return
+			}
+		}
+	}
 }
 
 func getChangedTableList(
@@ -471,7 +678,7 @@ func getChangedTableList(
 	service string,
 	eng engine.Engine,
 	from types.TS,
-) (tbls []tablePair, pkSequms []int, newest types.TS, err error) {
+) (tbls []*tablePair, newest types.TS, err error) {
 
 	defer func() {
 		logutil.Info("get changed table list",
@@ -484,6 +691,7 @@ func getChangedTableList(
 		req := cmd_util.GetChangedTableListReq{}
 		ts := from.ToTimestamp()
 		req.From = &ts
+		req.Limit = defaultGetTableListLimit
 		return req.Marshal()
 	}
 
@@ -498,7 +706,7 @@ func getChangedTableList(
 	de := eng.(*Engine)
 	txnOperator, err := de.cli.New(ctx, timestamp.Timestamp{})
 	if err != nil {
-		return nil, nil, types.TS{}, err
+		return nil, types.TS{}, err
 	}
 
 	proc := process.NewTopProcess(ctx,
@@ -511,7 +719,7 @@ func getChangedTableList(
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
 	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if err != nil {
-		return nil, nil, types.TS{}, err
+		return nil, types.TS{}, err
 	}
 
 	cc := de.GetLatestCatalogCache()
@@ -519,7 +727,7 @@ func getChangedTableList(
 	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 
 	if len(resp.AccIds) == 0 {
-		return nil, nil, types.TS{}, nil
+		return nil, types.TS{}, nil
 	}
 
 	for i := range resp.AccIds {
@@ -528,27 +736,49 @@ func getChangedTableList(
 			continue
 		}
 
-		tbls = append(tbls, tablePair{
-			acc:     uint64(item.AccountId),
-			db:      item.DatabaseId,
-			tbl:     item.Id,
-			tblName: item.Name,
-			dbName:  item.DatabaseName,
-		})
+		tp := allocateTablePair()
+		tp.pkSequence = item.PrimarySeqnum
+		tp.acc = uint64(item.AccountId)
+		tp.db = item.DatabaseId
+		tp.tbl = item.Id
+		tp.tblName = item.Name
+		tp.dbName = item.DatabaseName
 
-		pkSequms = append(pkSequms, int(item.PrimarySeqnum))
+		tbls = append(tbls, tp)
 	}
 
-	return tbls, pkSequms, types.TimestampToTS(*resp.Newest), nil
+	return tbls, types.TimestampToTS(*resp.Newest), nil
+}
+
+func subscribeTable(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	tbl *tablePair,
+) (pState *logtailreplay.PartitionState, err error) {
+
+	txnTbl := txnTable{}
+	txnTbl.tableId = tbl.tbl
+	txnTbl.tableName = tbl.tblName
+	txnTbl.accountId = uint32(tbl.acc)
+	txnTbl.db = &txnDatabase{
+		databaseId:   tbl.db,
+		databaseName: tbl.dbName,
+	}
+
+	txnTbl.primarySeqnum = tbl.pkSequence
+
+	if pState, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &txnTbl); err != nil {
+		return nil, err
+	}
+
+	return pState, nil
 }
 
 func getLastUpdateTS(
 	ctx context.Context,
 	sqlExecutor func() ie.InternalExecutor,
 ) (types.TS, error) {
-	if !moTableStats.lastUpdateTS.IsEmpty() {
-		return moTableStats.lastUpdateTS, nil
-	}
 
 	opts := ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 	ret := sqlExecutor().Query(ctx, fmt.Sprintf(lastUpdateTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS), opts)
@@ -570,195 +800,8 @@ func getLastUpdateTS(
 		return types.TS{}, err
 	}
 
-	moTableStats.lastUpdateTS = types.BuildTS(tt.UnixNano(), 0)
-	return moTableStats.lastUpdateTS, nil
-}
-
-func prepare(
-	ctx context.Context,
-	service string,
-	eng engine.Engine,
-	sqlExecutor func() ie.InternalExecutor,
-) (err error) {
-
-	var (
-		tbls     []tablePair
-		pkSequms []int
-
-		now       types.TS
-		lastMinTS types.TS
-		iter      logtailreplay.ObjectsIter
-		pState    *logtailreplay.PartitionState
-	)
-
-	lastMinTS, err = getLastUpdateTS(ctx, sqlExecutor)
-	if err != nil {
-		return err
-	}
-
-	tbls, pkSequms, now, err = getChangedTableList(ctx, service, eng, lastMinTS)
-	for i, item := range tbls {
-		tbl := txnTable{}
-		tbl.tableId = item.tbl
-		tbl.tableName = item.tblName
-		tbl.accountId = uint32(item.acc)
-		tbl.db = &txnDatabase{
-			databaseId:   item.db,
-			databaseName: item.dbName,
-		}
-
-		tbl.primarySeqnum = pkSequms[i]
-		if pState, err = eng.(*Engine).PushClient().toSubscribeTable(ctx, &tbl); err != nil {
-			return err
-		}
-
-		if pState == nil {
-			continue
-		}
-
-		pState = pState.Copy()
-
-		dBlkCnt, tBlkCnt, _, _ := pState.GetDTBlockCnt()
-
-		moTableStats.acs.dataBlkNeedToLoad = dBlkCnt
-		moTableStats.acs.tombstoneBlkNeedToLoad = tBlkCnt
-
-		if iter, err = pState.NewObjectsIter(now, true, false); err != nil {
-			return err
-		}
-		moTableStats.acs.dObjIterStack = append(moTableStats.acs.dObjIterStack, iter)
-
-		if iter, err = pState.NewObjectsIter(now, true, true); err != nil {
-			return err
-		}
-		moTableStats.acs.tObjIterStack = append(moTableStats.acs.tObjIterStack, iter)
-		moTableStats.acs.pStateStack = append(moTableStats.acs.pStateStack, pState)
-
-		moTableStats.acs.dRowIterStack = append(moTableStats.acs.dRowIterStack,
-			pState.NewRowsIter(now, nil, false))
-
-		moTableStats.acs.tRowIterStack = append(moTableStats.acs.tRowIterStack,
-			pState.NewRowsIter(now, nil, true))
-
-		moTableStats.acs.tblInfoStack =
-			append(moTableStats.acs.tblInfoStack, tablePair{
-				db:      item.db,
-				tbl:     item.tbl,
-				acc:     uint64(item.acc),
-				tblName: item.tblName,
-				dbName:  item.dbName,
-			})
-	}
-
-	moTableStats.lastUpdateTS = now
-	moTableStats.acs.blkNeedToLoadDelta =
-		int(math.Ceil(float64(moTableStats.acs.tombstoneBlkNeedToLoad+
-			moTableStats.acs.dataBlkNeedToLoad) / float64(alphaCycleDur/betaCycleDur)))
-
-	return nil
-}
-
-func betaCycleScheduler(
-	ctx context.Context,
-	service string,
-	eng engine.Engine,
-	sqlExecutor func() ie.InternalExecutor,
-) (done bool, err error) {
-
-	de := eng.(*Engine)
-	var start time.Time = time.Now()
-
-	for {
-		if len(moTableStats.acs.tblInfoStack) == 0 {
-			return true, nil
-		}
-
-		var (
-			loaded     int
-			loadedDBlk int
-			loadedTBlk int
-
-			totalSize   float64
-			totalRows   float64
-			deletedRows float64
-
-			tblInfo       = moTableStats.acs.tblInfoStack[0]
-			blkNeedToLoad = moTableStats.acs.blkNeedToLoadDelta
-
-			pState   = moTableStats.acs.pStateStack[0]
-			dObjIter = moTableStats.acs.dObjIterStack[0]
-			tObjIter = moTableStats.acs.tObjIterStack[0]
-			dRowIter = moTableStats.acs.dRowIterStack[0]
-			tRowIter = moTableStats.acs.tRowIterStack[0]
-		)
-
-		if totalRows, totalSize, loaded, err = collectVisibleData(dObjIter, dRowIter); err != nil {
-			return false, err
-		}
-
-		loadedDBlk += loaded
-		moTableStats.bcs.totalSize += totalSize
-		moTableStats.bcs.totalRows += totalRows
-
-		if deletedRows, loaded, err = applyTombstones(
-			ctx, de.fs, de.mp, tObjIter, tRowIter, pState, blkNeedToLoad); err != nil {
-			return false, err
-		}
-
-		loadedTBlk += loaded
-		moTableStats.bcs.deletedRows += deletedRows
-
-		if err = dRowIter.Close(); err != nil {
-			return false, err
-		}
-
-		if err = tRowIter.Close(); err != nil {
-			return false, err
-		}
-
-		singleTableDone := true
-		if dObjIter.Done() {
-			if err = dObjIter.Close(); err != nil {
-				return false, err
-			}
-		} else {
-			singleTableDone = false
-		}
-
-		if tObjIter.Done() {
-			if err = tObjIter.Close(); err != nil {
-				return false, err
-			}
-		} else {
-			singleTableDone = false
-		}
-
-		if singleTableDone {
-			moTableStats.bcs.took = time.Since(start)
-
-			moTableStats.stashToStats(tblInfo)
-			moTableStats.cleanStash()
-
-			err = updateStatsTable(ctx, service, tblInfo, *moTableStats.stats[tblInfo], sqlExecutor)
-			if err != nil {
-				return false, err
-			}
-
-			moTableStats.acs.tblInfoStack = moTableStats.acs.tblInfoStack[1:]
-			moTableStats.acs.dObjIterStack = moTableStats.acs.dObjIterStack[1:]
-			moTableStats.acs.tObjIterStack = moTableStats.acs.tObjIterStack[1:]
-			moTableStats.acs.dRowIterStack = moTableStats.acs.dRowIterStack[1:]
-			moTableStats.acs.tRowIterStack = moTableStats.acs.tRowIterStack[1:]
-
-			start = time.Now()
-		}
-
-		if loadedDBlk+loadedTBlk >= blkNeedToLoad {
-			break
-		}
-	}
-
-	return len(moTableStats.acs.tblInfoStack) == 0, err
+	lastUpdateTS := types.BuildTS(tt.UnixNano(), 0)
+	return lastUpdateTS, nil
 }
 
 // O(m+n)
@@ -795,50 +838,68 @@ func getDeletedRows(
 }
 
 func collectVisibleData(
-	//pState *logtailreplay.PartitionState,
-	dObjIter logtailreplay.ObjectsIter,
-	dRowIter logtailreplay.RowsIter,
-) (visibleRows, visibleSize float64, loaded int, err error) {
+	bcs *betaCycleStash,
+	pState *logtailreplay.PartitionState,
+) (err error) {
 
 	var (
+		dRowIter logtailreplay.RowsIter
+		dObjIter logtailreplay.ObjectsIter
+
 		estimatedOneRowSize float64
 	)
+
+	defer func() {
+		if dRowIter != nil {
+			err = dRowIter.Close()
+		}
+
+		if dObjIter != nil {
+			err = dObjIter.Close()
+		}
+	}()
+
+	dObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, false)
+	if err != nil {
+		return err
+	}
+
+	dRowIter = pState.NewRowsIter(bcs.snapshot, nil, false)
 
 	// there won't exist visible appendable obj
 	for dObjIter.Next() {
 		obj := dObjIter.Entry()
 
-		moTableStats.bcs.dobjectCnt++
-		moTableStats.bcs.dblockCnt += int(obj.BlkCnt())
+		bcs.dobjectCnt++
+		bcs.dblockCnt += int(obj.BlkCnt())
 
-		visibleSize += float64(obj.Size())
-		visibleRows += float64(obj.Rows())
-		moTableStats.bcs.dataObjIds = append(
-			moTableStats.bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
+		bcs.totalSize += float64(obj.Size())
+		bcs.totalRows += float64(obj.Rows())
+		bcs.dataObjIds = append(
+			bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
 	}
 
-	if visibleRows != 0 {
-		estimatedOneRowSize = visibleSize / visibleRows
+	if bcs.totalRows != 0 {
+		estimatedOneRowSize = bcs.totalSize / bcs.totalRows
 	}
 
 	// 1. inserts on appendable object
 	for dRowIter.Next() {
 		entry := dRowIter.Entry()
 
-		idx := slices.IndexFunc(moTableStats.bcs.dataObjIds, func(objId types.Objectid) bool {
+		idx := slices.IndexFunc(bcs.dataObjIds, func(objId types.Objectid) bool {
 			return objId.EQ(entry.BlockID.Object())
 		})
 
 		if idx == -1 {
-			moTableStats.bcs.dataObjIds = append(
-				moTableStats.bcs.dataObjIds, *entry.BlockID.Object())
+			bcs.dataObjIds = append(bcs.dataObjIds, *entry.BlockID.Object())
 		}
 
-		visibleRows += float64(1)
+		bcs.totalRows += float64(1)
 		if estimatedOneRowSize > 0 {
-			visibleSize += estimatedOneRowSize
+			bcs.totalSize += estimatedOneRowSize
 		} else {
-			visibleSize += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+			bcs.totalSize += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
 		}
 	}
 
@@ -847,25 +908,29 @@ func collectVisibleData(
 
 func applyTombstones(
 	ctx context.Context,
+	bcs *betaCycleStash,
 	fs fileservice.FileService,
-	mp *mpool.MPool,
-	tObjIter logtailreplay.ObjectsIter,
-	tRowIter logtailreplay.RowsIter,
 	pState *logtailreplay.PartitionState,
-	blkNeedToLoadDelta int,
-) (deletedRows float64, loaded int, err error) {
+) (err error) {
 	var (
+		tObjIter logtailreplay.ObjectsIter
+
 		hidden  objectio.HiddenColumnSelection
 		release func()
 	)
 
+	tObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, true)
+	if err != nil {
+		return err
+	}
+
 	// 1. non-appendable tombstone obj
 	// 2. appendable tombstone obj
-	for tObjIter.Next() && loaded <= blkNeedToLoadDelta {
+	for tObjIter.Next() {
 		tombstone := tObjIter.Entry()
 
-		moTableStats.bcs.tobjectCnt++
-		moTableStats.bcs.tblockCnt += int(tombstone.BlkCnt())
+		bcs.tobjectCnt++
+		bcs.tblockCnt += int(tombstone.BlkCnt())
 
 		attrs := objectio.GetTombstoneAttrs(hidden)
 		persistedDeletes := containers.NewVectors(len(attrs))
@@ -881,13 +946,14 @@ func applyTombstones(
 				defer release()
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
-				cnt := getDeletedRows(moTableStats.bcs.dataObjIds, rowIds)
+				cnt := getDeletedRows(bcs.dataObjIds, rowIds)
 
-				deletedRows += float64(cnt)
+				bcs.deletedRows += float64(cnt)
+				//deletedRows += float64(cnt)
 				return true
 			}, tombstone.ObjectStats)
 
-		loaded += int(tombstone.BlkCnt())
+		//loaded += int(tombstone.BlkCnt())
 
 		if err != nil {
 			return
@@ -911,18 +977,20 @@ func applyTombstones(
 			return true, nil
 		}
 
-		deletedRows += float64(getDeletedRows(moTableStats.bcs.dataObjIds, []types.Rowid{entry.RowID}))
+		bcs.deletedRows += float64(getDeletedRows(bcs.dataObjIds, []types.Rowid{entry.RowID}))
+		//deletedRows += float64(getDeletedRows(moTableStats.bcs.dataObjIds, []types.Rowid{entry.RowID}))
 
 		return true, nil
 	})
 
-	return deletedRows, loaded, err
+	//return deletedRows, loaded, err
+	return nil
 }
 
 func updateStatsTable(
 	ctx context.Context,
 	service string,
-	tbl tablePair,
+	tbl *tablePair,
 	sl statsList,
 	executor func() ie.InternalExecutor,
 ) (err error) {
@@ -938,7 +1006,7 @@ func updateStatsTable(
 		return err
 	}
 
-	utcTime := moTableStats.lastUpdateTS.
+	utcTime := tbl.snapshot.
 		ToTimestamp().
 		ToStdTime().
 		Format("2006-01-02 15:04:05.000000")
