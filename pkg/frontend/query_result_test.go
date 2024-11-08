@@ -90,6 +90,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	ses.GetTxnHandler().txnOp = newTestTxnOp()
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()

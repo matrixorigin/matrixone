@@ -133,8 +133,7 @@ func (t *testWorkspace) WriteOffset() uint64 {
 }
 
 func (t *testWorkspace) Adjust(writeOffset uint64) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (t *testWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
@@ -148,8 +147,6 @@ func (t *testWorkspace) Rollback(ctx context.Context) error {
 }
 
 func (t *testWorkspace) IncrSQLCount() {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (t *testWorkspace) GetSQLCount() uint64 {
@@ -958,8 +955,7 @@ func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.S
 }
 
 func (txnop *testTxnOp) NextSequence() uint64 {
-	//TODO implement me
-	panic("implement me")
+	return 0
 }
 
 func (txnop *testTxnOp) EnterRunSql() {
