@@ -439,12 +439,12 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var err error
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
-		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
 	case *tree.Select:
-		nodeID, err = b.builder.buildSelect(subquery, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1639,20 +1639,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			//expand the in list to col=a or col=b or ......
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if err != nil {
+						return nil, err
+					}
 					if newExpr == nil {
 						newExpr = tmpExpr
 					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if err != nil {
+						return nil, err
+					}
 					if newExpr == nil {
 						newExpr = tmpExpr
 					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			}

@@ -1213,19 +1213,33 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 // and then the second alter will be treated as an operation on a newly-created table if txn.CreateTable is used.
 //
 // 2. This check depends on replaying all catalog cache when cn starts.
-func (tbl *txnTable) isCreatedInTxn() bool {
+func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 	if tbl.remoteWorkspace {
-		return tbl.createdInTxn
+		return tbl.createdInTxn, nil
 	}
 
 	if tbl.db.op.IsSnapOp() {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
-		return false
+		return false, nil
 	}
-	idAckedbyTN := tbl.db.getEng().GetLatestCatalogCache().
-		GetTableByIdAndTime(tbl.accountId, tbl.db.databaseId, tbl.tableId, tbl.db.op.SnapshotTS())
-	return idAckedbyTN == nil
+
+	cache := tbl.db.getEng().GetLatestCatalogCache()
+	cacheTS := cache.GetStartTS().ToTimestamp()
+	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
+		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
+			return false, err
+		}
+		return false, moerr.NewTxnNeedRetry(ctx)
+	}
+
+	idAckedbyTN := cache.GetTableByIdAndTime(
+		tbl.accountId,
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.op.SnapshotTS(),
+	)
+	return idAckedbyTN == nil, nil
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
@@ -1319,7 +1333,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// 0. check if the table is created in txn.
 	// For a table created in txn, alter means to recreate table and put relating dml/alter batch behind the new create batch.
 	// For a normal table, alter means sending Alter request to TN, no creating command, and no dropping command.
-	createdInTxn := tbl.isCreatedInTxn()
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	if err != nil {
+		return err
+	}
 	if !createdInTxn {
 		tbl.version += 1
 		// For normal Alter, send Alter request to TN
@@ -1865,7 +1882,11 @@ func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.Part
 		}
 	}()
 
-	if tbl.isCreatedInTxn() {
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if createdInTxn {
 		return
 	}
 

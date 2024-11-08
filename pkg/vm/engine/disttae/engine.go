@@ -355,34 +355,23 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	switch tableId {
-	case catalog.MO_DATABASE_ID:
+	if catalog.IsSystemTable(tableId) {
+		dbName = catalog.MO_CATALOG
 		db := &txnDatabase{
 			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+			databaseName: dbName,
 		}
-		defs := catalog.GetDefines(e.service).MoDatabaseTableDefs
-		return catalog.MO_CATALOG, catalog.MO_DATABASE,
-			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
-	case catalog.MO_TABLES_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+		switch tableId {
+		case catalog.MO_DATABASE_ID:
+			tableName = catalog.MO_DATABASE
+		case catalog.MO_TABLES_ID:
+			tableName = catalog.MO_TABLES
+		case catalog.MO_COLUMNS_ID:
+			tableName = catalog.MO_COLUMNS
 		}
-		defs := catalog.GetDefines(e.service).MoTablesTableDefs
-		return catalog.MO_CATALOG, catalog.MO_TABLES,
-			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
-	case catalog.MO_COLUMNS_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
-		}
-		defs := catalog.GetDefines(e.service).MoColumnsTableDefs
-		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
-			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
+		rel, err = db.Relation(ctx, tableName, nil)
+		return
 	}
 
 	accountId, _ := defines.GetAccountId(ctx)
