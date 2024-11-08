@@ -97,6 +97,7 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		metric.FSReadHitMemCounter.Add(float64(numHit))
+		metric.FSReadReadMemCounter.Add(float64(numRead))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)

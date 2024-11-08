@@ -47,6 +47,10 @@ var (
 	FSReadHitMemCounter    = fsReadCounter.WithLabelValues("hit-mem")
 	FSReadHitDiskCounter   = fsReadCounter.WithLabelValues("hit-disk")
 	FSReadHitRemoteCounter = fsReadCounter.WithLabelValues("hit-remote")
+	FSReadHitMetaCounter   = fsReadCounter.WithLabelValues("hit-meta")
+	FSReadReadMemCounter   = fsReadCounter.WithLabelValues("read-mem")
+	FSReadReadDiskCounter  = fsReadCounter.WithLabelValues("read-disk")
+	FSReadReadMetaCounter  = fsReadCounter.WithLabelValues("read-meta")
 )
 
 var (

@@ -29,12 +29,13 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 type DiskCache struct {
@@ -233,6 +234,7 @@ func (d *DiskCache) Read(
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
 		metric.FSReadHitDiskCounter.Add(float64(numHit))
+		metric.FSReadReadDiskCounter.Add(float64(numRead))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
