@@ -16,7 +16,6 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"strconv"
 	"strings"
@@ -455,9 +454,9 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	assert.NoError(t, err)
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		if e.TableName == fmt.Sprintf("_%d_data_meta", tid) {
+		if e.EntryType == api.Entry_DataObject {
 			dataObj = e.Bat
-		} else if e.TableName == fmt.Sprintf("_%d_tombstone_meta", tid) {
+		} else if e.EntryType == api.Entry_TombstoneObject {
 			tombstoneObj = e.Bat
 		} else if e.EntryType == api.Entry_Insert {
 			ins = e.Bat
