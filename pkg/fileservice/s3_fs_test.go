@@ -977,6 +977,8 @@ func TestNewS3NoDefaultCredential(t *testing.T) {
 }
 
 func TestS3FSIOMerger(t *testing.T) {
+	ctx := context.Background()
+
 	fs, err := NewS3FS(
 		context.Background(),
 		ObjectStorageArguments{
@@ -994,10 +996,10 @@ func TestS3FSIOMerger(t *testing.T) {
 		false,
 	)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	var counterSet perfcounter.CounterSet
-	ctx := perfcounter.WithCounterSet(context.Background(), &counterSet)
+	ctx = perfcounter.WithCounterSet(context.Background(), &counterSet)
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -1040,6 +1042,8 @@ func TestS3FSIOMerger(t *testing.T) {
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+
 	fs, err := NewS3FS(
 		context.Background(),
 		ObjectStorageArguments{
@@ -1056,12 +1060,12 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 		false,
 	)
 	assert.Nil(b, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			data := fs.AllocateCacheData(42)
+			data := fs.AllocateCacheData(ctx, 42)
 			data.Release()
 		}
 	})
