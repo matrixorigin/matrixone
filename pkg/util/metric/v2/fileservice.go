@@ -168,12 +168,18 @@ var (
 			Subsystem: "fs",
 			Name:      "cache_bytes",
 			Help:      "Total bytes of fs cache.",
-		}, []string{"name", "type"})
+		}, []string{"component", "type"})
 )
 
 // GetFsCacheBytesGauge return inuse, cap Gauge metric
 // {typ} should be [mem, disk, meta]
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
-	return fsCacheBytes.WithLabelValues(name, "inuse-"+typ),
-		fsCacheBytes.WithLabelValues(name, "cap-"+typ)
+	var component string
+	if name == "" {
+		component = typ
+	} else {
+		component = name + "-" + typ
+	}
+	return fsCacheBytes.WithLabelValues(component, "inuse"),
+		fsCacheBytes.WithLabelValues(component, "cap")
 }
