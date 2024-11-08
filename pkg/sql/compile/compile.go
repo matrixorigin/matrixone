@@ -4198,10 +4198,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
-			Addr: c.addr,
-			Mcpu: mcpu,
+			Addr:             c.addr,
+			Mcpu:             mcpu,
+			CNCNT:            1,
+			NeedExpandRanges: true,
 		})
-		nodes[0].NeedExpandRanges = true
 		return nodes, nil
 	}
 
@@ -4734,8 +4735,9 @@ func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) 
 		mcpu = 1
 	}
 	nodes = append(nodes, engine.Node{
-		Addr: c.addr,
-		Mcpu: mcpu,
+		Addr:  c.addr,
+		Mcpu:  mcpu,
+		CNCNT: 1,
 	})
 	nodes[0].Data = relData
 	return nodes
