@@ -671,5 +671,5 @@ func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip str
 	if isIpInNodes(ip, nodes) {
 		return nil
 	}
-	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes %s", ip, invitedNodes)
+	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip)
 }
