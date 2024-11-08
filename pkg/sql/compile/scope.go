@@ -22,8 +22,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -520,10 +518,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
 		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
 
-		if s.DataSource.TableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: s.isremote newreaders cpu %v", scanUsedCpuNumber)
-		}
-
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
 			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
@@ -547,9 +541,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			scanUsedCpuNumber = 1
 		}
 
-		if s.DataSource.TableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: s.NodeInfo.Rel != nil newreaders cpu %v", scanUsedCpuNumber)
-		}
 		readers, err = s.NodeInfo.Rel.NewReader(c.proc.Ctx,
 			scanUsedCpuNumber,
 			s.DataSource.FilterExpr,
@@ -627,9 +618,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		if len(s.DataSource.OrderBy) > 0 {
 			scanUsedCpuNumber = 1
 		}
-		if s.DataSource.TableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: default newreaders cpu %v", scanUsedCpuNumber)
-		}
 
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
 			mainRds, err1 := rel.NewReader(ctx,
@@ -700,11 +688,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// need some merge to make sure it is only scanUsedCpuNumber reader.
 	// partition table and read from memory will cause len(readers) > scanUsedCpuNumber.
 	if len(readers) != scanUsedCpuNumber {
-
-		if s.DataSource.TableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: len(readers) != scanUsedCpuNumber lenreaders %v cpu %v", len(readers), scanUsedCpuNumber)
-		}
-
 		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
 		step := len(readers) / scanUsedCpuNumber
 		for i := 0; i < len(readers); i += step {
@@ -727,9 +710,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 	// return a pipeline which merge result from scanUsedCpuNumber scan.
 	readerScopes := make([]*Scope, scanUsedCpuNumber)
-	if s.DataSource.TableDef.Name == "defect_history" {
-		logutil.Infof("debug defect_history: build pipelines cpu:%v-%v", len(readers), scanUsedCpuNumber)
-	}
 	for i := 0; i < scanUsedCpuNumber; i++ {
 		readerScopes[i] = newScope(Normal)
 		readerScopes[i].NodeInfo = s.NodeInfo
@@ -855,9 +835,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
 		if err != nil {
 			return err
-		}
-		if scanNode.TableDef.Name == "defect_history" {
-			logutil.Infof("debug defect_history: expand ranges in run time, blocks %v", ranges.Len())
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
 		s.NodeInfo.NeedExpandRanges = false
