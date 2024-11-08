@@ -30,31 +30,34 @@ import (
 )
 
 func Test_saveProfile(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 	globalEtlFS = fs
 	saveCpuProfile(time.Second)
 	saveMallocProfile()
 }
 
 func Test_saveProfile2(t *testing.T) {
+	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 	globalEtlFS = fs
 	saveCpuProfile(time.Second)
 }
 
 func Test_saveProfile3(t *testing.T) {
+	ctx := context.Background()
 	sigs := make(chan os.Signal, 1)
 	close(sigs)
 	*profileInterval = time.Second * 10
 	dir := t.TempDir()
 	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, dir)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 	globalEtlFS = fs
 	saveProfilesLoop(sigs)
 }
@@ -114,7 +117,7 @@ func (tfs *testFS) Cost() *fileservice.CostAttr {
 	panic("implement me")
 }
 
-func (tfs *testFS) Close() {
+func (tfs *testFS) Close(ctx context.Context) {
 	//TODO implement me
 	panic("implement me")
 }

@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -84,15 +85,15 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	return bytes
 }
 
-func (b *bytesAllocator) AllocateCacheData(size int) fscache.Data {
+func (b *bytesAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	return b.allocateCacheData(size, malloc.NoHints)
 }
 
-func (b *bytesAllocator) AllocateCacheDataWithHint(size int, hints malloc.Hints) fscache.Data {
+func (b *bytesAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	return b.allocateCacheData(size, hints)
 }
 
-func (b *bytesAllocator) CopyToCacheData(data []byte) fscache.Data {
+func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	ret := b.allocateCacheData(len(data), malloc.NoClear)
 	copy(ret.Bytes(), data)
 	return ret
