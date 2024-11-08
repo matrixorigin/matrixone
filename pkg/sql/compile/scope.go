@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 
@@ -676,6 +678,9 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		//todo: optimize this, shuffle blocks in expand ranges
 		// add memory table block
 		newRelData := relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
+		if s.NodeInfo.IsLocal {
+			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+		}
 		if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 			err = shuffleBlocksByRange(c.proc, relData, newRelData, s.DataSource.node, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 			if err != nil {
@@ -685,6 +690,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			shuffleBlocksByHash(relData, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 		}
 		s.NodeInfo.Data = newRelData
+		logutil.Infof("addr %v blocklist %v", c.addr, s.NodeInfo.Data.DataCnt())
 	} else {
 		s.NodeInfo.Data = relData
 	}

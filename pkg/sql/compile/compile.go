@@ -438,7 +438,6 @@ func (c *Compile) FreeOperator() {
 	}
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
@@ -447,7 +446,6 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
-*/
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
 //
@@ -474,7 +472,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 
 // run once
 func (c *Compile) runOnce() (err error) {
-	//c.printPipeline()
+	c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
 	defer func() {
@@ -4144,10 +4142,10 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
-			Addr:             c.addr,
-			Mcpu:             mcpu,
-			CNCNT:            1,
-			NeedExpandRanges: true,
+			Addr:    c.addr,
+			Mcpu:    mcpu,
+			CNCNT:   1,
+			IsLocal: true,
 		})
 		return nodes
 	}
@@ -4155,12 +4153,12 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 	// scan on multi CN
 	for i := range c.cnList {
 		nodes = append(nodes, engine.Node{
-			Id:               c.cnList[i].Id,
-			Addr:             c.cnList[i].Addr,
-			Mcpu:             c.cnList[i].Mcpu,
-			CNCNT:            int32(len(c.cnList)),
-			CNIDX:            int32(i),
-			NeedExpandRanges: true,
+			Id:      c.cnList[i].Id,
+			Addr:    c.cnList[i].Addr,
+			Mcpu:    c.cnList[i].Mcpu,
+			CNCNT:   int32(len(c.cnList)),
+			CNIDX:   int32(i),
+			IsLocal: c.cnList[i].Addr == c.addr,
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })

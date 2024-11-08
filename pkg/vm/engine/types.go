@@ -41,13 +41,14 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Data             RelData
-	NeedExpandRanges bool
-	CNCNT            int32 // number of all cns
-	CNIDX            int32 // cn index , starts from 0
+	Mcpu int
+	Id   string `json:"id"`
+	Addr string `json:"address"`
+	Data RelData
+
+	CNCNT   int32 // number of all cns
+	CNIDX   int32 // cn index , starts from 0
+	IsLocal bool
 }
 
 // Attribute is a column
