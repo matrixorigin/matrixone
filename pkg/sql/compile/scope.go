@@ -599,13 +599,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
-	if s.NodeInfo.CNCNT > 1 && !s.NodeInfo.IsLocal {
-		err = s.initDataSource(c)
-		if err != nil {
-			return err
-		}
-	}
-
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
@@ -657,13 +650,17 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 	}
 
-	counterSet := new(perfcounter.CounterSet)
-	relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, s.DataSource.Db, s.DataSource.Ctx, newExprList, counterSet)
+	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node)
 	if err != nil {
 		return err
 	}
 
-	ctx := c.proc.GetTopContext()
+	counterSet := new(perfcounter.CounterSet)
+	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet)
+	if err != nil {
+		return err
+	}
+
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddScopePrepareS3Request(statistic.S3Request{
 		List:      counterSet.FileService.S3.List.Load(),
@@ -696,10 +693,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.NodeInfo.Data = relData
 	}
 
-	err = s.aggOptimize(c, s.DataSource.Rel, s.DataSource.Ctx)
+	err = s.aggOptimize(c, rel, ctx)
 	if err != nil {
 		return err
 	}
+	logutil.Infof("tablename %v ranges cnt %v data %v", s.DataSource.TableDef.Name, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data.GetBlockInfoSlice())
 	return nil
 }
 

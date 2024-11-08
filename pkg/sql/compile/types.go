@@ -127,8 +127,6 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
-	Ctx                    context.Context
-	Db                     engine.Database
 	Rel                    engine.Relation
 	FilterExpr             *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList             []*plan.Expr //from node.FilterList, use for reader
