@@ -599,6 +599,13 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
+	if s.NodeInfo.CNCNT > 1 && !s.NodeInfo.IsLocal {
+		err = s.initDataSource(c)
+		if err != nil {
+			return err
+		}
+	}
+
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
@@ -636,12 +643,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-	}
-
-	//expand ranges
-	scanNode := s.DataSource.node
-	if scanNode == nil {
-		panic("can not expand ranges on remote pipeline!")
 	}
 
 	for _, e := range s.DataSource.BlockFilterList {

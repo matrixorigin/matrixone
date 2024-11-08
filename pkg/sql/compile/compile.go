@@ -1971,6 +1971,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
+
+	logutil.Infof("init datasource addr %v table %v", c.addr, s.DataSource.TableDef.Name)
+
 	return nil
 }
 
