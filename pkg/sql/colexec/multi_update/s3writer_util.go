@@ -15,6 +15,10 @@
 package multi_update
 
 import (
+	"context"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func generateBlockWriter(writer *s3Writer,
@@ -332,8 +335,8 @@ func fetchMainTableBatchs(
 	return retBats, nil
 }
 
-func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := blockWriter.Sync(proc.Ctx)
+func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+	blocks, _, err := blockWriter.Sync(ctx)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -350,7 +353,7 @@ func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.Bl
 	} else {
 		stats = blockWriter.GetObjectStats(objectio.WithCNCreated())
 	}
-
+	stats.BlkCnt()
 	return blkInfos, stats, err
 }
 

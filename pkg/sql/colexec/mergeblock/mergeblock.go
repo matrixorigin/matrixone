@@ -98,6 +98,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 				if err = mergeBlock.container.partitionSources[i].Write(newCtx, mergeBlock.container.mp[i]); err != nil {
 					return input, err
 				}
+				analyzer.AddWrittenRows(int64(mergeBlock.container.mp[i].RowCount()))
 				analyzer.AddS3RequestCount(crs)
 				analyzer.AddDiskIO(crs)
 			}
@@ -109,6 +110,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 				if err = mergeBlock.container.partitionSources[i].Write(newCtx, bat); err != nil {
 					return input, err
 				}
+				analyzer.AddWrittenRows(int64(bat.RowCount()))
 				analyzer.AddS3RequestCount(crs)
 				analyzer.AddDiskIO(crs)
 
@@ -126,6 +128,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			if err = mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0]); err != nil {
 				return input, err
 			}
+			analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 		}
@@ -137,6 +140,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			if err = mergeBlock.container.source.Write(newCtx, bat); err != nil {
 				return input, err
 			}
+			analyzer.AddWrittenRows(int64(bat.RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 

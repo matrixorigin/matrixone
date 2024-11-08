@@ -242,6 +242,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 			if err != nil {
 				return input, err
 			}
+			analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 		}
@@ -265,6 +266,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		if err != nil {
 			return input, err
 		}
+		analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 		analyzer.AddS3RequestCount(crs)
 		analyzer.AddDiskIO(crs)
 	}
