@@ -695,7 +695,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.NodeInfo.Data = relData
 	}
 
-	err = s.aggOptimize(c)
+	err = s.aggOptimize(c, s.DataSource.Rel, s.DataSource.Ctx)
 	if err != nil {
 		return err
 	}
@@ -901,15 +901,11 @@ func removeStringBetween(s, start, end string) string {
 	return s
 }
 
-func (s *Scope) aggOptimize(c *Compile) error {
+func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	scanNode := s.DataSource.node
 	if scanNode != nil && len(scanNode.AggList) > 0 {
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
-			rel, _, ctx, err := c.handleDbRelContext(scanNode)
-			if err != nil {
-				return err
-			}
 
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			blk := s.NodeInfo.Data.GetBlockInfo(0)
