@@ -148,8 +148,9 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 				keys[i] = append(keys[i], bytes...)
 			}
 		} else {
+			va, area := vector.MustVarlenaRawData(vec)
 			for i := 0; i < n; i++ {
-				bytes := vec.GetBytesAt(i + start)
+				bytes := va[i+start].GetByteSlice(area)
 				// for "a"，"bc" and "ab","c", we need to distinct
 				// give the length
 				length := uint16(len(bytes))
