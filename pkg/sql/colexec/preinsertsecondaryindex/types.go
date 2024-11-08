@@ -32,7 +32,7 @@ type PreInsertSecIdx struct {
 	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
 
-	packer util.PackerList
+	packers util.PackerList
 
 	vm.OperatorBase
 }
@@ -72,8 +72,8 @@ func (preInsertSecIdx *PreInsertSecIdx) Reset(proc *process.Process, pipelineFai
 	if preInsertSecIdx.ctr.buf != nil {
 		preInsertSecIdx.ctr.buf.CleanOnlyData()
 	}
-	if preInsertSecIdx.packer.PackerCount() > 10 {
-		preInsertSecIdx.packer.Free()
+	if preInsertSecIdx.packers.PackerCount() > 10 {
+		preInsertSecIdx.packers.Free()
 	}
 }
 
@@ -82,5 +82,5 @@ func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFail
 		preInsertSecIdx.ctr.buf.Clean(proc.Mp())
 		preInsertSecIdx.ctr.buf = nil
 	}
-	preInsertSecIdx.packer.Free()
+	preInsertSecIdx.packers.Free()
 }
