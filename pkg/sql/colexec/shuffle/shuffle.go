@@ -16,8 +16,7 @@ package shuffle
 
 import (
 	"bytes"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -321,6 +321,18 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
+	case types.T_decimal64:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_decimal128:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row := range groupByCol {
@@ -328,7 +340,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", groupByVec.GetType())) //something got wrong here!
 	}
 	return sels
 }

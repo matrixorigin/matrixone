@@ -118,16 +118,16 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				ctr.inbat = bat
-				ctr.lastrow = 0
+				ctr.lastRow = 0
 			}
 
-			startrow := innerJoin.ctr.lastrow
+			startrow := innerJoin.ctr.lastRow
 			if err := ctr.probe(innerJoin, proc, &probeResult); err != nil {
 				return result, err
 			}
-			if innerJoin.ctr.lastrow == 0 {
+			if innerJoin.ctr.lastRow == 0 {
 				innerJoin.ctr.inbat = nil
-			} else if innerJoin.ctr.lastrow == startrow {
+			} else if innerJoin.ctr.lastRow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
 
@@ -201,11 +201,11 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 	}
 	itr := ctr.itr
 	rowCount := 0
-	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
+	for i := ap.ctr.lastRow; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
 			result.Batch = ctr.rbat
-			ap.ctr.lastrow = i
+			ap.ctr.lastRow = i
 			return nil
 		}
 		n := count - i
@@ -273,7 +273,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	ctr.rbat.AddRowCount(rowCount)
 	result.Batch = ctr.rbat
-	ap.ctr.lastrow = 0
+	ap.ctr.lastRow = 0
 	return nil
 }
 

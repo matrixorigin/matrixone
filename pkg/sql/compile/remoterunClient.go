@@ -20,10 +20,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -36,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
@@ -261,7 +259,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		nextChannel <- process.NewPipelineSignalToDirectly(bat, mp)
+		nextChannel <- process.NewPipelineSignalToDirectly(bat, nil, mp)
 	}
 }
 
