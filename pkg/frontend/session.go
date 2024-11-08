@@ -256,7 +256,8 @@ type Session struct {
 	createVersion string
 
 	//reuse backExec
-	backExec *backExec
+	backExec      *backExec
+	shareBackExec *backExec
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
@@ -803,21 +804,40 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 
 	ses.BackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
-	ses.backExec.backSes.ReplaceDerivedStmt(true)
-	return ses.backExec
+	ses.shareBackExec.backSes.ReplaceDerivedStmt(true)
+	return ses.shareBackExec
 }
 
 func (ses *Session) BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
-	if ses.backExec == nil {
-		ses.backExec = &backExec{}
-	}
-	if ses.backExec.backSes == nil {
-		ses.backExec.backSes = newBackSession(ses, txnOp, db, callBack)
+	if txnOp != nil {
+		if ses.shareBackExec == nil {
+			ses.shareBackExec = &backExec{}
+		} else if ses.shareBackExec.inUse {
+			panic(fmt.Sprintf("Session.ShareBackExec alread in use"))
+		}
+		if ses.shareBackExec.backSes == nil {
+			ses.shareBackExec.backSes = newBackSession(ses, txnOp, db, callBack)
+		} else {
+			ses.shareBackExec.backSes.reInit(ses, txnOp, db, callBack)
+		}
+		ses.shareBackExec.backSes.upstream = ses
+		ses.shareBackExec.inUse = true
+		return ses.shareBackExec
 	} else {
-		ses.backExec.backSes.reInit(ses, txnOp, db, callBack)
+		if ses.backExec == nil {
+			ses.backExec = &backExec{}
+		} else if ses.backExec.inUse {
+			panic(fmt.Sprintf("Session.BackExec alread in use"))
+		}
+		if ses.backExec.backSes == nil {
+			ses.backExec.backSes = newBackSession(ses, txnOp, db, callBack)
+		} else {
+			ses.backExec.backSes.reInit(ses, txnOp, db, callBack)
+		}
+		ses.backExec.backSes.upstream = ses
+		ses.backExec.inUse = true
+		return ses.backExec
 	}
-	ses.backExec.backSes.upstream = ses
-	return ses.backExec
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {

@@ -46,6 +46,7 @@ import (
 
 type backExec struct {
 	backSes *backSession
+	inUse   bool
 }
 
 func (back *backExec) Service() string {
@@ -53,6 +54,9 @@ func (back *backExec) Service() string {
 }
 
 func (back *backExec) Close() {
+	if back == nil {
+		return
+	}
 	tempExecCtx := ExecCtx{
 		ses:    back.backSes,
 		txnOpt: FeTxnOption{byRollback: true},
@@ -67,6 +71,7 @@ func (back *backExec) Close() {
 	back.Clear()
 	back.backSes.Close()
 	back.backSes.Clear()
+	back.inUse = false
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
@@ -658,8 +663,9 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	txnOpReuse    TxnOperator
-	backExecReuse *backExec
+	txnOpReuse         TxnOperator
+	backExecReuse      *backExec
+	shareBackExecReuse *backExec
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -716,15 +722,31 @@ func (backSes *backSession) reInit(ses FeSession, txnOp TxnOperator, db string, 
 }
 
 func (backSes *backSession) BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
-	if backSes.backExecReuse == nil {
-		backSes.backExecReuse = &backExec{}
-	}
-	if backSes.backExecReuse.backSes == nil {
-		backSes.backExecReuse.backSes = newBackSession(backSes, txnOp, db, callBack)
+	if txnOp != nil {
+		if backSes.shareBackExecReuse == nil {
+			backSes.shareBackExecReuse = &backExec{}
+		} else if backSes.shareBackExecReuse.inUse {
+			panic("backSession.ShareBackExec already in use")
+		}
+		if backSes.shareBackExecReuse.backSes == nil {
+			backSes.shareBackExecReuse.backSes = newBackSession(backSes, txnOp, db, callBack)
+		} else {
+			backSes.shareBackExecReuse.backSes.reInit(backSes, txnOp, db, callBack)
+		}
+		return backSes.shareBackExecReuse
 	} else {
-		backSes.backExecReuse.backSes.reInit(backSes, txnOp, db, callBack)
+		if backSes.backExecReuse == nil {
+			backSes.backExecReuse = &backExec{}
+		} else if backSes.backExecReuse.inUse {
+			panic("backSession.BackExec already in use")
+		}
+		if backSes.backExecReuse.backSes == nil {
+			backSes.backExecReuse.backSes = newBackSession(backSes, txnOp, db, callBack)
+		} else {
+			backSes.backExecReuse.backSes.reInit(backSes, txnOp, db, callBack)
+		}
+		return backSes.backExecReuse
 	}
-	return backSes.backExecReuse
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
@@ -741,8 +763,10 @@ func (backSes *backSession) Close() {
 			backSes.txnOpReuse = txnOp
 		}
 	}
-	backSes.feSessionImpl.Close()
-	backSes.upstream = nil
+	if !(txnHandler != nil && txnHandler.IsShareTxn()) {
+		backSes.feSessionImpl.Close()
+		backSes.upstream = nil
+	}
 }
 
 func (backSes *backSession) Clear() {
@@ -914,8 +938,8 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 
 	backSes.BackExec(txnOp, "", fakeDataSetFetcher2)
 	//the derived statement execute in a shared transaction in background session
-	backSes.backExecReuse.backSes.ReplaceDerivedStmt(true)
-	return backSes.backExecReuse
+	backSes.shareBackExecReuse.backSes.ReplaceDerivedStmt(true)
+	return backSes.shareBackExecReuse
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
