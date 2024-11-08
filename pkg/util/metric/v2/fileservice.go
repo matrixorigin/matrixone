@@ -169,12 +169,6 @@ var (
 			Name:      "cache_bytes",
 			Help:      "Total bytes of fs cache.",
 		}, []string{"name", "type"})
-	FSCacheInuseMemBytes  = fsCacheBytes.WithLabelValues("inuse-mem")
-	FSCacheInuseDiskBytes = fsCacheBytes.WithLabelValues("inuse-disk")
-	FSCacheInuseMetaBytes = fsCacheBytes.WithLabelValues("inuse-meta")
-	FSCacheCapMemBytes    = fsCacheBytes.WithLabelValues("cap-mem")
-	FSCacheCapDiskBytes   = fsCacheBytes.WithLabelValues("cap-disk")
-	FSCacheCapMetaBytes   = fsCacheBytes.WithLabelValues("cap-meta")
 )
 
 // GetFsCacheBytesGauge return inuse, cap Gauge metric

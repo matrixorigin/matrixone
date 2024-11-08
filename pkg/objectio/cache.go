@@ -111,21 +111,28 @@ func cacheCapacityFunc(size int64) fscache.CapacityFunc {
 }
 
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](
-		cacheCapacityFunc(metaCacheSize()),
-		shardMetaCacheKey,
-		nil, nil, nil,
-	)
+	metaCache = newMetaCache(cacheCapacityFunc(metaCacheSize()))
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](
-			cacheCapacityFunc(size),
-			shardMetaCacheKey,
-			nil, nil, nil,
-		)
+		metaCache = newMetaCache(cacheCapacityFunc(size))
 	})
+}
+
+func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("default", "meta")
+	return fifocache.New[mataCacheKey, []byte](
+		capacity,
+		shardMetaCacheKey,
+		func(_ mataCacheKey, _ []byte, size int64) { // postSet
+			inuseBytes.Add(float64(size))
+		},
+		nil,
+		func(_ mataCacheKey, _ []byte, size int64) { // postEvict
+			inuseBytes.Add(float64(-size))
+			capacityBytes.Set(float64(capacity()))
+		})
 }
 
 func EvictCache() (target int64) {
