@@ -227,6 +227,8 @@ message Entry {
         Update = 2;
         Alter = 3;
         SpecialDelete = 4;
+        DataObject = 5;
+        TombstoneObject = 6;
     }
     EntryType entry_type = 1;
     uint64 table_id      = 2;
