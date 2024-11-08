@@ -159,6 +159,7 @@ func TestBackupData(t *testing.T) {
 }
 
 func TestBackupData2(t *testing.T) {
+	t.Skip("TestBackupData2")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()

@@ -46,6 +46,55 @@ func PatternToString(pattern string, mode int64) (string, error) {
 	return PatternListToString(ps), nil
 }
 
+func PatternListToStringWithPosition(ps []*Pattern) string {
+	ss := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ss = append(ss, p.StringWithPosition())
+	}
+
+	return strings.Join(ss, " ")
+}
+
+func PatternToStringWithPosition(pattern string, mode int64) (string, error) {
+	ps, err := ParsePattern(pattern, mode)
+	if err != nil {
+		return "", err
+	}
+
+	return PatternListToStringWithPosition(ps), nil
+}
+
+func TestPatternPhrase(t *testing.T) {
+	tests := []TestCase{
+		{
+			pattern: "\"Matrix Origin\"",
+			expect:  "(phrase (text 0 matrix) (text 7 origin))",
+		},
+		{
+			pattern: "\"Matrix\"",
+			expect:  "(phrase (text 0 matrix))",
+		},
+		{
+			pattern: "\"    Matrix     \"",
+			expect:  "(phrase (text 0 matrix))",
+		},
+		{
+			pattern: "\"Matrix     Origin\"",
+			expect:  "(phrase (text 0 matrix) (text 11 origin))",
+		},
+		{
+			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
+			expect:  "(phrase (text 0 你好嗎?) (text 11 hello) (text 17 world) (text 24 在一起) (text 35 happy) (text 42 再见))",
+		},
+	}
+
+	for _, c := range tests {
+		result, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
+		require.Nil(t, err)
+		assert.Equal(t, c.expect, result)
+	}
+}
+
 func TestPatternBoolean(t *testing.T) {
 
 	tests := []TestCase{
@@ -762,14 +811,14 @@ func TestFullTextPhrase(t *testing.T) {
 	// init the word "are"
 	word = "are"
 	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{0, 4, 6}, DocCount: 2}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{3, 9, 10}, DocCount: 2}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int32{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[12] = &Word{DocId: 12, Position: []int32{0, 4, 6}, DocCount: 4}
 
 	// init the word "so"
 	word = "so"
 	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{0, 4, 6}, DocCount: 5}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{0, 4, 7}, DocCount: 5}
 	s.WordAccums[word].Words[1] = &Word{DocId: 1, Position: []int32{0, 4, 6}, DocCount: 6}
 	s.WordAccums[word].Words[22] = &Word{DocId: 22, Position: []int32{0, 4, 6}, DocCount: 7}
 	s.WordAccums[word].Words[23] = &Word{DocId: 23, Position: []int32{0, 4, 6}, DocCount: 8}
@@ -777,7 +826,7 @@ func TestFullTextPhrase(t *testing.T) {
 	// init the word "happy"
 	word = "happy"
 	s.WordAccums[word] = &WordAccum{Words: make(map[any]*Word)}
-	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{0, 4, 6}, DocCount: 1}
+	s.WordAccums[word].Words[0] = &Word{DocId: 0, Position: []int32{0, 4, 10}, DocCount: 1}
 	s.WordAccums[word].Words[31] = &Word{DocId: 31, Position: []int32{0, 4, 6}, DocCount: 2}
 	s.WordAccums[word].Words[32] = &Word{DocId: 32, Position: []int32{0, 4, 6}, DocCount: 3}
 	s.WordAccums[word].Words[33] = &Word{DocId: 33, Position: []int32{0, 4, 6}, DocCount: 4}

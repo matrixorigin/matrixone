@@ -1113,12 +1113,15 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		tenant               *TenantInfo
 		err                  error
 		rsset                []ExecResult
+		userRsset            []ExecResult
 		tenantID             int64
 		userID               int64
 		pwd, accountStatus   string
+		psw                  []byte
 		accountVersion       uint64
 		createVersion        string
 		lastChangedTime      string
+		defPwdLife           int
 		userStatus           string
 		loginAttempts        uint64
 		lockTime             string
@@ -1213,47 +1216,27 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
+	userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
-	if !execResultArrayHasData(rsset) {
+	if !execResultArrayHasData(userRsset) {
 		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
-	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
+	userID, err = userRsset[0].GetInt64(tenantCtx, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	pwd, err = rsset[0].GetString(tenantCtx, 0, 1)
+	pwd, err = userRsset[0].GetString(tenantCtx, 0, 1)
 	if err != nil {
 		return nil, err
 	}
 
 	//the default_role in the mo_user table.
 	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 2)
-	if err != nil {
-		return nil, err
-	}
-
-	lastChangedTime, err = rsset[0].GetString(tenantCtx, 0, 3)
-	if err != nil {
-		return nil, err
-	}
-
-	userStatus, err = rsset[0].GetString(tenantCtx, 0, 5)
-	if err != nil {
-		return nil, err
-	}
-
-	loginAttempts, err = rsset[0].GetUint64(tenantCtx, 0, 6)
-	if err != nil {
-		return nil, err
-	}
-
-	lockTime, err = rsset[0].GetString(tenantCtx, 0, 7)
+	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1335,7 +1318,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
-	psw, err := GetPassWord(pwd)
+	psw, err = GetPassWord(pwd)
 	if err != nil {
 		return nil, err
 	}
@@ -1345,15 +1328,36 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	needCheckLock, err = whetherCheckLoginAttempts(tenantCtx, ses)
+	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
 	if err != nil {
 		return nil, err
+	}
+	if needCheckLock {
+		// get user status, login_attempts, lock_time
+		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+		userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userLockInfoSql)
+		if err != nil {
+			return nil, err
+		}
+		userStatus, err = userRsset[0].GetString(tenantCtx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+
+		lockTime, err = userRsset[0].GetString(tenantCtx, 0, 2)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	/*
 		if user lock status is locked
 		check if the lock_time is not expired
-		if yes, return error
 	*/
 	if needCheckLock && userStatus == userStatusLock {
 		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
@@ -1382,15 +1386,31 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if !isSuperUser(tenant.GetUser()) {
 			// check password expired
 			var expired bool
-			expired, err = checkPasswordExpired(tenantCtx, ses, lastChangedTime)
+
+			defPwdLife, err = whetherNeedCheckExpired(tenantCtx, ses)
 			if err != nil {
 				return nil, err
 			}
-			if expired {
-				ses.getRoutine().setExpired(true)
+
+			if defPwdLife > 0 {
+				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
+				userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userExpiredSql)
+				if err != nil {
+					return nil, err
+				}
+				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 0)
+				if err != nil {
+					return nil, err
+				}
+				expired, err = checkPasswordExpired(defPwdLife, lastChangedTime)
+				if err != nil {
+					return nil, err
+				}
+				if expired {
+					ses.getRoutine().setExpired(true)
+				}
 			}
 
-			// if need check lock
 			if needCheckLock && userStatus == userStatusLock {
 				// if user lock status is locked, update status to unlock
 				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
@@ -1967,20 +1987,25 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	return fields
 }
 
-func checkPasswordExpired(ctx context.Context, ses *Session, lastChangedTime string) (bool, error) {
+func whetherNeedCheckExpired(ctx context.Context, ses *Session) (int, error) {
 	var (
 		defaultPasswordLifetime int
 		err                     error
-		lastChanged             time.Time
 	)
-	// get the default password lifetime
 	defaultPasswordLifetime, err = getPasswordLifetime(ctx, ses)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
+	return defaultPasswordLifetime, nil
+}
 
-	// if the default password lifetime is 0, the password never expires
-	if defaultPasswordLifetime == 0 {
+func checkPasswordExpired(defPwdLifeTime int, lastChangedTime string) (bool, error) {
+	var (
+		err         error
+		lastChanged time.Time
+	)
+
+	if defPwdLifeTime <= 0 {
 		return false, nil
 	}
 
@@ -1992,7 +2017,7 @@ func checkPasswordExpired(ctx context.Context, ses *Session, lastChangedTime str
 
 	// get the current time as utc time
 	now := time.Now().UTC()
-	if lastChanged.AddDate(0, 0, defaultPasswordLifetime).Before(now) {
+	if lastChanged.AddDate(0, 0, defPwdLifeTime).Before(now) {
 		return true, nil
 	}
 
@@ -2034,7 +2059,7 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 
 	// get the current time as utc time
 	now := time.Now().UTC()
-	if lt.Add(time.Duration(maxDelay) * time.Microsecond).After(now) {
+	if lt.Add(time.Duration(maxDelay) * time.Millisecond).After(now) {
 		return false, nil
 	}
 
@@ -2069,13 +2094,13 @@ func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
 	return delay, nil
 }
 
-func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
+func whetherNeedCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
 	var (
-		loginTimes    int64
+		loginMaxTimes int64
 		err           error
 		loginMaxDelay int64
 	)
-	loginTimes, err = getLoginAttempts(ctx, ses)
+	loginMaxTimes, err = getLoginAttempts(ctx, ses)
 	if err != nil {
 		return false, err
 	}
@@ -2084,7 +2109,7 @@ func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	return loginTimes > 0 && loginMaxDelay > 0, nil
+	return loginMaxTimes > 0 && loginMaxDelay > 0, nil
 }
 
 func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {
