@@ -113,25 +113,25 @@ func NewLocalFS(
 	return fs, nil
 }
 
-func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
+func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(size)
+		l.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheData(size)
+	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
-func (l *LocalFS) AllocateCacheDataWithHint(size int, hints malloc.Hints) fscache.Data {
+func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(size)
+		l.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(size, hints)
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
-func (l *LocalFS) CopyToCacheData(data []byte) fscache.Data {
+func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(len(data))
+		l.memCache.cache.EnsureNBytes(ctx, len(data))
 	}
-	return DefaultCacheDataAllocator().CopyToCacheData(data)
+	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -543,7 +543,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(cr, nil, l)
+				cacheData, err = entry.ToCacheData(ctx, cr, nil, l)
 				if err != nil {
 					return err
 				}
@@ -690,7 +690,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			closeFunc: func() error {
 				defer file.Close()
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), l)
+				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
 				if err != nil {
 					return err
 				}
@@ -1066,21 +1066,21 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 
 var _ CachingFileService = new(LocalFS)
 
-func (l *LocalFS) Close() {
+func (l *LocalFS) Close(ctx context.Context) {
 	if l.memCache != nil {
-		l.memCache.Close()
+		l.memCache.Close(ctx)
 	}
 	if l.diskCache != nil {
-		l.diskCache.Close()
+		l.diskCache.Close(ctx)
 	}
 }
 
-func (l *LocalFS) FlushCache() {
+func (l *LocalFS) FlushCache(ctx context.Context) {
 	if l.memCache != nil {
-		l.memCache.Flush()
+		l.memCache.Flush(ctx)
 	}
 	if l.diskCache != nil {
-		l.diskCache.Flush()
+		l.diskCache.Flush(ctx)
 	}
 }
 
