@@ -4055,69 +4055,6 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
-	var err error
-	var db engine.Database
-	var rel engine.Relation
-	var txnOp client.TxnOperator
-
-	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-
-			txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-			c.proc.SetCloneTxnOperator(txnOp)
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
-	//-------------------------------------------------------------------------------------------------------------
-	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-	if node.ObjRef.PubInfo != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.GetTenantId()))
-	}
-	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
-		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	}
-
-	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
-	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
-	}
-
-	return rel, db, ctx, nil
-}
-
 func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 	forceSingle := false
 	if len(n.AggList) > 0 {
