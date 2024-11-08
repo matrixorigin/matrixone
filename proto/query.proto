@@ -92,6 +92,8 @@ enum CmdMethod {
   // FileServiceCache handle mem/disk cache query and reset action.
   FileServiceCache = 28;
   FileServiceCacheEvict = 29;
+  // MetadataCache handle metadata cache related operations
+  MetadataCache = 30;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -226,6 +228,7 @@ message Request {
   GoMemLimitRequest GoMemLimitRequest = 30 [ (gogoproto.nullable) = false ];
   FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
+  MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -284,6 +287,7 @@ message Response {
   GoMemLimitResponse GoMemLimitResponse = 30  [ (gogoproto.nullable) = false ];
   FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
+  MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -586,4 +590,12 @@ message FileServiceCacheEvictResponse {
   int64 CacheSize = 1;
   int64 CacheCapacity = 2;
   string Message = 3;
+}
+
+message MetadataCacheRequest {
+  int64 CacheSize = 1;
+}
+
+message MetadataCacheResponse {
+  int64 CacheCapacity = 1;
 }
