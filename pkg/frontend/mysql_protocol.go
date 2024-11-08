@@ -1073,20 +1073,6 @@ func (mp *MysqlProtocolImpl) readTimestamp(data []byte, pos int) (int, string) {
 	return pos, fmt.Sprintf("%s.%06d", dateTime, microSecond)
 }
 
-func (mp *MysqlProtocolImpl) getOriginHost() (string, error) {
-	if mp.tcpConn.RawConn() != nil {
-		remoteAddr := mp.tcpConn.RawConn().RemoteAddr()
-		if remoteAddr != nil {
-			host, _, err := net.SplitHostPort(remoteAddr.String())
-			if err != nil {
-				return "", err
-			}
-			return host, nil
-		}
-	}
-	return "", nil
-}
-
 // read an int with length encoded from the buffer at the position
 // return the int ; position + the count of bytes for length encoded (1 or 3 or 4 or 9)
 func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, bool) {
@@ -1431,17 +1417,12 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	var psw []byte
 	var err error
 	var tenant *TenantInfo
-	var originHost string
 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		ses.Debugf(ctx, "authenticate user 1")
 		// get origin host
-		originHost, err = mp.getOriginHost()
-		if err != nil {
-			return err
-		}
-		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), CheckPassword, originHost)
+		psw, err = ses.AuthenticateUser(ctx, mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), CheckPassword)
 		if err != nil {
 			return err
 		}

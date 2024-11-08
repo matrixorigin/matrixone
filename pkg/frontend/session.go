@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -1104,7 +1105,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 }
 
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
-func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool, originHost string) ([]byte, error) {
+func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
 		defaultRoleID        int64
 		defaultRole          string
@@ -1336,7 +1337,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if needCheckHost {
-		err = whetherValidIpInInvitedNodes(tenantCtx, ses, originHost)
+		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -2196,10 +2198,11 @@ func whetherNeedToCheckIp(ses *Session) (bool, error) {
 	return true, nil
 }
 
-func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, ip string) error {
+func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, clientAddr string) error {
 	var (
 		invitedNodesVal interface{}
 		err             error
+		ip              string
 	)
 
 	invitedNodesVal, err = ses.GetGlobalSysVar(InvitedNodes)
@@ -2210,7 +2213,12 @@ func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, ip string) 
 	if !ok {
 		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
 	}
-	ses.Debugf(ctx, "host %s is valid in invited nodes: %s", ip, invitedNodes)
+
+	// get the ip address of the client
+	ip, _, err = net.SplitHostPort(clientAddr)
+	if err != nil {
+		return err
+	}
 
 	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
 }

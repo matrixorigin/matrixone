@@ -29,7 +29,7 @@ import (
 
 var (
 	// The default value of proxy service.
-	defaultListenAddress = "127.0.0.1:6009"
+	defaultListenAddress = "0.0.0.0:6009"
 	// The default value of refresh interval to HAKeeper.
 	defaultRefreshInterval = 2 * time.Second
 	// The default value of rebalance interval.
