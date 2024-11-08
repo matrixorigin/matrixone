@@ -2185,7 +2185,7 @@ func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, ip string) 
 	if !ok {
 		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
 	}
+	ses.Debugf(ctx, "host %s is valid in invited nodes: %s", ip, invitedNodes)
 
 	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
-
 }
