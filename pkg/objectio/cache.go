@@ -126,9 +126,9 @@ func InitMetaCache(size int64) {
 	})
 }
 
-func EvictCache() (target int64) {
+func EvictCache(ctx context.Context) (target int64) {
 	ch := make(chan int64, 1)
-	metaCache.Evict(ch)
+	metaCache.Evict(ctx, ch)
 	target = <-ch
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
@@ -152,7 +152,7 @@ func LoadObjectMetaByExtent(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return MustObjectMeta(v), nil
 	}
@@ -165,7 +165,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(key, v[:], int64(len(v)))
+	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -176,7 +176,7 @@ func FastLoadBF(
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return v, nil
 	}
@@ -194,7 +194,7 @@ func LoadBFWithMeta(
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return v, nil
 	}
@@ -203,7 +203,7 @@ func LoadBFWithMeta(
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(key, bf, int64(len(bf)))
+	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
 }
 

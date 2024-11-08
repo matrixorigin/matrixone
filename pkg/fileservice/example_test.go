@@ -58,8 +58,8 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToCacheData: func(_ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-					cacheData := allocator.CopyToCacheData(data)
+				ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					cacheData := allocator.CopyToCacheData(ctx, data)
 					return cacheData, nil
 				},
 			},
@@ -72,5 +72,5 @@ func TestCacheExample(t *testing.T) {
 	assert.Equal(t, []byte("42"), value.Bytes())
 
 	vec.Release()
-	fs.FlushCache()
+	fs.FlushCache(ctx)
 }

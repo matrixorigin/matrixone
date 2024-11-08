@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -25,12 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
+type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
+	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
 			if err != nil {
@@ -40,12 +41,12 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			cacheData = allocator.CopyToCacheData(data)
+			cacheData = allocator.CopyToCacheData(ctx, data)
 			return cacheData, nil
 		}
 
 		// lz4 compress
-		decompressed := allocator.AllocateCacheData(int(size))
+		decompressed := allocator.AllocateCacheData(ctx, int(size))
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return
