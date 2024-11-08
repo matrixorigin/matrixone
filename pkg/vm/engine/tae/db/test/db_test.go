@@ -6124,10 +6124,10 @@ func TestAlterFakePk(t *testing.T) {
 	for i, cmd := range resp.Commands {
 		t.Logf("command %d, table name %v, type %d", i, cmd.TableName, cmd.EntryType)
 	}
-	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType) // data insert
+	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)      // data insert
 	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType) // data insert
-	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType) // data insert
-	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType) // data delete
+	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
+	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
 	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	assert.NoError(t, err)
