@@ -121,12 +121,14 @@ func InitMetaCache(size int64) {
 }
 
 func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
-	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("default", "meta")
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
+	capacityBytes.Set(float64(capacity()))
 	return fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
 		func(_ mataCacheKey, _ []byte, size int64) { // postSet
 			inuseBytes.Add(float64(size))
+			capacityBytes.Set(float64(capacity()))
 		},
 		nil,
 		func(_ mataCacheKey, _ []byte, size int64) { // postEvict
