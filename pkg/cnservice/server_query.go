@@ -557,6 +557,9 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("file service cache evict",
+		zap.String("type", req.FileServiceCacheEvictRequest.Type.String()))
+
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
@@ -565,7 +568,12 @@ func (s *service) handleFileServiceCacheEvictRequest(
 		ret = fileservice.EvictMemoryCaches()
 	}
 
-	for _, target := range ret {
+	for name, target := range ret {
+		logutil.Info("file service cache evict",
+			zap.String("type", req.FileServiceCacheEvictRequest.Type.String()),
+			zap.Int64("size", target),
+			zap.String("name", name),
+		)
 		resp.FileServiceCacheEvictResponse.CacheSize = target
 		resp.FileServiceCacheEvictResponse.CacheCapacity = target
 		// usually one instance

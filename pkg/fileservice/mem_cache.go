@@ -84,12 +84,18 @@ func NewMemCache(
 	}
 	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
-	return &MemCache{
+	ret := &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
 
 		capacityBytes: capacityBytes,
 	}
+
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
+
+	return ret
 }
 
 var _ IOVectorCache = new(MemCache)
