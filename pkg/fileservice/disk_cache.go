@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -50,8 +49,6 @@ type DiskCache struct {
 	}
 
 	cache *fifocache.Cache[string, struct{}]
-
-	capacityBytes prometheus.Gauge
 }
 
 func NewDiskCache(
@@ -76,8 +73,16 @@ func NewDiskCache(
 	seed := maphash.MakeSeed()
 
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "disk")
-
 	capacityBytes.Set(float64(capacity()))
+
+	capacityFunc := func() int64 {
+		// read from global size hint
+		if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
 
 	ret = &DiskCache{
 		path:               path,
@@ -86,14 +91,7 @@ func NewDiskCache(
 
 		cache: fifocache.New(
 
-			func() int64 {
-				// read from global size hint
-				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
-					return n
-				}
-				// fallback
-				return capacity()
-			},
+			capacityFunc,
 
 			func(key string) uint64 {
 				return maphash.String(seed, key)
@@ -101,12 +99,14 @@ func NewDiskCache(
 
 			func(_ string, _ struct{}, size int64) { // postSet
 				inuseBytes.Add(float64(size))
+				capacityBytes.Set(float64(capacityFunc()))
 			},
 
 			nil,
 
 			func(path string, _ struct{}, size int64) {
 				inuseBytes.Add(float64(-size))
+				capacityBytes.Set(float64(capacityFunc()))
 				err := os.Remove(path)
 				if err == nil {
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -639,9 +639,6 @@ func (d *DiskCache) removeOnePath(path string) (err error) {
 }
 
 func (d *DiskCache) Evict(done chan int64) {
-	if d.capacityBytes != nil {
-		d.capacityBytes.Set(float64(d.cache.Capacity()))
-	}
 	d.cache.Evict(done)
 }
 

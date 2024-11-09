@@ -42,8 +42,18 @@ func NewMemCache(
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
+	capacityFunc := func() int64 {
+		// read from global hint
+		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
+
 	postSetFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
 		inuseBytes.Add(float64(size))
+		capacityBytes.Set(float64(capacityFunc()))
 		value.Retain()
 
 		if callbacks != nil {
@@ -65,6 +75,7 @@ func NewMemCache(
 
 	postEvictFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
 		inuseBytes.Add(float64(-size))
+		capacityBytes.Set(float64(capacityFunc()))
 		value.Release()
 
 		if callbacks != nil {
@@ -74,21 +85,11 @@ func NewMemCache(
 		}
 	}
 
-	capacityFunc := func() int64 {
-		// read from global hint
-		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
-			return n
-		}
-		// fallback
-		return capacity()
-	}
 	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
 	ret := &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
-
-		capacityBytes: capacityBytes,
 	}
 
 	if name != "" {
@@ -197,9 +198,6 @@ func (m *MemCache) DeletePaths(
 }
 
 func (m *MemCache) Evict(done chan int64) {
-	if m.capacityBytes != nil {
-		m.capacityBytes.Set(float64(m.cache.Capacity()))
-	}
 	m.cache.Evict(done)
 }
 
