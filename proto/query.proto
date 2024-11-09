@@ -231,6 +231,7 @@ message Request {
   FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
+  GoGCPercentRequest GoGCPercentRequest = 34 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -290,6 +291,7 @@ message Response {
   FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
+  GoGCPercentResponse GoGCPercentResponse = 34 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.

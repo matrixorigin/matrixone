@@ -537,10 +537,10 @@ func (s *service) handleGoMemLimit(
 func (s *service) handleGoGCPercent(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
-	resp.GOGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GOGCPercnetRequest.Percent)))
+	resp.GoGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GoGCPercentRequest.Percent)))
 	logutil.Info("QueryService::GOGCPercent",
-		zap.Int64("in", req.GOGCPercnetRequest.Percent),
-		zap.Int64("out", resp.GOGCPercentResponse.Percent),
+		zap.Int32("in", req.GoGCPercentRequest.Percent),
+		zap.Int32("out", resp.GoGCPercentResponse.Percent),
 	)
 	return nil
 }
