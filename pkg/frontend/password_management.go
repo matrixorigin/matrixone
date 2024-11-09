@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
+	"strings"
 	"time"
 	"unicode"
 
@@ -48,6 +50,10 @@ const (
 	// password lock management
 	ConnectionControlFailedConnectionsThreshold = "connection_control_failed_connections_threshold"
 	ConnectionControlMaxConnectionDelay         = "connection_control_max_connection_delay"
+
+	// ip whitelist management
+	ValidnodeChecking = "validnode_checking"
+	InvitedNodes      = "invited_nodes"
 )
 
 type passwordHistoryRecord struct {
@@ -561,4 +567,109 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	}
 
 	return nil
+}
+
+// ipwhitelist management
+// isValidIp check if the ip is valid
+func isValidIp(ip string) bool {
+	return net.ParseIP(ip) != nil
+}
+
+// isValidCidr check if the cidr is valid
+func isValidCidr(cidr string) bool {
+	_, _, err := net.ParseCIDR(cidr)
+	return err == nil
+}
+
+// validateInvitedNodes validate the invited nodes
+func validateInvitedNodes(ctx context.Context, nodes []string) error {
+	if len(nodes) == 1 && nodes[0] == "*" {
+		return nil
+	}
+
+	for _, node := range nodes {
+		if node == "*" {
+			// if the invited nodes contains "*", it should be the only element
+			return moerr.NewInvalidInputf(ctx, "invited_nodes contains '*', it should be the only element")
+		}
+		if strings.Contains(node, "/") {
+			if !isValidCidr(node) {
+				return moerr.NewInvalidInputf(ctx, "invalid CIDR: %s", node)
+			}
+		} else {
+			if !isValidIp(node) {
+				return moerr.NewInvalidInputf(ctx, "invalid IP: %s", node)
+			}
+		}
+	}
+	return nil
+}
+
+// parseInvitedNodes parse the invited nodes
+func parseInvitedNodes(invitedNodesStr string) []string {
+	nodes := strings.Split(invitedNodesStr, ",")
+	for i, node := range nodes {
+		nodes[i] = strings.TrimSpace(node)
+	}
+	return nodes
+}
+
+func checkInvitedNodes(ctx context.Context, invitedNodes string) error {
+	if len(invitedNodes) == 0 {
+		return moerr.NewInvalidInputf(ctx, "invited_nodes is empty")
+	}
+	nodes := parseInvitedNodes(invitedNodes)
+	err := validateInvitedNodes(ctx, nodes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// isIpInCidr check if the ip is in the cidr
+func isIpInCidr(ip, cidr string) bool {
+	ipAddr := net.ParseIP(ip)
+	_, cidrNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	return cidrNet.Contains(ipAddr)
+}
+
+func isIpInNodes(ip string, nodes []string) bool {
+	if ip == "127.0.0.1" {
+		// allow localhost
+		return true
+	}
+
+	for _, node := range nodes {
+		if node == "*" {
+			// allow all ips
+			return true
+		}
+		if strings.Contains(node, "/") {
+			if isIpInCidr(ip, node) {
+				return true
+			}
+		} else {
+			if ip == node {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip string) error {
+	if len(invitedNodes) == 0 {
+		return moerr.NewInvalidInputf(ctx, "invited_nodes is empty")
+	}
+	if len(ip) == 0 {
+		return moerr.NewInvalidInputf(ctx, "IP is empty")
+	}
+	nodes := parseInvitedNodes(invitedNodes)
+	if isIpInNodes(ip, nodes) {
+		return nil
+	}
+	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip)
 }

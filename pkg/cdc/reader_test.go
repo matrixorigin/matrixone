@@ -213,7 +213,7 @@ func Test_tableReader_Run(t *testing.T) {
 				sinker:                tt.fields.sinker,
 				wMarkUpdater:          tt.fields.wMarkUpdater,
 				tick:                  tt.fields.tick,
-				restartFunc:           tt.fields.restartFunc,
+				resetWatermarkFunc:    tt.fields.restartFunc,
 				insTsColIdx:           tt.fields.insTsColIdx,
 				insCompositedPkColIdx: tt.fields.insCompositedPkColIdx,
 				delTsColIdx:           tt.fields.delTsColIdx,
@@ -235,9 +235,9 @@ func Test_tableReader_Run_StaleRead(t *testing.T) {
 
 	// restart success
 	reader := &tableReader{
-		tick:        time.NewTicker(time.Millisecond * 300),
-		sinker:      NewConsoleSinker(nil, nil),
-		restartFunc: func(*DbTableInfo) error { return nil },
+		tick:               time.NewTicker(time.Millisecond * 300),
+		sinker:             NewConsoleSinker(nil, nil),
+		resetWatermarkFunc: func(*DbTableInfo) error { return nil },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 	cancel()
@@ -245,9 +245,9 @@ func Test_tableReader_Run_StaleRead(t *testing.T) {
 	// restart failed
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	reader = &tableReader{
-		tick:        time.NewTicker(time.Millisecond * 300),
-		sinker:      NewConsoleSinker(nil, nil),
-		restartFunc: func(*DbTableInfo) error { return moerr.NewInternalErrorNoCtx("") },
+		tick:               time.NewTicker(time.Millisecond * 300),
+		sinker:             NewConsoleSinker(nil, nil),
+		resetWatermarkFunc: func(*DbTableInfo) error { return moerr.NewInternalErrorNoCtx("") },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 	cancel()
@@ -264,9 +264,9 @@ func Test_tableReader_Run_NonStaleReadErr(t *testing.T) {
 	defer stub.Reset()
 
 	reader := &tableReader{
-		tick:        time.NewTicker(time.Millisecond * 300),
-		sinker:      NewConsoleSinker(nil, nil),
-		restartFunc: func(*DbTableInfo) error { return nil },
+		tick:               time.NewTicker(time.Millisecond * 300),
+		sinker:             NewConsoleSinker(nil, nil),
+		resetWatermarkFunc: func(*DbTableInfo) error { return nil },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
 }
@@ -333,77 +333,6 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	err := reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 }
-
-//func Test_tableReader_readTable(t *testing.T) {
-//	type fields struct {
-//		cnTxnClient           client.TxnClient
-//		cnEngine              engine.Engine
-//		mp                    *mpool.MPool
-//		packerPool            *fileservice.Pool[*types.Packer]
-//		info                  *DbTableInfo
-//		sinker                Sinker
-//		wMarkUpdater          *WatermarkUpdater
-//		tick                  *time.Ticker
-//		restartFunc           func(*DbTableInfo) error
-//		insTsColIdx           int
-//		insCompositedPkColIdx int
-//		delTsColIdx           int
-//		delCompositedPkColIdx int
-//	}
-//
-//	type args struct {
-//		ctx context.Context
-//		ar  *ActiveRoutine
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		wantErr assert.ErrorAssertionFunc
-//	}{
-//		{
-//			name: "t1",
-//			fields: fields{
-//				packerPool: fileservice.NewPool(
-//					128,
-//					func() *types.Packer {
-//						return types.NewPacker()
-//					},
-//					func(packer *types.Packer) {
-//						packer.Reset()
-//					},
-//					func(packer *types.Packer) {
-//						packer.Close()
-//					},
-//				),
-//			},
-//			args: args{
-//				ctx: context.Background(),
-//				ar:  NewCdcActiveRoutine(),
-//			},
-//		},
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			reader := &tableReader{
-//				cnTxnClient:           tt.fields.cnTxnClient,
-//				cnEngine:              tt.fields.cnEngine,
-//				mp:                    tt.fields.mp,
-//				packerPool:            tt.fields.packerPool,
-//				info:                  tt.fields.info,
-//				sinker:                tt.fields.sinker,
-//				wMarkUpdater:          tt.fields.wMarkUpdater,
-//				tick:                  tt.fields.tick,
-//				restartFunc:           tt.fields.restartFunc,
-//				insTsColIdx:           tt.fields.insTsColIdx,
-//				insCompositedPkColIdx: tt.fields.insCompositedPkColIdx,
-//				delTsColIdx:           tt.fields.delTsColIdx,
-//				delCompositedPkColIdx: tt.fields.delCompositedPkColIdx,
-//			}
-//			reader.readTable(tt.args.ctx, tt.args.ar)
-//		})
-//	}
-//}
 
 var _ engine.ChangesHandle = new(testChangesHandle)
 
