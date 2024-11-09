@@ -209,7 +209,7 @@ func (opAlyzr *operatorAnalyzer) AddWrittenRows(rowCount int64) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.WrittenRows: operatorAnalyzer.opStats is nil")
 	}
-	opAlyzr.opStats.WrittenRows = rowCount
+	opAlyzr.opStats.WrittenRows += rowCount
 }
 
 func (opAlyzr *operatorAnalyzer) AddScanTime(t time.Time) {

@@ -183,6 +183,11 @@ func (s *StatsArray) WithS3IODeleteCount(v float64) *StatsArray {
 	return s
 }
 
+func (s *StatsArray) WithS3InputEstimateCount(v float64) *StatsArray {
+	// TODO: implement this by xiezexiong
+	return s
+}
+
 func (s *StatsArray) WithOutTrafficBytes(v float64) *StatsArray {
 	if s.GetVersion() >= StatsArrayVersion2 {
 		(*s)[StatsArrayIndexOutTrafficBytes] = v
@@ -660,4 +665,12 @@ func EnsureStatsInfoCanBeFound(ctx context.Context, from context.Context) contex
 	}
 	ctx = context.WithValue(ctx, statsInfoKey{}, v)
 	return ctx
+}
+
+// Each 8192 rows of data corresponds to an S3 input unit
+const rowsPerS3Input int64 = 8192
+
+// Estimating S3input using the number of written lines, Maintained by @LeftHandCold
+func EstimateS3Input(writtenRows int64) float64 {
+	return float64(writtenRows) / float64(rowsPerS3Input)
 }
