@@ -51,7 +51,7 @@ func testFileService(
 	t.Run("basic", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		assert.True(t, strings.Contains(fs.Name(), fsName))
 
@@ -183,7 +183,7 @@ func testFileService(
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -235,7 +235,7 @@ func testFileService(
 	t.Run("ReadCloserForRead", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -314,7 +314,7 @@ func testFileService(
 	t.Run("random", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		for i := 0; i < 8; i++ {
 			filePath := fmt.Sprintf("%d", mrand.Int63())
@@ -444,7 +444,7 @@ func testFileService(
 	t.Run("tree", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		for _, dir := range []string{
 			"",
@@ -567,7 +567,7 @@ func testFileService(
 	t.Run("errors", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		err := fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -670,9 +670,9 @@ func testFileService(
 	})
 
 	t.Run("cache data", func(t *testing.T) {
-		fs := newFS(fsName)
-		defer fs.Close()
 		ctx := context.Background()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
 		var counterSet perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
@@ -701,13 +701,13 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					ToCacheData: func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.CopyToCacheData(bs)
+						cacheData := allocator.CopyToCacheData(ctx, bs)
 						return cacheData, nil
 					},
 				},
@@ -747,9 +747,9 @@ func testFileService(
 	})
 
 	t.Run("ignore", func(t *testing.T) {
-		fs := newFS(fsName)
-		defer fs.Close()
 		ctx := context.Background()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
 
 		data := []byte("foo")
 		err := fs.Write(ctx, IOVector{
@@ -787,7 +787,7 @@ func testFileService(
 	t.Run("named path", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		// write
 		err := fs.Write(ctx, IOVector{
@@ -857,7 +857,7 @@ func testFileService(
 	t.Run("issue6110", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "path/to/file/foo",
@@ -880,7 +880,7 @@ func testFileService(
 	t.Run("streaming write", func(t *testing.T) {
 		ctx := context.Background()
 		fs := newFS(fsName)
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		reader, writer := io.Pipe()
 		n := 65536
@@ -990,10 +990,10 @@ func testFileService(
 	})
 
 	t.Run("context cancel", func(t *testing.T) {
-		fs := newFS(fsName)
-		defer fs.Close()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
 			Policy: policy,

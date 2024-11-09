@@ -242,7 +242,7 @@ type connector struct {
 
 func newConnector(c *PushClient, e *Engine) *connector {
 	co := &connector{
-		signal: make(chan struct{}),
+		signal: make(chan struct{}, 10),
 		client: c,
 		engine: e,
 	}
@@ -637,11 +637,15 @@ func (c *PushClient) sendConnectSig() {
 		return
 	}
 
-	select {
-	case c.connector.signal <- struct{}{}:
-		logutil.Infof("%s reconnect signal is received", logTag)
-	default:
-		logutil.Infof("%s connecting is in progress", logTag)
+	for {
+		select {
+		case c.connector.signal <- struct{}{}:
+			logutil.Infof("%s reconnect signal is received", logTag)
+			return
+		default:
+			logutil.Infof("%s reconnect chan is full", logTag)
+			time.Sleep(time.Second)
+		}
 	}
 }
 
