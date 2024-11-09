@@ -124,6 +124,23 @@ func (p *Pattern) String() string {
 	return str
 }
 
+func (p *Pattern) StringWithPosition() string {
+	if p.Operator == TEXT || p.Operator == STAR {
+		return fmt.Sprintf("(%s %d %s)", OperatorToString(p.Operator), p.Position, p.Text)
+	}
+
+	str := fmt.Sprintf("(%s ", OperatorToString(p.Operator))
+	for i, c := range p.Children {
+		if i > 0 {
+			str += " "
+		}
+		str += c.StringWithPosition()
+
+	}
+	str += ")"
+	return str
+}
+
 // Get the text of leaf nodes with operator specified. Either TEXT or STAR as operator.
 func (p *Pattern) GetLeafText(operator int) []string {
 	if p.Operator == operator {
@@ -237,6 +254,47 @@ func (p *Pattern) EvalOR(s *SearchAccum, arg, result map[any]float32) (map[any]f
 			result[doc_id] += arg[doc_id]
 		} else {
 			result[doc_id] = arg[doc_id]
+		}
+	}
+
+	return result, nil
+}
+
+func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float32, error) {
+	// check word order here
+
+	result := make(map[any]float32)
+
+	for docid := range arg {
+		var pos []int32
+		for j, c := range p.Children {
+			wacc := s.WordAccums[c.Text]
+			word := wacc.Words[docid]
+			currpos := word.Position
+			if j == 0 {
+				pos = word.Position
+			} else {
+				retpos := make([]int32, 0, len(pos))
+				// always compare with the first word offset '0'
+				for _, p1 := range pos {
+					for _, p2 := range currpos {
+						diff := p2 - p1
+						if c.Position == diff {
+							retpos = append(retpos, p1)
+						}
+					}
+				}
+				if len(retpos) == 0 {
+					pos = nil
+					break
+				} else {
+					pos = retpos
+				}
+			}
+		}
+
+		if len(pos) > 0 {
+			result[docid] = arg[docid]
 		}
 	}
 
@@ -392,7 +450,8 @@ func (p *Pattern) Eval(accum *SearchAccum, weight float32, result map[any]float3
 			}
 		}
 
-		return result, nil
+		// check word order
+		return p.EvalPhrase(accum, result)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("Eval() not handled")
 	}
@@ -542,19 +601,44 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
+func ParsePhrase(pattern string) ([]*Pattern, error) {
+	// phrase here
+	offset := int32(0)
+	isspace := false
+	var children []*Pattern
+
+	for pos, r := range pattern {
+		if r == ' ' {
+			if isspace {
+				continue
+			} else {
+				children = append(children, &Pattern{Text: string(pattern[offset:pos]), Operator: TEXT, Position: offset})
+			}
+			isspace = true
+		} else {
+			if isspace {
+				// start of the word
+				offset = int32(pos)
+			}
+			isspace = false
+		}
+	}
+
+	children = append(children, &Pattern{Text: string(pattern[offset:]), Operator: TEXT, Position: offset})
+	return []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}, nil
+}
+
 // Parse the search string in boolean mode
 func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 
 	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
 		// phrase here
-		ss := strings.Split(pattern[1:len(pattern)-1], " ")
-		var children []*Pattern
-
-		for _, s := range ss {
-			children = append(children, &Pattern{Text: s, Operator: TEXT})
+		ss := strings.Trim(pattern[1:len(pattern)-1], " ")
+		if len(ss) == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("phrase is empty string")
 		}
 
-		return []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}, nil
+		return ParsePhrase(ss)
 	}
 
 	runeSlice := []rune(pattern)
