@@ -91,6 +91,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
@@ -529,6 +530,17 @@ func (s *service) handleGoMemLimit(
 		zap.String("op", "set"),
 		zap.Int64("in", req.GoMemLimitRequest.MemLimitBytes),
 		zap.Int64("out", resp.GoMemLimitResponse.MemLimitBytes),
+	)
+	return nil
+}
+
+func (s *service) handleGoGCPercent(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GOGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GOGCPercnetRequest.Percent)))
+	logutil.Info("QueryService::GOGCPercent",
+		zap.Int64("in", req.GOGCPercnetRequest.Percent),
+		zap.Int64("out", resp.GOGCPercentResponse.Percent),
 	)
 	return nil
 }
