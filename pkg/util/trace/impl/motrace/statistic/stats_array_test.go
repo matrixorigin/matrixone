@@ -15,6 +15,7 @@
 package statistic
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -154,6 +155,17 @@ func TestStatsArray_Add(t *testing.T) {
 				s3out:        3494,
 			},
 			wantString: []byte(`[1,66,8.000,81,3498]`),
+		},
+		{
+			name: "1/8192_io_input",
+			field: field{
+				version:      1,
+				timeConsumed: 2,
+				memory:       3,
+				s3in:         float64(1) / 8192,
+				s3out:        0,
+			},
+			wantString: []byte(`[1,3,5.000,3.000122,4]`),
 		},
 	}
 
@@ -341,4 +353,64 @@ func BenchmarkStatsInfo(b *testing.B) {
 		s.ExecutionStart()
 		s.ExecutionEnd()
 	}
+}
+
+// BenchmarkStatsInfo_ToJsonString
+// goos: darwin
+// goarch: arm64
+// pkg: github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic
+// cpu: Apple M1 Pro
+// BenchmarkStatsInfo_ToJsonString
+// BenchmarkStatsInfo_ToJsonString/v_check_value
+// BenchmarkStatsInfo_ToJsonString/v_check_value-10         	1000000000	         0.0000026 ns/op
+// BenchmarkStatsInfo_ToJsonString/v_no_check
+// BenchmarkStatsInfo_ToJsonString/v_no_check-10            	1000000000	         0.0000017 ns/op
+//
+// SO, keep the check op, reduce the byte ToJsonString used.
+func BenchmarkStatsInfo_ToJsonString(b *testing.B) {
+	s := NewStatsArrayV4().
+		WithTimeConsumed(1).
+		WithMemorySize(123.45678).
+		WithS3IOInputCount(float64(1) / 8192).
+		WithS3IOOutputCount(123).
+		WithOutTrafficBytes(48475).
+		WithConnType(1).
+		WithCU(234.759347)
+
+	b.Run("v_check_value", func(bm *testing.B) {
+		bm.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			s.ToJsonString()
+		}
+	})
+	b.Run("v_no_check", func(bm *testing.B) {
+		bm.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			StatsArrayToJsonString_noCheck((*s)[:StatsArrayLengthV4])
+		}
+	})
+}
+
+func StatsArrayToJsonString_noCheck(arr []float64) []byte {
+	// len([1,184467440737095516161,18446744073709551616,18446744073709551616,18446744073709551616]") = 88
+	buf := make([]byte, 0, 128)
+	buf = append(buf, '[')
+	for idx, v := range arr {
+		if idx > 0 {
+			buf = append(buf, ',')
+		}
+		if v == 0.0 {
+			buf = append(buf, '0')
+		} else if idx == StatsArrayIndexMemorySize {
+			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForMemorySize, 64)
+		} else if idx == StatsArrayIndexCU {
+			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForCU, 64)
+		} else if idx == StatsArrayIndexS3IOInputCount {
+			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForIOInput, 64)
+		} else {
+			buf = strconv.AppendFloat(buf, v, 'f', 0, 64)
+		}
+	}
+	buf = append(buf, ']')
+	return buf
 }
