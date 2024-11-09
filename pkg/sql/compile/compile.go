@@ -1805,7 +1805,10 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		stats.AddCompileTableScanConsumption(time.Since(compileStart))
 	}()
 
-	nodes := c.generateNodes(n)
+	nodes, err := c.generateNodes(n)
+	if err != nil {
+		return nil, err
+	}
 	ss := make([]*Scope, 0, len(nodes))
 
 	currentFirstFlag := c.anal.isFirst
@@ -4119,7 +4122,12 @@ func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.D
 	return rel, db, ctx, nil
 }
 
-func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+	_, _, _, err := c.handleDbRelContext(n)
+	if err != nil {
+		return nil, err
+	}
+
 	forceSingle := false
 	if len(n.AggList) > 0 {
 		partialResults, _, _ := checkAggOptimize(n)
@@ -4144,7 +4152,7 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 			CNCNT:   1,
 			IsLocal: true,
 		})
-		return nodes
+		return nodes, nil
 	}
 
 	// scan on multi CN
@@ -4159,7 +4167,7 @@ func (c *Compile) generateNodes(n *plan.Node) engine.Nodes {
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-	return nodes
+	return nodes, nil
 }
 
 func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
