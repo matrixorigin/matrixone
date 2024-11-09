@@ -57,7 +57,7 @@ func (s *subPathFS) toUpstreamPath(p string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (s *subPathFS) Close() {
+func (s *subPathFS) Close(ctx context.Context) {
 }
 
 func (s *subPathFS) Write(ctx context.Context, vector IOVector) error {

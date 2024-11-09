@@ -126,20 +126,20 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 	return fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
-		func(_ mataCacheKey, _ []byte, size int64) { // postSet
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postSet
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
 		nil,
-		func(_ mataCacheKey, _ []byte, size int64) { // postEvict
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
 }
 
-func EvictCache() (target int64) {
+func EvictCache(ctx context.Context) (target int64) {
 	ch := make(chan int64, 1)
-	metaCache.Evict(ch)
+	metaCache.Evict(ctx, ch)
 	target = <-ch
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
@@ -164,7 +164,7 @@ func LoadObjectMetaByExtent(
 ) (meta ObjectMeta, err error) {
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return MustObjectMeta(v), nil
@@ -178,7 +178,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(key, v[:], int64(len(v)))
+	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -190,7 +190,7 @@ func FastLoadBF(
 ) (BloomFilter, error) {
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -210,7 +210,7 @@ func LoadBFWithMeta(
 ) (BloomFilter, error) {
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
@@ -220,7 +220,7 @@ func LoadBFWithMeta(
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(key, bf, int64(len(bf)))
+	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
 }
 

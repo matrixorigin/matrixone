@@ -51,7 +51,7 @@ func NewMemCache(
 		return capacity()
 	}
 
-	postSetFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 		value.Retain()
@@ -63,7 +63,7 @@ func NewMemCache(
 		}
 	}
 
-	postGetFn := func(key fscache.CacheKey, value fscache.Data, _ int64) {
+	postGetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
 		value.Retain()
 
 		if callbacks != nil {
@@ -73,7 +73,7 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(key fscache.CacheKey, value fscache.Data, size int64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 		value.Release()
@@ -185,8 +185,8 @@ func (m *MemCache) Update(
 	return nil
 }
 
-func (m *MemCache) Flush() {
-	m.cache.Flush()
+func (m *MemCache) Flush(ctx context.Context) {
+	m.cache.Flush(ctx)
 }
 
 func (m *MemCache) DeletePaths(
@@ -197,11 +197,11 @@ func (m *MemCache) DeletePaths(
 	return nil
 }
 
-func (m *MemCache) Evict(done chan int64) {
-	m.cache.Evict(done)
+func (m *MemCache) Evict(ctx context.Context, done chan int64) {
+	m.cache.Evict(ctx, done)
 }
 
-func (m *MemCache) Close() {
-	m.Flush()
+func (m *MemCache) Close(ctx context.Context) {
+	m.Flush(ctx)
 	allMemoryCaches.Delete(m)
 }
