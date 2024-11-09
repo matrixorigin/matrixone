@@ -599,6 +599,8 @@ func (s *service) handleMetadataCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("metadata cache", zap.Int64("size", req.MetadataCacheRequest.CacheSize))
+
 	// set capacity hint
 	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)
 	// evict
