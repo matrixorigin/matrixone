@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -57,7 +55,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 var (
@@ -287,6 +287,8 @@ type Config struct {
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
+
+	MoTableStats disttae.Config `toml:"mo-table-stats"`
 }
 
 func (c *Config) Validate() error {
