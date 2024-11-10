@@ -281,7 +281,7 @@ func (s *service) registerExecutorsLocked() {
 	// init mo table stats task
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MOTableStats,
-		disttae.GetMOTableStatsExecutor(s.cfg.UUID, s.storeEngine, ieFactory))
+		disttae.GetMOTableStatsExecutor(s.cfg.UUID, s.cfg.MoTableStats, s.storeEngine, ieFactory))
 
 	// init metric task
 	s.task.runner.RegisterExecutor(

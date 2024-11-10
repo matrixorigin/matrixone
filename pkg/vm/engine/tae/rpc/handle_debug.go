@@ -241,7 +241,7 @@ func (h *Handle) HandleGetChangedTableList(
 	}
 
 	// TODO
-	tt := now.ToTimestamp()
+	tt := h.db.LogtailMgr.LastTruncatedTS().ToTimestamp()
 	resp.Newest = &tt
 
 	truncated := h.GetDB().LogtailMgr.LastTruncatedTS()

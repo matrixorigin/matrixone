@@ -285,9 +285,9 @@ var (
 			)`
 
 	MoCatalogMoTableStatsDDL = fmt.Sprintf(`create table mo_catalog.%s (
-    			account_id bigint unsigned,
-    			database_id bigint unsigned,
-    			table_id bigint unsigned,
+    			account_id bigint signed,
+    			database_id bigint signed,
+    			table_id bigint signed,
     			database_name varchar(255),
     			table_name varchar(255),
     			table_stats json,

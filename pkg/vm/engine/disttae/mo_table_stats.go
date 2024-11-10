@@ -78,7 +78,7 @@ const (
 				on duplicate key update
 					table_stats = '%s', update_time = '%s', takes = %d;`
 
-	lastUpdateTSSQL = `select max(update_time) from %s.%s;`
+	lastUpdateTSSQL = `select update_time from %s.%s where account_id=-1 and database_id=-1 and table_id=-1;`
 
 	getTableStatsSQL = `
 				select 
@@ -91,11 +91,14 @@ const (
 )
 
 const (
-	alphaCycleDur = time.Minute
-	betaCycleDur  = time.Second * 5
+	defaultAlphaCycleDur = time.Minute
 
 	defaultGetTableListLimit = 100
 	defaultForceUpdateGap    = time.Minute * 5
+
+	updateTSAccountId  = -1
+	updateTSDatabaseId = -1
+	updateTSTableId    = -1
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -107,11 +110,18 @@ var TableStatsName = [TableStatsCnt]string{
 	"dblock_cnt",
 }
 
+type Config struct {
+	UpdateDuration    time.Duration `json:"update_duration"`
+	GetTableListLimit int           `json:"get_table_list_limit"`
+	ForceUpdateGap    time.Duration `json:"force_update_gap"`
+}
+
 var dynamicConfig struct {
 	tblQueue chan *tablePair
 
 	de                   *Engine
 	service              string
+	alphaCycleDur        time.Duration
 	forceUpdateGap       time.Duration
 	initialized          bool
 	objIdsPool           sync.Pool
@@ -163,7 +173,7 @@ func queryStats(
 
 	var (
 		idxes   []uint64
-		gotTIds []uint64
+		gotTIds []int64
 		stats   map[string]any
 		val     interface{}
 
@@ -181,7 +191,7 @@ func queryStats(
 		}
 
 		idxes = append(idxes, i)
-		gotTIds = append(gotTIds, val.(uint64))
+		gotTIds = append(gotTIds, val.(int64))
 	}
 
 	// scan update time and stats val
@@ -223,18 +233,26 @@ func queryStats(
 			zap.String("table", fmt.Sprintf("%s(%d)-%s(%d)", tp.dbName, tp.db, tp.tblName, tp.tbl)))
 	}
 
-	// for too old stats, we force launch an update
+	var forceUpdatedCnt int
+	// for too old stats, we force launch an update,
+	// the number of force update also subject to Limit.
 	for i := range tbls {
 		if now.Sub(updates[i]) > dynamicConfig.forceUpdateGap {
+			if forceUpdatedCnt >= dynamicConfig.changeTableListLimit {
+				logutil.Info("force update stats reached limit",
+					zap.Int("limit", dynamicConfig.changeTableListLimit))
+				break
+			}
+
 			// force update
 			tblItem := dynamicConfig.de.
 				GetLatestCatalogCache().
 				GetTableById(uint32(accs[i]), dbs[i], tbls[i])
 
 			tp := allocateTablePair()
-			tp.acc = uint64(accs[i])
-			tp.db = dbs[i]
-			tp.tbl = tbls[i]
+			tp.acc = int64(accs[i])
+			tp.db = int64(dbs[i])
+			tp.tbl = int64(tbls[i])
 			tp.snapshot = types.BuildTS(now.UnixNano(), 0)
 			tp.tblName = tblItem.Name
 			tp.dbName = tblItem.DatabaseName
@@ -270,6 +288,7 @@ func queryStats(
 				continue
 			}
 
+			forceUpdatedCnt++
 			statsVals[i] = stats[TableStatsName[statsIdx]]
 		}
 	}
@@ -322,7 +341,7 @@ type tablePair struct {
 
 	pkSequence int
 
-	acc, db, tbl    uint64
+	acc, db, tbl    int64
 	dbName, tblName string
 
 	snapshot types.TS
@@ -425,9 +444,8 @@ func stashToStats(bcs betaCycleStash) statsList {
 func initialize(
 	ctx context.Context,
 	server string,
+	conf Config,
 	eng engine.Engine,
-	listLimit int,
-	forceGap time.Duration,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
 
@@ -448,12 +466,22 @@ func initialize(
 	dynamicConfig.de = eng.(*Engine)
 	dynamicConfig.initialized = true
 	dynamicConfig.sqlExecFactory = sqlExecutor
-	if listLimit <= 0 {
+	if conf.GetTableListLimit <= 0 {
 		dynamicConfig.changeTableListLimit = defaultGetTableListLimit
+	} else {
+		dynamicConfig.changeTableListLimit = conf.GetTableListLimit
 	}
 
-	if forceGap <= 0 {
+	if conf.ForceUpdateGap <= 0 {
 		dynamicConfig.forceUpdateGap = defaultForceUpdateGap
+	} else {
+		dynamicConfig.forceUpdateGap = conf.ForceUpdateGap
+	}
+
+	if conf.UpdateDuration <= 0 {
+		dynamicConfig.alphaCycleDur = defaultAlphaCycleDur
+	} else {
+		dynamicConfig.alphaCycleDur = conf.UpdateDuration
 	}
 
 	dynamicConfig.objIdsPool = sync.Pool{
@@ -485,17 +513,19 @@ func initialize(
 
 func GetMOTableStatsExecutor(
 	service string,
+	conf Config,
 	eng engine.Engine,
 	sqlExecutor func() ie.InternalExecutor,
 ) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, task task.Task) error {
-		return tableStatsExecutor(ctx, service, eng, sqlExecutor)
+		return tableStatsExecutor(ctx, service, conf, eng, sqlExecutor)
 	}
 }
 
 func tableStatsExecutor(
 	ctx context.Context,
 	service string,
+	conf Config,
 	eng engine.Engine,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
@@ -504,7 +534,7 @@ func tableStatsExecutor(
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
-	if err = initialize(ctx, service, eng, 0, 0, sqlExecutor); err != nil {
+	if err = initialize(ctx, service, conf, eng, sqlExecutor); err != nil {
 		return
 	}
 
@@ -531,7 +561,7 @@ func tableStatsExecutor(
 				break
 			}
 
-			executeTicker.Reset(alphaCycleDur / 10)
+			executeTicker.Reset(dynamicConfig.alphaCycleDur / 10)
 		}
 
 		if err != nil {
@@ -572,6 +602,12 @@ func alphaTask(
 	}
 
 	tbls, newestTS, err = getChangedTableList(newCtx, service, eng, lastUpdateTS)
+	defer func() {
+		if len(tbls) > 0 {
+			err = updateLastUpdateTS(ctx, newestTS, service, sqlExecutor)
+			return
+		}
+	}()
 
 	if err != nil {
 		return err
@@ -738,9 +774,9 @@ func getChangedTableList(
 
 		tp := allocateTablePair()
 		tp.pkSequence = item.PrimarySeqnum
-		tp.acc = uint64(item.AccountId)
-		tp.db = item.DatabaseId
-		tp.tbl = item.Id
+		tp.acc = int64(item.AccountId)
+		tp.db = int64(item.DatabaseId)
+		tp.tbl = int64(item.Id)
 		tp.tblName = item.Name
 		tp.dbName = item.DatabaseName
 
@@ -758,11 +794,11 @@ func subscribeTable(
 ) (pState *logtailreplay.PartitionState, err error) {
 
 	txnTbl := txnTable{}
-	txnTbl.tableId = tbl.tbl
+	txnTbl.tableId = uint64(tbl.tbl)
 	txnTbl.tableName = tbl.tblName
 	txnTbl.accountId = uint32(tbl.acc)
 	txnTbl.db = &txnDatabase{
-		databaseId:   tbl.db,
+		databaseId:   uint64(tbl.db),
 		databaseName: tbl.dbName,
 	}
 
@@ -780,10 +816,17 @@ func getLastUpdateTS(
 	sqlExecutor func() ie.InternalExecutor,
 ) (types.TS, error) {
 
+	// force update logic may distribute the continuity of the update time,
+	// so a special record needed to remember which step the normal routine arrived.
+
 	opts := ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 	ret := sqlExecutor().Query(ctx, fmt.Sprintf(lastUpdateTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS), opts)
 	if ret.Error() != nil {
 		return types.TS{}, ret.Error()
+	}
+
+	if ret.RowCount() == 0 {
+		return types.TS{}, nil
 	}
 
 	val, err := ret.Value(ctx, 0, 0)
@@ -802,6 +845,26 @@ func getLastUpdateTS(
 
 	lastUpdateTS := types.BuildTS(tt.UnixNano(), 0)
 	return lastUpdateTS, nil
+}
+
+func updateLastUpdateTS(
+	ctx context.Context,
+	snapshot types.TS,
+	service string,
+	sqlExecutor func() ie.InternalExecutor,
+) (err error) {
+	tbl := tablePair{
+		tbl:      updateTSTableId,
+		db:       updateTSDatabaseId,
+		acc:      updateTSAccountId,
+		snapshot: snapshot,
+	}
+
+	if err = updateStatsTable(
+		ctx, service, &tbl, statsList{}, sqlExecutor); err != nil {
+		return err
+	}
+	return nil
 }
 
 // O(m+n)
