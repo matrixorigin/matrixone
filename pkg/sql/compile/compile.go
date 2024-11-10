@@ -4198,32 +4198,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
-			Addr: c.addr,
-			Mcpu: mcpu,
+			Addr:             c.addr,
+			Mcpu:             mcpu,
+			CNCNT:            1,
+			NeedExpandRanges: true,
 		})
-		nodes[0].NeedExpandRanges = true
 		return nodes, nil
 	}
 
-	// if len(ranges) == 0 indicates that it's a temporary table.
-	if relData.DataCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
-		nodes = make(engine.Nodes, len(c.cnList))
-		for i, node := range c.cnList {
-			nodes[i] = engine.Node{
-				Id:   node.Id,
-				Addr: node.Addr,
-				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
-				Data: engine.BuildEmptyRelData(),
-			}
-		}
-		return nodes, nil
-	}
-
-	engineType := rel.GetEngineType()
 	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
 	// if not disttae engine, just put all payloads in current CN
-	if len(c.cnList) == 1 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || engineType != engine.Disttae || forceSingle {
+	if len(c.cnList) == 1 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || forceSingle {
 		return putBlocksInCurrentCN(c, relData, forceSingle), nil
 	}
 	// only support disttae engine for now
@@ -4749,8 +4735,9 @@ func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) 
 		mcpu = 1
 	}
 	nodes = append(nodes, engine.Node{
-		Addr: c.addr,
-		Mcpu: mcpu,
+		Addr:  c.addr,
+		Mcpu:  mcpu,
+		CNCNT: 1,
 	})
 	nodes[0].Data = relData
 	return nodes
