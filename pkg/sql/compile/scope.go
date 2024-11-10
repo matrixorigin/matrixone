@@ -697,7 +697,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	logutil.Infof("tablename %v ranges cnt %v data %v", s.DataSource.TableDef.Name, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data.GetBlockInfoSlice())
+
 	return nil
 }
 
