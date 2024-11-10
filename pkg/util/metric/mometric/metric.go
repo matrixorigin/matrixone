@@ -454,7 +454,7 @@ var SingleMetricTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricAccountColumn, metricNameColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
+	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn
@@ -473,7 +473,7 @@ var SqlStatementCUTable = &table.Table{
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `sql_statement_cu metric data` + catalog.MO_COMMENT_NO_DEL_HINT,
+	Comment:          `sql_statement_cu metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn
