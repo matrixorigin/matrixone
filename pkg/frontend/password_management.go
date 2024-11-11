@@ -420,7 +420,7 @@ func checkPasswordIntervalRule(ctx context.Context, reuseInfo *passwordReuseInfo
 				return false, err
 			}
 
-			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now()) {
+			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now().UTC()) {
 				return false, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 			}
 		}
@@ -519,13 +519,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	if canDeleteNum > 0 {
 		for i := 0; i < int(canDeleteNum); i++ {
 			// if password time exceeds the password history, delete the password record
-			var passwordTime time.Time
-			passwordTime, err = time.ParseInLocation("2006-01-02 15:04:05", userPasswords[i].PasswordTimestamp, time.UTC)
-			if err != nil {
-				return err
-			}
-
-			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordHisoty)).Before(time.Now()) {
+			if passwordIntervalExpired(userPasswords[i].PasswordTimestamp, reuseInfo.PasswordReuseInterval) {
 				deleteNum++
 			} else {
 				break
@@ -561,4 +555,12 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	}
 
 	return nil
+}
+
+func passwordIntervalExpired(timeStr string, interVal int64) bool {
+	passwordTime, err := time.ParseInLocation("2006-01-02 15:04:05", timeStr, time.UTC)
+	if err != nil {
+		return false
+	}
+	return passwordTime.AddDate(0, 0, int(interVal)).Before(time.Now().UTC())
 }
