@@ -18,13 +18,13 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
-	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -75,6 +75,7 @@ func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineF
 func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
 	var err error
 	st := &tokenizeState{}
+
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
@@ -132,7 +133,11 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				c += "\n"
 			}
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
-			if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+
+			// fix issue #19948 return vector type is not datalink even the input argurment type is datalink
+			// so we have to check the input argument instead of vector
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
+			if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
 				// datalink
 				dl, err := datalink.NewDatalink(data, proc)
 				if err != nil {
@@ -158,11 +163,13 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 	case "json":
+		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
 			var bj bytejson.ByteJson
-			if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			if types.T(tf.Args[i].Typ.Id) == types.T_json {
 				if err := bj.Unmarshal(c); err != nil {
 					return err
 				}
@@ -173,11 +180,21 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				}
 			}
 
+			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
-				slen := t.TokenBytes[0]
-				word := string(t.TokenBytes[1 : slen+1])
-				doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.TokenPos})
+				jslen := t.TokenBytes[0]
+				value := string(t.TokenBytes[1 : jslen+1])
+				// tokenize the value
+				tok, _ := tokenizer.NewSimpleTokenizer([]byte(value))
+				for tt := range tok.Tokenize() {
+					tslen := tt.TokenBytes[0]
+					word := string(tt.TokenBytes[1 : tslen+1])
+					doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
+				}
+				voffset += int32(jslen)
 			}
+
+			joffset += int32(len(c))
 		}
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
