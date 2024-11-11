@@ -48,12 +48,12 @@ const statsCacheMaxSize = 8192
 
 func BlockThresholdForOneCN(ncpu int) int {
 	if ncpu == 0 {
-		ncpu = system.GoRoutines()
+		ncpu = system.GoMaxProcs()
 	}
 	return ncpu * blockThresholdForTpQuery
 }
 func costThresholdForOneCN() int {
-	return system.GoRoutines() * costThresholdForTpQuery
+	return system.GoMaxProcs() * costThresholdForTpQuery
 }
 
 type ExecType int
@@ -1564,7 +1564,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) Exe
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	ncpu := system.GoRoutines()
+	ncpu := system.GoMaxProcs()
 	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
@@ -1577,7 +1577,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	ncpu := system.GoRoutines()
+	ncpu := system.GoMaxProcs()
 	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"

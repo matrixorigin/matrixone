@@ -57,6 +57,8 @@ func TestMemory(t *testing.T) {
 // Benchmark_GoRutinues/NumGoroutine-10   	249281432	         4.795 ns/op
 func Benchmark_GoRutinues(b *testing.B) {
 	var v atomic.Int32
+	b.Logf("v: %d, runtime.GOMAXPROCS(0): %d, runtime.NumGoroutine: %d",
+		v.Load(), runtime.GOMAXPROCS(0), runtime.NumGoroutine())
 	b.Run("Atomic", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -72,7 +74,7 @@ func Benchmark_GoRutinues(b *testing.B) {
 	b.Run("NumGoroutine", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			runtime.NumGoroutine()
+			runtime.NumGoroutine() // running go routines, not eq GOMAXPROCS
 		}
 	})
 }
