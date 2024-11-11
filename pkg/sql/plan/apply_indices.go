@@ -484,6 +484,23 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+
+	for i := range node.TableDef.Cols {
+		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] > 0 {
+			colName := node.TableDef.Cols[i].Name
+			found := false
+			for j := range idxDef.Parts {
+				if idxDef.Parts[j] == colName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return -1
+			}
+		}
+	}
+
 	col2filter := make(map[int32]int)
 	colPos := int32(-1)
 	for i, expr := range node.FilterList {
