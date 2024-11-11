@@ -818,14 +818,8 @@ func (c *Conn) Reset() {
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
 
-var dumpConn = &Conn{}
-
-var ExecuteFuncWithRecover = func(fun func() error) (err error, hasRecovered bool) {
-	return dumpConn.ExecuteFuncWithRecover(fun)
-}
-
 // ExecuteFuncWithRecover executes the function and recover the panic
-func (c *Conn) ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
+func ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
 	defer func() {
 		if rErr := recover(); rErr != nil {
 			hasRecovered = true
@@ -838,7 +832,7 @@ func (c *Conn) ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered
 		}
 	}()
 	if err = fun(); err != nil {
-		return err, false
+		return
 	}
-	return nil, false
+	return
 }

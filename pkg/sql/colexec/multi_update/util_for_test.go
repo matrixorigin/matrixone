@@ -22,8 +22,10 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -57,19 +59,14 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 	var err error
 	var res vm.CallResult
 
-	dupBatchs := func(bats []*batch.Batch) []*batch.Batch {
-		ret := make([]*batch.Batch, len(bats))
-		for i, bat := range bats {
-			ret[i], _ = bat.Dup(proc.GetMPool())
-		}
-		return ret
-	}
-
-	// logutil.Info("begin to run multi_update test")
 	for _, tc := range tcs {
-		child := colexec.NewMockOperator().WithBatchs(dupBatchs(tc.inputBatchs))
+		child := colexec.NewMockOperator().WithBatchs(tc.inputBatchs)
 		tc.op.AppendChild(child)
 		err = tc.op.Prepare(proc)
+		// use small Threshold for ut
+		if tc.op.ctr.s3Writer != nil {
+			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
+		}
 		require.NoError(t, err)
 		for {
 			res, err = tc.op.Call(proc)
@@ -92,13 +89,18 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
-		require.Equal(t, tc.op.GetAffectedRows(), tc.affectedRows)
+		require.Equal(t, tc.affectedRows, tc.op.GetAffectedRows())
 
+		child.ResetBatchs()
 		tc.op.Children[0].Reset(proc, false, nil)
 		tc.op.Reset(proc, false, nil)
 
-		child.ResetBatchs(proc, tc.inputBatchs)
+		child.WithBatchs(tc.inputBatchs)
 		err = tc.op.Prepare(proc)
+		// use small Threshold for ut
+		if tc.op.ctr.s3Writer != nil {
+			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
+		}
 		require.NoError(t, err)
 		for {
 			res, err = tc.op.Call(proc)
@@ -113,7 +115,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		tc.op.Free(proc, false, nil)
 	}
 
-	proc.GetFileService().Close()
+	proc.GetFileService().Close(proc.Ctx)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -312,13 +314,13 @@ func buildTestCase(
 	eng engine.Engine,
 	inputBats []*batch.Batch,
 	affectRows uint64,
-	toWriteS3 bool) *testCase {
+	action UpdateAction) *testCase {
 
 	retCase := &testCase{
 		op: &MultiUpdate{
 			ctr:                    container{},
 			MultiUpdateCtx:         multiUpdateCtxs,
-			ToWriteS3:              toWriteS3,
+			Action:                 action,
 			IsOnduplicateKeyUpdate: false,
 			Engine:                 eng,
 			OperatorBase: vm.OperatorBase{
@@ -348,7 +350,7 @@ func makeTestPkArray(from int64, rowCount int) []int64 {
 func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
 	val := make([]int32, rowCount)
 	for i := 0; i < rowCount; i++ {
-		val[i] = int32(i / partitionCount)
+		val[i] = int32(i % partitionCount)
 	}
 	return val
 }
@@ -359,4 +361,17 @@ func makeTestVarcharArray(rowCount int) []string {
 		val[i] = strconv.Itoa(i)
 	}
 	return val
+}
+
+func makeTestRowIDVector(m *mpool.MPool, objectID *types.Objectid, blockNum uint16, rowCount int) *vector.Vector {
+	blockID := types.NewBlockidWithObjectID(objectID, blockNum+1000)
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	for i := 0; i < rowCount; i++ {
+		rowID := types.NewRowid(blockID, uint32(i)+1)
+		if err := vector.AppendFixed(vec, *rowID, false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }

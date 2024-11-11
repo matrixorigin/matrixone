@@ -25,8 +25,9 @@ import (
 func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileService) {
 
 	b.Run("parallel raed", func(b *testing.B) {
+		ctx := context.Background()
 		fs := newFS()
-		defer fs.Close()
+		defer fs.Close(ctx)
 
 		content := bytes.Repeat([]byte("x"), 16*1024*1024)
 		parts := fixedSplit(content, 512*1024)

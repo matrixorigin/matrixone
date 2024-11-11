@@ -52,6 +52,7 @@ const (
 	Mark
 	IndexJoin
 	IndexBuild
+	DedupJoin
 
 	Merge
 	MergeTop
@@ -549,13 +550,8 @@ func (info OperatorInfo) GetAddress() message.MessageAddress {
 	}
 }
 
-func CannotRemote(op Operator) bool {
-	// todo: I think we should add more operators here.
-	return op.OpType() == LockOp || op.OpType() == MergeRecursive || op.OpType() == MergeCTE
-}
-
 type ModificationArgument interface {
-	AffectedRows() uint64
+	GetAffectedRows() uint64
 }
 
 // doHandleAllOp function uses post traversal to recursively process nodes in the operand tree.

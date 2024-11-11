@@ -80,7 +80,7 @@ func Test_writeToS3(t *testing.T) {
 
 	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	serv := &service{
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),

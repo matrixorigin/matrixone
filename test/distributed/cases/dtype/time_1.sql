@@ -56,7 +56,7 @@ select * from time_03;
 drop table time_03;
 create table time_03 (t1 int,t2 time,t3 varchar(25),t4 time default '110034',primary key(t1,t2));
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","yellow");
--- @pattern
+ -- @pattern
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","oooppppp");
 insert into time_03(t1,t2,t3) values (31,"24:59:09.932823","postttttt");
 insert into time_03(t1,t2,t3) values (32,NULL,"vinda");

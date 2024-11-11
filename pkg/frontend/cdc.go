@@ -1410,6 +1410,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 	if err != nil {
 		return err
 	}
+	go sinker.Run(ctx, cdc.activeRoutine)
 
 	// make reader
 	reader := cdc2.NewTableReader(
