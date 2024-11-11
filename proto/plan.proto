@@ -940,6 +940,8 @@ message LockTarget {
 	lock.LockMode Mode  = 10;
 	int32 primary_col_rel_pos  = 11;
 	int32 filter_col_rel_pos  = 12;
+	Expr lock_rows = 13;
+    bool lock_table_at_the_end = 14;
 }
 
 message PreInsertUkCtx {
