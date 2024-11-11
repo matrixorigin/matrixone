@@ -1434,7 +1434,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
-			if err = ses.InitSystemVariables(ctx); err != nil {
+			bh := ses.GetBackgroundExec(ctx)
+			defer bh.Close()
+			if err = ses.InitSystemVariables(ctx, bh); err != nil {
 				return err
 			}
 		} else {

@@ -349,6 +349,9 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	txnOp := ses.GetTxnHandler().GetTxn()
 	ctx := execCtx.reqCtx
 
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
 	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp)
 	if err != nil {
 		return err
@@ -372,7 +375,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		sql := getSqlForRoleNameOfRoleId(int64(roleId))
 
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, ses, sql); err != nil {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return "", nil
+		}
+		if rets, err = getResultSet(ctx, bh); err != nil {
 			return "", err
 		}
 

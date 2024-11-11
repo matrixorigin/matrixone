@@ -516,22 +516,12 @@ var NewBackgroundExec = func(
 
 // ExeSqlInBgSes for mock stub
 var ExeSqlInBgSes = func(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
-	return executeSQLInBackgroundSession(reqCtx, upstream, sql)
-}
-
-// executeSQLInBackgroundSession executes the sql in an independent session and transaction.
-// It sends nothing to the client.
-func executeSQLInBackgroundSession(reqCtx context.Context, upstream *Session, sql string) ([]ExecResult, error) {
-	bh := NewBackgroundExec(reqCtx, upstream)
+	bh := upstream.GetBackgroundExec(reqCtx)
 	defer bh.Close()
-
-	upstream.Debugf(reqCtx, "background exec sql:%v", sql)
 	err := bh.Exec(reqCtx, sql)
-	upstream.Debug(reqCtx, "background exec sql done")
 	if err != nil {
 		return nil, err
 	}
-
 	return getResultSet(reqCtx, bh)
 }
 

@@ -956,8 +956,8 @@ type GlobalSysVarsMgr struct {
 }
 
 // Get return sys vars of accountId
-func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
-	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
+	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
