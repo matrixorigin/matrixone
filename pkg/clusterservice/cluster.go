@@ -344,10 +344,12 @@ func (c *cluster) refresh() {
 		}
 	}
 	for _, tn := range details.TNStores {
-		v := newTNService(tn)
-		new.addTN([]metadata.TNService{v})
-		if c.logger.Enabled(zap.DebugLevel) {
-			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
+		if tn.State == logpb.NormalState {
+			v := newTNService(tn)
+			new.addTN([]metadata.TNService{v})
+			if c.logger.Enabled(zap.DebugLevel) {
+				c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
+			}
 		}
 	}
 	c.services.Store(new)
