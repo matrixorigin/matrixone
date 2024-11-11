@@ -307,7 +307,3 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64) {
 	}
 	c.evict(ctx, done, 0)
 }
-
-func (c *Cache[K, V]) Capacity() int64 {
-	return c.capacity()
-}
