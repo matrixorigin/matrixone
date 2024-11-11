@@ -414,7 +414,8 @@ func (c *checkpointCleaner) Replay() (err error) {
 			ckpData,
 			c.mutation.snapshotMeta,
 			accountSnapshots,
-			pitrs)
+			pitrs,
+			0)
 		logutil.Info("GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Int("size", len(accountSnapshots)),
@@ -711,6 +712,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
+	gcFileCount int,
 ) (err error) {
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
@@ -810,7 +812,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		newCheckpointData,
 		c.mutation.snapshotMeta,
 		accountSnapshots,
-		pitrs)
+		pitrs,
+		gcFileCount)
 	if newCheckpoint == nil {
 		panic("MergeCheckpoint new checkpoint is nil")
 	}
@@ -1040,7 +1043,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	if waterMark.GT(&scanMark) {
 		waterMark = scanMark
 	}
-	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer, accountSnapshots, pitrs)
+	err = c.mergeCheckpointFilesLocked(&waterMark, memoryBuffer, accountSnapshots, pitrs, len(filesToGC))
 	if err != nil {
 		extraErrMsg = fmt.Sprintf("mergeCheckpointFilesLocked %v failed", waterMark.ToString())
 	}
@@ -1073,7 +1076,6 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.Duration("soft-gc", softCost),
 			zap.Duration("merge-table", mergeCost),
 			zap.Error(err),
-			zap.Strings("files-to-gc", filesToGC),
 			zap.String("metafile", metafile),
 			zap.String("extra-err-msg", extraErrMsg),
 		)

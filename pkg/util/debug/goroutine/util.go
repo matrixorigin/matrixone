@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package goroutine
 
-const (
-	moEnumCastIndexToValueFun      = "cast_index_to_value"
-	moEnumCastValueToIndexFun      = "cast_value_to_index"
-	moEnumCastIndexValueToIndexFun = "cast_index_value_to_index"
+import (
+	"bytes"
+	"runtime"
+	"strconv"
 )
+
+// GetRoutineId gets the routine id
+func GetRoutineId() uint64 {
+	data := make([]byte, 64)
+	data = data[:runtime.Stack(data, false)]
+	data = bytes.TrimPrefix(data, []byte("goroutine "))
+	data = data[:bytes.IndexByte(data, ' ')]
+	id, _ := strconv.ParseUint(string(data), 10, 64)
+	return id
+}

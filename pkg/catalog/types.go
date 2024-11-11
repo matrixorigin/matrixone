@@ -170,6 +170,10 @@ func IsSystemTable(id uint64) bool {
 	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID
 }
 
+func IsSystemTableByName(name string) bool {
+	return name == MO_DATABASE || name == MO_TABLES || name == MO_COLUMNS
+}
+
 const (
 	// Metrics and Trace related
 
@@ -539,9 +543,10 @@ var (
 		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE,
 		SystemDBAttr_AccID, SystemDBAttr_Name)
 
+	// exclude mo_catlaog
 	MoDatabaseBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s`",
-		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE)
+		"select %s from `%s`.`%s` where %s > 1",
+		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE, SystemDBAttr_ID)
 
 	MoDatabasesInEngineQueryFormat = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s = %%d",
@@ -585,9 +590,10 @@ var (
 		MoTablesAllColsString, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
+	// exclude mo_database mo_tables mo_columns
 	MoTablesBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s`",
-		MoTablesAllColsString, MO_CATALOG, MO_TABLES)
+		"select %s from `%s`.`%s` where %s > 3",
+		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID)
 
 	MoTablesInDBQueryFormat = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
@@ -637,9 +643,10 @@ var (
 		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID)
 
+	// exclude mo_database mo_tables mo_columns
 	MoColumnsBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s` order by %s, %s, %s",
-		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
+		"select %s from `%s`.`%s` where %s > 3 order by %s, %s, %s",
+		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
