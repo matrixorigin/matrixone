@@ -3774,7 +3774,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date_sub`
 	{
 		functionId: DATE_SUB,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
