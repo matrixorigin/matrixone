@@ -327,6 +327,67 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	newProjList := make([]*plan.Expr, len(selectNode.ProjectList))
+	for i, expr := range selectNode.ProjectList {
+		newProjList[i] = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+	for _, tableDef := range dmlCtx.tableDefs {
+		pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+		for _, idxDef := range tableDef.Indexes {
+			if !idxDef.TableExist || idxDef.Unique {
+				continue
+			}
+
+			idxTableName := idxDef.IndexTableName
+			colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
+			argsLen := len(idxDef.Parts) // argsLen is alwarys greater than 1 for secondary index
+			args := make([]*plan.Expr, argsLen)
+
+			var colPos int32
+			var ok bool
+			for k := 0; k < argsLen; k++ {
+				if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
+					errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
+					return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+				}
+				args[k] = &plan.Expr{
+					Typ: selectNode.ProjectList[colPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: colPos,
+						},
+					},
+				}
+			}
+
+			fnName := "serial"
+			if !idxDef.Unique {
+				fnName = "serial_full"
+			}
+			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(newProjList))
+			newProjList = append(newProjList, idxExpr)
+		}
+	}
+	if len(newProjList) > len(selectNode.ProjectList) {
+		selectNodeTag = builder.genNewTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: newProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{selectNodeTag},
+		}, bindCtx)
+	}
+
 	dmlNode := &plan.Node{
 		NodeType:    plan.Node_MULTI_UPDATE,
 		BindingTags: []int32{builder.genNewTag()},
@@ -646,17 +707,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist {
+		if !idxDef.TableExist || !idxDef.Unique {
 			continue
 		}
 
-		if idxDef.Unique {
-			skipUniqueIdx[i] = true
-			for _, part := range idxDef.Parts {
-				if !columnIsNull[part] {
-					skipUniqueIdx[i] = false
-					break
-				}
+		skipUniqueIdx[i] = true
+		for _, part := range idxDef.Parts {
+			if !columnIsNull[part] {
+				skipUniqueIdx[i] = false
+				break
 			}
 		}
 
