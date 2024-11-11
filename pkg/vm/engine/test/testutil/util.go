@@ -229,7 +229,7 @@ func NewDefaultTableReader(
 		expr,
 		source,
 		engine_util.GetThresholdForReader(1),
-		true,
+		engine.FilterHint{Must: true},
 	)
 }
 

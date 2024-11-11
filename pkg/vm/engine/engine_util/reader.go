@@ -317,7 +317,7 @@ func NewReader(
 	//orderedScan bool, // it should be included in filter or expr.
 	source engine.DataSource,
 	threshHold uint64,
-	filterMust bool,
+	filterHint engine.FilterHint,
 ) (*reader, error) {
 
 	baseFilter, err := ConstructBasePKFilter(
@@ -334,7 +334,7 @@ func NewReader(
 		ts,
 		packerPool,
 		baseFilter,
-		filterMust,
+		filterHint,
 	)
 	if err != nil {
 		return nil, err

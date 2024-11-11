@@ -457,7 +457,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 	txnOffset int,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
-	filterMust bool) ([]engine.Reader, error) {
+	filterHint engine.FilterHint) ([]engine.Reader, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
 		return nil, err
@@ -472,7 +472,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			txnOffset,
 			orderBy,
 			engine.Policy_CheckAll,
-			filterMust,
+			filterHint,
 		)
 	}
 	return tbl.BuildShardingReaders(
@@ -731,7 +731,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				expr,
 				ds,
 				engine_util.GetThresholdForReader(newNum),
-				false,
+				engine.FilterHint{},
 			)
 			if err != nil {
 				return nil, err

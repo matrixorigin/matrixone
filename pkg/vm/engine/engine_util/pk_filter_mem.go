@@ -22,19 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 type MemPKFilter struct {
-	op int
-	// for some MUST situations:
-	// 	1. transfer row ids
-	must    bool
+	op      int
 	packed  [][]byte
 	isVec   bool
 	isValid bool
 	TS      types.TS
 
+	filterHint  engine.FilterHint
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
@@ -43,7 +42,7 @@ func NewMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter BasePKFilter,
-	filterMust bool,
+	filterHint engine.FilterHint,
 ) (filter MemPKFilter, err error) {
 
 	filter.TS = types.TimestampToTS(ts)
@@ -202,7 +201,7 @@ func NewMemPKFilter(
 
 	filter.tryConstructPrimaryKeyIndexIter(ts, tableDef.Name)
 
-	filter.must = filterMust
+	filter.filterHint = filterHint
 
 	return
 }
@@ -212,7 +211,7 @@ func (f *MemPKFilter) InKind() (int, bool) {
 }
 
 func (f *MemPKFilter) Must() bool {
-	return f.must
+	return f.filterHint.Must
 }
 
 func (f *MemPKFilter) String() string {

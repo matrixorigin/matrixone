@@ -867,7 +867,7 @@ type Relation interface {
 		txnOffset int,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
-		filterMust bool,
+		filterHint FilterHint,
 	) ([]Reader, error)
 
 	BuildShardingReaders(
@@ -1172,4 +1172,8 @@ func GetForceShuffleReader() (bool, []uint64, int) {
 	defer forceShuffleReader.Unlock()
 
 	return forceShuffleReader.force, forceShuffleReader.tblIds, forceShuffleReader.blkCnt
+}
+
+type FilterHint struct {
+	Must bool
 }
