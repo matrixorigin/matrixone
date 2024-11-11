@@ -1193,12 +1193,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	ses.Debugf(ctx, "check tenant %s exists", tenant)
-	bh.ClearExecResultSet()
-	err = bh.Exec(sysTenantCtx, sqlForCheckTenant)
-	if err != nil {
-		return nil, err
-	}
-	rsset, err = getResultSet(sysTenantCtx, bh)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1257,12 +1252,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(tenantCtx, sqlForPasswordOfUser)
-	if err != nil {
-		return nil, err
-	}
-	rsset, err = getResultSet(tenantCtx, bh)
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1331,15 +1321,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		bh.ClearExecResultSet()
-		err = bh.Exec(tenantCtx, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = getResultSet(tenantCtx, bh)
-		if err != nil {
-			return nil, err
-		}
+
 		if !execResultArrayHasData(rsset) {
 			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
@@ -1350,12 +1336,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		bh.ClearExecResultSet()
-		err = bh.Exec(tenantCtx, sqlForRoleOfUser)
-		if err != nil {
-			return nil, err
-		}
-		rsset, err = getResultSet(tenantCtx, bh)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1376,12 +1357,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		bh.ClearExecResultSet()
-		err = bh.Exec(tenantCtx, sql)
-		if err != nil {
-			return nil, err
-		}
-		rsset, err = getResultSet(tenantCtx, bh)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1485,8 +1461,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		bh.ClearExecResultSet()
-		err = bh.Exec(tenantCtx, "use `"+dbName+"`")
+		_, err = executeSQLInBackgroundSession(tenantCtx, bh, "use `"+dbName+"`")
 		if err != nil {
 			return nil, err
 		}
@@ -1525,13 +1500,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-	bh.ClearExecResultSet()
-	err = bh.Exec(tenantCtx, sqlForGetVariables)
-	if err != nil {
-		return nil, err
-	}
-
-	if execResults, err = getResultSet(tenantCtx, bh); err != nil {
+	if execResults, err = ExeSqlInBgSes(tenantCtx, bh, sqlForGetVariables); err != nil {
 		return
 	}
 
