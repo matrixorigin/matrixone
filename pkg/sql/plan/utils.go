@@ -643,7 +643,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {

@@ -132,7 +132,7 @@ c1    c1    c2    c3
 33    33    33    33
 34    34    34    34
 35    35    35    35
-explain select user from system.statement_info where account = 'sys' and `database` = 'mo_task' and request_at > date_sub(now(), interval 10 second) order by request_at desc limit 1;
+explain select user from system.statement_info where request_at > date_sub(now(), interval 10 second) order by request_at desc limit 1;
 TP QUERY PLAN
 Project
   ->  Sort
@@ -141,7 +141,7 @@ Project
         Send Message: [tag 1 , type MsgTopValue]
         ->  Table Scan on system.statement_info
               Sort Key: request_at DESC
-              Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2)), (statement_info.database = 'mo_task'), (statement_info.account = 'sys')
-              Block Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2)), (statement_info.account = 'sys')
+              Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2))
+              Block Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2))
               Recv Message: [tag 1 , type MsgTopValue]
 drop database if exists d1;

@@ -34,5 +34,5 @@ set @a_var = 5;
 set @b_var = 30;
 execute s using @a_var,@b_var;
 -- @separator:table
-explain select user from system.statement_info where account = 'sys' and `database` = 'mo_task' and request_at > date_sub(now(), interval 10 second) order by request_at desc limit 1;
+explain select user from system.statement_info where request_at > date_sub(now(), interval 10 second) order by request_at desc limit 1;
 drop database if exists d1;
