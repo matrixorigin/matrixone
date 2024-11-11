@@ -187,6 +187,8 @@ func (tbl *txnTable) recurTransferS3Delete(
 	rowID types.Rowid,
 	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
 	softDeletes map[objectio.ObjectId]struct{},
+	phase string,
+	from, to types.TS,
 ) (newID types.Rowid, err error) {
 	blkID2, row := rowID.Decode()
 	id.BlockID = *blkID2
@@ -201,6 +203,9 @@ func (tbl *txnTable) recurTransferS3Delete(
 				zap.Error(err),
 				zap.String("id", id.String()),
 				zap.String("txn", tbl.store.txn.String()),
+				zap.String("phase", phase),
+				zap.String("from", from.ToString()),
+				zap.String("to", to.ToString()),
 			)
 			err = moerr.NewTxnRWConflictNoCtx()
 			return
@@ -225,7 +230,7 @@ func (tbl *txnTable) recurTransferS3Delete(
 	if !ok {
 		return
 	}
-	return tbl.recurTransferS3Delete(id, newID, memo, softDeletes)
+	return tbl.recurTransferS3Delete(id, newID, memo, softDeletes, phase, from, to)
 }
 func (tbl *txnTable) TransferDeletes(
 	ctx context.Context,
@@ -301,7 +306,13 @@ func (tbl *txnTable) TransferDeletes(
 						rowID,
 						memo,
 						objMap,
+						phase,
+						startTS,
+						ts,
 					)
+					if err != nil {
+						return
+					}
 					pk := pkVec.Get(i)
 					// try to transfer the delete node
 					// here are some possible returns
@@ -496,13 +507,13 @@ func (tbl *txnTable) recurTransferDelete(
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
-		typ := types.T_Rowid.ToType()
-		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&typ)
-		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*newID.ObjectID(), newID.BlockID.Sequence(), offset)
+		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		rowID := *types.NewRowid(&newID.BlockID, offset)
 		rowIDVec.Append(rowID, false)
 		defer rowIDVec.Close()
 		//transfer the deletes to the target block.
-		if err = tbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
+		if err = tbl.DeleteByPhyAddrKeys(
+			rowIDVec, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
 		common.DoIfDebugEnabled(func() {

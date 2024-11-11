@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -125,14 +126,19 @@ func callNonBlocking(
 	}
 
 	if result.Batch == nil {
-		return result, lockOp.ctr.retryError
+		if lockOp.ctr.retryError != nil {
+			return result, lockOp.ctr.retryError
+		}
+		err := lockTalbeIfLockCountIsZero(proc, lockOp)
+		return result, err
 	}
 	if result.Batch.IsEmpty() {
 		analyzer.Output(result.Batch)
 		return result, err
 	}
 
-	if err = performLock(result.Batch, proc, lockOp, analyzer); err != nil {
+	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 		return result, err
 	}
 
@@ -145,9 +151,13 @@ func performLock(
 	proc *process.Process,
 	lockOp *LockOp,
 	analyzer process.Analyzer,
+	targetIdx int,
 ) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
+		if targetIdx != -1 && targetIdx != idx {
+			continue
+		}
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
@@ -766,6 +776,8 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			LockTable:          target.lockTable,
 			ChangeDef:          target.changeDef,
 			Mode:               target.mode,
+			LockRows:           plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:  target.lockTableAtTheEnd,
 		}
 	}
 	return targets
@@ -776,13 +788,17 @@ func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *LockOp {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *LockOp {
 	return lockOp.AddLockTargetWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
-		refreshTimestampIndexInBatch)
+		refreshTimestampIndexInBatch,
+		lockRows,
+		lockTableAtTheEnd)
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -791,13 +807,17 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *LockOp {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		lockRows:                     lockRows,
+		lockTableAtTheEnd:            lockTableAtTheEnd,
 	})
 	return lockOp
 }
@@ -843,6 +863,8 @@ func (lockOp *LockOp) AddLockTargetWithPartition(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *LockOp {
 	return lockOp.AddLockTargetWithPartitionAndMode(
 		tableIDs,
@@ -850,6 +872,8 @@ func (lockOp *LockOp) AddLockTargetWithPartition(
 		primaryColumnIndexInBatch,
 		primaryColumnType,
 		refreshTimestampIndexInBatch,
+		lockRows,
+		lockTableAtTheEnd,
 		partitionTableIDMappingInBatch)
 }
 
@@ -861,6 +885,8 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *LockOp {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
@@ -872,6 +898,8 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
+			lockRows,
+			lockTableAtTheEnd,
 		)
 	}
 
@@ -884,6 +912,8 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
 			mode:                         mode,
+			lockRows:                     lockRows,
+			lockTableAtTheEnd:            lockTableAtTheEnd,
 		})
 	}
 	return lockOp
@@ -970,4 +1000,55 @@ func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 		analyzer.WaitStop(start)
 		analyzer.AddWaitLockTime(start)
 	}
+}
+
+func lockTalbeIfLockCountIsZero(
+	proc *process.Process,
+	lockOp *LockOp,
+) error {
+	rt := lockOp.ctr
+	if rt.lockCount != 0 {
+		return nil
+	}
+	for idx := 0; idx < len(lockOp.targets); idx++ {
+		target := lockOp.targets[idx]
+		// do not lock table or rows at the end for hidden table
+		if !target.lockTableAtTheEnd {
+			continue
+		}
+		if target.lockRows != nil {
+			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				free()
+			}()
+
+			bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
+			bat.Vecs[target.primaryColumnIndexInBatch] = vec
+			bat.SetRowCount(vec.Length())
+
+			anal := lockOp.OpAnalyzer
+			anal.Start()
+			defer anal.Stop()
+			err = performLock(bat, proc, lockOp, anal, idx)
+			if err != nil {
+				return err
+			} else if rt.retryError != nil {
+				if rt.defChanged {
+					rt.retryError = retryWithDefChangedError
+				}
+				return rt.retryError
+			}
+		} else {
+			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	rt.lockCount = 1
+
+	return nil
 }
