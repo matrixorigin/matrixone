@@ -1931,6 +1931,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 
+	err := builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
+	if err != nil {
+		return nil, err
+	}
+
 	//for i := 1; i < len(builder.qry.Steps); i++ {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
@@ -2704,6 +2709,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
+				LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 			}
 			if tableDef.Partition != nil {
 				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
