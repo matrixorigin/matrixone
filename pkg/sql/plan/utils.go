@@ -641,13 +641,13 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
+		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
-				case "cast", "serial":
+				case "cast", "serial", "date_sub":
 					return extractColRefInFilter(exprImpl.F.Args[0])
 				}
 				return nil
@@ -1061,6 +1061,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 		}
 		if isConst {
 			return true
+		}
+
+		if exprImpl.F.Func.ObjName == "cast" {
+			switch exprImpl.F.Args[0].Typ.Id {
+			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp):
+				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
+					//this cast is monotonic, can safely pushdown to block filters
+					return true
+				}
+			}
 		}
 
 		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
@@ -2692,4 +2702,13 @@ func offsetToString(offset int) string {
 		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
 	}
 	return fmt.Sprintf("+%02d:%02d", hours, minutes)
+}
+
+func getLockTableAtTheEnd(tableDef *TableDef) bool {
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
+		tableDef.Partition != nil || // unsupport partition table
+		len(tableDef.Pkey.Names) > 1 { // unsupport multi-column primary key
+		return false
+	}
+	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 }
