@@ -15,6 +15,7 @@
 package engine_util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -74,7 +75,12 @@ func TestNewMemPKFilter(t *testing.T) {
 
 	for i := range baseFilters {
 		tableDef.Cols[0].Typ.Id = int32(baseFilters[i].Oid)
-		filter, err := NewMemPKFilter(tableDef, ts, packerPool, baseFilters[i], true)
+		filter, err := NewMemPKFilter(
+			tableDef,
+			ts,
+			packerPool,
+			baseFilters[i],
+			engine.FilterHint{})
 		assert.Nil(t, err)
 		assert.True(t, filter.isValid)
 		assert.Equal(t, function.BETWEEN, filter.op)

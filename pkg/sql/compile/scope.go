@@ -1015,7 +1015,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			false,
+			engine.FilterHint{},
 		)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
@@ -1104,7 +1104,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				s.TxnOffset,
 				len(s.DataSource.OrderBy) > 0,
 				engine.Policy_CheckAll,
-				false,
+				engine.FilterHint{},
 			)
 			if err != nil {
 				return
@@ -1140,7 +1140,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					s.TxnOffset,
 					len(s.DataSource.OrderBy) > 0,
 					engine.Policy_CheckAll,
-					false,
+					engine.FilterHint{},
 				)
 				if err != nil {
 					return
