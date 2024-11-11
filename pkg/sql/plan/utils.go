@@ -642,7 +642,18 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
-			return extractColRefInFilter(exprImpl.F.Args[0])
+			switch e := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
+				return extractColRefInFilter(exprImpl.F.Args[0])
+			case *plan.Expr_F:
+				switch e.F.Func.ObjName {
+				case "cast", "serial", "date_sub":
+					return extractColRefInFilter(exprImpl.F.Args[0])
+				}
+				return nil
+			default:
+				return nil
+			}
 		default:
 			var col *ColRef
 			for _, arg := range exprImpl.F.Args {
