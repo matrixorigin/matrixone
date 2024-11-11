@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1132,12 +1131,10 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 		return
 	}
 	tableDef := baseNode.TableDef
-	objRef := baseNode.ObjRef
-	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-		tableDef.Partition != nil || // unsupport multi-column primary key
-		len(tableDef.Pkey.Names) > 1 { // unsupport partition table
+	if !getLockTableAtTheEnd(tableDef) {
 		return
 	}
+	objRef := baseNode.ObjRef
 	tableIDs := make(map[uint64]bool)
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
