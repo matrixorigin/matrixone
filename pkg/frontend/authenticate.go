@@ -4157,7 +4157,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(ctx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -8178,17 +8178,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
 		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
-
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
-	defer bh.Close()
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
