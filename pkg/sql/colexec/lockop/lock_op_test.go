@@ -381,7 +381,7 @@ func runLockNonBlockingOpTest(
 				IsLast:  false,
 			}
 			for idx, table := range tables {
-				arg.AddLockTarget(table, offset, pkType, offset+1)
+				arg.AddLockTarget(table, offset, pkType, offset+1, nil, true)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
