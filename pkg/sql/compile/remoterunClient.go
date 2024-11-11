@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -82,7 +84,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc); err != nil {
+	debugMsg := ""
+	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
+	if exist {
+		if strings.Contains(c.sql, sub_sql) {
+			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
+		}
+	}
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
 		return sender, err
 	}
 
@@ -368,10 +377,11 @@ func newMessageSenderOnClient(
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
-	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int) error {
+	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
+		message.SetDebugMsg(debugMsg)
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.Method_PipelineMessage)
 		message.SetData(scopeData)
@@ -386,6 +396,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 		end := start + eachMessageSizeLimitation
 
 		message := cnclient.AcquireMessage()
+		message.SetDebugMsg(debugMsg)
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.Method_PipelineMessage)
 		if end >= sdLen {

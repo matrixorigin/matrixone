@@ -205,3 +205,124 @@ func Test_PasswordVerification(t *testing.T) {
 	_, _, err := passwordVerification(ctx, reuseInfo, "123456", userPasswords)
 	assert.NoError(t, err)
 }
+
+func TestCheckInvitedNodes(t *testing.T) {
+	ctx := context.Background()
+
+	// test empty invited nodes
+	err := checkInvitedNodes(ctx, "")
+	assert.Error(t, err)
+
+	// test
+	err = checkInvitedNodes(ctx, "192.168.1.1, 10.0.0.1")
+	assert.NoError(t, err)
+
+	// test invalid invited nodes
+	err = checkInvitedNodes(ctx, "192.168.1.1, invalid_ip")
+	assert.Error(t, err)
+
+	// test CIDR
+	err = checkInvitedNodes(ctx, "192.168.1.1, 10.0.0.0/33")
+	assert.Error(t, err)
+
+	// test CIDR
+	err = checkInvitedNodes(ctx, "192.168.1.0/24")
+	assert.NoError(t, err)
+
+	// test "*"
+	err = checkInvitedNodes(ctx, "*")
+	assert.NoError(t, err)
+
+	// test "*," should fail
+	err = checkInvitedNodes(ctx, "192.168.1.1, *")
+	assert.Error(t, err)
+}
+
+func TestCheckValidIpInInvitedNodes(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		invitedNodes string
+		ip           string
+		expectedErr  bool
+	}{
+		{
+			invitedNodes: "192.168.1.0/24",
+			ip:           "192.168.1.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.1.0/24",
+			ip:           "192.168.0.1",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "192.168.0.1",
+			ip:           "192.168.0.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1",
+			ip:           "192.168.0.2",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "*",
+			ip:           "192.168.0.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "192.168.0.3",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "192.168.0.4",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "",
+			ip:           "127.0.0.1",
+			expectedErr:  true,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "127.0.0.1",
+			expectedErr:  false,
+		},
+		{
+			invitedNodes: "192.168.0.1, 192.168.0.3",
+			ip:           "",
+			expectedErr:  true,
+		},
+	}
+	for _, test := range tests {
+		err := checkValidIpInInvitedNodes(ctx, test.invitedNodes, test.ip)
+		if test.expectedErr {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
+	}
+}
+
+func TestPasswordTimeIntervalCheck(t *testing.T) {
+	tests := []struct {
+		timeStr  string
+		interval int64
+		want     bool
+	}{
+		{"2024-11-11 06:45:56", 0, true},
+		{"2024-11-11 06:46:01", 0, true},
+		{"2024-11-11 06:48:30", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.timeStr, func(t *testing.T) {
+			if got := passwordIntervalExpired(tt.timeStr, tt.interval); got != tt.want {
+				t.Errorf("passwordTimeIntervalCheck(%v) = %v, want %v", tt.timeStr, got, tt.want)
+			}
+		})
+	}
+}

@@ -355,3 +355,41 @@ select * from rename01;
 -- @session}
 select * from rename01;
 drop table rename01;
+
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+delete from t1 where a = 1;
+-- @session:id=1{
+use isolation;
+-- @wait:0:commit
+delete from t1 where a = 1;
+-- @session}
+commit;
+
+begin;
+delete from t1 where a in (1,2,3);
+-- @session:id=1{
+use isolation;
+-- @wait:0:commit
+delete from t1 where a = 3;
+-- @session}
+commit;
+
+begin;
+update t1 set b = 10 where a = 1;
+-- @session:id=1{
+use isolation;
+-- @wait:0:commit
+delete from t1 where a = 1;
+-- @session}
+commit;
+
+begin;
+select * from t1 where a = 1 for update;
+-- @session:id=1{
+use isolation;
+-- @wait:0:commit
+delete from t1 where a = 1;
+-- @session}
+commit;

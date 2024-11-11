@@ -106,39 +106,28 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	// special tables
-	if db.databaseName == catalog.MO_CATALOG {
-		switch name {
-		case catalog.MO_DATABASE:
-			id := uint64(catalog.MO_DATABASE_ID)
-			defs := catalog.GetDefines(p.GetService()).MoDatabaseTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_TABLES:
-			id := uint64(catalog.MO_TABLES_ID)
-			defs := catalog.GetDefines(p.GetService()).MoTablesTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_COLUMNS:
-			id := uint64(catalog.MO_COLUMNS_ID)
-			defs := catalog.GetDefines(p.GetService()).MoColumnsTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		}
-	}
-
+	openSys := db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(name)
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if openSys {
+		accountId = 0
+	}
+
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 
 	// check the table is deleted or not
-	if txn.tableOps.existAndDeleted(key) {
+	if !openSys && txn.tableOps.existAndDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	// get relation from the txn created tables cache: created by this txn
-	if v := txn.tableOps.existAndActive(key); v != nil {
-		v.proc.Store(p)
-		return v, nil
+	if !openSys {
+		if v := txn.tableOps.existAndActive(key); v != nil {
+			v.proc.Store(p)
+			return v, nil
+		}
 	}
 
 	rel := txn.getCachedTable(ctx, key)
@@ -270,7 +259,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	if len(rowids) != len(colPKs) {
-		panic(fmt.Sprintf("delete table failed %v, %v", len(rowids), len(colPKs)))
+		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 
 	{ // 2. delete the row from mo_tables
@@ -509,41 +498,6 @@ func (db *txnDatabase) createWithID(
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 	txn.tableOps.addCreateTable(key, txn.statementID, tbl)
 	return nil
-}
-
-func (db *txnDatabase) openSysTable(
-	p *process.Process,
-	id uint64,
-	name string,
-	defs []engine.TableDef,
-) engine.Relation {
-	item := &cache.TableItem{
-		AccountId:  catalog.System_Account,
-		DatabaseId: catalog.MO_CATALOG_ID,
-		Name:       name,
-		Ts:         db.op.SnapshotTS(),
-	}
-	// it is always safe to use latest cache to open system table
-	found := db.getEng().GetLatestCatalogCache().GetTable(item)
-	if !found {
-		panic("can't find system table")
-	}
-	tbl := &txnTable{
-		//AccountID for mo_tables, mo_database, mo_columns is always 0.
-		accountId:     0,
-		db:            db,
-		tableId:       id,
-		tableName:     name,
-		defs:          defs,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		tableDef:      item.TableDef,
-		constraint:    item.Constraint,
-		clusterByIdx:  -1,
-		eng:           db.getTxn().engine,
-	}
-	tbl.proc.Store(p)
-	return tbl
 }
 
 func (db *txnDatabase) loadTableFromStorage(

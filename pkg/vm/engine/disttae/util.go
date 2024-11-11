@@ -764,7 +764,7 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 
 func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
-	if len(bs) == 1 {
+	if len(bs) <= 1 {
 		return true
 	}
 	prevTableId := vector.GetFixedAtNoTypeCheck[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
