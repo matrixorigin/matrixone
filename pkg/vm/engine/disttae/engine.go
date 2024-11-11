@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -59,7 +59,6 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
-var ncpu = runtime.GOMAXPROCS(0)
 
 func New(
 	ctx context.Context,
@@ -553,6 +552,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
+	var ncpu = system.GoRoutines()
 	var nodes engine.Nodes
 
 	start := time.Now()
