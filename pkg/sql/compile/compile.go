@@ -1973,8 +1973,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
 
-	logutil.Infof("init datasource addr %v table %v", c.addr, s.DataSource.TableDef.Name)
-
 	return nil
 }
 
@@ -4059,11 +4057,17 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
+func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var txnOp client.TxnOperator
+
+	if onRemoteCN {
+		ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
+		c.proc.GetTxnOperator().AddWorkspace(ws)
+		ws.BindTxnOp(c.proc.GetTxnOperator())
+	}
 
 	//------------------------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
@@ -4123,7 +4127,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.D
 }
 
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
-	_, _, _, err := c.handleDbRelContext(n)
+	_, _, _, err := c.handleDbRelContext(n, false)
 	if err != nil {
 		return nil, err
 	}

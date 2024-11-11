@@ -650,7 +650,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 	}
 
-	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node)
+	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, !s.NodeInfo.IsLocal)
 	if err != nil {
 		return err
 	}
