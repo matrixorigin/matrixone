@@ -600,12 +600,13 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	idxColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
+		leadingColPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		if numParts > 1 {
-			origType := node.TableDef.Cols[leadingPos[0]].Typ
+			origType := node.TableDef.Cols[leadingColPos].Typ
 			idxColExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, origType, 0)
 		}
 
-		idxColMap[[2]int32{node.BindingTags[0], leadingPos[0]}] = idxColExpr
+		idxColMap[[2]int32{node.BindingTags[0], leadingColPos}] = idxColExpr
 
 		for i, expr := range node.FilterList {
 			fn := expr.GetF()
