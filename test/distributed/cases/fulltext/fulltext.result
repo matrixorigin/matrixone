@@ -10,9 +10,9 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src where match(body) against('red');
-not supported: fulltext_match() not implemented yet.  Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select match(body) against('red') from src;
-not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);
 select * from src where match(body, title) against('red');
 id    body    title
@@ -268,7 +268,7 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
-not supported: fulltext_match_score() not implemented yet. Please create FULLTEXT INDEX.
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
