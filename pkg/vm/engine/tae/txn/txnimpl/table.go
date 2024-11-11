@@ -696,9 +696,11 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.CreateNonAppendable.Add(1)
-	})
+	perfcounter.Update(
+		tbl.store.ctx,
+		func(counter *perfcounter.CounterSet) {
+			counter.TAE.Object.CreateNonAppendable.Add(1)
+		})
 	return tbl.createObject(opts)
 }
 
@@ -708,7 +710,8 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 		factory = tbl.store.dataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.CreateObject(tbl.store.txn, opts, factory); err != nil {
+	if meta, err = tbl.entry.CreateObject(
+		tbl.store.txn, opts, factory); err != nil {
 		return
 	}
 	obj = newObject(tbl, meta)
