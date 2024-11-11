@@ -66,7 +66,7 @@ func TestBuildReadersIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.BuildReaders(context.Background(), nil, nil, nil, 0, 0, false, 0)
+			_, err := tbl.BuildReaders(context.Background(), nil, nil, nil, 0, 0, false, 0, true)
 			require.Error(t, err)
 		},
 	)

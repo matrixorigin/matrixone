@@ -867,6 +867,7 @@ type Relation interface {
 		txnOffset int,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
+		filterMust bool,
 	) ([]Reader, error)
 
 	BuildShardingReaders(

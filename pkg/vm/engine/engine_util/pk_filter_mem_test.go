@@ -74,7 +74,7 @@ func TestNewMemPKFilter(t *testing.T) {
 
 	for i := range baseFilters {
 		tableDef.Cols[0].Typ.Id = int32(baseFilters[i].Oid)
-		filter, err := NewMemPKFilter(tableDef, ts, packerPool, baseFilters[i])
+		filter, err := NewMemPKFilter(tableDef, ts, packerPool, baseFilters[i], true)
 		assert.Nil(t, err)
 		assert.True(t, filter.isValid)
 		assert.Equal(t, function.BETWEEN, filter.op)

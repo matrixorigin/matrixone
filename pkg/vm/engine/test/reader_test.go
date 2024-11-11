@@ -1063,6 +1063,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 		0,
 		false,
 		0,
+		false,
 	)
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(ctx))
