@@ -16,15 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -37,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -297,6 +296,9 @@ type Compile struct {
 	isPrepare bool
 
 	hasMergeOp bool
+
+	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
+	ncpu int
 }
 
 type RemoteReceivRegInfo struct {
