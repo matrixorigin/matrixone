@@ -3616,7 +3616,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	"profiling_history_size": {
 		Name:              "profiling_history_size",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
