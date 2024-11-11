@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
@@ -79,7 +80,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			// Calculate the total sum of S3 requests for each stage
 			list, head, put, get, delete, deleteMul, writtenRows := CalcTotalS3Requests(gblStats, statsInfo)
 
-			s3InputEstByRows := statistic.EstimateS3Input(writtenRows)
+			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
 			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows(%d/8192):%.4f \n",
 				list, head, put, get, delete, deleteMul, writtenRows, s3InputEstByRows,
 			))
