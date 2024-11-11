@@ -251,11 +251,13 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
-	// txn workspace size
+	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
-	// the total row count for insert entries when txn commits.
-	insertCount int
-	// the approximation of total row count for delete entries when txn commits.
+	// the approximation of total size for insert entries
+	approximateInMemInsertSize uint64
+	// the approximation of total row count for insert entries
+	approximateInMemInsertCnt int
+	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
@@ -473,7 +475,7 @@ func (txn *Transaction) PPString() string {
 		}),
 		stringifySyncMap(txn.tableCache),
 		len(txn.toFreeBatches),
-		txn.insertCount,
+		txn.approximateInMemInsertCnt,
 		txn.snapshotWriteOffset,
 		txn.rollbackCount,
 		txn.statementID,
@@ -734,6 +736,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
+			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
 			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
