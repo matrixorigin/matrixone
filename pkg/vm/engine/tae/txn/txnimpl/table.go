@@ -607,7 +607,8 @@ func (tbl *txnTable) TransferDeleteRows(
 	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
-	if err = tbl.recurTransferDelete(memo, page, id, row, pk, pkType, depth, ts); err != nil {
+	if err = tbl.recurTransferDelete(
+		memo, page, id, row, pk, pkType, depth, ts); err != nil {
 		return
 	}
 
@@ -664,7 +665,8 @@ func (tbl *txnTable) GetObject(id *types.Objectid, isTombstone bool) (obj handle
 }
 
 func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) {
-	txnEntry, err := tbl.entry.DropObjectEntry(id, tbl.store.txn, isTombstone)
+	txnEntry, err := tbl.entry.DropObjectEntry(
+		id, tbl.store.txn, isTombstone)
 	if err != nil {
 		return
 	}
@@ -672,7 +674,8 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().GetID(), tbl.entry.ID, id, isTombstone)
+	tbl.store.txn.GetMemo().AddObject(
+		tbl.entry.GetDB().GetID(), tbl.entry.ID, id, isTombstone)
 	return
 }
 
