@@ -165,7 +165,7 @@ func (w *Ws) PPString() string {
 func NewMockCompile() *Compile {
 	return &Compile{
 		proc: testutil.NewProcess(),
-		ncpu: system.GoRoutines(),
+		ncpu: system.GoMaxProcs(),
 	}
 }
 

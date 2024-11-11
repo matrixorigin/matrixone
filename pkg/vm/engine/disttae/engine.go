@@ -552,7 +552,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
-	var ncpu = system.GoRoutines()
+	var ncpu = system.GoMaxProcs()
 	var nodes engine.Nodes
 
 	start := time.Now()

@@ -39,6 +39,8 @@ var (
 	memoryTotal atomic.Uint64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
+
+	goMaxProcs atomic.Int32
 )
 
 // InContainer returns if the process is running in a container.
@@ -107,6 +109,19 @@ func MemoryGolang() int {
 // GoRoutines returns the number of goroutine.
 func GoRoutines() int {
 	return runtime.NumGoroutine()
+}
+
+// GoMaxProcs returns the maximum number of CPUs that can be executing goroutine.
+// co-operate with SetGoMaxProcs
+func GoMaxProcs() int {
+	return int(goMaxProcs.Load())
+}
+
+// SetGoMaxProcs
+// co-operate with pkg/cnservice/service.handleGoMaxProcs
+func SetGoMaxProcs(n int) int {
+	goMaxProcs.Store(int32(n))
+	return runtime.GOMAXPROCS(n)
 }
 
 func runWithContainer(stopper *stopper.Stopper) {
