@@ -261,7 +261,7 @@ func Test_mce(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 
@@ -435,7 +435,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		})
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		err = handleCmdFieldList(ses, ec, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
@@ -744,7 +744,7 @@ func Test_handleShowVariables(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		proto.SetSession(ses)
 		ec := newTestExecCtx(ctx, ctrl)
