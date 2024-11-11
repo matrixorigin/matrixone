@@ -64,6 +64,14 @@ func TestDefaultGoAllocator(t *testing.T) {
 	})
 }
 
+func TestDefaultGoMakeAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return newDefault(&Config{
+			Allocator: ptrTo("go-make"),
+		})
+	})
+}
+
 func BenchmarkDefaultGoAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
