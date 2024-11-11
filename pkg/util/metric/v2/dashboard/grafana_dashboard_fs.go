@@ -119,10 +119,12 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 			3,
 			[]string{
 				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
+				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
 				cacheUsingPercent(componentFilter),
 			},
 			[]string{
-				"{{component}}",
+				"{{component}} - inuse",
+				"{{component}} - cap",
 				"{{component}} - Usage",
 			},
 			timeseries.Axis(tsaxis.Unit("bytes")),

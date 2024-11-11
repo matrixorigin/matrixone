@@ -229,6 +229,7 @@ func (c *DashboardCreator) withTimeSeries(
 	opts := []timeseries.Option{
 		timeseries.Span(span),
 		timeseries.DataSource(c.dataSource),
+		timeseries.Tooltip(timeseries.AllSeries), // default show all metrics' value.
 	}
 	opts = append(opts, tsOpts...)
 
