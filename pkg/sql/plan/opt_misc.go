@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -1115,4 +1116,97 @@ func (builder *QueryBuilder) tempOptimizeForDML() {
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.handleHashMapMessages(rootID)
 	}
+}
+
+func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err error) {
+	query := builder.qry
+	if !builder.isForUpdate {
+		if query.StmtType != plan.Query_DELETE && query.StmtType != plan.Query_UPDATE {
+			return
+		}
+	}
+
+	baseNode := query.Nodes[0]
+	if baseNode.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	tableDef := baseNode.TableDef
+	if !getLockTableAtTheEnd(tableDef) {
+		return
+	}
+	objRef := baseNode.ObjRef
+	tableIDs := make(map[uint64]bool)
+	tableIDs[tableDef.TblId] = true
+	for _, idx := range tableDef.Indexes {
+		if idx.TableExist {
+			_, idxTableDef := builder.compCtx.Resolve(objRef.SchemaName, idx.IndexTableName, nil)
+			if idxTableDef == nil {
+				return
+			}
+			tableIDs[idxTableDef.TblId] = false
+		}
+	}
+
+	var lockTarget *plan.LockTarget
+
+	for i := 1; i < len(query.Nodes); i++ {
+		node := query.Nodes[i]
+		if node.NodeType != plan.Node_LOCK_OP {
+			continue
+		}
+
+		for _, target := range node.LockTargets {
+			if target.IsPartitionTable {
+				continue
+			}
+
+			isMain, ok := tableIDs[target.TableId]
+			if !ok {
+				return //unsupport multi delete/multi update
+			}
+			if isMain && !target.LockTable { // do nothing if already a table lock
+				lockTarget = target
+			}
+		}
+	}
+
+	if lockTarget != nil {
+		var lockRows *Expr
+		pkName := tableDef.Name + "." + tableDef.Pkey.Names[0]
+		checkIsPkColExpr := func(e *plan.Expr) bool {
+			if col_expr, ok := e.Expr.(*plan.Expr_Col); ok {
+				if col_expr.Col.Name == pkName {
+					return true
+				}
+			}
+			return false
+		}
+
+		for _, expr := range baseNode.FilterList {
+			if e, ok := expr.Expr.(*plan.Expr_F); ok {
+				if e.F.Func.GetObjName() == "=" {
+					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
+					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
+					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+						lockRows = e.F.Args[1]
+					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+						lockRows = e.F.Args[0]
+					}
+				} else if e.F.Func.GetObjName() == "in" {
+					//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
+					//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
+					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+						lockRows = e.F.Args[1]
+					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+						lockRows = e.F.Args[0]
+					}
+				}
+			}
+		}
+
+		lockTarget.LockRows = lockRows
+		lockTarget.LockTableAtTheEnd = true
+	}
+
+	return
 }
