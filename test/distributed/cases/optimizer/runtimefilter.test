@@ -37,8 +37,10 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
 select Sleep(1);
+-- @bvt:issue#19733
 -- @separator:table
 explain select * from t1,t2 where t1.c1=t2.c2 and t2.c3<1000;
+-- @bvt:issue
 select count(*) from t1,t2 where t1.c1=t2.c2 and t2.c3<10000;
 -- @separator:table
 explain select * from t1,t2 where t1.c2=t2.c1 and t2.c3<5;
