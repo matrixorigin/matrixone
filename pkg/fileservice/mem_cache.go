@@ -17,8 +17,6 @@ package fileservice
 import (
 	"context"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -28,8 +26,6 @@ import (
 type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
-
-	capacityBytes prometheus.Gauge
 }
 
 func NewMemCache(
