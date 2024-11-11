@@ -1509,7 +1509,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-	if execResults, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForGetVariables); err != nil {
+	if execResults, err = ExeSqlInBgSes(tenantCtx, bh, sqlForGetVariables); err != nil {
 		return
 	}
 

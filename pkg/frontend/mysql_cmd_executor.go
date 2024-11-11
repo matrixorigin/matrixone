@@ -352,7 +352,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp)
+	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp, bh)
 	if err != nil {
 		return err
 	}
@@ -483,7 +483,9 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	}
 
 	if dbMeta.IsSubscription(ctx) {
-		if _, err = checkSubscriptionValid(ctx, ses, db); err != nil {
+		bh := ses.GetShareTxnBackgroundExec(ctx, false)
+		defer bh.Close()
+		if _, err = checkSubscriptionValid(ctx, ses, db, bh); err != nil {
 			return
 		}
 	}
