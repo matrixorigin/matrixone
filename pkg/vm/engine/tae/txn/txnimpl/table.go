@@ -507,9 +507,8 @@ func (tbl *txnTable) recurTransferDelete(
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
-		typ := types.T_Rowid.ToType()
-		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&typ)
-		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*newID.ObjectID(), newID.BlockID.Sequence(), offset)
+		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		rowID := types.NewRowid(&newID.BlockID, offset)
 		rowIDVec.Append(rowID, false)
 		defer rowIDVec.Close()
 		//transfer the deletes to the target block.
