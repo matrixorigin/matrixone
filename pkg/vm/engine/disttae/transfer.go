@@ -483,6 +483,7 @@ func doTransferRowids(
 		0,
 		false,
 		engine.Policy_CheckCommittedOnly,
+		true,
 	)
 	if err != nil {
 		return

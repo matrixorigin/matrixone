@@ -39,6 +39,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+const (
+	IndexScaleZero        = 0
+	MuchGreaterThanFactor = 100
+)
+
 type PartitionState struct {
 	service string
 

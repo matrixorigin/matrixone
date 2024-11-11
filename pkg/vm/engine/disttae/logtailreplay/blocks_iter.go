@@ -66,6 +66,14 @@ type BlocksIter interface {
 	Entry() types.Blockid
 }
 
+func (p *PartitionState) ApproxInMemTombstones() int {
+	return p.inMemTombstoneRowIdIndex.Len()
+}
+
+func (p *PartitionState) ApproxInMemRows() int {
+	return p.rows.Len()
+}
+
 // ApproxDataObjectsNum not accurate!  only used by stats
 func (p *PartitionState) ApproxDataObjectsNum() int {
 	return p.dataObjectsNameIndex.Len()

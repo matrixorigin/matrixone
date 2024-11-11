@@ -1763,6 +1763,7 @@ func (tbl *txnTable) BuildReaders(
 	txnOffset int,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
+	filterMust bool,
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
@@ -1815,6 +1816,7 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			filterMust,
 		)
 		if err != nil {
 			return nil, err

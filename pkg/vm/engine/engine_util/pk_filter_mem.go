@@ -17,7 +17,6 @@ package engine_util
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +26,10 @@ import (
 )
 
 type MemPKFilter struct {
-	op      int
+	op int
+	// for some MUST situations:
+	// 	1. transfer row ids
+	must    bool
 	packed  [][]byte
 	isVec   bool
 	isValid bool
@@ -41,17 +43,8 @@ func NewMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter BasePKFilter,
+	filterMust bool,
 ) (filter MemPKFilter, err error) {
-	//defer func() {
-	//	if filter.iter == nil {
-	//		filter.isValid = true
-	//		filter.iter = state.NewRowsIter(
-	//			types.TimestampToTS(ts),
-	//			nil,
-	//			false,
-	//		)
-	//	}
-	//}()
 
 	filter.TS = types.TimestampToTS(ts)
 
@@ -208,7 +201,18 @@ func NewMemPKFilter(
 	}
 
 	filter.tryConstructPrimaryKeyIndexIter(ts, tableDef.Name)
+
+	filter.must = filterMust
+
 	return
+}
+
+func (f *MemPKFilter) InKind() (int, bool) {
+	return len(f.packed), f.op == function.IN || f.op == function.PREFIX_IN
+}
+
+func (f *MemPKFilter) Must() bool {
+	return f.must
 }
 
 func (f *MemPKFilter) String() string {
@@ -233,7 +237,8 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 
 func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
 	ts timestamp.Timestamp,
-	tableName string) {
+	tableName string,
+) {
 	if !f.isValid {
 		return
 	}
