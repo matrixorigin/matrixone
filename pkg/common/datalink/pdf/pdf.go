@@ -33,10 +33,7 @@ func init() {
 
 func check_pdftotext() bool {
 	_, err := pdftotext_check_version()
-	if err == nil {
-		return true
-	}
-	return false
+	return err == nil
 }
 
 func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
