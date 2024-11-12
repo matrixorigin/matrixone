@@ -30,7 +30,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const estimateMemUsagePerRow = 20
+const estimateMemUsagePerRow = 30
 
 func estimateMergeConsume(objs []*catalog.ObjectEntry) (origSize, estSize int) {
 	for _, o := range objs {
