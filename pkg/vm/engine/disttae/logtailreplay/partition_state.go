@@ -122,7 +122,16 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
 		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
-
+	case api.Entry_DataObject:
+		if objectio.PartitionStateInjected(entry.TableName) {
+			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
+		}
+		p.HandleDataObjectList(ctx, entry, fs, pool)
+	case api.Entry_TombstoneObject:
+		if objectio.PartitionStateInjected(entry.TableName) {
+			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
+		}
+		p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 	default:
 		logutil.Panicf("unsupported logtail entry type: %s", entry.String())
 	}

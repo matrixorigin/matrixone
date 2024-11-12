@@ -30,7 +30,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const estimateMemUsagePerRow = 20
+const estimateMemUsagePerRow = 30
 
 func originalSize(objs []*catalog.ObjectEntry) int {
 	size := 0

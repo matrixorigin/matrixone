@@ -187,6 +187,8 @@ func (tbl *txnTable) recurTransferS3Delete(
 	rowID types.Rowid,
 	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
 	softDeletes map[objectio.ObjectId]struct{},
+	phase string,
+	from, to types.TS,
 ) (newID types.Rowid, err error) {
 	blkID2, row := rowID.Decode()
 	id.BlockID = *blkID2
@@ -201,6 +203,9 @@ func (tbl *txnTable) recurTransferS3Delete(
 				zap.Error(err),
 				zap.String("id", id.String()),
 				zap.String("txn", tbl.store.txn.String()),
+				zap.String("phase", phase),
+				zap.String("from", from.ToString()),
+				zap.String("to", to.ToString()),
 			)
 			err = moerr.NewTxnRWConflictNoCtx()
 			return
@@ -225,7 +230,7 @@ func (tbl *txnTable) recurTransferS3Delete(
 	if !ok {
 		return
 	}
-	return tbl.recurTransferS3Delete(id, newID, memo, softDeletes)
+	return tbl.recurTransferS3Delete(id, newID, memo, softDeletes, phase, from, to)
 }
 func (tbl *txnTable) TransferDeletes(
 	ctx context.Context,
@@ -301,7 +306,13 @@ func (tbl *txnTable) TransferDeletes(
 						rowID,
 						memo,
 						objMap,
+						phase,
+						startTS,
+						ts,
 					)
+					if err != nil {
+						return
+					}
 					pk := pkVec.Get(i)
 					// try to transfer the delete node
 					// here are some possible returns
@@ -496,13 +507,13 @@ func (tbl *txnTable) recurTransferDelete(
 		pkVec := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 		pkVec.Append(pk, false)
 		defer pkVec.Close()
-		typ := types.T_Rowid.ToType()
-		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&typ)
-		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*newID.ObjectID(), newID.BlockID.Sequence(), offset)
+		rowIDVec := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		rowID := *types.NewRowid(&newID.BlockID, offset)
 		rowIDVec.Append(rowID, false)
 		defer rowIDVec.Close()
 		//transfer the deletes to the target block.
-		if err = tbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
+		if err = tbl.DeleteByPhyAddrKeys(
+			rowIDVec, pkVec, handle.DT_Normal); err != nil {
 			return err
 		}
 		common.DoIfDebugEnabled(func() {
@@ -596,7 +607,8 @@ func (tbl *txnTable) TransferDeleteRows(
 	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
-	if err = tbl.recurTransferDelete(memo, page, id, row, pk, pkType, depth, ts); err != nil {
+	if err = tbl.recurTransferDelete(
+		memo, page, id, row, pk, pkType, depth, ts); err != nil {
 		return
 	}
 
@@ -653,7 +665,8 @@ func (tbl *txnTable) GetObject(id *types.Objectid, isTombstone bool) (obj handle
 }
 
 func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err error) {
-	txnEntry, err := tbl.entry.DropObjectEntry(id, tbl.store.txn, isTombstone)
+	txnEntry, err := tbl.entry.DropObjectEntry(
+		id, tbl.store.txn, isTombstone)
 	if err != nil {
 		return
 	}
@@ -661,7 +674,8 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().GetID(), tbl.entry.ID, id, isTombstone)
+	tbl.store.txn.GetMemo().AddObject(
+		tbl.entry.GetDB().GetID(), tbl.entry.ID, id, isTombstone)
 	return
 }
 
@@ -682,9 +696,11 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.CreateNonAppendable.Add(1)
-	})
+	perfcounter.Update(
+		tbl.store.ctx,
+		func(counter *perfcounter.CounterSet) {
+			counter.TAE.Object.CreateNonAppendable.Add(1)
+		})
 	return tbl.createObject(opts)
 }
 
@@ -694,7 +710,8 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 		factory = tbl.store.dataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.CreateObject(tbl.store.txn, opts, factory); err != nil {
+	if meta, err = tbl.entry.CreateObject(
+		tbl.store.txn, opts, factory); err != nil {
 		return
 	}
 	obj = newObject(tbl, meta)
