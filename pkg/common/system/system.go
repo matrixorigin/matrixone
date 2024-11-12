@@ -256,5 +256,6 @@ func refreshQuotaConfig() {
 
 func init() {
 	pid = os.Getpid()
+	SetGoMaxProcs(runtime.GOMAXPROCS(0))
 	refreshQuotaConfig()
 }
