@@ -23,13 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func reset() {
+func reset(exists bool) {
 	pdftotext_extract = pdftotext.Extract
 	pdftotext_check_version = pdftotext.CheckPopplerVersion
+	PDFTOTEXT_EXISTS = exists
 }
 
 func TestCheckVersion(t *testing.T) {
-	defer reset()
+	defer reset(PDFTOTEXT_EXISTS)
 
 	pdftotext_check_version = func() (string, error) {
 		return "1.0", nil
@@ -48,7 +49,7 @@ func TestCheckVersion(t *testing.T) {
 
 func TestError(t *testing.T) {
 
-	defer reset()
+	defer reset(PDFTOTEXT_EXISTS)
 
 	pdftotext_extract = func(data []byte) ([]pdftotext.PdfPage, error) {
 		return nil, moerr.NewInternalErrorNoCtx("some error")
@@ -59,7 +60,7 @@ func TestError(t *testing.T) {
 
 func TestPdfToText(t *testing.T) {
 
-	defer reset()
+	defer reset(PDFTOTEXT_EXISTS)
 
 	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
@@ -87,13 +88,7 @@ func TestGoPdf(t *testing.T) {
 
 func TestPdf(t *testing.T) {
 
-	pdftotext_exist := PDFTOTEXT_EXISTS
-
-	defer func() {
-		pdftotext_extract = pdftotext.Extract
-		pdftotext_check_version = pdftotext.CheckPopplerVersion
-		PDFTOTEXT_EXISTS = pdftotext_exist
-	}()
+	defer reset(PDFTOTEXT_EXISTS)
 
 	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
