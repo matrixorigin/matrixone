@@ -85,19 +85,16 @@ type Manager struct {
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 	eventOnce           sync.Once
-	tnMemo              *TNUsageMemo
 	nextCompactTS       types.TS
 }
 
 func NewManager(
-	memo *TNUsageMemo,
 	rt *dbutils.Runtime,
 	blockSize int,
 	nowClock func() types.TS) *Manager {
 
 	mgr := &Manager{
-		tnMemo: memo,
-		rt:     rt,
+		rt: rt,
 		table: NewTxnTable(
 			blockSize,
 			nowClock,
@@ -148,26 +145,6 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 			continue
 		}
 		mgr.generateLogtailWithTxn(txn)
-	}
-
-	mgr.notifyTableChange(items...)
-}
-
-func (mgr *Manager) notifyTableChange(items ...any) {
-	mgr.tnMemo.EnterProcessing()
-	defer func() {
-		mgr.tnMemo.LeaveProcessing()
-	}()
-
-	for _, item := range items {
-		txn := item.(*txnWithLogtails)
-		for _, tail := range *txn.tails {
-			mgr.tnMemo.RecordTableChange(
-				uint64(tail.Table.AccId),
-				tail.Table.DbId,
-				tail.Table.TbId,
-				types.TimestampToTS(*tail.Ts))
-		}
 	}
 }
 

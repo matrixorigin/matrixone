@@ -127,6 +127,11 @@ var dynamicConfig struct {
 	objIdsPool           sync.Pool
 	sqlExecFactory       func() ie.InternalExecutor
 	changeTableListLimit int
+
+	tableStock struct {
+		tbls   []*tablePair
+		newest types.TS
+	}
 }
 
 ////////////////// MoTableStats Interface //////////////////
@@ -300,6 +305,8 @@ func MTSTableSize(
 	ctx context.Context, server string,
 	accs, dbs, tbls []uint64,
 ) (sizes []uint64, err error) {
+
+	fmt.Println("mo_table_size request", len(tbls))
 
 	statsVals, err := queryStats(ctx, TableStatsTableSize, float64(0), accs, dbs, tbls)
 	if err != nil {
@@ -583,11 +590,9 @@ func alphaTask(
 		newCtx context.Context
 		cancel context.CancelFunc
 
-		ticker  *time.Ticker
-		procIdx int
+		ticker    *time.Ticker
+		processed int
 
-		tbls         []*tablePair
-		newestTS     types.TS
 		lastUpdateTS types.TS
 		pState       *logtailreplay.PartitionState
 	)
@@ -601,10 +606,10 @@ func alphaTask(
 		return err
 	}
 
-	tbls, newestTS, err = getChangedTableList(newCtx, service, eng, lastUpdateTS)
+	err = getChangedTableList(newCtx, service, eng, lastUpdateTS)
 	defer func() {
-		if len(tbls) > 0 {
-			err = updateLastUpdateTS(ctx, newestTS, service, sqlExecutor)
+		if len(dynamicConfig.tableStock.tbls) == 0 {
+			err = updateLastUpdateTS(ctx, dynamicConfig.tableStock.newest, service, sqlExecutor)
 			return
 		}
 	}()
@@ -625,23 +630,25 @@ func alphaTask(
 			return err
 
 		default:
-			if procIdx >= len(tbls) {
+			if processed >= dynamicConfig.changeTableListLimit ||
+				len(dynamicConfig.tableStock.tbls) == 0 {
 				return
 			}
 
-			if pState, err = subscribeTable(ctx, service, eng, tbls[procIdx]); err != nil {
+			if pState, err = subscribeTable(ctx, service, eng, dynamicConfig.tableStock.tbls[0]); err != nil {
 				return err
 			} else if pState == nil {
 				continue
 			}
 			pState = pState.Copy()
 
-			tbls[procIdx].pState = pState
-			tbls[procIdx].snapshot = newestTS
-			tbls[procIdx].waiter.errQueue = errQueue
-			dynamicConfig.tblQueue <- tbls[procIdx]
+			dynamicConfig.tableStock.tbls[0].pState = pState
+			dynamicConfig.tableStock.tbls[0].snapshot = dynamicConfig.tableStock.newest
+			dynamicConfig.tableStock.tbls[0].waiter.errQueue = errQueue
+			dynamicConfig.tblQueue <- dynamicConfig.tableStock.tbls[0]
 
-			procIdx++
+			processed++
+			dynamicConfig.tableStock.tbls = dynamicConfig.tableStock.tbls[1:]
 			ticker.Reset(time.Millisecond * 10)
 		}
 	}
@@ -714,12 +721,16 @@ func getChangedTableList(
 	service string,
 	eng engine.Engine,
 	from types.TS,
-) (tbls []*tablePair, newest types.TS, err error) {
+) (err error) {
+
+	if len(dynamicConfig.tableStock.tbls) > 0 {
+		return
+	}
 
 	defer func() {
 		logutil.Info("get changed table list",
 			zap.Time("from", from.ToTimestamp().ToStdTime()),
-			zap.Int("cnt", len(tbls)))
+			zap.Int("cnt", len(dynamicConfig.tableStock.tbls)))
 	}()
 
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
@@ -742,7 +753,7 @@ func getChangedTableList(
 	de := eng.(*Engine)
 	txnOperator, err := de.cli.New(ctx, timestamp.Timestamp{})
 	if err != nil {
-		return nil, types.TS{}, err
+		return err
 	}
 
 	proc := process.NewTopProcess(ctx,
@@ -752,18 +763,21 @@ func getChangedTableList(
 		de.us, nil,
 	)
 
+	fmt.Println("get table request")
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
 	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if err != nil {
-		return nil, types.TS{}, err
+		return err
 	}
 
 	cc := de.GetLatestCatalogCache()
 
 	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 
+	fmt.Println("get table stats", len(resp.AccIds))
+
 	if len(resp.AccIds) == 0 {
-		return nil, types.TS{}, nil
+		return nil
 	}
 
 	for i := range resp.AccIds {
@@ -780,10 +794,13 @@ func getChangedTableList(
 		tp.tblName = item.Name
 		tp.dbName = item.DatabaseName
 
-		tbls = append(tbls, tp)
+		//fmt.Println("get table stats", tp.String())
+		dynamicConfig.tableStock.tbls = append(dynamicConfig.tableStock.tbls, tp)
 	}
 
-	return tbls, types.TimestampToTS(*resp.Newest), nil
+	dynamicConfig.tableStock.newest = types.TimestampToTS(*resp.Newest)
+
+	return nil
 }
 
 func subscribeTable(
