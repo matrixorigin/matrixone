@@ -414,3 +414,7 @@ select * from src where match(json1, json2) against('"update json"' in boolean m
 id    json1    json2
 0    {"c":"update json"}    {"d": "happy birthday", "f":"winter"}
 drop table src;
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+create fulltext index ftidx on t1 (b);
