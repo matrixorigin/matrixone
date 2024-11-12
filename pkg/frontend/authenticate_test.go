@@ -7419,7 +7419,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
 
-	_ = ses.InitSystemVariables(ctx)
+	_ = ses.InitSystemVariables(ctx, nil)
 
 	rm, _ := NewRoutineManager(ctx, "")
 	rm.baseService = new(MockBaseService)

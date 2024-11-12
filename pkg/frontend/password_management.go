@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -121,9 +122,9 @@ func validateCheckUserNameInPassword(ctx context.Context, pwd, authUserName, cur
 		return nil
 	}
 
-	pwdBytes := Slice(pwd)
+	pwdBytes := util.UnsafeStringToBytes(pwd)
 	for _, userName := range []string{authUserName, curUserName} {
-		userNameBytes := Slice(userName)
+		userNameBytes := util.UnsafeStringToBytes(userName)
 		if bytes.Equal(pwdBytes, userNameBytes) {
 			return moerr.NewInvalidInputf(ctx, "Password '%s' euqals the user name '%s'", pwd, userName)
 		} else if bytes.Equal(pwdBytes, reverseBytes(userNameBytes)) {
@@ -337,7 +338,7 @@ func whetherSavePasswordHistory(ses *Session) (bool, error) {
 		return false, err
 	}
 
-	return passwordReuseInfo.PasswordHisoty > 0 && passwordReuseInfo.PasswordReuseInterval > 0, nil
+	return passwordReuseInfo.PasswordHisoty > 0 || passwordReuseInfo.PasswordReuseInterval > 0, nil
 }
 
 func generateSinglePasswordRecod(pwd string) ([]byte, error) {
@@ -426,7 +427,7 @@ func checkPasswordIntervalRule(ctx context.Context, reuseInfo *passwordReuseInfo
 				return false, err
 			}
 
-			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now()) {
+			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordReuseInterval)).After(time.Now().UTC()) {
 				return false, moerr.NewInvalidInputf(ctx, "The password has been used before, please change another one")
 			}
 		}
@@ -501,7 +502,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 		return err
 	}
 
-	if reuseInfo.PasswordHisoty <= 0 || reuseInfo.PasswordReuseInterval <= 0 {
+	if reuseInfo.PasswordHisoty <= 0 && reuseInfo.PasswordReuseInterval <= 0 {
 		return nil
 	}
 
@@ -525,13 +526,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 	if canDeleteNum > 0 {
 		for i := 0; i < int(canDeleteNum); i++ {
 			// if password time exceeds the password history, delete the password record
-			var passwordTime time.Time
-			passwordTime, err = time.ParseInLocation("2006-01-02 15:04:05", userPasswords[i].PasswordTimestamp, time.UTC)
-			if err != nil {
-				return err
-			}
-
-			if passwordTime.AddDate(0, 0, int(reuseInfo.PasswordHisoty)).Before(time.Now()) {
+			if passwordIntervalExpired(userPasswords[i].PasswordTimestamp, reuseInfo.PasswordReuseInterval) {
 				deleteNum++
 			} else {
 				break
@@ -672,4 +667,12 @@ func checkValidIpInInvitedNodes(ctx context.Context, invitedNodes string, ip str
 		return nil
 	}
 	return moerr.NewInvalidInputf(ctx, "IP %s is not in the invited nodes", ip)
+}
+
+func passwordIntervalExpired(timeStr string, interVal int64) bool {
+	passwordTime, err := time.ParseInLocation("2006-01-02 15:04:05", timeStr, time.UTC)
+	if err != nil {
+		return false
+	}
+	return passwordTime.AddDate(0, 0, int(interVal)).Before(time.Now().UTC())
 }
