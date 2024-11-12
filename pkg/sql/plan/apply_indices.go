@@ -542,6 +542,55 @@ func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	return nil, false
 }
 
+func (builder *QueryBuilder) replaceLeadingFilter(filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
+	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
+		expr := DeepCopyExpr(filterList[leadingPos[0]])
+		fn := expr.GetF()
+		fn.Args[0].GetCol().RelPos = idxTag
+		fn.Args[0].GetCol().ColPos = 0
+		fn.Args[0].Typ = idxTableDef.Cols[0].Typ
+		switch fn.Func.ObjName {
+		case "between":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
+		case "in":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
+		default:
+			panic("unsupported filter for index only scan!")
+		}
+		return expr
+	}
+
+	if numParts == 1 { //directly equal
+		expr := DeepCopyExpr(filterList[leadingPos[0]])
+		args := expr.GetF().Args
+		args[0].GetCol().RelPos = idxTag
+		args[0].GetCol().ColPos = 0
+		return expr
+	}
+
+	// a=1 and b=2, change to prefix_eq
+	compositeFilterSel := 1.0
+	serialArgs := make([]*plan.Expr, len(leadingPos))
+	for i := range leadingPos {
+		filter := filterList[leadingPos[i]]
+		serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
+		compositeFilterSel = compositeFilterSel * filter.Selectivity
+	}
+	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+
+	funcName := "="
+	if len(leadingPos) < numParts {
+		funcName = "prefix_eq"
+	}
+	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
+	expr.Selectivity = compositeFilterSel
+	return expr
+}
+
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
 	// check if this index contains all columns needed
 	for i := range node.TableDef.Cols {
@@ -613,53 +662,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
 	}
 
-	var newLeadingFilter *plan.Expr
-
-	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		expr := node.FilterList[leadingPos[0]]
-		fn := expr.GetF()
-		fn.Args[0].GetCol().RelPos = idxTag
-		fn.Args[0].GetCol().ColPos = 0
-		fn.Args[0].Typ = idxTableDef.Cols[0].Typ
-		switch fn.Func.ObjName {
-		case "between":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-			newLeadingFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
-		case "in":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-			newLeadingFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
-		}
-	} else { // a = 1 AND b = 2 AND c = 3
-		if numParts == 1 {
-			idx := leadingPos[0]
-			idxFilter := node.FilterList[idx]
-			args := idxFilter.GetF().Args
-			args[0].GetCol().RelPos = idxTag
-			args[0].GetCol().ColPos = 0
-			newLeadingFilter = idxFilter
-		} else {
-			compositeFilterSel := 1.0
-			serialArgs := make([]*plan.Expr, len(leadingPos))
-			for i := range leadingPos {
-				filter := node.FilterList[leadingPos[i]]
-				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
-				compositeFilterSel = compositeFilterSel * filter.Selectivity
-			}
-			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-
-			funcName := "="
-			if len(leadingPos) < numParts {
-				funcName = "prefix_eq"
-			}
-			newLeadingFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
-				GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
-				rightArg,
-			})
-			newLeadingFilter.Selectivity = compositeFilterSel
-		}
-	}
-
+	newLeadingFilter := builder.replaceLeadingFilter(node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef, numParts)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
 	for _, idx := range missFilterIdx {
