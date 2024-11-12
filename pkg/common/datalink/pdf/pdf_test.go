@@ -16,6 +16,7 @@ package pdf
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,10 +27,13 @@ func TestPdfToText(t *testing.T) {
 	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
 
-	data, err := GetPlainTextFromPdfToText(bytes)
-	require.Nil(t, err)
+	_, err = exec.LookPath("pdftotext")
+	if err == nil {
+		data, err := GetPlainTextFromPdfToText(bytes)
+		require.Nil(t, err)
 
-	require.Equal(t, string(data), "Optimizing MySQL','In this tutorial, we show ...")
+		require.Equal(t, string(data), "Optimizing MySQL','In this tutorial, we show ...")
+	}
 }
 
 func TestGoPdf(t *testing.T) {
@@ -43,7 +47,6 @@ func TestGoPdf(t *testing.T) {
 	require.Equal(t, string(data), "OptimizingMySQL','Inthistutorial,weshow...")
 }
 
-/*
 func TestPdf(t *testing.T) {
 
 	bytes, err := os.ReadFile("test/test3.pdf")
@@ -52,6 +55,10 @@ func TestPdf(t *testing.T) {
 	data, err := GetPlainText(bytes)
 	require.Nil(t, err)
 
-	fmt.Println(string(data))
+	_, err = exec.LookPath("pdftotext")
+	if err != nil {
+		require.Equal(t, string(data), "OptimizingMySQL','Inthistutorial,weshow...")
+	} else {
+		require.Equal(t, string(data), "Optimizing MySQL','In this tutorial, we show ...")
+	}
 }
-*/
