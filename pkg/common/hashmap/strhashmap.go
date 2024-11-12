@@ -15,8 +15,7 @@
 package hashmap
 
 import (
-	"unsafe"
-
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -182,7 +181,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					keys[i] = append(keys[i], 0)
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -199,7 +198,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					keys[i] = append(keys[i], 0)
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -212,7 +211,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -222,7 +221,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -248,7 +247,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 						keys[i] = append(keys[i], 0)
 						// give the length
 						length := uint16(len(bytes))
-						keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+						keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 						// append the pure value bytes
 						keys[i] = append(keys[i], bytes...)
 					}
@@ -261,7 +260,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -282,7 +281,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 						keys[i] = append(keys[i], 0)
 						// give the length
 						length := uint16(len(bytes))
-						keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+						keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 						// append the pure value bytes
 						keys[i] = append(keys[i], bytes...)
 					}
@@ -295,7 +294,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -325,7 +324,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		return
 	}
 	if vec.IsConst() {
-		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), sz)
+		data := vec.GetData()[:sz]
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], 0)
@@ -338,7 +337,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		}
 		return
 	}
-	data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
+	data := vec.GetData()[:(n+start)*sz]
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
