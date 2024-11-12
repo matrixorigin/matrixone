@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 type mpoolBased[T any, P ReusableObject[T]] struct {
@@ -59,5 +60,5 @@ func (p *mpoolBased[T, P]) Alloc() P {
 func (p *mpoolBased[T, P]) Free(v P) {
 	p.c.free(v)
 	p.opts.release(v)
-	p.pool.Free(unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v)))
+	p.pool.Free(util.UnsafeToBytes(v))
 }
