@@ -748,9 +748,7 @@ func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
 }
 
 func cleanHint(originSql string) string {
-	re := regexp.MustCompile(`/\*.*?\*/`)
+	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")
-	cleanSQL = regexp.MustCompile(`\s+`).ReplaceAllString(cleanSQL, " ")
-	cleanSQL = strings.TrimSpace(cleanSQL)
 	return cleanSQL
 }
