@@ -206,7 +206,7 @@ func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	/* push data change in mo_database table */
 }
 
-func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, dbName string, batchIdx int8, delete bool) {
+func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, dbName string, batchIdx int8, entryType api.Entry_EntryType) {
 	bat := b.batches[batchIdx]
 	if bat == nil || bat.Length() == 0 {
 		return
@@ -221,15 +221,11 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf(
 			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
-			tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString(),
+			tid, tableName, entryType, bat.Length(), b.txn.GetPrepareTS().ToString(),
 		)
 	})
 	if err != nil {
 		panic(err)
-	}
-	entryType := api.Entry_Insert
-	if delete {
-		entryType = api.Entry_Delete
 	}
 	if b.txn.GetMemo().IsFlushOrMerge &&
 		entryType == api.Entry_Delete &&
@@ -276,22 +272,22 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 
 func (b *TxnLogtailRespBuilder) rotateTable(aid uint32, dbName, tableName string, dbid, tid uint64, pkSeqnum uint16) {
 
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_data_meta", b.currTableID), b.currDBName, dataObjectInfoBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataObjectInfoBatch, api.Entry_DataObject)
 	if b.batches[dataObjectInfoBatch] != nil {
 		b.batchToClose = append(b.batchToClose, b.batches[dataObjectInfoBatch])
 		b.batches[dataObjectInfoBatch] = nil
 	}
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_tombstone_meta", b.currTableID), b.currDBName, tombstoneObjectInfoBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, tombstoneObjectInfoBatch, api.Entry_TombstoneObject)
 	if b.batches[tombstoneObjectInfoBatch] != nil {
 		b.batchToClose = append(b.batchToClose, b.batches[tombstoneObjectInfoBatch])
 		b.batches[tombstoneObjectInfoBatch] = nil
 	}
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, api.Entry_Delete)
 	if b.batches[dataDelBatch] != nil {
 		b.batchToClose = append(b.batchToClose, b.batches[dataDelBatch])
 		b.batches[dataDelBatch] = nil
 	}
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, api.Entry_Insert)
 	if b.batches[dataInsBatch] != nil {
 		b.insertBatch.Add(uint32(len(b.batchToClose)))
 		b.batchToClose = append(b.batchToClose, b.batches[dataInsBatch])
@@ -306,10 +302,10 @@ func (b *TxnLogtailRespBuilder) rotateTable(aid uint32, dbName, tableName string
 }
 
 func (b *TxnLogtailRespBuilder) BuildResp() {
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_data_meta", b.currTableID), b.currDBName, dataObjectInfoBatch, false)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_tombstone_meta", b.currTableID), b.currDBName, tombstoneObjectInfoBatch, false)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataObjectInfoBatch, api.Entry_DataObject)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, tombstoneObjectInfoBatch, api.Entry_TombstoneObject)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, api.Entry_Delete)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, api.Entry_Insert)
 
 	for i := range b.batches {
 		if b.batches[i] != nil {
