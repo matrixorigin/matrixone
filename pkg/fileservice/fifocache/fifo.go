@@ -20,8 +20,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"golang.org/x/sys/cpu"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 const numShards = 256
@@ -33,9 +34,9 @@ type Cache[K comparable, V any] struct {
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
 
-	postSet   func(ctx context.Context, key K, value V)
-	postGet   func(ctx context.Context, key K, value V)
-	postEvict func(ctx context.Context, key K, value V)
+	postSet   func(ctx context.Context, key K, value V, size int64)
+	postGet   func(ctx context.Context, key K, value V, size int64)
+	postEvict func(ctx context.Context, key K, value V, size int64)
 
 	shards [numShards]struct {
 		sync.Mutex
@@ -88,9 +89,9 @@ func (c *_CacheItem[K, V]) dec() {
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
-	postSet func(ctx context.Context, key K, value V),
-	postGet func(ctx context.Context, key K, value V),
-	postEvict func(ctx context.Context, key K, value V),
+	postSet func(ctx context.Context, key K, value V, size int64),
+	postGet func(ctx context.Context, key K, value V, size int64),
+	postEvict func(ctx context.Context, key K, value V, size int64),
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,
@@ -128,7 +129,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 	}
 	shard.values[key] = item
 	if c.postSet != nil {
-		c.postSet(ctx, key, value)
+		c.postSet(ctx, key, value, size)
 	}
 
 	return item
@@ -183,7 +184,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 		return
 	}
 	if c.postGet != nil {
-		c.postGet(ctx, item.key, item.value)
+		c.postGet(ctx, item.key, item.value, item.size)
 	}
 	shard.Unlock()
 	item.inc()
@@ -200,7 +201,7 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	}
 	delete(shard.values, key)
 	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value)
+		c.postEvict(ctx, item.key, item.value, item.size)
 	}
 	// queues will be update in evict
 }
@@ -275,7 +276,7 @@ func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
 	defer shard.Unlock()
 	delete(shard.values, item.key)
 	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value)
+		c.postEvict(ctx, item.key, item.value, item.size)
 	}
 }
 

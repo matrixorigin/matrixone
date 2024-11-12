@@ -817,3 +817,22 @@ func (c *Conn) Reset() {
 	c.packetInBuf = 0
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
 }
+
+// ExecuteFuncWithRecover executes the function and recover the panic
+func ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			hasRecovered = true
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
+	}()
+	if err = fun(); err != nil {
+		return
+	}
+	return
+}

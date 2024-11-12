@@ -261,9 +261,9 @@ func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 	return &ses.mysqlParser
 }
 
-func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
+func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) (err error) {
 	var sv *SystemVariables
-	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
 	ses.mu.Lock()
@@ -1151,15 +1151,27 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
 	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+
+	err = bh.Exec(sysTenantCtx, "begin;")
+	defer func() {
+		err = finishTxn(sysTenantCtx, bh, err)
+	}()
+	if err != nil {
+		return nil, err
+	}
+
 	sqlForCheckTenant, err = getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
 	}
 	ses.Debugf(ctx, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1218,7 +1230,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
+	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1267,7 +1279,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -1282,7 +1294,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1303,7 +1315,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1326,7 +1338,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	// TO Check password
-	if err = ses.InitSystemVariables(tenantCtx); err != nil {
+	if err = ses.InitSystemVariables(tenantCtx, bh); err != nil {
 		return nil, err
 	}
 
@@ -1351,7 +1363,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if needCheckLock {
 		// get user status, login_attempts, lock_time
 		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
-		userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userLockInfoSql)
+		userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 		if err != nil {
 			return nil, err
 		}
@@ -1386,16 +1398,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	// make update user login info in one transaction
-	bh := ses.GetBackgroundExec(tenantCtx)
-	defer bh.Close()
-
-	err = bh.Exec(tenantCtx, "begin;")
-	defer func() {
-		err = finishTxn(tenantCtx, bh, err)
-	}()
-	if err != nil {
-		return nil, err
-	}
 
 	if checkPassword(psw, salt, authResponse) {
 		ses.Debug(tenantCtx, "check password succeeded")
@@ -1410,7 +1412,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 			if defPwdLife > 0 {
 				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
-				userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userExpiredSql)
+				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
 				if err != nil {
 					return nil, err
 				}
@@ -1468,7 +1470,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use `"+dbName+"`")
+		_, err = executeSQLInBackgroundSession(tenantCtx, bh, "use `"+dbName+"`")
 		if err != nil {
 			return nil, err
 		}
@@ -1499,7 +1501,7 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
-func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]interface{}, err error) {
+func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
@@ -1507,7 +1509,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]i
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-	if execResults, err = ExeSqlInBgSes(tenantCtx, ses, sqlForGetVariables); err != nil {
+	if execResults, err = ExeSqlInBgSes(tenantCtx, bh, sqlForGetVariables); err != nil {
 		return
 	}
 
