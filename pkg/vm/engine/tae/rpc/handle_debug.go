@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -212,12 +215,102 @@ func (h *Handle) HandleGetChangedTableList(
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error) {
 
-	// TODO(ghs) Limit
-
 	from := types.TimestampToTS(*req.From)
 	now := types.BuildTS(time.Now().UnixNano(), 0)
 
-	rr := h.db.LogtailMgr.GetReader(from, now)
+	fmt.Println("handleGetChangedTableList", from.ToString(), req.Limit)
+	var (
+		err     error
+		dbEntry *catalog2.DBEntry
+		data    = &logtail.CheckpointData{}
+	)
+
+	logErr := func(e error, hint string) {
+		logutil.Info("handle get changed table list failed",
+			zap.Error(e),
+			zap.String("hint", hint))
+	}
+
+	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+	fmt.Println("handleGetChangedTableList-ckps", len(ckps))
+	var newFrom = from
+	for i := 0; i < len(ckps); i++ {
+		if ckps[i] == nil {
+			continue
+		}
+
+		ckpEnd := ckps[i].GetEnd()
+		if ckpEnd.LT(&from) {
+			continue
+		}
+
+		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		dataObjBat := data.GetObjectBatchs()
+		tombstoneObjBat := data.GetTombstoneObjectBatchs()
+
+		bats := []*containers.Batch{dataObjBat, tombstoneObjBat}
+
+		for j := range bats {
+			for k := range bats[j].Length() {
+				dbId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_DBID).Get(k).(uint64)
+				tblId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_TID).Get(k).(uint64)
+				commit := dataObjBat.GetVectorByName(objectio.DefaultCommitTS_Attr).Get(k).(types.TS)
+
+				if commit.GT(&newFrom) {
+					newFrom = commit
+				}
+
+				if slices.Index(resp.TableIds, tblId) != -1 {
+					continue
+				}
+
+				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
+				if err != nil {
+					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
+					return nil, err
+				}
+
+				resp.TableIds = append(resp.TableIds, tblId)
+				resp.DatabaseIds = append(resp.DatabaseIds, dbId)
+				resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
+			}
+
+			// to avoid load too much data, apply LIMIT here
+			if len(resp.TableIds) >= int(req.Limit) {
+				break
+			}
+		}
+	}
+
+	fmt.Println("handleGetChangedTableList-ckps-done", len(resp.TableIds), newFrom.ToString())
+
+	if len(resp.TableIds) >= int(req.Limit) {
+		tt := newFrom.ToTimestamp()
+		resp.Newest = &tt
+		return nil, nil
+	}
+
+	// TODO(ghs) apply LIMIT on this
+	rr := h.db.LogtailMgr.GetReader(newFrom, now)
 
 	cc := h.GetDB().Catalog
 
@@ -226,7 +319,11 @@ func (h *Handle) HandleGetChangedTableList(
 		dbId := val.DbID
 		tblId := val.ID
 
-		dbEntry, err := cc.GetDatabaseByID(dbId)
+		if slices.Index(resp.TableIds, tblId) != -1 {
+			continue
+		}
+
+		dbEntry, err = cc.GetDatabaseByID(dbId)
 		if err != nil {
 			return nil, err
 		}
@@ -240,31 +337,10 @@ func (h *Handle) HandleGetChangedTableList(
 		resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
 	}
 
-	// TODO
-	tt := h.db.LogtailMgr.LastTruncatedTS().ToTimestamp()
+	tt := now.ToTimestamp()
 	resp.Newest = &tt
 
-	truncated := h.GetDB().LogtailMgr.LastTruncatedTS()
-	if truncated.GE(&from) {
-		// TODO
-		// collect from ckp
-	}
-
-	//memo := h.db.GetUsageMemo()
-	//
-	//memo.EnterProcessing()
-	//defer func() {
-	//	memo.LeaveProcessing()
-	//}()
-	//
-	//var newest types.TS
-	//resp.AccIds, resp.DatabaseIds, resp.TableIds, newest =
-	//	memo.CollectTableChangeListByTS(
-	//		types.TimestampToTS(*req.From))
-	//
-	//tt := newest.ToTimestamp()
-	//resp.Newest = &tt
-
+	fmt.Println("handleGetChangedTableList-done", len(resp.TableIds), now.ToString())
 	return nil, nil
 }
 

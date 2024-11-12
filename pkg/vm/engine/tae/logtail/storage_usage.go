@@ -102,26 +102,10 @@ const (
 	nope    triode = 2
 )
 
-type TablePair struct {
-	AccId uint64
-	DbId  uint64
-	TblId uint64
-}
-
-func tablePairLess(a, b TablePair) bool {
-	if a.AccId != b.AccId {
-		return a.AccId < b.AccId
-	}
-
-	if a.DbId != b.DbId {
-		return a.DbId < b.DbId
-	}
-
-	return a.TblId < b.TblId
-}
-
 type UsageData struct {
-	TablePair
+	AccId        uint64
+	DbId         uint64
+	TblId        uint64
 	Size         uint64
 	SnapshotSize uint64
 
@@ -140,12 +124,9 @@ type ObjectAbstract struct {
 }
 
 var zeroUsageData UsageData = UsageData{
-	TablePair: TablePair{
-		AccId: math.MaxUint32,
-		DbId:  math.MaxUint64,
-		TblId: math.MaxUint64,
-	},
-
+	AccId:        math.MaxUint32,
+	DbId:         math.MaxUint64,
+	TblId:        math.MaxUint64,
 	Size:         math.MaxInt64,
 	SnapshotSize: math.MaxInt64,
 	special:      unknown,
@@ -163,13 +144,10 @@ func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result 
 
 			for z := 0; z < tblCnt; z++ {
 				result = append(result, UsageData{
-					TablePair: TablePair{
-						AccId: accId,
-						DbId:  dbId,
-						TblId: allocator.Add(1),
-					},
-
-					Size: uint64(rand.Int63() % 0x3fff),
+					AccId: accId,
+					DbId:  dbId,
+					TblId: allocator.Add(1),
+					Size:  uint64(rand.Int63() % 0x3fff),
 				})
 			}
 		}
@@ -211,7 +189,15 @@ func (u UsageData) IsZero() bool {
 }
 
 func usageLess(a UsageData, b UsageData) bool {
-	return tablePairLess(a.TablePair, b.TablePair)
+	if a.AccId != b.AccId {
+		return a.AccId < b.AccId
+	}
+
+	if a.DbId != b.DbId {
+		return a.DbId < b.DbId
+	}
+
+	return a.TblId < b.TblId
 }
 
 type StorageUsageCache struct {
@@ -341,11 +327,7 @@ func (c *StorageUsageCache) GatherAccountSize(id uint64) (size, snapshotSize uin
 	iter := c.data.Iter()
 	defer iter.Release()
 
-	piovt := UsageData{
-		TablePair: TablePair{
-			AccId: id,
-		},
-	}
+	piovt := UsageData{AccId: id}
 
 	if found := iter.Seek(piovt); !found {
 		return
@@ -375,23 +357,9 @@ func (c *StorageUsageCache) Delete(usage UsageData) {
 	c.setUpdateTime(time.Now())
 }
 
-type tableChange struct {
-	TablePair
-	Ts types.TS
-}
-
-func tableChangesLess(a, b tableChange) bool {
-	//if ret := a.Ts.Compare(&b.Ts); ret != 0 {
-	//	return ret < 0
-	//}
-	return tablePairLess(a.TablePair, b.TablePair)
-}
-
 type TNUsageMemo struct {
 	sync.Mutex
 	cache *StorageUsageCache
-
-	tableChangeList *btree.BTreeG[tableChange]
 	// has update
 	pending  bool
 	reqTrace []struct {
@@ -416,55 +384,8 @@ func NewTNUsageMemo(c *catalog.Catalog) *TNUsageMemo {
 	memo := new(TNUsageMemo)
 	memo.cache = NewStorageUsageCache()
 	memo.newAccCache = NewStorageUsageCache()
-	memo.tableChangeList = btree.NewBTreeGOptions[tableChange](
-		tableChangesLess, btree.Options{
-			Degree: 64,
-		})
 	memo.C = c
 	return memo
-}
-
-func (m *TNUsageMemo) RecordTableChange(
-	acc, db, tbl uint64,
-	ts types.TS) {
-
-	m.tableChangeList.Set(tableChange{
-		TablePair: TablePair{
-			AccId: acc,
-			DbId:  db,
-			TblId: tbl,
-		},
-		Ts: ts,
-	})
-}
-
-func (m *TNUsageMemo) CollectTableChangeListByTS(
-	from types.TS,
-) (accs, dbs, tbls []uint64, newest types.TS) {
-	// else: collect from list by the ts
-
-	if m.tableChangeList.Len() > 0 {
-		list := m.tableChangeList.Copy()
-		list.Scan(func(item tableChange) bool {
-			if item.Ts.LT(&from) {
-				// no need any more
-				m.tableChangeList.Delete(item)
-				return true
-			}
-
-			accs = append(accs, item.AccId)
-			dbs = append(dbs, item.DbId)
-			tbls = append(tbls, item.TblId)
-
-			if newest.LT(&item.Ts) {
-				newest = item.Ts
-			}
-
-			return true
-		})
-	}
-
-	return
 }
 
 func (m *TNUsageMemo) PrepareReplay(datas []*CheckpointData, vers []uint32) {
@@ -611,12 +532,7 @@ func (m *TNUsageMemo) GatherSpecialTableSize() (size uint64) {
 		return 0
 	}
 
-	usage := UsageData{
-		TablePair: TablePair{
-			AccId: uint64(pkgcatalog.System_Account),
-			DbId:  pkgcatalog.MO_CATALOG_ID,
-		},
-	}
+	usage := UsageData{AccId: uint64(pkgcatalog.System_Account), DbId: pkgcatalog.MO_CATALOG_ID}
 	iter := m.cache.Iter()
 
 	var updates []UsageData
@@ -730,12 +646,9 @@ func (m *TNUsageMemo) applyDeletes(
 			dbs = append(dbs, e)
 		case *catalog.TableEntry:
 			piovt := UsageData{
-				TablePair: TablePair{
-					AccId: uint64(e.GetDB().GetTenantID()),
-					DbId:  e.GetDB().GetID(),
-					TblId: e.GetID(),
-				},
-
+				AccId:   uint64(e.GetDB().GetTenantID()),
+				DbId:    e.GetDB().GetID(),
+				TblId:   e.GetID(),
 				special: unknown}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
@@ -760,11 +673,8 @@ func (m *TNUsageMemo) applyDeletes(
 	for _, db := range dbs {
 		iter := m.cache.Iter()
 		iter.Seek(UsageData{
-			TablePair: TablePair{
-				AccId: uint64(db.GetTenantID()),
-				DbId:  db.ID,
-			},
-
+			AccId:   uint64(db.GetTenantID()),
+			DbId:    db.ID,
 			special: unknown})
 
 		if !isSameDBFunc(iter.Item(), db) {
@@ -832,11 +742,7 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 
 func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
-	povit := UsageData{
-		TablePair: TablePair{
-			AccId: accId,
-		},
-		special: unknown}
+	povit := UsageData{AccId: accId, special: unknown}
 
 	iter := m.cache.Iter()
 
@@ -902,7 +808,6 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 			zap.Int("delayed tbl", len(m.pendingReplay.delayed)))
 	}()
 
-	// storage usage
 	for x := range m.pendingReplay.datas {
 
 		insVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageInsIDX])
@@ -911,11 +816,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		// var skip bool
 		// var log string
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{
-				TablePair: TablePair{
-					AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y],
-				},
-				Size: sizeCol[y], special: unknown}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
 			m.DeltaUpdate(usage, false)
 		}
 
@@ -928,37 +829,11 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < len(accCol); y++ {
-			usage := UsageData{
-				TablePair: TablePair{
-					AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y],
-				},
-				Size: sizeCol[y], special: unknown}
+			usage := UsageData{AccId: accCol[y], DbId: dbCol[y], TblId: tblCol[y], Size: sizeCol[y], special: unknown}
 			m.DeltaUpdate(usage, true)
 		}
 	}
 
-	// table change list
-	for x := range m.pendingReplay.datas {
-		dataObjBat := m.pendingReplay.datas[x].bats[ObjectInfoIDX]
-		tombstoneObjBat := m.pendingReplay.datas[x].bats[TombstoneObjectInfoIDX]
-
-		bats := []*containers.Batch{dataObjBat, tombstoneObjBat}
-
-		for i := range bats {
-			for j := range bats[i].Length() {
-				dbId := dataObjBat.GetVectorByName(SnapshotAttr_DBID).Get(j).(uint64)
-				tblId := dataObjBat.GetVectorByName(SnapshotAttr_TID).Get(j).(uint64)
-				commit := dataObjBat.GetVectorByName(objectio.DefaultCommitTS_Attr).Get(j).(types.TS)
-
-				entry, err := m.C.GetDatabaseByID(dbId)
-				if err != nil {
-					logutil.Errorf("EstablishFromCKPs replay table change list faile: %v(%d)", err, dbId)
-				}
-
-				m.RecordTableChange(uint64(entry.GetTenantID()), dbId, tblId, commit)
-			}
-		}
-	}
 }
 
 // the returned order:
@@ -1056,12 +931,10 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 func Objects2Usages(objs []*catalog.ObjectEntry, isGlobal bool) (usages []UsageData) {
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
 		usage := UsageData{
-			TablePair: TablePair{
-				DbId:  obj.GetTable().GetDB().GetID(),
-				TblId: obj.GetTable().GetID(),
-				AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
-			},
-			Size: uint64(obj.Size()),
+			DbId:  obj.GetTable().GetDB().GetID(),
+			Size:  uint64(obj.Size()),
+			TblId: obj.GetTable().GetID(),
+			AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
 		}
 
 		if isGlobal {
@@ -1173,12 +1046,10 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		}
 
 		memo.Replace(UsageData{
-			TablePair: TablePair{
-				TblId: uniqueTbl[2],
-				DbId:  uniqueTbl[1],
-				AccId: uniqueTbl[0],
-			},
 			Size:           uint64(usage.Size),
+			TblId:          uniqueTbl[2],
+			DbId:           uniqueTbl[1],
+			AccId:          uniqueTbl[0],
 			SnapshotSize:   usage.SnapshotSize,
 			ObjectAbstract: usage.ObjectAbstract,
 		})
@@ -1368,12 +1239,9 @@ func FillUsageBatOfCompacted(
 			snapSize := usageData[key].SnapshotSize
 			snapSize += uint64(stats.Size())
 			usageData[key] = UsageData{
-				TablePair: TablePair{
-					AccId: accountId,
-					DbId:  dbid[i],
-					TblId: tableID[i],
-				},
-
+				AccId:        accountId,
+				DbId:         dbid[i],
+				TblId:        tableID[i],
 				SnapshotSize: snapSize,
 			}
 
@@ -1498,12 +1366,9 @@ func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
 
 	for idx := range accCol {
 		usages = append(usages, UsageData{
-			TablePair: TablePair{
-				AccId: accCol[idx],
-				DbId:  dbCol[idx],
-				TblId: tblCol[idx],
-			},
-
+			AccId:   accCol[idx],
+			DbId:    dbCol[idx],
+			TblId:   tblCol[idx],
 			Size:    sizeCol[idx],
 			special: unknown,
 		})
