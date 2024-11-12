@@ -3614,6 +3614,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("connection_control_max_connection_delay", 0, 2147483647, false),
 		Default:           int64(0),
 	},
+	"validnode_checking": {
+		Name:              "validnode_checking",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("validnode_checking"),
+		Default:           int64(0),
+	},
+	"invited_nodes": {
+		Name:              "invited_nodes",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("invited_nodes"),
+		Default:           "*",
+	},
+	"profiling_history_size": {
+		Name:              "profiling_history_size",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
+		Default:           int64(15),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
