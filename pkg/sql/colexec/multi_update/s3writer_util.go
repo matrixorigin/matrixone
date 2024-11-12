@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -132,6 +133,7 @@ func cloneSomeVecFromCompactBatchs(
 	var err error
 	var newBat *batch.Batch
 	bats := make([]*batch.Batch, 0, src.Length())
+	var sortNulls *nulls.Nulls
 
 	defer func() {
 		if err != nil {
@@ -154,7 +156,9 @@ func cloneSomeVecFromCompactBatchs(
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
-			sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls = oldBat.Vecs[cols[sortIdx]].GetNulls()
+			}
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
@@ -166,7 +170,11 @@ func cloneSomeVecFromCompactBatchs(
 			}
 
 			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(rowIdx)) && !sortNulls.Contains(uint64(rowIdx)) {
+				if !nulls.Contains(uint64(rowIdx)) {
+					if sortNulls != nil && sortNulls.Contains(uint64(rowIdx)) {
+						continue
+					}
+
 					if partition == -1 {
 						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expect {
@@ -192,9 +200,8 @@ func cloneSomeVecFromCompactBatchs(
 			newBat.Attrs = attrs
 			oldBat := src.Get(i)
 
-			sortVec := oldBat.Vecs[cols[sortIdx]]
-			if sortVec.HasNull() {
-				sortNulls := sortVec.GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
 				for newColIdx, oldColIdx := range cols {
 					typ := oldBat.Vecs[oldColIdx].GetType()
 					newBat.Vecs[newColIdx] = vector.NewVec(*typ)
