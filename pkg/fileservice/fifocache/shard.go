@@ -16,14 +16,11 @@ package fifocache
 
 import (
 	"hash/maphash"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"golang.org/x/exp/constraints"
 )
 
 func ShardInt[T constraints.Integer](v T) uint64 {
-	return maphash.Bytes(seed, unsafe.Slice(
-		(*byte)(unsafe.Pointer(&v)),
-		unsafe.Sizeof(v),
-	))
+	return maphash.Bytes(seed, util.UnsafeToBytes(&v))
 }
