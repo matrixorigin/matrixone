@@ -11,3 +11,13 @@ insert into t3(a) values (1);
 create table t4(a int auto_increment, b int auto_increment, unique key(a, b));
 insert into t4(b) values (1);
 insert into t4(a) values (2);
+
+
+drop table if exists insert_t5;
+create table insert_t5(col1 bool);
+insert into insert_t5 values("true");
+select * from insert_t5;
+delete from insert_t5;;
+insert into insert_t5 values("false");
+select * from insert_t5;
+drop table insert_t5;
