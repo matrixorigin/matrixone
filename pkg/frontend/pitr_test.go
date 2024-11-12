@@ -306,7 +306,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{}})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -387,7 +387,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -468,7 +468,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -550,7 +550,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -646,7 +646,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -743,7 +743,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -839,7 +839,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -936,7 +936,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1018,7 +1018,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 	convey.Convey("doRestorePitr fail", t, func() {
@@ -1098,7 +1098,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1181,7 +1181,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1261,7 +1261,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1469,14 +1469,14 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
 		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1")
 		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1594,7 +1594,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1716,7 +1716,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1832,7 +1832,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1955,7 +1955,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2072,7 +2072,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -2199,7 +2199,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2320,7 +2320,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2441,7 +2441,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }

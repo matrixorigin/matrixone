@@ -718,9 +718,8 @@ func Test_handleCreateCdc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.wantErr(t,
-				execInFrontend(tt.args.ses, tt.args.execCtx),
-				fmt.Sprintf("handleCreateCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.create))
+			_, err = execInFrontend(tt.args.ses, tt.args.execCtx)
+			tt.wantErr(t, err, fmt.Sprintf("handleCreateCdc(%v, %v, %v)", tt.args.ses, tt.args.execCtx, tt.args.create))
 		})
 	}
 }
@@ -1747,7 +1746,7 @@ func Test_updateCdc_cancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			_, err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -1938,7 +1937,7 @@ func Test_updateCdc_pause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			_, err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -2133,7 +2132,7 @@ func Test_updateCdc_restart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			_, err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -2231,7 +2230,7 @@ func Test_updateCdc_resume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			_, err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
@@ -2457,7 +2456,7 @@ func Test_handleShowCdc(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
+			_, err = execInFrontend(tt.args.ses, tt.args.ses.GetTxnCompileCtx().execCtx)
 			assert.NoError(t, err)
 			rs := tt.args.ses.GetMysqlResultSet()
 			taskId, err := rs.GetString(tt.args.execCtx.reqCtx, 0, 0)
@@ -2913,7 +2912,7 @@ func Test_execFrontend(t *testing.T) {
 
 	for _, stmt := range stmts {
 		ses.GetTxnCompileCtx().execCtx.stmt = stmt
-		err := execInFrontend(ses, ses.GetTxnCompileCtx().execCtx)
+		_, err := execInFrontend(ses, ses.GetTxnCompileCtx().execCtx)
 		assert.Error(t, err)
 	}
 
