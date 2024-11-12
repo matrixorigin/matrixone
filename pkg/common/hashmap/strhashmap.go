@@ -101,6 +101,38 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	}
 }
 
+func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, n int, start int) {
+	keys := itr.keys
+	bytes := vec.GetBytesAt(start)
+	length := uint16(len(bytes))
+	// can't be const null
+	if itr.mp.hasNull {
+		gsp := vec.GetGrouping()
+		for i := 0; i < n; i++ {
+			hasGrouping := gsp.Contains(uint64(i + start))
+			if hasGrouping {
+				keys[i] = append(keys[i], byte(2))
+				continue
+			}
+			// for "a"，"bc" and "ab","c", we need to distinct
+			// this is not null value
+			keys[i] = append(keys[i], 0)
+			// give the length
+			keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+			// append the pure value bytes
+			keys[i] = append(keys[i], bytes...)
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			// for "a"，"bc" and "ab","c", we need to distinct
+			// give the length
+			keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+			// append the pure value bytes
+			keys[i] = append(keys[i], bytes...)
+		}
+	}
+}
+
 // A NULL C
 // 01A101C 9 bytes
 // for non-NULL value, give 3 bytes, the first byte is always 0, the last two bytes are the length
@@ -128,6 +160,11 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 		}
 		return
 	}
+	if vec.IsConst() {
+		fillStringGroupStrForConstVec(itr, vec, n, start)
+		return
+	}
+
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			gsp := vec.GetGrouping()
