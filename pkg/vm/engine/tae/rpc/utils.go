@@ -214,9 +214,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 		tblIt := entry.MakeTableIt(true)
 		for tblIt.Valid() {
 			insUsage := logtail.UsageData{
-				TablePair: logtail.TablePair{
-					AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID,
-				},
+				AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID,
 			}
 
 			tblEntry := tblIt.Get().GetPayload()
