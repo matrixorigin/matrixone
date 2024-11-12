@@ -563,8 +563,9 @@ type ObservabilityParameters struct {
 	// LabelSelector
 	LabelSelector map[string]string `toml:"label-selector"`
 
-	// TaskLabelSelector
-	TaskLabelSelector map[string]string `toml:"task-label-selector"`
+	// TaskLabel
+	TaskLabel      map[string]string `toml:"task-label"`
+	ResetTaskLabel bool              `toml:"reset-task-label"`
 
 	// estimate tcp network packet cost
 	TCPPacket bool `toml:"tcp-packet"`
@@ -636,7 +637,8 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggThreshold:                 toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{}, /*default: role=logging_cn*/
-		TaskLabelSelector:                  defaultTaskLoggerMap,
+		TaskLabel:                          map[string]string{},
+		ResetTaskLabel:                     false,
 		TCPPacket:                          true,
 		MaxLogMessageSize:                  toml.ByteSize(defaultMaxLogMessageSize),
 		CU:                                 *NewOBCUConfig(),
