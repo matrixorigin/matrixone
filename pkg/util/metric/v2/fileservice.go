@@ -47,6 +47,10 @@ var (
 	FSReadHitMemCounter    = fsReadCounter.WithLabelValues("hit-mem")
 	FSReadHitDiskCounter   = fsReadCounter.WithLabelValues("hit-disk")
 	FSReadHitRemoteCounter = fsReadCounter.WithLabelValues("hit-remote")
+	FSReadHitMetaCounter   = fsReadCounter.WithLabelValues("hit-meta")
+	FSReadReadMemCounter   = fsReadCounter.WithLabelValues("read-mem")
+	FSReadReadDiskCounter  = fsReadCounter.WithLabelValues("read-disk")
+	FSReadReadMetaCounter  = fsReadCounter.WithLabelValues("read-meta")
 )
 
 var (
@@ -156,3 +160,26 @@ var (
 		},
 	)
 )
+
+var (
+	fsCacheBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_bytes",
+			Help:      "Total bytes of fs cache.",
+		}, []string{"component", "type"})
+)
+
+// GetFsCacheBytesGauge return inuse, cap Gauge metric
+// {typ} should be [mem, disk, meta]
+func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
+	var component string
+	if name == "" {
+		component = typ
+	} else {
+		component = name + "-" + typ
+	}
+	return fsCacheBytes.WithLabelValues(component, "inuse"),
+		fsCacheBytes.WithLabelValues(component, "cap")
+}
