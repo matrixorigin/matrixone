@@ -655,7 +655,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	builder.addNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
-	if numKeyParts == 1 {
+	if numParts == 1 {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
 	} else {
