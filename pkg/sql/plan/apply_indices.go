@@ -558,6 +558,10 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	leadingPos, leadingEqualCond := findLeadingFilter(idxDef, node)
+	if leadingPos == nil {
+		//don't find leading filter, return
+		return -1
+	}
 	if leadingEqualCond {
 		leadingPos = tryMatchMoreLeadingFilters(idxDef, node, leadingPos[0])
 	}
