@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     curl \
     git \
+    poppler-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
