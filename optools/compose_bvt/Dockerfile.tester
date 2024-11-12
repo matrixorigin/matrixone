@@ -1,10 +1,5 @@
 FROM matrixorigin/tester:go1.22.3-jdk8
 
-# Install some utilities used for debugging or by startup script
-RUN apt-get update && apt-get install -y \
-    poppler-utils \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /
 
 RUN git clone https://github.com/matrixorigin/mo-tester.git
