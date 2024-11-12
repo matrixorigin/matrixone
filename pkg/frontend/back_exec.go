@@ -514,6 +514,10 @@ var NewBackgroundExec = func(
 	return upstream.BackExec(nil, "", fakeDataSetFetcher2)
 }
 
+var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
+	return ses.GetShareTxnBackgroundExec(ctx, rawBatch)
+}
+
 // ExeSqlInBgSes for mock stub
 var ExeSqlInBgSes = func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
 	return executeSQLInBackgroundSession(reqCtx, bh, sql)

@@ -1496,7 +1496,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		bhStub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
