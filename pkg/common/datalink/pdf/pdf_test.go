@@ -15,7 +15,7 @@
 package pdf
 
 import (
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,7 +23,7 @@ import (
 
 func TestPdfToText(t *testing.T) {
 
-	bytes, err := ioutil.ReadFile("test/test3.pdf")
+	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
 
 	data, err := GetPlainTextFromPdfToText(bytes)
@@ -34,7 +34,7 @@ func TestPdfToText(t *testing.T) {
 
 func TestGoPdf(t *testing.T) {
 
-	bytes, err := ioutil.ReadFile("test/test3.pdf")
+	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
 
 	data, err := GetPlainTextFromDslipakPdf(bytes)
@@ -46,7 +46,7 @@ func TestGoPdf(t *testing.T) {
 /*
 func TestPdf(t *testing.T) {
 
-	bytes, err := ioutil.ReadFile("test/test3.pdf")
+	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
 
 	data, err := GetPlainText(bytes)
