@@ -235,6 +235,8 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+	// create version
+	createVersion string
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -962,6 +964,18 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 	return val, nil
 }
 
+func (ses *Session) SetCreateVersion(version string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.createVersion = version
+}
+
+func (ses *Session) GetCreateVersion() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.createVersion
+}
+
 func (ses *Session) GetTxnInfo() string {
 	txnH := ses.GetTxnHandler()
 	if txnH == nil {
@@ -1010,6 +1024,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	var createVersion string
 
 	//Get tenant info
 	tenant, err = GetTenantInfo(ctx, userInput)
@@ -1058,8 +1073,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	//account version
+	// account version
 	accountVersion, err = rsset[0].GetUint64(sysTenantCtx, 0, 3)
+	if err != nil {
+		return nil, err
+	}
+
+	// create version
+	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
 	if err != nil {
 		return nil, err
 	}
@@ -1223,6 +1244,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	ses.Info(ctx, tenant.String())
+	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
 }
@@ -1305,18 +1327,6 @@ func (ses *Session) GetFromRealUser() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.fromRealUser
-}
-
-func changeVersion(ctx context.Context, ses *Session, db string) error {
-	var err error
-	if _, ok := bannedCatalogDatabases[db]; ok {
-		return err
-	}
-	version, _ := GetVersionCompatibility(ctx, ses, db)
-	if ses.GetTenantInfo() != nil {
-		ses.GetTenantInfo().SetVersion(version)
-	}
-	return err
 }
 
 // getCNLabels returns requested CN labels.

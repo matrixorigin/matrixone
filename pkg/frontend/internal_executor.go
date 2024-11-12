@@ -254,6 +254,8 @@ func (ip *internalProtocol) GetStr(id PropertyID) string {
 		return ip.GetUserName()
 	case DBNAME:
 		return ip.GetDatabaseName()
+	case PEER:
+		return ip.Peer()
 	}
 	return ""
 }

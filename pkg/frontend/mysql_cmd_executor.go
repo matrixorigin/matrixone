@@ -1804,6 +1804,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		}
 	}
 	if ret != nil {
+		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
 			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
 			if err != nil {
@@ -2623,6 +2624,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
+	input.genHash()
+	version := ses.GetCreateVersion()
+	if len(version) == 0 {
+		version = serverVersion.Load().(string)
+	}
 
 	sqlLen := len(input.getSql())
 	if sqlLen != 0 {
@@ -2661,7 +2667,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
 		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
+		Version:              makeServerVersion(getGlobalPu(), version),
 		TimeZone:             ses.GetTimeZone(),
 		StorageEngine:        getGlobalPu().StorageEngine,
 		LastInsertID:         ses.GetLastInsertID(),
@@ -2887,6 +2893,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			} else {
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
 	ses.EnterFPrint(1)

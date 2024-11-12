@@ -3691,6 +3691,14 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 // InplaceSortAndCompact @todo optimization in the future
 func (v *Vector) InplaceSortAndCompact() {
+	cleanDataNotResetArea := func() {
+		if v.data != nil {
+			v.length = 0
+		}
+		v.nsp.Reset()
+		v.sorted = true
+	}
+
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedCol[bool](v)
@@ -3973,49 +3981,47 @@ func (v *Vector) InplaceSortAndCompact() {
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
+
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float32](
+			return moarray.Compare(
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare[float64](
+			return moarray.Compare(
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
+			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
 	}
@@ -4295,55 +4301,76 @@ func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, a
 
 // Intersection2VectorOrdered does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
-	var long, short []T
-	if len(a) < len(b) {
-		long = b
-		short = a
-	} else {
-		long = a
-		short = b
+func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
+	a, b []T,
+	ret *Vector,
+	mp *mpool.MPool,
+	cmp func(x, y T) int) (err error) {
+
+	var preVal T
+	var idxA, idxB int
+
+	if err = ret.PreExtend(len(a)+len(b), mp); err != nil {
+		return err
 	}
-	var lenLong, lenShort = len(long), len(short)
 
-	ret.PreExtend(lenLong+lenShort, mp)
+	for idxA < len(a) && idxB < len(b) {
+		var cmpRet int
 
-	for i := range short {
-		idx := sort.Search(lenLong, func(j int) bool {
-			return cmp(long[j], short[i]) >= 0
-		})
-		if idx >= lenLong {
-			break
+		if cmpRet = cmp(a[idxA], b[idxB]); cmpRet == 0 {
+			if ret.Length() == 0 || cmp(preVal, a[idxA]) != 0 {
+				if err = AppendFixed(ret, a[idxA], false, mp); err != nil {
+					return err
+				}
+
+				preVal = a[idxA]
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		if cmp(short[i], long[idx]) == 0 {
-			AppendFixed(ret, short[i], false, mp)
-		}
-
-		long = long[idx:]
 	}
+
+	return nil
 }
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
+func Union2VectorOrdered[T types.OrderedT | types.Decimal128](
+	a, b []T,
+	ret *Vector,
+	mp *mpool.MPool,
+	cmp func(x, y T) int) (err error) {
+
 	var i, j int
 	var prevVal T
 	var lenA, lenB = len(a), len(b)
 
-	ret.PreExtend(lenA+lenB, mp)
+	if err = ret.PreExtend(lenA+lenB, mp); err != nil {
+		return err
+	}
 
 	for i < lenA && j < lenB {
 		if cmp(a[i], b[j]) <= 0 {
 			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 				prevVal = a[i]
-				AppendFixed(ret, a[i], false, mp)
+				if err = AppendFixed(ret, a[i], false, mp); err != nil {
+					return err
+				}
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 				prevVal = b[j]
-				AppendFixed(ret, b[j], false, mp)
+				if err = AppendFixed(ret, b[j], false, mp); err != nil {
+					return err
+				}
 			}
 			j++
 		}
@@ -4352,63 +4379,76 @@ func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vec
 	for ; i < lenA; i++ {
 		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 			prevVal = a[i]
-			AppendFixed(ret, a[i], false, mp)
+			if err = AppendFixed(ret, a[i], false, mp); err != nil {
+				return err
+			}
 		}
 	}
 
 	for ; j < lenB; j++ {
 		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 			prevVal = b[j]
-			AppendFixed(ret, b[j], false, mp)
+			if err = AppendFixed(ret, b[j], false, mp); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // Intersection2VectorVarlen does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
-func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
-	var shortCol, longCol []types.Varlena
-	var shortArea, longArea []byte
+func Intersection2VectorVarlen(
+	va, vb *Vector,
+	ret *Vector,
+	mp *mpool.MPool) (err error) {
+
+	var preVal []byte
+	var idxA, idxB int
 
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	if len(cola) <= len(colb) {
-		shortCol = cola
-		shortArea = areaa
-		longCol = colb
-		longArea = areab
-	} else {
-		shortCol = colb
-		shortArea = areab
-		longCol = cola
-		longArea = areaa
+	if err = ret.PreExtend(len(cola)+len(colb), mp); err != nil {
+		return err
 	}
 
-	var lenLong, lenShort = len(longCol), len(shortCol)
+	for idxA < len(cola) && idxB < len(colb) {
+		var cmpRet int
 
-	ret.PreExtend(lenLong+lenShort, mp)
+		bytesA := cola[idxA].GetByteSlice(areaa)
+		bytesB := colb[idxB].GetByteSlice(areab)
 
-	for i := range shortCol {
-		shortBytes := shortCol[i].GetByteSlice(shortArea)
-		idx := sort.Search(lenLong, func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
-		})
-		if idx >= lenLong {
-			break
+		if cmpRet = bytes.Compare(bytesA, bytesB); cmpRet == 0 {
+			if ret.Length() == 0 || !bytes.Equal(preVal, bytesA) {
+				if err = AppendBytes(ret, bytesA, false, mp); err != nil {
+					return err
+				}
+
+				preVal = bytesA
+			}
+
+			idxA++
+			idxB++
+
+		} else if cmpRet < 0 {
+			idxA++
+
+		} else {
+			idxB++
 		}
-
-		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
-			AppendBytes(ret, shortBytes, false, mp)
-		}
-
-		longCol = longCol[idx:]
 	}
+
+	return nil
 }
 
 // Union2VectorValen does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
-func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
+func Union2VectorValen(
+	va, vb *Vector,
+	ret *Vector,
+	mp *mpool.MPool) (err error) {
+
 	var i, j int
 	var prevVal []byte
 
@@ -4417,22 +4457,28 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 
 	var lenA, lenB = len(cola), len(colb)
 
-	ret.PreExtend(lenA+lenB, mp)
+	if err = ret.PreExtend(lenA+lenB, mp); err != nil {
+		return err
+	}
 
 	for i < lenA && j < lenB {
-		bb := colb[j].GetByteSlice(areab)
 		ba := cola[i].GetByteSlice(areaa)
+		bb := colb[j].GetByteSlice(areab)
 
 		if bytes.Compare(ba, bb) <= 0 {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 				prevVal = ba
-				AppendBytes(ret, ba, false, mp)
+				if err = AppendBytes(ret, ba, false, mp); err != nil {
+					return err
+				}
 			}
 			i++
 		} else {
-			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+			if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 				prevVal = bb
-				AppendBytes(ret, bb, false, mp)
+				if err = AppendBytes(ret, bb, false, mp); err != nil {
+					return err
+				}
 			}
 			j++
 		}
@@ -4440,17 +4486,23 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 
 	for ; i < lenA; i++ {
 		ba := cola[i].GetByteSlice(areaa)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
 			prevVal = ba
-			AppendBytes(ret, ba, false, mp)
+			if err = AppendBytes(ret, ba, false, mp); err != nil {
+				return err
+			}
 		}
 	}
 
 	for ; j < lenB; j++ {
 		bb := colb[j].GetByteSlice(areab)
-		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+		if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
 			prevVal = bb
-			AppendBytes(ret, bb, false, mp)
+			if err = AppendBytes(ret, bb, false, mp); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }

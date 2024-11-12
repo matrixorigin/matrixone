@@ -46,10 +46,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err != nil {
 			return
 		}
-		err = changeVersion(execCtx.reqCtx, ses, st.Name.Compare())
-		if err != nil {
-			return
-		}
 	case *tree.MoDump:
 
 		//dump

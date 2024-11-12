@@ -15,13 +15,19 @@
 package txn
 
 var (
-	txnFeatureUserTxn      = uint32(1 << 0)
-	txnFeatureReadOnly     = uint32(1 << 1)
-	txnFeatureCacheWrite   = uint32(1 << 2)
-	txnFeatureDisable1PC   = uint32(1 << 3)
-	txnFeatureCheckDup     = uint32(1 << 4)
-	txnFeatureDisableTrace = uint32(1 << 5)
+	txnFeatureUserTxn           = uint32(1 << 0)
+	txnFeatureReadOnly          = uint32(1 << 1)
+	txnFeatureCacheWrite        = uint32(1 << 2)
+	txnFeatureDisable1PC        = uint32(1 << 3)
+	txnFeatureCheckDup          = uint32(1 << 4)
+	txnFeatureDisableTrace      = uint32(1 << 5)
+	txnFeatureDisableWaitPaused = uint32(1 << 6)
 )
+
+func (m TxnOptions) WithDisableWaitPaused() TxnOptions {
+	m.Features |= txnFeatureDisableWaitPaused
+	return m
+}
 
 func (m TxnOptions) WithDisableTrace() TxnOptions {
 	m.Features |= txnFeatureDisableTrace
@@ -59,6 +65,10 @@ func (m TxnOptions) CacheWriteEnabled() bool {
 
 func (m TxnOptions) TraceDisabled() bool {
 	return m.featureEnabled(txnFeatureDisableTrace)
+}
+
+func (m TxnOptions) WaitPausedDisabled() bool {
+	return m.featureEnabled(txnFeatureDisableWaitPaused)
 }
 
 func (m TxnOptions) UserTxn() bool {

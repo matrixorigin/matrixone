@@ -171,9 +171,9 @@ func (c *DashboardCreator) initFrontendSQLLength() dashboard.Option {
 		"Input SQL Length",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="total-sql-length"`),
-				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="load-data-inline-sql-length"`),
-				c.getMetricWithFilter(`mo_frontend_sql_length_bucket`, `label="other-sql-length""`),
+				c.getMetricWithFilter(`mo_frontend_input_sql_length_bucket`, `label="total-sql-length"`),
+				c.getMetricWithFilter(`mo_frontend_input_sql_length_bucket`, `label="load-data-inline-sql-length"`),
+				c.getMetricWithFilter(`mo_frontend_input_sql_length_bucket`, `label="other-sql-length"`),
 			},
 			[]string{
 				"total-sql-length",
@@ -182,7 +182,7 @@ func (c *DashboardCreator) initFrontendSQLLength() dashboard.Option {
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
+			axis.Unit("bytes"),
 			axis.Min(0))...,
 	)
 }

@@ -227,30 +227,31 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
-func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
-	if tableDef == nil {
-		return 0
-	}
-	// first to check if it is primary key.
-	if containsAllPKs(cols, tableDef) {
-		return 1
-	}
+/*
+	func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
+		if tableDef == nil {
+			return 0
+		}
+		// first to check if it is primary key.
+		if containsAllPKs(cols, tableDef) {
+			return 1
+		}
 
-	s := builder.getStatsInfoByTableID(tableDef.TblId)
-	if s == nil {
-		return 0
+		s := builder.getStatsInfoByTableID(tableDef.TblId)
+		if s == nil {
+			return 0
+		}
+		var totalNDV float64 = 1
+		for i := range cols {
+			totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+		}
+		result := totalNDV / s.TableCnt
+		if result > 1 {
+			result = 1
+		}
+		return result
 	}
-	var totalNDV float64 = 1
-	for i := range cols {
-		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
-	}
-	result := totalNDV / s.TableCnt
-	if result > 1 {
-		result = 1
-	}
-	return result
-}
-
+*/
 func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo {
 	if builder == nil {
 		return nil

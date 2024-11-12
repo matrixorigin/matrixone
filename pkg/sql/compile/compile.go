@@ -2403,6 +2403,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.FilterExpr = filterExpr
 	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	s.DataSource.OrderBy = n.OrderBy
+	if len(n.OrderBy) > 0 || n.Limit != nil {
+		s.DataSource.hasLimit = true
+	}
 
 	return nil
 }

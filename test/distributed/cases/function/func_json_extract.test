@@ -297,3 +297,14 @@ SELECT
 FROM test_json_simplified;
 
 drop database test;
+
+create database test;
+use test;
+create table test_123(c1 json);
+insert into test_123 values ('{"a1":10, "a2":20}');
+insert into test_123 values ('{"a1":"test", "a2":"test2"}');
+select * from test_123;
+select json_extract(c1, '$.a1', '$.a2') from test_123;
+select json_extract_float64(c1, '$.a1', '$.a2') from test_123;
+select json_extract_string(c1, '$.a1', '$.a2') from test_123;
+drop database test;

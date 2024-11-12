@@ -399,118 +399,118 @@ DESC `mo_sample_data_tpch_sf1`.`supplier` ;
 invalid database mo_sample_data_tpch_sf1
 DESC `mysql`.`columns_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-column_name    CHAR(64)    NO    PRI    ''        
+host    CHAR(255)    NO    PRI            
+db    CHAR(64)    NO    PRI            
+user    CHAR(32)    NO    PRI            
+table_name    CHAR(64)    NO    PRI            
+column_name    CHAR(64)    NO    PRI            
 timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-column_priv    VARCHAR(10)    NO        ''        
+column_priv    VARCHAR(10)    NO                
 DESC `mysql`.`db` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
+host    CHAR(255)    NO    PRI            
+db    CHAR(64)    NO    PRI            
+user    CHAR(32)    NO    PRI            
+select_priv    VARCHAR(10)    NO        N        
+insert_priv    VARCHAR(10)    NO        N        
+update_priv    VARCHAR(10)    NO        N        
+delete_priv    VARCHAR(10)    NO        N        
+create_priv    VARCHAR(10)    NO        N        
+drop_priv    VARCHAR(10)    NO        N        
+grant_priv    VARCHAR(10)    NO        N        
+references_priv    VARCHAR(10)    NO        N        
+index_priv    VARCHAR(10)    NO        N        
+alter_priv    VARCHAR(10)    NO        N        
+create_tmp_table_priv    VARCHAR(10)    NO        N        
+lock_tables_priv    VARCHAR(10)    NO        N        
+create_view_priv    VARCHAR(10)    NO        N        
+show_view_priv    VARCHAR(10)    NO        N        
+create_routine_priv    VARCHAR(10)    NO        N        
+alter_routine_priv    VARCHAR(10)    NO        N        
+execute_priv    VARCHAR(10)    NO        N        
+event_priv    VARCHAR(10)    NO        N        
+trigger_priv    VARCHAR(10)    NO        N        
 DESC `mysql`.`procs_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-routine_name    CHAR(64)    NO    PRI    ''        
+host    CHAR(255)    NO    PRI            
+db    CHAR(64)    NO    PRI            
+user    CHAR(32)    NO    PRI            
+routine_name    CHAR(64)    NO    PRI            
 routine_type    VARCHAR(10)    NO    PRI    null        
-grantor    VARCHAR(288)    NO    MUL    ''        
-proc_priv    VARCHAR(10)    NO        ''        
+grantor    VARCHAR(288)    NO    MUL            
+proc_priv    VARCHAR(10)    NO                
 timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
 DESC `mysql`.`tables_priv` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-db    CHAR(64)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-table_name    CHAR(64)    NO    PRI    ''        
-grantor    VARCHAR(288)    NO    MUL    ''        
+host    CHAR(255)    NO    PRI            
+db    CHAR(64)    NO    PRI            
+user    CHAR(32)    NO    PRI            
+table_name    CHAR(64)    NO    PRI            
+grantor    VARCHAR(288)    NO    MUL            
 timestamp    TIMESTAMP(0)    NO        CURRENT_TIMESTAMP()        
-table_priv    VARCHAR(10)    NO        ''        
-column_priv    VARCHAR(10)    NO        ''        
+table_priv    VARCHAR(10)    NO                
+column_priv    VARCHAR(10)    NO                
 DESC `mysql`.`user` ;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''        
-user    CHAR(32)    NO    PRI    ''        
-select_priv    VARCHAR(10)    NO        'N'        
-insert_priv    VARCHAR(10)    NO        'N'        
-update_priv    VARCHAR(10)    NO        'N'        
-delete_priv    VARCHAR(10)    NO        'N'        
-create_priv    VARCHAR(10)    NO        'N'        
-drop_priv    VARCHAR(10)    NO        'N'        
-reload_priv    VARCHAR(10)    NO        'N'        
-shutdown_priv    VARCHAR(10)    NO        'N'        
-process_priv    VARCHAR(10)    NO        'N'        
-file_priv    VARCHAR(10)    NO        'N'        
-grant_priv    VARCHAR(10)    NO        'N'        
-references_priv    VARCHAR(10)    NO        'N'        
-index_priv    VARCHAR(10)    NO        'N'        
-alter_priv    VARCHAR(10)    NO        'N'        
-show_db_priv    VARCHAR(10)    NO        'N'        
-super_priv    VARCHAR(10)    NO        'N'        
-create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-lock_tables_priv    VARCHAR(10)    NO        'N'        
-execute_priv    VARCHAR(10)    NO        'N'        
-repl_slave_priv    VARCHAR(10)    NO        'N'        
-repl_client_priv    VARCHAR(10)    NO        'N'        
-create_view_priv    VARCHAR(10)    NO        'N'        
-show_view_priv    VARCHAR(10)    NO        'N'        
-create_routine_priv    VARCHAR(10)    NO        'N'        
-alter_routine_priv    VARCHAR(10)    NO        'N'        
-create_user_priv    VARCHAR(10)    NO        'N'        
-event_priv    VARCHAR(10)    NO        'N'        
-trigger_priv    VARCHAR(10)    NO        'N'        
-create_tablespace_priv    VARCHAR(10)    NO        'N'        
-ssl_type    VARCHAR(10)    NO        ''        
+host    CHAR(255)    NO    PRI            
+user    CHAR(32)    NO    PRI            
+select_priv    VARCHAR(10)    NO        N        
+insert_priv    VARCHAR(10)    NO        N        
+update_priv    VARCHAR(10)    NO        N        
+delete_priv    VARCHAR(10)    NO        N        
+create_priv    VARCHAR(10)    NO        N        
+drop_priv    VARCHAR(10)    NO        N        
+reload_priv    VARCHAR(10)    NO        N        
+shutdown_priv    VARCHAR(10)    NO        N        
+process_priv    VARCHAR(10)    NO        N        
+file_priv    VARCHAR(10)    NO        N        
+grant_priv    VARCHAR(10)    NO        N        
+references_priv    VARCHAR(10)    NO        N        
+index_priv    VARCHAR(10)    NO        N        
+alter_priv    VARCHAR(10)    NO        N        
+show_db_priv    VARCHAR(10)    NO        N        
+super_priv    VARCHAR(10)    NO        N        
+create_tmp_table_priv    VARCHAR(10)    NO        N        
+lock_tables_priv    VARCHAR(10)    NO        N        
+execute_priv    VARCHAR(10)    NO        N        
+repl_slave_priv    VARCHAR(10)    NO        N        
+repl_client_priv    VARCHAR(10)    NO        N        
+create_view_priv    VARCHAR(10)    NO        N        
+show_view_priv    VARCHAR(10)    NO        N        
+create_routine_priv    VARCHAR(10)    NO        N        
+alter_routine_priv    VARCHAR(10)    NO        N        
+create_user_priv    VARCHAR(10)    NO        N        
+event_priv    VARCHAR(10)    NO        N        
+trigger_priv    VARCHAR(10)    NO        N        
+create_tablespace_priv    VARCHAR(10)    NO        N        
+ssl_type    VARCHAR(10)    NO                
 ssl_cipher    BLOB(0)    NO        null        
 x509_issuer    BLOB(0)    NO        null        
 x509_subject    BLOB(0)    NO        null        
-max_questions    INT UNSIGNED(32)    NO        '0'        
-max_updates    INT UNSIGNED(32)    NO        '0'        
-max_connections    INT UNSIGNED(32)    NO        '0'        
-max_user_connections    INT UNSIGNED(32)    NO        '0'        
-plugin    CHAR(64)    NO        'caching_sha2_password'        
+max_questions    INT UNSIGNED(32)    NO        0        
+max_updates    INT UNSIGNED(32)    NO        0        
+max_connections    INT UNSIGNED(32)    NO        0        
+max_user_connections    INT UNSIGNED(32)    NO        0        
+plugin    CHAR(64)    NO        caching_sha2_password        
 authentication_string    TEXT(0)    YES        null        
-password_expired    VARCHAR(10)    NO        'N'        
+password_expired    VARCHAR(10)    NO        N        
 password_last_changed    TIMESTAMP(0)    YES        null        
 password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
-account_locked    VARCHAR(10)    NO        'N'        
-create_role_priv    VARCHAR(10)    NO        'N'        
-drop_role_priv    VARCHAR(10)    NO        'N'        
+account_locked    VARCHAR(10)    NO        N        
+create_role_priv    VARCHAR(10)    NO        N        
+drop_role_priv    VARCHAR(10)    NO        N        
 password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
 password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
 password_require_current    VARCHAR(10)    YES        null        
 user_attributes    JSON(0)    YES        null        
 DESC `system_metrics`.`metric` ;
 Field    Type    Null    Key    Default    Extra    Comment
-metric_name    VARCHAR(1024)    YES        'sys'        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
+metric_name    VARCHAR(1024)    YES        sys        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
 collecttime    DATETIME(6)    NO        null        metric data collect time
-value    DOUBLE(0)    YES        '0.0'        metric value
-node    VARCHAR(1024)    YES        'monolithic'        mo node uuid
-role    VARCHAR(1024)    YES        'monolithic'        mo node role, like: CN, DN, LOG
-account    VARCHAR(1024)    YES        'sys'        account name
+value    DOUBLE(0)    YES        0.0        metric value
+node    VARCHAR(1024)    YES        monolithic        mo node uuid
+role    VARCHAR(1024)    YES        monolithic        mo node role, like: CN, DN, LOG
+account    VARCHAR(1024)    YES        sys        account name
 type    VARCHAR(1024)    NO        null        sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
 Field    Type    Null    Key    Default    Extra    Comment

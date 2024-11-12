@@ -20,8 +20,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL(7)    YES        null        雇员的基本工资
-comm    DECIMAL(7)    YES        null        奖金
+sal    DECIMAL(7,2)    YES        null        雇员的基本工资
+comm    DECIMAL(7,2)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES        null        所在部门
 show columns from emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -30,8 +30,8 @@ ename    VARCHAR(15)    YES        null        雇员姓名
 job    VARCHAR(10)    YES        null        雇员职位
 mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL(7)    YES        null        雇员的基本工资
-comm    DECIMAL(7)    YES        null        奖金
+sal    DECIMAL(7,2)    YES        null        雇员的基本工资
+comm    DECIMAL(7,2)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES        null        所在部门
 show full columns from emp;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
@@ -40,8 +40,8 @@ ename    VARCHAR(15)    null    YES        null        select,insert,update,refe
 job    VARCHAR(10)    null    YES        null        select,insert,update,references    雇员职位
 mgr    INT UNSIGNED(32)    null    YES        null        select,insert,update,references    雇员对应的领导的编号
 hiredate    DATE(0)    null    YES        null        select,insert,update,references    雇员的雇佣日期
-sal    DECIMAL(7)    null    YES        null        select,insert,update,references    雇员的基本工资
-comm    DECIMAL(7)    null    YES        null        select,insert,update,references    奖金
+sal    DECIMAL(7,2)    null    YES        null        select,insert,update,references    雇员的基本工资
+comm    DECIMAL(7,2)    null    YES        null        select,insert,update,references    奖金
 deptno    INT UNSIGNED(32)    null    YES        null        select,insert,update,references    所在部门
 show columns from emp like 'e%';
 Field    Type    Null    Key    Default    Extra    Comment

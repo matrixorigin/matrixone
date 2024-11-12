@@ -154,10 +154,16 @@ func TestParseFormat(t *testing.T) {
 		panic("wrong")
 	}
 }
-func BenchmarkFor(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-	}
+
+func TestParseEmpty(t *testing.T) {
+	Parse64("")
+	ParseDecimal64("", 0, 0)
+	ParseDecimal64FromByte("", 0, 0)
+	Parse128("")
+	ParseDecimal128("", 0, 0)
+	ParseDecimal128FromByte("", 0, 0)
 }
+
 func BenchmarkFloatAdd(b *testing.B) {
 	x := float64(rand.Int())
 	y := float64(rand.Int())
