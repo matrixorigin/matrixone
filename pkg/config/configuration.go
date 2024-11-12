@@ -753,9 +753,9 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 		}
 	}
 	resetMapConfig := func(target map[string]string, defaultVal map[string]string, setVal map[string]string) {
-		eq := true
+		eq := len(target) == len(defaultVal)
 		// check eq
-		if len(target) == len(defaultVal) {
+		if eq {
 			for k, v := range defaultVal {
 				if target[k] != v {
 					eq = false
