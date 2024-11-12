@@ -65,7 +65,7 @@ func (c *resourceController) setMemLimit(total uint64) {
 	} else if total != 0 {
 		c.limit = int64(total / 4 * 3)
 	} else {
-		logutil.Fatal("failed to get system total memory")
+		panic("failed to get system total memory")
 	}
 
 	if c.limit > 200*common.Const1GBytes {
