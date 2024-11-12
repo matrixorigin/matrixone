@@ -15,19 +15,19 @@
 package merge
 
 import (
-	"github.com/stretchr/testify/require"
-	"testing"
+	"syscall"
+	"unsafe"
 )
 
-func TestResourceController(t *testing.T) {
-	rc := new(resourceController)
-	rc.setMemLimit(10000)
-	require.Equal(t, int64(7500), rc.limit)
-	require.Equal(t, int64(7500), rc.availableMem())
-
-	rc.refresh()
-	rc.limit = rc.using + 1
-	require.Equal(t, int64(1), rc.availableMem())
-
-	require.Panics(t, func() { rc.setMemLimit(0) })
+func totalMem() uint64 {
+	s, err := syscall.Sysctl("hw.memsize")
+	if err != nil {
+		return 0
+	}
+	// hack because the string conversion above drops a \0
+	b := []byte(s)
+	if len(b) < 8 {
+		b = append(b, 0)
+	}
+	return *(*uint64)(unsafe.Pointer(&b[0]))
 }
