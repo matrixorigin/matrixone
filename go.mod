@@ -26,6 +26,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
+	github.com/cpegeric/pdftotext-go v0.0.0-20241112122606-a8979920f0b1
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
@@ -46,7 +47,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/hayageek/threadsafe v1.0.1
-	github.com/heussd/pdftotext-go v0.0.0-20240804143356-fe57a0d73567
 	github.com/itchyny/gojq v0.12.16
 	github.com/jhump/protoreflect v1.15.2
 	github.com/json-iterator/go v1.1.12

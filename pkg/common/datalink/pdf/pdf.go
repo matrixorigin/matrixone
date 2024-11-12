@@ -15,12 +15,20 @@ package pdf
 
 import (
 	"bytes"
-	"os/exec"
 	"strings"
 
+	pdftotext "github.com/cpegeric/pdftotext-go"
 	gopdf "github.com/dslipak/pdf"
-	pdftotext "github.com/heussd/pdftotext-go"
 )
+
+var PDFTOTEXT_EXISTS bool = false
+
+func init() {
+	_, err := pdftotext.CheckPopplerVersion()
+	if err == nil {
+		PDFTOTEXT_EXISTS = true
+	}
+}
 
 func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
 
@@ -42,11 +50,11 @@ func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
 
 func GetPlainText(data []byte) ([]byte, error) {
 
-	_, err := exec.LookPath("pdftotext")
-	if err != nil {
+	if PDFTOTEXT_EXISTS {
+		return GetPlainTextFromPdfToText(data)
+	} else {
 		return GetPlainTextFromDslipakPdf(data)
 	}
-	return GetPlainTextFromPdfToText(data)
 }
 
 func GetPlainTextFromDslipakPdf(data []byte) ([]byte, error) {

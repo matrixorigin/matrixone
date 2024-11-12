@@ -16,7 +16,6 @@ package pdf
 
 import (
 	"os"
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,8 +26,7 @@ func TestPdfToText(t *testing.T) {
 	bytes, err := os.ReadFile("test/test3.pdf")
 	require.Nil(t, err)
 
-	_, err = exec.LookPath("pdftotext")
-	if err == nil {
+	if PDFTOTEXT_EXISTS {
 		data, err := GetPlainTextFromPdfToText(bytes)
 		require.Nil(t, err)
 
@@ -55,10 +53,9 @@ func TestPdf(t *testing.T) {
 	data, err := GetPlainText(bytes)
 	require.Nil(t, err)
 
-	_, err = exec.LookPath("pdftotext")
-	if err != nil {
-		require.Equal(t, string(data), "OptimizingMySQL','Inthistutorial,weshow...")
-	} else {
+	if PDFTOTEXT_EXISTS {
 		require.Equal(t, string(data), "Optimizing MySQL','In this tutorial, we show ...")
+	} else {
+		require.Equal(t, string(data), "OptimizingMySQL','Inthistutorial,weshow...")
 	}
 }
