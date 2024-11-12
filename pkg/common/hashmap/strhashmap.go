@@ -140,28 +140,28 @@ func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, 
 // for NULL value, just only one byte, give one byte(1)
 // these are the rules of multi-cols
 // for one col, just give the value bytes
-func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, start int, lenCols int) {
+func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, start int, lenCols int) {
 	keys := itr.keys
 	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
+		for i := 0; i < lenV; i++ {
 			keys[i] = append(keys[i], byte(2))
 		}
 		return
 	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				keys[i] = append(keys[i], byte(1))
 			}
 		} else {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				itr.zValues[i] = 0
 			}
 		}
 		return
 	}
 	if vec.IsConst() {
-		fillStringGroupStrForConstVec(itr, vec, n, start)
+		fillStringGroupStrForConstVec(itr, vec, lenV, start)
 		return
 	}
 
@@ -170,7 +170,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 			gsp := vec.GetGrouping()
 			va, area := vector.MustVarlenaRawData(vec)
 			if area == nil {
-				for i := 0; i < n; i++ {
+				for i := 0; i < lenV; i++ {
 					bytes := va[i+start].ByteSlice()
 					hasGrouping := gsp.Contains(uint64(i + start))
 					if hasGrouping {
@@ -187,7 +187,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 					keys[i] = append(keys[i], bytes...)
 				}
 			} else {
-				for i := 0; i < n; i++ {
+				for i := 0; i < lenV; i++ {
 					bytes := va[i+start].GetByteSlice(area)
 					hasGrouping := gsp.Contains(uint64(i + start))
 					if hasGrouping {
@@ -207,7 +207,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 		} else {
 			va, area := vector.MustVarlenaRawData(vec)
 			if area == nil {
-				for i := 0; i < n; i++ {
+				for i := 0; i < lenV; i++ {
 					bytes := va[i+start].ByteSlice()
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
@@ -217,7 +217,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 					keys[i] = append(keys[i], bytes...)
 				}
 			} else {
-				for i := 0; i < n; i++ {
+				for i := 0; i < lenV; i++ {
 					bytes := va[i+start].GetByteSlice(area)
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
@@ -233,7 +233,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 		rsp := vec.GetGrouping()
 		va, area := vector.MustVarlenaRawData(vec)
 		if area == nil {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				hasNull := nsp.Contains(uint64(i + start))
 				hasGrouping := rsp.Contains(uint64(i + start))
 				if itr.mp.hasNull {
@@ -267,7 +267,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, star
 				}
 			}
 		} else {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				hasNull := nsp.Contains(uint64(i + start))
 				hasGrouping := rsp.Contains(uint64(i + start))
 				if itr.mp.hasNull {
