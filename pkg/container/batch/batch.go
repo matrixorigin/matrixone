@@ -611,7 +611,7 @@ func (bat *Batch) Allocated() int {
 func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
-	b.Attrs = append(b.Attrs, bat.Attrs...)
+	b.Attrs = bat.Attrs
 	for i, vec := range bat.Vecs {
 		b.Vecs[i], err = vec.Window(start, end)
 		if err != nil {
