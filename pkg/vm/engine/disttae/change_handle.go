@@ -215,6 +215,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		0,
 		false,
 		engine.Policy_CheckCommittedOnly,
+		engine.FilterHint{},
 	)
 	if err != nil {
 		return
