@@ -94,12 +94,32 @@ func newDefault(delta *Config) (allocator Allocator) {
 		return allocator
 
 	case "go":
-		// go allocator
+		// go sync.Pool allocator
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
 				var ret Allocator
 				ret = NewClassAllocator(NewFixedSizeSyncPoolAllocator)
+				if config.EnableMetrics != nil && *config.EnableMetrics {
+					ret = NewMetricsAllocator(
+						ret,
+						metric.MallocCounter.WithLabelValues("allocate"),
+						metric.MallocGauge.WithLabelValues("inuse"),
+						metric.MallocCounter.WithLabelValues("allocate-objects"),
+						metric.MallocGauge.WithLabelValues("inuse-objects"),
+					)
+				}
+				return ret
+			},
+		)
+
+	case "go-make":
+		// go make allocator
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				var ret Allocator
+				ret = NewClassAllocator(NewFixedSizeMakeAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(
 						ret,
