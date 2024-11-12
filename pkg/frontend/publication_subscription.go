@@ -1385,7 +1385,7 @@ func batchDeleteMoSubs(
 	return bh.Exec(ctx, sql)
 }
 
-func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
+func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator, bh BackgroundExec) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := getPu(ses.GetService()).StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
@@ -1393,20 +1393,16 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 	}
 
 	if dbMeta.IsSubscription(ctx) {
-		return checkSubscriptionValid(ctx, ses, dbName)
+		return checkSubscriptionValid(ctx, ses, dbName, bh)
 	}
 	return nil, nil
 }
 
-func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, pubAccountName, pubName string) (subMeta *plan.SubscriptionMeta, err error) {
+func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, pubAccountName, pubName string, bh BackgroundExec) (subMeta *plan.SubscriptionMeta, err error) {
 	start := time.Now()
 	defer func() {
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
-	defer bh.Close()
-
 	var (
 		sql, accStatus string
 		erArray        []ExecResult
@@ -1486,10 +1482,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	return
 }
 
-func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string) (*plan.SubscriptionMeta, error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
+func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string, bh BackgroundExec) (*plan.SubscriptionMeta, error) {
 	subInfos, err := getSubInfosFromSub(ctx, bh, dbName)
 	if err != nil {
 		return nil, err
@@ -1498,7 +1491,7 @@ func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string) (
 	}
 
 	subInfo := subInfos[0]
-	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName)
+	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName, bh)
 }
 
 func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool, err error) {
