@@ -256,9 +256,9 @@ type Session struct {
 	// create version
 	createVersion string
 
-	//reuse backExec
-	backExec      *backExec
-	shareBackExec *backExec
+	//reused backExec
+	backExecReused         *backExec
+	shareTxnBackExecReused *backExec
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
@@ -663,7 +663,9 @@ func (ses *Session) Close() {
 		ses.buf = nil
 	}
 
-	ses.backExec.Close()
+	//clean reused backExec
+	ses.backExecReused.Close()
+	ses.shareTxnBackExecReused.Close()
 
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -803,41 +805,33 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	ses.BackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
+	ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
-	ses.shareBackExec.backSes.ReplaceDerivedStmt(true)
-	return ses.shareBackExec
+	ses.shareTxnBackExecReused.backSes.ReplaceDerivedStmt(true)
+	return ses.shareTxnBackExecReused
 }
 
-func (ses *Session) BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
 	if txnOp != nil {
-		if ses.shareBackExec == nil {
-			ses.shareBackExec = &backExec{}
-		} else if ses.shareBackExec.inUse {
-			panic(fmt.Sprintf("Session.ShareBackExec alread in use"))
+		if ses.shareTxnBackExecReused == nil {
+			ses.shareTxnBackExecReused = &backExec{}
+		} else if ses.shareTxnBackExecReused.inUse {
+			panic("Session.ShareBackExec already in use")
 		}
-		if ses.shareBackExec.backSes == nil {
-			ses.shareBackExec.backSes = newBackSession(ses, txnOp, db, callBack)
-		} else {
-			ses.shareBackExec.backSes.reInit(ses, txnOp, db, callBack)
-		}
-		ses.shareBackExec.backSes.upstream = ses
-		ses.shareBackExec.inUse = true
-		return ses.shareBackExec
+		ses.shareTxnBackExecReused.init(ses, txnOp, db, callBack)
+		ses.shareTxnBackExecReused.backSes.upstream = ses
+		ses.shareTxnBackExecReused.inUse = true
+		return ses.shareTxnBackExecReused
 	} else {
-		if ses.backExec == nil {
-			ses.backExec = &backExec{}
-		} else if ses.backExec.inUse {
-			panic(fmt.Sprintf("Session.BackExec alread in use"))
+		if ses.backExecReused == nil {
+			ses.backExecReused = &backExec{}
+		} else if ses.backExecReused.inUse {
+			panic("Session.BackExec already in use")
 		}
-		if ses.backExec.backSes == nil {
-			ses.backExec.backSes = newBackSession(ses, txnOp, db, callBack)
-		} else {
-			ses.backExec.backSes.reInit(ses, txnOp, db, callBack)
-		}
-		ses.backExec.backSes.upstream = ses
-		ses.backExec.inUse = true
-		return ses.backExec
+		ses.backExecReused.init(ses, txnOp, db, callBack)
+		ses.backExecReused.backSes.upstream = ses
+		ses.backExecReused.inUse = true
+		return ses.backExecReused
 	}
 }
 
@@ -845,7 +839,7 @@ func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExe
 	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
 	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
 
-	return ses.BackExec(nil, "", batchFetcher2)
+	return ses.InitBackExec(nil, "", batchFetcher2)
 }
 
 func (ses *Session) GetIsInternal() bool {

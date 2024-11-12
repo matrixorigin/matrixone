@@ -546,7 +546,7 @@ type FeSession interface {
 		Clear mostly releases buffer,memory.
 	*/
 	Reset()
-	BackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
+	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
 	SessionLogger
 }
 
@@ -733,21 +733,20 @@ func (ses *feSessionImpl) ExitRunSql() {
 	}
 }
 
+// Close releases all reference.
+// close txn handler also
 func (ses *feSessionImpl) Close() {
 	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
-	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
-	}
-	if ses.txnCompileCtx != nil {
-		ses.txnCompileCtx.Close()
-		ses.txnCompileCtx = nil
+		ses.txnHandler = nil
 	}
 	ses.Reset()
 }
 
+// Clear clean result only
 func (ses *feSessionImpl) Clear() {
 	if ses == nil {
 		return
@@ -758,7 +757,8 @@ func (ses *feSessionImpl) Clear() {
 
 // Reset release resources like buffer,memory,handles,etc.
 //
-//	It also reserves some necessary resources that are carefully designed.
+//		It also reserves some necessary resources that are carefully designed.
+//	 	does not close txn handler here.
 func (ses *feSessionImpl) Reset() {
 	if ses == nil {
 		return
@@ -766,11 +766,12 @@ func (ses *feSessionImpl) Reset() {
 	ses.Clear()
 
 	ses.mrs = nil
-	if ses.txnHandler != nil {
-		//ses.txnHandler.Reset()
+	//release refer but not close it
+	ses.txnHandler = nil
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.Close()
+		ses.txnCompileCtx = nil
 	}
-
-	ses.txnCompileCtx = nil
 	ses.sql = ""
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
