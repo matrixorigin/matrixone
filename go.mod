@@ -8,6 +8,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.1.4
 	github.com/K-Phoen/grabana v0.21.19
+	github.com/K-Phoen/sdk v0.12.3
 	github.com/KimMachineGun/automemlimit v0.6.0
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
@@ -45,6 +46,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/hayageek/threadsafe v1.0.1
+	github.com/heussd/pdftotext-go v0.0.0-20240804143356-fe57a0d73567
 	github.com/itchyny/gojq v0.12.16
 	github.com/jhump/protoreflect v1.15.2
 	github.com/json-iterator/go v1.1.12
@@ -92,7 +94,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/K-Phoen/sdk v0.12.3 // indirect
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
@@ -109,7 +110,6 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
-	github.com/heussd/pdftotext-go v0.0.0-20240804143356-fe57a0d73567 // indirect
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
