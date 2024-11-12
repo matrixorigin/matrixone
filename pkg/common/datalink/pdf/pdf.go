@@ -23,16 +23,25 @@ import (
 
 var PDFTOTEXT_EXISTS bool = false
 
+// stub function for UT
+var pdftotext_extract = pdftotext.Extract
+var pdftotext_check_version = pdftotext.CheckPopplerVersion
+
 func init() {
-	_, err := pdftotext.CheckPopplerVersion()
+	PDFTOTEXT_EXISTS = check_pdftotext()
+}
+
+func check_pdftotext() bool {
+	_, err := pdftotext_check_version()
 	if err == nil {
-		PDFTOTEXT_EXISTS = true
+		return true
 	}
+	return false
 }
 
 func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
 
-	pages, err := pdftotext.Extract(data)
+	pages, err := pdftotext_extract(data)
 	if err != nil {
 		return nil, err
 	}
