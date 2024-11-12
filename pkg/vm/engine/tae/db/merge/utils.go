@@ -32,15 +32,20 @@ import (
 
 const estimateMemUsagePerRow = 20
 
-func estimateMergeConsume(objs []*catalog.ObjectEntry) (origSize, estSize int) {
+func originalSize(objs []*catalog.ObjectEntry) int {
+	size := 0
 	for _, o := range objs {
-		origSize += int(o.OriginSize())
-
-		// the main memory consumption is transfer table.
-		// each row uses ~20B, so estimate size is 20 * rows.
-		estSize += int(o.Rows()) * estimateMemUsagePerRow
+		size += int(o.OriginSize())
 	}
-	return
+	return size
+}
+
+func estimateMergeSize(objs []*catalog.ObjectEntry) int {
+	size := 0
+	for _, o := range objs {
+		size += int(o.Rows() * estimateMemUsagePerRow)
+	}
+	return size
 }
 
 func entryOutdated(entry *catalog.ObjectEntry, lifetime time.Duration) bool {
@@ -145,8 +150,7 @@ func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	_, eSize := estimateMergeConsume(objs)
-	return eSize <= int(2*mem/3)
+	return estimateMergeSize(objs) <= int(2*mem/3)
 }
 
 func memInfo(info string) int64 {

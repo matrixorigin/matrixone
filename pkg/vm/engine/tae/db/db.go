@@ -63,15 +63,14 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
-	MergeScheduler     *merge.Scheduler
+
+	MergeScheduler *merge.Scheduler
 
 	DiskCleaner *gc2.DiskCleaner
 
 	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
-
-	CNMergeSched merge.CNMergeScheduler
 
 	Closed *atomic.Value
 }
