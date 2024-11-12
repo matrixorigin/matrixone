@@ -4144,4 +4144,6 @@ col2    col1    count(col1) over (partition by col2 order by col1 desc)
 老师    100    1
 老师    21    2
 老师    1    3
+select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
+key_columns
 drop database test;
