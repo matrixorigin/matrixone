@@ -1176,13 +1176,13 @@ func FillUsageBatOfCompacted(
 	meta *SnapshotMeta,
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *PitrInfo,
+	gcFileCount int,
 ) {
-	now := time.Now()
 	var memoryUsed float64
 	usage.EnterProcessing()
 	defer func() {
 		v2.TaskStorageUsageCacheMemUsedGauge.Set(memoryUsed)
-		v2.TaskCompactedCollectUsageDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.TaskCompactedCollectUsageDurationHistogram.Observe(float64(gcFileCount))
 		usage.LeaveProcessing()
 	}()
 	objects := data.GetObjectBatchs()

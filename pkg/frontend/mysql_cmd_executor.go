@@ -349,7 +349,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	txnOp := ses.GetTxnHandler().GetTxn()
 	ctx := execCtx.reqCtx
 
-	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp)
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp, bh)
 	if err != nil {
 		return err
 	}
@@ -372,7 +375,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		sql := getSqlForRoleNameOfRoleId(int64(roleId))
 
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, ses, sql); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
 			return "", err
 		}
 
@@ -480,7 +483,9 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	}
 
 	if dbMeta.IsSubscription(ctx) {
-		if _, err = checkSubscriptionValid(ctx, ses, db); err != nil {
+		bh := ses.GetShareTxnBackgroundExec(ctx, false)
+		defer bh.Close()
+		if _, err = checkSubscriptionValid(ctx, ses, db, bh); err != nil {
 			return
 		}
 	}
@@ -2562,6 +2567,7 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
+	var hasRecovered bool
 	ses.EnterFPrint(FPExecStmtWithIncrStmt)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmt)
 
@@ -2579,8 +2585,10 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 	crs := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
-	err = txnOp.GetWorkspace().IncrStatementID(newCtx, false)
-	if err != nil {
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
+		return txnOp.GetWorkspace().IncrStatementID(newCtx, false)
+	})
+	if err != nil || hasRecovered {
 		return err
 	}
 	stats := statistic.StatsInfoFromContext(newCtx)

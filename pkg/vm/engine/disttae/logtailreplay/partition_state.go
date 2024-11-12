@@ -85,6 +85,10 @@ func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	)
 }
 
+func (p *PartitionState) Desc() string {
+	return fmt.Sprintf("PartitionState(tid:%d) objLen %v, rowsLen %v", p.tid, p.dataObjectsNameIndex.Len(), p.rows.Len())
+}
+
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,

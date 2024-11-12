@@ -123,4 +123,5 @@ type Pattern struct {
 	Text     string
 	Operator int
 	Children []*Pattern
+	Position int32
 }

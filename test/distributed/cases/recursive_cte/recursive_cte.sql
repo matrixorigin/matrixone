@@ -8,6 +8,7 @@ drop table if exists t2;
 create table t2(a bigint, b int);
 insert into t2 values (1, 2), (3, 4), (5, 6);
 with recursive c as (select a from t1 union all select a+1 from c where a < 2) select * from c order by a;
+with recursive c as (select a from t1 union all select a+1 from c where a < 2), d as (select a from c union all select a+1 from d where a < 2) select distinct tt.* from ( SELECT * FROM c UNION ALL SELECT * FROM d) tt order by tt.a;
 with recursive c as (select a from t1 union all select a+1 from c where a < 200) select * from c;
 with recursive c as (select a from t1 union all select c.a+1 from c, t1 as k1, t1 as k2 where c.a = k1.a and c.a = k2.a) select * from c order by a;
 with recursive c as (select t1.a from t1, t2, t3 where t1.a = t2.a or t1.a = t3.a union all select a+1 from c where a < 6) select count(*) from c;

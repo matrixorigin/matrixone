@@ -27,6 +27,7 @@ const (
 	Decimal128ToFloat64Scale = 5
 	Float64PrecForMemorySize = 3
 	Float64PrecForCU         = 4
+	Float64PrecForIOInput    = 6
 )
 
 const StatsArrayVersion = StatsArrayVersionLatest
@@ -259,6 +260,12 @@ func StatsArrayToJsonString(arr []float64) []byte {
 			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForMemorySize, 64)
 		} else if idx == StatsArrayIndexCU {
 			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForCU, 64)
+		} else if idx == StatsArrayIndexS3IOInputCount {
+			if float64(int(v)) == v {
+				buf = strconv.AppendFloat(buf, v, 'f', 0, 64)
+			} else {
+				buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForIOInput, 64)
+			}
 		} else {
 			buf = strconv.AppendFloat(buf, v, 'f', 0, 64)
 		}

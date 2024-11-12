@@ -52,6 +52,10 @@ type RemoteDataSource struct {
 	data                engine.RelData
 }
 
+func (rs *RemoteDataSource) String() string {
+	return "RemoteDataSource"
+}
+
 func (rs *RemoteDataSource) Next(
 	_ context.Context,
 	_ []string,
