@@ -489,7 +489,10 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		if i == 0 {
 			continue //already hit
 		}
-		currentPos := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+		currentPos, ok := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
+		if !ok {
+			break
+		}
 		found := false
 		for j := range node.FilterList {
 			fn := node.FilterList[j].GetF()
