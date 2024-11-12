@@ -7,7 +7,13 @@ ENV LC_ALL="C.UTF-8"
 ENV LAUNCH="launch"
 ENV ENABLE_UT="false"
 
+# Install some utilities used for debugging or by startup script
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 RUN go env -w GOPROXY=$GOPROXY
+
 
 RUN mkdir -p /matrixone-test
 
