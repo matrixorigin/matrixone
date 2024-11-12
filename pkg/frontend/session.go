@@ -665,7 +665,9 @@ func (ses *Session) Close() {
 
 	//clean reused backExec
 	ses.backExecReused.Close()
+	ses.backExecReused = nil
 	ses.shareTxnBackExecReused.Close()
+	ses.shareTxnBackExecReused = nil
 
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool

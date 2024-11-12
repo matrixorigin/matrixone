@@ -65,26 +65,11 @@ func (back *backExec) Close() {
 	if back == nil {
 		return
 	}
-
-	if back.backSes != nil {
-		txnHandler := back.backSes.GetTxnHandler()
-		if txnHandler != nil {
-			tempExecCtx := ExecCtx{
-				ses:    back.backSes,
-				txnOpt: FeTxnOption{byRollback: true},
-			}
-			defer tempExecCtx.Close()
-			err := txnHandler.Rollback(&tempExecCtx)
-			if err != nil {
-				back.backSes.Error(tempExecCtx.reqCtx,
-					"Failed to rollback txn in back session",
-					zap.Error(err))
-			}
-		}
-	}
+	defer func() {
+		back.inUse = false
+	}()
 	back.Clear()
 	back.backSes.Close()
-	back.inUse = false
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
@@ -547,6 +532,7 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 	if err != nil {
 		return nil, err
 	}
+
 	return getResultSet(reqCtx, bh)
 }
 
@@ -747,16 +733,33 @@ func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 }
 
 func (backSes *backSession) Close() {
+	if backSes == nil {
+		return
+	}
 	txnHandler := backSes.GetTxnHandler()
-	//record txnOp
-	if backSes.txnOpReused == nil &&
-		txnHandler != nil &&
-		!txnHandler.IsShareTxn() {
-		txnOp := txnHandler.GetTxn()
-		if txnOp != nil {
-			backSes.txnOpReused = txnOp
+	if txnHandler != nil {
+		tempExecCtx := ExecCtx{
+			ses:    backSes,
+			txnOpt: FeTxnOption{byRollback: true},
+		}
+		defer tempExecCtx.Close()
+		err := txnHandler.Rollback(&tempExecCtx)
+		if err != nil {
+			backSes.Error(tempExecCtx.reqCtx,
+				"Failed to rollback txn in back session",
+				zap.Error(err))
+		}
+
+		//record txnOp
+		if backSes.txnOpReused == nil &&
+			!txnHandler.IsShareTxn() {
+			txnOp := txnHandler.GetTxn()
+			if txnOp != nil {
+				backSes.txnOpReused = txnOp
+			}
 		}
 	}
+
 	//if the txn is not shared outside, we clean feSessionImpl.
 	//reset else
 	if txnHandler == nil || !txnHandler.IsShareTxn() {

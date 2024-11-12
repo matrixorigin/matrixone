@@ -538,14 +538,6 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
-	/*
-		Reset release resources like buffer,memory,handles,etc.
-		It also reserves some necessary resources that are carefully designed.
-
-		With regard to Close and Clear, Close release all resources.
-		Clear mostly releases buffer,memory.
-	*/
-	Reset()
 	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
 	SessionLogger
 }
@@ -746,15 +738,6 @@ func (ses *feSessionImpl) Close() {
 	ses.Reset()
 }
 
-// Clear clean result only
-func (ses *feSessionImpl) Clear() {
-	if ses == nil {
-		return
-	}
-	ses.ClearAllMysqlResultSet()
-	ses.ClearResultBatches()
-}
-
 // Reset release resources like buffer,memory,handles,etc.
 //
 //		It also reserves some necessary resources that are carefully designed.
@@ -788,6 +771,15 @@ func (ses *feSessionImpl) Reset() {
 		ses.buf = nil
 	}
 	ses.upstream = nil
+}
+
+// Clear clean result only
+func (ses *feSessionImpl) Clear() {
+	if ses == nil {
+		return
+	}
+	ses.ClearAllMysqlResultSet()
+	ses.ClearResultBatches()
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {

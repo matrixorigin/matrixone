@@ -1403,7 +1403,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 	defer func() {
 		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
 	var (
 		sql, accStatus string
 		erArray        []ExecResult
