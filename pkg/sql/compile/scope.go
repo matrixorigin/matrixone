@@ -488,6 +488,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	if err != nil {
 		return err
 	}
+	if parallelScope == nil {
+		return nil //no need to run
+	}
 
 	if parallelScope == s {
 		//s.ScopeAnalyzer.Stop()
@@ -533,6 +536,9 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	readers, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
+	}
+	if readers == nil {
+		return nil, nil
 	}
 
 	// only one scan reader, it can just run without any merge.
@@ -982,6 +988,10 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimized the datasource.
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
+	}
+
+	if s.NodeInfo.Data.DataCnt() == 0 {
+		return nil, nil
 	}
 
 	switch {
