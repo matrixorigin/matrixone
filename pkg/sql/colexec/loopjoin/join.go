@@ -111,6 +111,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if ctr.inbat.IsEmpty() {
+					ctr.inbat = nil
 					continue
 				}
 				ctr.probeIdx = 0

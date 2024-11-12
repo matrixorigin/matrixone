@@ -19,9 +19,9 @@ package nulls
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"golang.org/x/exp/constraints"
 )
 
@@ -194,10 +194,7 @@ func FilterCount(nsp *Nulls, sels []int64) int {
 	}
 
 	// XXX WTF is this?  convert int64 to uint64?
-	var idxs []uint64
-	if len(sels) > 0 {
-		idxs = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
-	}
+	idxs := util.UnsafeSliceCast[uint64](sels)
 
 	for _, idx := range idxs {
 		if nsp.np.Contains(idx) {

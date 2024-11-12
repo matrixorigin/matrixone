@@ -159,7 +159,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.qry.LoadTag {
+	if builder.qry.LoadTag || builder.isRestore {
 		// load do not handle primary/unique key confliction
 		for i, tableDef := range dmlCtx.tableDefs {
 			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
@@ -325,6 +325,75 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}, bindCtx)
 			}
 		}
+	}
+
+	newProjLen := len(selectNode.ProjectList)
+	for _, tableDef := range dmlCtx.tableDefs {
+		for _, idxDef := range tableDef.Indexes {
+			if idxDef.TableExist && !idxDef.Unique {
+				newProjLen++
+			}
+		}
+	}
+
+	if newProjLen > len(selectNode.ProjectList) {
+		newProjList := make([]*plan.Expr, 0, newProjLen)
+
+		for i, expr := range selectNode.ProjectList {
+			newProjList = append(newProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: int32(i),
+					},
+				},
+			})
+		}
+
+		for _, tableDef := range dmlCtx.tableDefs {
+			pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+			for _, idxDef := range tableDef.Indexes {
+				if !idxDef.TableExist || idxDef.Unique {
+					continue
+				}
+
+				idxTableName := idxDef.IndexTableName
+				colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
+				argsLen := len(idxDef.Parts) // argsLen is alwarys greater than 1 for secondary index
+				args := make([]*plan.Expr, argsLen)
+
+				var colPos int32
+				var ok bool
+				for k := 0; k < argsLen; k++ {
+					if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
+						errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
+						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					}
+					args[k] = &plan.Expr{
+						Typ: selectNode.ProjectList[colPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: colPos,
+							},
+						},
+					}
+				}
+
+				idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(newProjList))
+				newProjList = append(newProjList, idxExpr)
+			}
+		}
+
+		selectNodeTag = builder.genNewTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: newProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{selectNodeTag},
+		}, bindCtx)
 	}
 
 	dmlNode := &plan.Node{
@@ -646,17 +715,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist {
+		if !idxDef.TableExist || !idxDef.Unique {
 			continue
 		}
 
-		if idxDef.Unique {
-			skipUniqueIdx[i] = true
-			for _, part := range idxDef.Parts {
-				if !columnIsNull[part] {
-					skipUniqueIdx[i] = false
-					break
-				}
+		skipUniqueIdx[i] = true
+		for _, part := range idxDef.Parts {
+			if !columnIsNull[part] {
+				skipUniqueIdx[i] = false
+				break
 			}
 		}
 
@@ -678,11 +745,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				args[k] = DeepCopyExpr(projList2[colPos])
 			}
 
-			fnName := "serial"
-			if !idxDef.Unique {
-				fnName = "serial_full"
-			}
-			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
 			projList2 = append(projList2, idxExpr)
 		}

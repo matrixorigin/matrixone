@@ -57,6 +57,14 @@ select * from src where match(body, title) against('+red +(<blue >is)' in boolea
 
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 
+select * from src where match(body, title) against('"red"' in boolean mode);
+
+-- phrase exact match.  double space cannot be matched and empty result
+select * from src where match(body, title) against('"is  not red"' in boolean mode);
+
+-- phrase exact match. all words match but not exact match
+select * from src where match(body, title) against('"blue is red"' in boolean mode);
+
 -- match in projection
 select src.*, match(body, title) against('blue') from src;
 
@@ -322,5 +330,8 @@ select * from src where match(json1, json2) against('中文學習教材' in bool
 
 drop table src;
 
-
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+create fulltext index ftidx on t1 (b);
 

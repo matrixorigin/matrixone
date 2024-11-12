@@ -41,7 +41,7 @@ type tableReader struct {
 	sinker               Sinker
 	wMarkUpdater         *WatermarkUpdater
 	tick                 *time.Ticker
-	restartFunc          func(*DbTableInfo) error
+	resetWatermarkFunc   func(*DbTableInfo) error
 	initSnapshotSplitTxn bool
 
 	tableDef                           *plan.TableDef
@@ -58,7 +58,7 @@ func NewTableReader(
 	sinker Sinker,
 	wMarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
-	restartFunc func(*DbTableInfo) error,
+	resetWatermarkFunc func(*DbTableInfo) error,
 	initSnapshotSplitTxn bool,
 ) Reader {
 	reader := &tableReader{
@@ -70,7 +70,7 @@ func NewTableReader(
 		sinker:               sinker,
 		wMarkUpdater:         wMarkUpdater,
 		tick:                 time.NewTicker(200 * time.Millisecond),
-		restartFunc:          restartFunc,
+		resetWatermarkFunc:   resetWatermarkFunc,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
 		tableDef:             tableDef,
 	}
@@ -112,19 +112,22 @@ func (reader *tableReader) Run(
 		}
 
 		if err := reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("cdc tableReader(%v) failed, err: %v\n", reader.info, err)
+			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 
 			// if stale read, try to restart reader
 			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				if err = reader.restartFunc(reader.info); err != nil {
-					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v\n", reader.info, err)
+				// reset sinker
+				reader.sinker.Reset()
+				// reset watermark
+				if err = reader.resetWatermarkFunc(reader.info); err != nil {
+					logutil.Errorf("cdc tableReader(%v) restart failed, err: %v", reader.info, err)
 					return
 				}
-				logutil.Errorf("cdc tableReader(%v) restart successfully\n", reader.info)
+				logutil.Errorf("cdc tableReader(%v) restart successfully", reader.info)
 				continue
 			}
 
-			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit\n", reader.info)
+			logutil.Errorf("cdc tableReader(%v) err is not stale read, quit", reader.info)
 			return
 		}
 	}
@@ -247,9 +250,15 @@ func (reader *tableReader) readTableWithTxn(
 	defer func() {
 		if hasBegin {
 			if err == nil {
-				err = reader.sinker.SendCommit(ctx)
-			} else {
-				_ = reader.sinker.SendRollback(ctx)
+				// error may can't be caught immediately, but must be caught when next call
+				reader.sinker.SendCommit()
+				// so send a dummy sql to guarantee previous commit is sent successfully
+				reader.sinker.SendDummy()
+				err = reader.sinker.Error()
+			}
+
+			if err != nil {
+				reader.sinker.SendRollback()
 			}
 		}
 
@@ -269,8 +278,12 @@ func (reader *tableReader) readTableWithTxn(
 			return
 		default:
 		}
-		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
+		// check sinker error of last round
+		if err = reader.sinker.Error(); err != nil {
+			return
+		}
 
+		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
 		start = time.Now()
 		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
@@ -281,11 +294,12 @@ func (reader *tableReader) readTableWithTxn(
 		// both nil denote no more data (end of this tail)
 		if insertData == nil && deleteData == nil {
 			// heartbeat
-			err = reader.sinker.Sink(ctx, &DecoderOutput{
+			reader.sinker.Sink(ctx, &DecoderOutput{
 				noMoreData: true,
 				fromTs:     fromTs,
 				toTs:       toTs,
 			})
+			err = reader.sinker.Error()
 			return
 		}
 
@@ -295,14 +309,12 @@ func (reader *tableReader) readTableWithTxn(
 		case engine.ChangesHandle_Snapshot:
 			// output sql in a txn
 			if !hasBegin && !reader.initSnapshotSplitTxn {
-				if err = reader.sinker.SendBegin(ctx); err != nil {
-					return err
-				}
+				reader.sinker.SendBegin()
 				hasBegin = true
 			}
 
 			// transform into insert instantly
-			err = reader.sinker.Sink(ctx, &DecoderOutput{
+			reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:     OutputTypeSnapshot,
 				checkpointBat: insertData,
 				fromTs:        fromTs,
@@ -310,7 +322,7 @@ func (reader *tableReader) readTableWithTxn(
 			})
 			addSnapshotEndMetrics()
 			insertData.Clean(reader.mp)
-			if err != nil {
+			if err = reader.sinker.Error(); err != nil {
 				return
 			}
 		case engine.ChangesHandle_Tail_wip:
@@ -333,13 +345,11 @@ func (reader *tableReader) readTableWithTxn(
 
 			// output sql in a txn
 			if !hasBegin {
-				if err = reader.sinker.SendBegin(ctx); err != nil {
-					return err
-				}
+				reader.sinker.SendBegin()
 				hasBegin = true
 			}
 
-			err = reader.sinker.Sink(ctx, &DecoderOutput{
+			reader.sinker.Sink(ctx, &DecoderOutput{
 				outputTyp:      OutputTypeTail,
 				insertAtmBatch: insertAtmBatch,
 				deleteAtmBatch: deleteAtmBatch,
@@ -350,7 +360,7 @@ func (reader *tableReader) readTableWithTxn(
 			addTailEndMetrics(deleteAtmBatch)
 			insertAtmBatch.Close()
 			deleteAtmBatch.Close()
-			if err != nil {
+			if err = reader.sinker.Error(); err != nil {
 				return
 			}
 

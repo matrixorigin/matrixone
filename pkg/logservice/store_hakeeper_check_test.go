@@ -142,16 +142,18 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 
 func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
 	defer leaktest.AfterTest(t)()
-	cfg := getStoreTestConfig()
-	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getStoreTestConfig()
+		cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+		return cfg
+	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer taskService.StopScheduleCronTask()
 
-	store, err := getTestStore(func() Config {
-		return cfg
-	}, false, taskService)
+	store, err := getTestStore(genCfg, false, taskService)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())

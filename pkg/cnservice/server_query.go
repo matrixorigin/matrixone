@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -92,6 +93,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -558,9 +560,9 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
-		ret = fileservice.EvictDiskCaches()
+		ret = fileservice.EvictDiskCaches(ctx)
 	case query.FileServiceCacheType_Memory:
-		ret = fileservice.EvictMemoryCaches()
+		ret = fileservice.EvictMemoryCaches(ctx)
 	}
 
 	for _, target := range ret {
@@ -569,6 +571,20 @@ func (s *service) handleFileServiceCacheEvictRequest(
 		// usually one instance
 		break
 	}
+
+	return nil
+}
+
+func (s *service) handleMetadataCacheRequest(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+
+	// set capacity hint
+	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)
+	// evict
+	target := objectio.EvictCache(ctx)
+	// response
+	resp.MetadataCacheResponse.CacheCapacity = target
 
 	return nil
 }

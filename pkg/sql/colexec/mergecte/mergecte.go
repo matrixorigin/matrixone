@@ -16,6 +16,7 @@ package mergecte
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -124,6 +125,11 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				if mergeCTE.ctr.curNodeCnt == 0 {
 					mergeCTE.ctr.last = true
 					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+					mergeCTE.ctr.recursiveLevel++
+					if mergeCTE.ctr.recursiveLevel > moDefaultRecursionMax {
+						result.Status = vm.ExecStop
+						return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
+					}
 					if len(ctr.freeBats) > ctr.i {
 						if ctr.freeBats[ctr.i] != nil {
 							ctr.freeBats[ctr.i].CleanOnlyData()

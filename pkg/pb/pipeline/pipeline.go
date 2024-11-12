@@ -29,6 +29,10 @@ func (m *Message) SetID(id uint64) {
 	m.Id = id
 }
 
+func (m *Message) SetDebugMsg(msg string) {
+	m.DebugMsg = msg
+}
+
 func (m *Message) SetSid(sid Status) {
 	m.Sid = sid
 }

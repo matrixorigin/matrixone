@@ -187,10 +187,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		}
 	}
 	p.Node = &pipeline.NodeInfo{
-		Id:      s.NodeInfo.Id,
-		Addr:    s.NodeInfo.Addr,
-		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: string(data),
+		Id:               s.NodeInfo.Id,
+		Addr:             s.NodeInfo.Addr,
+		Mcpu:             int32(s.NodeInfo.Mcpu),
+		Payload:          string(data),
+		NeedExpandRanges: s.NodeInfo.NeedExpandRanges,
+		CnCnt:            s.NodeInfo.CNCNT,
+		CnIdx:            s.NodeInfo.CNIDX,
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -212,6 +215,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
+			Node:                   s.DataSource.node,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -323,6 +327,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			PushdownAddr:       dsc.PushdownAddr,
 			FilterExpr:         dsc.Expr,
 			TableDef:           dsc.TableDef,
+			node:               dsc.Node,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
@@ -333,6 +338,9 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
+		s.NodeInfo.NeedExpandRanges = p.Node.NeedExpandRanges
+		s.NodeInfo.CNCNT = p.Node.CnCnt
+		s.NodeInfo.CNIDX = p.Node.CnIdx
 
 		bs := []byte(p.Node.Payload)
 		var relData engine.RelData
@@ -936,7 +944,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {

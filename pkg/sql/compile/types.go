@@ -182,8 +182,7 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	PartialResults     []any
-	PartialResultTypes []types.T
+	HasPartialResults bool
 }
 
 // ipAddrMatch return true if the node-addr of the scope matches to local address.

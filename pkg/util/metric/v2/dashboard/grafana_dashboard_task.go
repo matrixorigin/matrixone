@@ -229,6 +229,7 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 		[]string{
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_usage"`),
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_usage"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="compacted_collect_usage"`),
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="handle_usage_request"`),
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="show_accounts_get_table_stats"`),
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="show_accounts_get_storage_usage"`),
@@ -237,6 +238,7 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 		[]string{
 			"gckp_collect_usage",
 			"ickp_collect_usage",
+			"compacted_collect_usage",
 			"handle_usage_request",
 			"show_accounts_get_table_stats",
 			"show_accounts_get_storage_usage",

@@ -17,6 +17,7 @@ package value_scan
 import (
 	"bytes"
 	"fmt"
+
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/google/uuid"
@@ -28,7 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	oneBatchMaxRow = int(options.DefaultBlockMaxRows)
 )
 
 func (valueScan *ValueScan) String(buf *bytes.Buffer) {
@@ -65,15 +71,10 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if valueScan.runningCtx.nowIdx < len(valueScan.Batchs) {
-		result.Batch = valueScan.Batchs[valueScan.runningCtx.nowIdx]
-
-		if valueScan.runningCtx.nowIdx > 0 {
-			if !valueScan.dataInProcess {
-				valueScan.Batchs[valueScan.runningCtx.nowIdx-1].Clean(proc.GetMPool())
-				valueScan.Batchs[valueScan.runningCtx.nowIdx-1] = nil
-			}
+		result.Batch, err = valueScan.genSubBatchFromOriginBatch(proc)
+		if err != nil {
+			return result, err
 		}
-		valueScan.runningCtx.nowIdx++
 	}
 
 	result.Batch, err = valueScan.EvalProjection(result.Batch, proc)
@@ -81,6 +82,48 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Output(result.Batch)
 
 	return result, err
+}
+
+func (valueScan *ValueScan) genSubBatchFromOriginBatch(proc *process.Process) (*batch.Batch, error) {
+	currBat := valueScan.Batchs[valueScan.runningCtx.nowIdx]
+	if currBat == nil {
+		return nil, nil
+	}
+	if currBat.RowCount() <= oneBatchMaxRow {
+		valueScan.runningCtx.nowIdx++
+		return currBat, nil
+	}
+
+	valueScan.runningCtx.start = valueScan.runningCtx.end
+	valueScan.runningCtx.end += oneBatchMaxRow
+
+	if valueScan.runningCtx.end > currBat.RowCount() {
+		valueScan.runningCtx.end = currBat.RowCount()
+	}
+
+	if valueScan.runningCtx.start == valueScan.runningCtx.end {
+		valueScan.runningCtx.start = 0
+		valueScan.runningCtx.end = 0
+		valueScan.runningCtx.nowIdx++ // set for next Call
+
+		if valueScan.runningCtx.nowIdx > 0 {
+			if !valueScan.dataInProcess {
+				valueScan.Batchs[valueScan.runningCtx.nowIdx-1].Clean(proc.GetMPool())
+				valueScan.Batchs[valueScan.runningCtx.nowIdx-1] = nil
+			}
+		}
+
+		return valueScan.genSubBatchFromOriginBatch(proc)
+	}
+
+	subBatch, err := currBat.Window(
+		valueScan.runningCtx.start,
+		valueScan.runningCtx.end,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return subBatch, nil
 }
 
 func (valueScan *ValueScan) getReadOnlyBatchFromProcess(proc *process.Process) (bat *batch.Batch, err error) {

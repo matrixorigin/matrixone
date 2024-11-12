@@ -63,7 +63,7 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 		nil,
 		"",
 	)
-	defer cache.Close()
+	defer cache.Close(ctx)
 
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
@@ -86,7 +86,7 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 		fscache.ConstCapacity(2*1024*1024), nil, nil,
 		"",
 	)
-	defer cache.Close()
+	defer cache.Close(ctx)
 
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
