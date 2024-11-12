@@ -343,6 +343,7 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
@@ -1097,6 +1098,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
