@@ -117,7 +117,7 @@ func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, 
 			// this is not null value
 			keys[i] = append(keys[i], 0)
 			// give the length
-			keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 			// append the pure value bytes
 			keys[i] = append(keys[i], bytes...)
 		}
@@ -125,7 +125,7 @@ func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, 
 		for i := 0; i < n; i++ {
 			// for "a"，"bc" and "ab","c", we need to distinct
 			// give the length
-			keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
+			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 			// append the pure value bytes
 			keys[i] = append(keys[i], bytes...)
 		}
