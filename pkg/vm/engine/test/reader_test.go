@@ -379,7 +379,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(
 			t,
 			testutil.WriteToRelation(
-				ctx, txn, relation, containers.ToCNBatch(bat), true,
+				ctx, txn, relation, containers.ToCNBatch(bat), false, true,
 			),
 		)
 
