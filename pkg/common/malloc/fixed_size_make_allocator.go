@@ -14,23 +14,18 @@
 
 package malloc
 
-import (
-	"io"
-	"testing"
-)
+type fixedSizeMakeAllocator struct {
+	size uint64
+}
 
-func TestCheckMunmap(t *testing.T) {
-	checkMunmap(io.EOF, IgnoreMunmapError)
-	func() {
-		defer func() {
-			p := recover()
-			if p == nil {
-				t.Fatal("should panic")
-			}
-			if p != io.EOF {
-				t.Fatalf("got %v", p)
-			}
-		}()
-		checkMunmap(io.EOF, NoHints)
-	}()
+func NewFixedSizeMakeAllocator(size uint64) (ret *fixedSizeMakeAllocator) {
+	return &fixedSizeMakeAllocator{
+		size: size,
+	}
+}
+
+var _ FixedSizeAllocator = new(fixedSizeMakeAllocator)
+
+func (f *fixedSizeMakeAllocator) Allocate(Hints, uint64) ([]byte, Deallocator, error) {
+	return make([]byte, f.size), FuncDeallocator(func(Hints) {}), nil
 }

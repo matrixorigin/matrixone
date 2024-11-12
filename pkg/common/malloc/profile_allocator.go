@@ -129,6 +129,8 @@ func (p *ProfileAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	}
 	values.Bytes.Allocated.Add(size)
 	values.Objects.Allocated.Add(1)
+	values.Bytes.Inuse.Add(int64(size))
+	values.Objects.Inuse.Add(1)
 	return ptr, ChainDeallocator(
 		dec,
 		p.deallocatorPool.Get(profileDeallocateArgs{

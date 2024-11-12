@@ -306,3 +306,23 @@ func TestCheckValidIpInInvitedNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordTimeIntervalCheck(t *testing.T) {
+	tests := []struct {
+		timeStr  string
+		interval int64
+		want     bool
+	}{
+		{"2024-11-11 06:45:56", 0, true},
+		{"2024-11-11 06:46:01", 0, true},
+		{"2024-11-11 06:48:30", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.timeStr, func(t *testing.T) {
+			if got := passwordIntervalExpired(tt.timeStr, tt.interval); got != tt.want {
+				t.Errorf("passwordTimeIntervalCheck(%v) = %v, want %v", tt.timeStr, got, tt.want)
+			}
+		})
+	}
+}
