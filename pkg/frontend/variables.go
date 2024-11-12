@@ -3630,6 +3630,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("invited_nodes"),
 		Default:           "*",
 	},
+	"profiling_history_size": {
+		Name:              "profiling_history_size",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
+		Default:           int64(15),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
