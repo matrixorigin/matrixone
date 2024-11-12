@@ -461,6 +461,14 @@ func (tbl *txnTable) GetProcess() any {
 }
 
 func (tbl *txnTable) resetSnapshot() {
+	//TODO::Remove the debug info for issue-19867
+	if tbl.db.op.IsSnapOp() {
+		logutil.Infof("reset partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
+			tbl._partState.Load(),
+			tbl,
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
+	}
 	tbl._partState.Store(nil)
 }
 
@@ -675,6 +683,15 @@ func (tbl *txnTable) doRanges(
 	// get the table's snapshot
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
+	}
+
+	//TODO::Remove the debug info for issue-19867
+	if tbl.tableName == "mo_database" && tbl.db.op.IsSnapOp() {
+		logutil.Infof("doRanges:get partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
+			part,
+			tbl,
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
 	}
 
 	if err = tbl.rangesOnePart(
@@ -1864,7 +1881,8 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+			tbl,
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),
@@ -2140,7 +2158,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

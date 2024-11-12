@@ -62,7 +62,7 @@ func (m *MemoryFS) Name() string {
 	return m.name
 }
 
-func (m *MemoryFS) Close() {
+func (m *MemoryFS) Close(ctx context.Context) {
 }
 
 func (m *MemoryFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {

@@ -996,6 +996,7 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
 	}
 
+	// special handle for validate_password.policy
 	if policy, ok := val.(string); ok && name == validatePasswordPolicyTag {
 		if strings.ToLower(policy) == validatePasswordPolicyLow {
 			// convert to 0
@@ -1003,6 +1004,14 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		} else if strings.ToLower(policy) == validatePasswordPolicyMed {
 			// convert to 1
 			val = int64(1)
+		}
+	}
+
+	// special check for invited_nodes
+	if invitedlist, ok := val.(string); ok && name == InvitedNodes {
+		err = checkInvitedNodes(ctx, invitedlist)
+		if err != nil {
+			return err
 		}
 	}
 

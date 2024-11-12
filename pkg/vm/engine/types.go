@@ -46,6 +46,8 @@ type Node struct {
 	Addr             string `json:"address"`
 	Data             RelData
 	NeedExpandRanges bool
+	CNCNT            int32 // number of all cns
+	CNIDX            int32 // cn index , starts from 0
 }
 
 // Attribute is a column

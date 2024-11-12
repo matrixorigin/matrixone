@@ -25,6 +25,7 @@ import (
 )
 
 func BenchmarkEnsureNBytesAndSet(b *testing.B) {
+	ctx := context.Background()
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
@@ -32,7 +33,7 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			cache.EnsureNBytes(1)
+			cache.EnsureNBytes(ctx, 1)
 		}
 	})
 }

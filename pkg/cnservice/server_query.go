@@ -560,9 +560,9 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
-		ret = fileservice.EvictDiskCaches()
+		ret = fileservice.EvictDiskCaches(ctx)
 	case query.FileServiceCacheType_Memory:
-		ret = fileservice.EvictMemoryCaches()
+		ret = fileservice.EvictMemoryCaches(ctx)
 	}
 
 	for _, target := range ret {
@@ -582,7 +582,7 @@ func (s *service) handleMetadataCacheRequest(
 	// set capacity hint
 	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)
 	// evict
-	target := objectio.EvictCache()
+	target := objectio.EvictCache(ctx)
 	// response
 	resp.MetadataCacheResponse.CacheCapacity = target
 

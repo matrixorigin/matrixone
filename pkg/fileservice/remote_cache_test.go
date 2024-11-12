@@ -93,7 +93,7 @@ func TestRemoteCache(t *testing.T) {
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
 
-		sf1.fs.Close()
+		sf1.fs.Close(ctx)
 	})
 }
 

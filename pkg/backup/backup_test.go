@@ -52,7 +52,7 @@ func TestBackupData(t *testing.T) {
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
-	defer opts.Fs.Close()
+	defer opts.Fs.Close(ctx)
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
@@ -110,7 +110,7 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)
@@ -167,7 +167,7 @@ func TestBackupData2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
-	defer opts.Fs.Close()
+	defer opts.Fs.Close(ctx)
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
@@ -229,7 +229,7 @@ func TestBackupData2(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)

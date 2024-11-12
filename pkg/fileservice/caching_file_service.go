@@ -14,12 +14,14 @@
 
 package fileservice
 
+import "context"
+
 // CachingFileService is an extension to the FileService
 type CachingFileService interface {
 	FileService
 
 	// FlushCache flushes cache
-	FlushCache()
+	FlushCache(ctx context.Context)
 
 	// SetAsyncUpdate sets cache update operation to async mode
 	SetAsyncUpdate(bool)
