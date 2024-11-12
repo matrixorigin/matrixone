@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fifocache
+package malloc
 
-import (
-	"hash/maphash"
+type fixedSizeMakeAllocator struct {
+	size uint64
+}
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"golang.org/x/exp/constraints"
-)
+func NewFixedSizeMakeAllocator(size uint64) (ret *fixedSizeMakeAllocator) {
+	return &fixedSizeMakeAllocator{
+		size: size,
+	}
+}
 
-func ShardInt[T constraints.Integer](v T) uint64 {
-	return maphash.Bytes(seed, util.UnsafeToBytes(&v))
+var _ FixedSizeAllocator = new(fixedSizeMakeAllocator)
+
+func (f *fixedSizeMakeAllocator) Allocate(Hints, uint64) ([]byte, Deallocator, error) {
+	return make([]byte, f.size), FuncDeallocator(func(Hints) {}), nil
 }

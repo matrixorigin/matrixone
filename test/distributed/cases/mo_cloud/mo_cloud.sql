@@ -64,7 +64,9 @@ SHOW CREATE TABLE mysql.db;
 SHOW CREATE TABLE mysql.procs_priv;
 SHOW CREATE TABLE mysql.tables_priv;
 SHOW CREATE TABLE mysql.user;
+-- @bvt:issue#19912
 SHOW CREATE TABLE system_metrics.metric;
+-- @bvt:issue
 SHOW CREATE TABLE system_metrics.server_connections;
 SHOW CREATE TABLE system_metrics.server_storage_usage;
 SHOW CREATE TABLE system_metrics.sql_statement_errors;

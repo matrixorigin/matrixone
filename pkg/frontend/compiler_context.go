@@ -1024,11 +1024,15 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
-	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn)
+	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tempCtx, false)
+	defer bh.Close()
+	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
-	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName)
+	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tcc.GetContext(), false)
+	defer bh.Close()
+	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
 }
 

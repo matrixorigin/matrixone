@@ -956,8 +956,8 @@ type GlobalSysVarsMgr struct {
 }
 
 // Get return sys vars of accountId
-func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
-	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
+	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
@@ -3629,6 +3629,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("invited_nodes"),
 		Default:           "*",
+	},
+	"profiling_history_size": {
+		Name:              "profiling_history_size",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
+		Default:           int64(15),
 	},
 }
 
