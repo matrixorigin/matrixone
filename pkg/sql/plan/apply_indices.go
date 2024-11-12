@@ -604,23 +604,18 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	idxTag := builder.genNewTag()
 	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
-	idxColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
 	for i := 0; i < numKeyParts; i++ {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
 		origType := node.TableDef.Cols[colIdx].Typ
-		mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(idxColExpr), origType, int64(i))
+		mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
 		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
 	}
 
 	var newLeadingFilter *plan.Expr
 
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		leadingColPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-		if numParts > 1 {
-			origType := node.TableDef.Cols[leadingColPos].Typ
-			idxColExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, origType, 0)
-		}
 		expr := node.FilterList[leadingPos[0]]
 		fn := expr.GetF()
 		fn.Args[0].GetCol().RelPos = idxTag
