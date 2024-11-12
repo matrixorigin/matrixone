@@ -453,8 +453,9 @@ func (e *Engine) getOrCreateSnapPart(
 		//check whether the latest partition is available for reuse.
 		if ps, err := tbl.tryToSubscribe(ctx); err == nil {
 			if ps != nil && ps.CanServe(ts) {
-				logutil.Infof("getOrCreateSnapPart:reuse latest partition state:%p, table:%s, tid:%v, txn:%s",
+				logutil.Infof("getOrCreateSnapPart:reuse latest partition state:%p, tbl:%p, table name:%s, tid:%v, txn:%s",
 					ps,
+					tbl,
 					tbl.tableName,
 					tbl.tableId,
 					tbl.db.op.Txn().DebugString())
@@ -465,11 +466,12 @@ func (e *Engine) getOrCreateSnapPart(
 				start, end = ps.GetDuration()
 			}
 			logutil.Infof("getOrCreateSnapPart, "+
-				"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, table:%s, relKind:%s, tid:%v, txn:%s",
+				"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, tbl:%p, table:%s, relKind:%s, tid:%v, txn:%s",
 				ps,
 				start.ToString(),
 				end.ToString(),
 				ts.ToString(),
+				tbl,
 				tbl.tableName,
 				tbl.relKind,
 				tbl.tableId,
@@ -578,9 +580,10 @@ func (e *Engine) getOrCreateSnapPart(
 	//if has no checkpoints or ts > snap.end, use latest partition.
 	if snap.Snapshot().IsEmpty() || ts.GT(&end) {
 		logutil.Infof("getOrCreateSnapPart:Start to resue latest ps for snapshot read at:%s, "+
-			"table:%s, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
+			"table name:%s, tbl:%p, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
 			ts.ToString(),
 			tbl.tableName,
+			tbl,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),
 			snap.Snapshot().IsEmpty(),
@@ -592,8 +595,9 @@ func (e *Engine) getOrCreateSnapPart(
 		}
 		if ps != nil && ps.CanServe(ts) {
 			logutil.Infof("getOrCreateSnapPart: resue latest partiton state:%p, "+
-				"table:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
+				"tbl:%p, table name:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
 				ps,
+				tbl,
 				tbl.tableName,
 				tbl.tableId,
 				tbl.db.op.Txn().DebugString(),
@@ -606,11 +610,12 @@ func (e *Engine) getOrCreateSnapPart(
 			start, end = ps.GetDuration()
 		}
 		logutil.Infof("getOrCreateSnapPart: "+
-			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, table:%s, tid:%v, txn:%s",
+			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, tbl:%p, table name:%s, tid:%v, txn:%s",
 			ps,
 			start.ToString(),
 			end.ToString(),
 			ts.ToString(),
+			tbl,
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
