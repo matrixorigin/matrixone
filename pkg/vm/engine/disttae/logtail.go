@@ -53,7 +53,7 @@ func consumeEntry(
 	}
 
 	// Try to handle the memory records of the three tables
-	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) {
+	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
 		return nil
 	}
 
