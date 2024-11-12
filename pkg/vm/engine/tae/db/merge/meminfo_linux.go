@@ -14,20 +14,13 @@
 
 package merge
 
-import (
-	"github.com/stretchr/testify/require"
-	"testing"
-)
+import "syscall"
 
-func TestResourceController(t *testing.T) {
-	rc := new(resourceController)
-	rc.setMemLimit(10000)
-	require.Equal(t, int64(7500), rc.limit)
-	require.Equal(t, int64(7500), rc.availableMem())
-
-	rc.refresh()
-	rc.limit = rc.using + 1
-	require.Equal(t, int64(1), rc.availableMem())
-
-	require.Panics(t, func() { rc.setMemLimit(0) })
+func totalMem() uint64 {
+	in := new(syscall.Sysinfo_t)
+	err := syscall.Sysinfo(in)
+	if err != nil {
+		return 0
+	}
+	return in.Totalram * uint64(in.Unit)
 }
