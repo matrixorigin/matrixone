@@ -254,3 +254,33 @@ id    col    seq    key    path    index    value    this
 1    t2.j    1    tag2    $.tag2    null    "v2"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
 1    t2.j    2    tag3    $.tag3    null    "v3"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
 2    null    null    null    null    null    null    null
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(1, 1, NULL);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int32 step can't be NULL
+drop table t1;
+create table t1(a int, b int, c int);
+insert into t1 values(1, NULL, 1);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int32 end can't be NULL
+drop table t1;
+create table t1(a int, b int, c int);
+insert into t1 values(NULL, 1, 1);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int32 start can't be NULL
+drop table t1;
+create table t1(a bigint, b bigint, c bigint);
+insert into t1 values(1, 1, NULL);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int64 step can't be NULL
+drop table t1;
+create table t1(a bigint, b bigint, c bigint);
+insert into t1 values(1, NULL, 1);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int64 end can't be NULL
+drop table t1;
+create table t1(a bigint, b bigint, c bigint);
+insert into t1 values(NULL, 1, 1);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+invalid input: generate_series int64 start can't be NULL
