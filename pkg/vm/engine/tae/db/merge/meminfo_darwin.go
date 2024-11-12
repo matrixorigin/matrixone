@@ -12,15 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fifocache
+package merge
 
 import (
-	"hash/maphash"
-
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"golang.org/x/exp/constraints"
+	"syscall"
+	"unsafe"
 )
 
-func ShardInt[T constraints.Integer](v T) uint64 {
-	return maphash.Bytes(seed, util.UnsafeToBytes(&v))
+func totalMem() uint64 {
+	s, err := syscall.Sysctl("hw.memsize")
+	if err != nil {
+		return 0
+	}
+	// hack because the string conversion above drops a \0
+	b := []byte(s)
+	if len(b) < 8 {
+		b = append(b, 0)
+	}
+	return *(*uint64)(unsafe.Pointer(&b[0]))
 }
