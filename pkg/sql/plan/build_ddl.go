@@ -134,6 +134,8 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 
 	// Check alter and change the viewsql.
 	viewSql := ctx.GetRootSql()
+	// remove sql hint
+	viewSql = cleanHint(viewSql)
 	if len(viewSql) != 0 {
 		if viewSql[0] == 'A' {
 			viewSql = strings.Replace(viewSql, "ALTER", "CREATE", 1)
