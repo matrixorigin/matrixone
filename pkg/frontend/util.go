@@ -505,7 +505,7 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		ses.Info(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
 		ses.Error(

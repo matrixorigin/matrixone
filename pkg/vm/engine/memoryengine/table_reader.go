@@ -137,6 +137,10 @@ func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, by
 
 var _ engine.Reader = new(TableReader)
 
+func (t *TableReader) BlkCnt() int {
+	panic("implement me")
+}
+
 func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	if t == nil {
 		return nil, nil
