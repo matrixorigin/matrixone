@@ -88,3 +88,7 @@ drop table t1;
 create table t1(a bigint, b bigint, c bigint);
 insert into t1 values(NULL, 1, 1);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+drop table t1;
+create table t1(a datetime,b datetime,c varchar);
+insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);
+select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
