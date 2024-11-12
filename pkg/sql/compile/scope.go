@@ -675,7 +675,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		//need to shuffle blocks
 		//todo: optimize this, shuffle blocks in expand ranges
 		// add memory table block
-		newRelData := relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
+		newRelData := relData.BuildEmptyRelData(relData.DataCnt() / int(s.NodeInfo.CNCNT))
 		if s.NodeInfo.IsLocal {
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
 		}
