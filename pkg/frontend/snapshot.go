@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 type tableType string
@@ -329,9 +331,12 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	return err
 }
 
-func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (err error) {
+func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	defer func() {
+		stats = bh.GetExecStatsArray()
+		bh.Close()
+	}()
 
 	srcAccountName := string(stmt.AccountName)
 	dbName := string(stmt.DatabaseName)
@@ -343,7 +348,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	var toAccountId uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
+		return stats, err
 	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
@@ -352,20 +357,20 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
 	if err != nil {
-		return err
+		return stats, err
 	}
 
 	if snapshot == nil {
-		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
+		return stats, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 	}
 	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
-		return moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
+		return stats, moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
 
 	// default restore to src account
 	restoreAccount, err = getAccountId(ctx, bh, srcAccountName)
 	if err != nil {
-		return err
+		return stats, err
 	}
 
 	if len(toAccountName) > 0 {
@@ -381,7 +386,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		if toAccountId, err = getAccountId(ctx, bh, string(stmt.ToAccountName)); err != nil {
-			return err
+			return stats, err
 		}
 	} else {
 		toAccountId = restoreAccount
@@ -401,23 +406,23 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(dbName) > 0 && needSkipDb(dbName) {
-		return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
+		return stats, moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbName)
 	}
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && (len(dbName) != 0 || len(tblName) != 0) {
-		return moerr.NewInternalError(ctx, "can't restore db or table from cluster level snapshot")
+		return stats, moerr.NewInternalError(ctx, "can't restore db or table from cluster level snapshot")
 	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		var srcAccountId uint32
 		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
-			return err
+			return stats, err
 		}
 
 		var sp string
 		sp, err = insertSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint64(srcAccountId), srcAccountName)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		snapshotName = sp
 		defer func() {
@@ -432,13 +437,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
-			return err
+			return stats, err
 		}
 
 		if len(subDbToRestore) > 0 {
 			for _, subDb := range subDbToRestore {
 				if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
-					return err
+					return stats, err
 				}
 			}
 		}
@@ -477,7 +482,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			restoreAccount,
 			false,
 			nil); err != nil {
-			return err
+			return stats, err
 		}
 	case tree.RESTORELEVELDATABASE:
 		if err = restoreToDatabase(ctx,
@@ -492,7 +497,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			restoreAccount,
 			false,
 			nil); err != nil {
-			return err
+			return stats, err
 		}
 	case tree.RESTORELEVELTABLE:
 		if err = restoreToTable(ctx,
@@ -506,7 +511,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			viewMap,
 			snapshot.ts,
 			restoreAccount); err != nil {
-			return err
+			return stats, err
 		}
 	}
 
@@ -525,7 +530,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		err = deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshotName)
 		if err != nil {
-			return err
+			return stats, err
 		}
 	}
 

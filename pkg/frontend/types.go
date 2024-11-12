@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -217,7 +218,14 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
+	// RecordExecPlan records the execution plan and calculates CU resources, and stores them in into statementinfo
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
+
+	// RecordCompoundStmt calculates the CU resources of composite statements, and stores them into statementinfo
+	RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error
+
+	// StatsCompositeSubStmtResource Statistics on CU resources of sub statements in composite statements
+	StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray)
 
 	SetExplainBuffer(buf *bytes.Buffer)
 
@@ -342,6 +350,7 @@ type BackgroundExec interface {
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
+	GetExecStatsArray() statistic.StatsArray
 
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()

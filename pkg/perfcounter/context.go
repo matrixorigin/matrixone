@@ -91,7 +91,14 @@ func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
 	return counter, ok
 }
 
-// Internal executor context key
+// Background Executor Internal Executor
+type BackgroundExecutorKey struct{}
+
+func AttachBackgroundExecutorKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, BackgroundExecutorKey{}, struct{}{})
+}
+
+// Internal executor context key(include `SQLExecutor` and `internalExecutor`)
 type InternalExecutorKey struct{}
 
 func AttachInternalExecutorKey(ctx context.Context) context.Context {

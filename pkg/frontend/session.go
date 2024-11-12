@@ -49,6 +49,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -799,7 +800,8 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 
 	backSes := newBackSession(ses, txnOp, ses.respr.GetStr(DBNAME), callback)
 	bh := &backExec{
-		backSes: backSes,
+		backSes:    backSes,
+		statsArray: statistic.NewStatsArray(),
 	}
 	//the derived statement execute in a shared transaction in background session
 	bh.backSes.ReplaceDerivedStmt(true)
@@ -816,7 +818,8 @@ func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExe
 
 	backSes := newBackSession(ses, nil, "", batchFetcher2)
 	bh := &backExec{
-		backSes: backSes,
+		backSes:    backSes,
+		statsArray: statistic.NewStatsArray(),
 	}
 	return bh
 }

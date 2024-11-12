@@ -302,6 +302,38 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 	return nil
 }
 
+// RecordCompoundStmt Check if it is a compound statement, What is a compound statement?
+func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
+		// Check if it is a compound statement, What is a compound statement?
+		jsonHandle := &jsonPlanHandler{
+			jsonBytes:  sqlQueryIgnoreExecPlan,
+			statsBytes: statsBytes,
+			//stats:      stats,
+			//buffer:     h.handoverBuffer(),
+		}
+		stm.SetSerializableExecPlan(jsonHandle)
+	}
+	return nil
+}
+
+func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
+	//if stm := cwft.ses.GetStmtInfo(); stm != nil {
+	waitActiveCost := time.Duration(0)
+	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
+		txn := handler.GetTxn()
+		if txn != nil {
+			waitActiveCost = txn.GetWaitActiveCost()
+		}
+	}
+
+	h := NewMarshalPlanHandlerWithoutPlanV2(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
+	statsByte, _ = h.Stats(ctx, cwft.ses)
+	return statsByte
+	//}
+	//return
+}
+
 func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
 	cwft.explainBuffer = buf
 }
