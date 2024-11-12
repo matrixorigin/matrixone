@@ -16,9 +16,8 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,7 +47,13 @@ type HashBuild struct {
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
 	JoinMapRefCnt     int32
-	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
+
+	IsDedup           bool
+	OnDuplicateAction plan.Node_OnDuplicateAction
+	DedupColName      string
+	DedupColTypes     []plan.Type
+
 	vm.OperatorBase
 }
 

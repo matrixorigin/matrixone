@@ -589,7 +589,7 @@ func TestQueryService_RemoteCache(t *testing.T) {
 			QueryClient:        qt,
 		}, nil)
 	assert.Nil(t, err)
-	defer func() { fs.Close() }()
+	defer func() { fs.Close(ctx) }()
 
 	t.Run("main", func(t *testing.T) {
 		runTestWithQueryService(t, cn, fs, func(cli client.QueryClient, addr string) {

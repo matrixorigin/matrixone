@@ -33,7 +33,7 @@ func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPoli
 	return true
 }
 
-func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (t *tombstonePolicy) revise(resourceControl *resourceController, config *BasicPolicyConfig) []reviseResult {
 	if len(t.tombstones) < 2 {
 		return nil
 	}

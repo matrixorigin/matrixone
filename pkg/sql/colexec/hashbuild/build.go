@@ -43,6 +43,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	if hashBuild.NeedHashMap {
+		hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
+		hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
+		hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
+		hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 		return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, proc)
 	}
 	return nil
@@ -82,6 +86,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				//jm.SetIgnoreRows(ctr.hashmapBuilder.IgnoreRows)
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}

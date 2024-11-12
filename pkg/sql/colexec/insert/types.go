@@ -137,12 +137,8 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 }
 
-func (insert *Insert) AffectedRows() uint64 {
+func (insert *Insert) GetAffectedRows() uint64 {
 	return insert.ctr.affectedRows
-}
-
-func (insert *Insert) GetAffectedRows() *uint64 {
-	return &insert.ctr.affectedRows
 }
 
 func (insert *Insert) initBufForS3() {

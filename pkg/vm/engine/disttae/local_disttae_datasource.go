@@ -78,6 +78,11 @@ func NewLocalDataSource(
 		if err != nil {
 			return nil, err
 		}
+		//TODO::Remove the debug info for issue-19867
+		if table.tableName == "mo_database" && table.db.op.IsSnapOp() {
+			logutil.Infof("NewLocalDataSource:tbl:%p, table name:%s, get partition state:%p,snapshot op:%s",
+				table, table.tableName, state, table.db.op.Txn().DebugString())
+		}
 		source.pState = state
 	}
 
@@ -651,6 +656,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				for i := range deleted {
 					deleted[i] += int64(inputRowCnt)
 				}
+				// negative shrink requires the bat sorted already
 				outBatch.Shrink(deleted, true)
 			} else {
 				for i := range deleted {
@@ -1091,6 +1097,8 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	cacheVectors := containers.NewVectors(len(attrs))
 
+	checkedObjCnt := 0
+
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
@@ -1110,6 +1118,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 		}
 
+		sameObj := false
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
@@ -1135,6 +1144,12 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
+
+						if !sameObj {
+							checkedObjCnt++
+						}
+						sameObj = true
+
 						break
 					}
 				}
@@ -1142,6 +1157,12 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 
 			release()
 		}
+	}
+
+	// if more than one tombstone have applied any delete,
+	// the unsorted input rowIds slice may lead the deleted slice unsorted as well.
+	if checkedObjCnt >= 2 {
+		slices.Sort(deleted)
 	}
 
 	return deleted, nil

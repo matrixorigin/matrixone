@@ -171,7 +171,7 @@ var (
 		Namespace: "mo",
 		Subsystem: "task",
 		Name:      "transfer_short_duration",
-		Buckets:   getShortDurationBuckets(),
+		Buckets:   getDurationBuckets(),
 	}, []string{"type"})
 
 	TransferMemLatencyHistogram = transferShortDurationHistogram.WithLabelValues("mem_latency")

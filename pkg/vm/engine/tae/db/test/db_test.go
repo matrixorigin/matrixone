@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -6360,6 +6361,10 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	common.RuntimeMaxMergeObjN.Store(0)
+	common.RuntimeOsizeRowsQualified.Store(0)
+	common.RuntimeMaxObjOsize.Store(0)
+
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -6426,7 +6431,6 @@ func TestAppendAndGC2(t *testing.T) {
 	opts.CheckpointCfg.GlobalMinCount = 5
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
 	db := tae.DB
 
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -6490,7 +6494,10 @@ func TestAppendAndGC2(t *testing.T) {
 			files[file] = struct{}{}
 		}
 	}
-	db.Wal.Replay(loadFiles)
+	dir := tae.Dir
+	tae.Close()
+	wal := wal.NewDriverWithBatchStore(opts.Ctx, dir, "wal", nil)
+	wal.Replay(loadFiles)
 	assert.NotEqual(t, 0, len(files))
 	for file := range metaFile {
 		if _, ok := files[file]; !ok {
@@ -10118,6 +10125,48 @@ func TestTransferInMerge(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestDeleteAndMerge(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	var appendTxn txnif.AsyncTxn
+	{
+		tae.DeleteAll(true)
+		appendTxn, err = tae.StartTxn(nil)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CompactBlocks(true)
+	tae.DoAppendWithTxn(bat, appendTxn, false)
+
+	assert.NoError(t, appendTxn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
 func TestTransferInMerge2(t *testing.T) {
 	ctx := context.Background()
 
@@ -10145,4 +10194,47 @@ func TestTransferInMerge2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.CheckRowsByScan(9, true)
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestMergeAndTransfer(t *testing.T) {
+	/*
+		append, flush
+		merge1, merge2
+		delete
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	tae.MergeBlocks(true)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel := tae.GetRelation()
+	id := testutil.GetOneBlockMeta(rel).AsCommonID()
+	txn.Commit(ctx)
+
+	txn, rel = tae.GetRelation()
+	err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
+	txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		err := at.GetStore().Freeze(ctx)
+		assert.NoError(t, err)
+		tae.MergeBlocks(true)
+		tae.MergeBlocks(true)
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+
 }

@@ -88,9 +88,12 @@ func (e *TestEngine) BindSchema(schema *catalog.Schema) { e.schema = schema }
 
 func (e *TestEngine) BindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
-func (e *TestEngine) Restart(ctx context.Context) {
+func (e *TestEngine) Restart(ctx context.Context, opts ...*options.Options) {
 	_ = e.DB.Close()
 	var err error
+	if len(opts) > 0 {
+		e.Opts = opts[0]
+	}
 	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
 	e.DB.DiskCleaner.GetCleaner().AddChecker(
@@ -103,6 +106,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 		}, cmd_util.CheckerKeyMinTS)
 	assert.NoError(e.T, err)
 }
+
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 	_ = e.DB.Close()
 	var err error

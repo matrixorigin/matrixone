@@ -171,21 +171,21 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 // default allocator must use with no memcache
 // only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
+	ctx := context.Background()
 	memCache1 := NewMemCache(
 		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
 	)
-	defer memCache1.Close()
+	defer memCache1.Close(ctx)
 	memCache2 := NewMemCache(
 		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
 	)
-	defer memCache2.Close()
+	defer memCache2.Close(ctx)
 	caches := []IOVectorCache{memCache1, memCache2}
 
-	ctx := context.Background()
 	dir := t.TempDir()
 	fs, err := NewLocalFS(ctx, "test", dir, CacheConfig{
 		MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
@@ -210,8 +210,8 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 8,
-				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-					cacheData := allocator.AllocateCacheData(8)
+				ToCacheData: func(ctx context.Context, r io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					cacheData := allocator.AllocateCacheData(ctx, 8)
 					_, err := io.ReadFull(r, cacheData.Bytes())
 					if err != nil {
 						return nil, err
@@ -227,9 +227,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 
 	assert.Equal(t, int64(8), memCache1.cache.Used())
 	assert.Equal(t, int64(8), memCache2.cache.Used())
-	memCache1.cache.Flush()
-	memCache2.cache.Flush()
-	fs.FlushCache()
+	memCache1.cache.Flush(ctx)
+	memCache2.cache.Flush(ctx)
+	fs.FlushCache(ctx)
 }
 
 func TestLocalFSEmptyRootPath(t *testing.T) {

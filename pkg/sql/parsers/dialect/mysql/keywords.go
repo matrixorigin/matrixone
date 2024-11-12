@@ -646,5 +646,6 @@ func init() {
 		"cdc":                        CDC,
 		"rollup":                     ROLLUP,
 		"apply":                      APPLY,
+		"dedup":                      DEDUP,
 	}
 }

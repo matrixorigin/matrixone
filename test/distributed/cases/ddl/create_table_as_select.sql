@@ -822,6 +822,7 @@ drop table if exists test03;
 create table test03 (col2 decimal unique key) as select col2 from test01;
 show create table test03;
 desc test03;
+-- @pattern
 insert into test03 values (372.324);
 
 drop table if exists test04;

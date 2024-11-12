@@ -16,7 +16,6 @@ package merge
 
 import (
 	"context"
-	"math"
 	"math/rand/v2"
 	"testing"
 
@@ -114,6 +113,7 @@ func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.Ob
 func TestPolicyBasic(t *testing.T) {
 	common.IsStandaloneBoost.Store(true)
 	p := newBasicPolicy()
+	rc := new(resourceController)
 
 	// only schedule objects whose size < cfg.objectMinOSize
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
@@ -121,7 +121,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 120, false), cfg))
-	result := p.revise(0, math.MaxInt64, cfg)
+	result := p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
@@ -132,7 +132,7 @@ func TestPolicyBasic(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 30, false), cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
@@ -142,7 +142,7 @@ func TestPolicyBasic(t *testing.T) {
 	cfg = testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(rc, cfg)
 	require.Equal(t, 0, len(result))
 
 	// memory limit
@@ -151,27 +151,29 @@ func TestPolicyBasic(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 10, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
 	require.True(t, p.onObject(newTestObjectEntryWithRowCnt(t, 20, 1, false), cfg))
-	result = p.revise(0, 36, cfg)
+	rc.limit = 36
+	result = p.revise(rc, cfg)
 	require.Equal(t, 0, len(result))
 }
 
 func TestPolicyTombstone(t *testing.T) {
 	common.IsStandaloneBoost.Store(true)
 	p := newTombstonePolicy()
+	rc := new(resourceController)
 
 	// tombstone policy do not schedule data objects
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg := testConfig(100, 2)
 	require.False(t, p.onObject(newTestObjectEntry(t, 10, false), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 20, false), cfg))
-	result := p.revise(0, math.MaxInt64, cfg)
+	result := p.revise(rc, cfg)
 	require.Equal(t, 0, len(result))
 
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
 	cfg = testConfig(100, 2)
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
@@ -182,7 +184,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
 	require.False(t, p.onObject(newTestObjectEntry(t, 30, true), cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
@@ -193,7 +195,7 @@ func TestPolicyTombstone(t *testing.T) {
 	require.True(t, p.onObject(newTestObjectEntry(t, 10, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 20, true), cfg))
 	require.True(t, p.onObject(newTestObjectEntry(t, 120, true), cfg))
-	result = p.revise(0, math.MaxInt64, cfg)
+	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 3, len(result[0].objs))
 	require.Equal(t, TaskHostDN, result[0].kind)
@@ -204,6 +206,7 @@ func TestPolicyGroup(t *testing.T) {
 	g := newPolicyGroup(newBasicPolicy(), newTombstonePolicy())
 	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}))
 	g.config = &BasicPolicyConfig{MergeMaxOneRun: 2, ObjectMinOsize: 100}
+	rc := new(resourceController)
 
 	g.onObject(newTestObjectEntry(t, 10, false))
 	g.onObject(newTestObjectEntry(t, 20, false))
@@ -212,7 +215,7 @@ func TestPolicyGroup(t *testing.T) {
 	g.onObject(newTestObjectEntry(t, 20, true))
 	g.onObject(newTestObjectEntry(t, 30, true))
 
-	results := g.revise(0, math.MaxInt64)
+	results := g.revise(rc)
 	require.Equal(t, 2, len(results))
 	require.Equal(t, TaskHostDN, results[0].kind)
 	require.Equal(t, TaskHostDN, results[1].kind)
@@ -227,7 +230,9 @@ func TestObjOverlap(t *testing.T) {
 
 	// empty policy
 	policy := newObjOverlapPolicy()
-	objs := policy.revise(0, math.MaxInt64, defaultBasicConfig)
+	rc := new(resourceController)
+	rc.setMemLimit(estimateMemUsagePerRow * 20)
+	objs := policy.revise(rc, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -239,7 +244,7 @@ func TestObjOverlap(t *testing.T) {
 	entry2 := newSortedTestObjectEntry(t, 3, 4, overlapSizeThreshold)
 	require.True(t, policy.onObject(entry1, defaultBasicConfig))
 	require.True(t, policy.onObject(entry2, defaultBasicConfig))
-	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
+	objs = policy.revise(rc, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -251,7 +256,7 @@ func TestObjOverlap(t *testing.T) {
 	entry4 := newSortedTestObjectEntry(t, 2, 3, overlapSizeThreshold)
 	require.True(t, policy.onObject(entry3, defaultBasicConfig))
 	require.True(t, policy.onObject(entry4, defaultBasicConfig))
-	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
+	objs = policy.revise(rc, defaultBasicConfig)
 	for i, obj := range objs {
 		if i == 0 {
 			require.Equal(t, 2, len(obj.objs))
@@ -269,7 +274,7 @@ func TestObjOverlap(t *testing.T) {
 	require.False(t, policy.onObject(entry5, defaultBasicConfig))
 	require.False(t, policy.onObject(entry6, defaultBasicConfig))
 	require.Equal(t, 6, len(policy.leveledObjects))
-	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
+	objs = policy.revise(rc, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -292,7 +297,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry10, defaultBasicConfig))
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
-	objs = policy.revise(0, math.MaxInt64, defaultBasicConfig)
+	objs = policy.revise(rc, defaultBasicConfig)
 	require.Equal(t, 6, len(objs))
 	require.Equal(t, 3, len(objs[0].objs))
 	require.Equal(t, TaskHostDN, objs[0].kind)
@@ -306,7 +311,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry12, defaultBasicConfig))
 	require.True(t, policy.onObject(entry13, defaultBasicConfig))
 
-	objs = policy.revise(0, 0, defaultBasicConfig)
+	objs = policy.revise(rc, defaultBasicConfig)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
 	}
@@ -318,6 +323,7 @@ func TestPolicyCompact(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	p := newObjCompactPolicy(fs)
+	rc := new(resourceController)
 
 	cata := catalog.MockCatalog()
 	defer cata.Close()
@@ -334,7 +340,7 @@ func TestPolicyCompact(t *testing.T) {
 
 	p.resetForTable(tbl, nil)
 
-	objs := p.revise(0, math.MaxInt64, defaultBasicConfig)
+	objs := p.revise(rc, defaultBasicConfig)
 	require.Equal(t, 0, len(objs))
 
 	txn2, _ := txnMgr.StartTxn(nil)

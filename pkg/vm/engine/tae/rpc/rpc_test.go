@@ -189,7 +189,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	fs := handle.db.Opts.Fs
-	defer fs.Close()
+	defer fs.Close(ctx)
 	IDAlloc := catalog.NewIDAllocator()
 
 	schema := catalog.MockSchema(2, 1)
@@ -1716,7 +1716,7 @@ func TestApplyDeltaloc(t *testing.T) {
 
 	h := mockTAEHandle(ctx, t, opts)
 	defer h.HandleClose(context.TODO())
-	defer opts.Fs.Close()
+	defer opts.Fs.Close(ctx)
 
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"

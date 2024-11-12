@@ -42,7 +42,7 @@ drop procedure test_if_hit_elseif_first_elseif;
 -- @label:bvt
 drop procedure if exists test_if_hit_second_elseif;
 -- @delimiter .
-create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
+create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end'
 .
 -- @delimiter ;
 call test_if_hit_second_elseif();

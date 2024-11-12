@@ -30,14 +30,19 @@ const (
 	sendRecursive = 2
 )
 
+const (
+	moDefaultRecursionMax = 100
+)
+
 type container struct {
-	buf        *batch.Batch
-	bats       []*batch.Batch
-	curNodeCnt int32
-	status     int32
-	last       bool
-	freeBats   []*batch.Batch
-	i          int
+	buf            *batch.Batch
+	bats           []*batch.Batch
+	curNodeCnt     int32
+	status         int32
+	last           bool
+	freeBats       []*batch.Batch
+	i              int
+	recursiveLevel int
 }
 
 type MergeCTE struct {
@@ -89,6 +94,7 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 	mergeCTE.ctr.status = sendInitial
 	mergeCTE.ctr.i = 0
 	mergeCTE.ctr.last = false
+	mergeCTE.ctr.recursiveLevel = 0
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {

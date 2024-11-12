@@ -72,16 +72,16 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	return false
 }
 
-func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (o *objCompactPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	if o.tblEntry == nil {
 		return nil
 	}
 	o.filterValidTombstones()
 	results := make([]reviseResult, 0, len(o.segObjects)+1)
 	for _, objs := range o.segObjects {
-		if ok, eSize := controlMem(objs, mem); ok {
+		if rc.resourceAvailable(objs) {
+			rc.reserveResources(objs)
 			results = append(results, reviseResult{objs, TaskHostDN})
-			mem -= eSize
 		}
 	}
 	if len(o.tombstones) > 0 {

@@ -611,15 +611,15 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 	tc.reset.commitCounter.addEnter()
 	defer tc.reset.commitCounter.addExit()
-	txn := tc.getTxnMeta(false)
-	util.LogTxnCommit(tc.logger, txn)
+	txnMeta := tc.getTxnMeta(false)
+	util.LogTxnCommit(tc.logger, txnMeta)
 
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
 		tc.reset.commitSeq = tc.NextSequence()
 		tc.reset.commitAt = time.Now()
 
-		tc.triggerEvent(newEvent(CommitEvent, txn, tc.reset.commitSeq, nil))
+		tc.triggerEvent(newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
 		defer func() {
 			cost := time.Since(tc.reset.commitAt)
 			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
@@ -630,6 +630,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if tc.opts.options.ReadOnly() {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
+		tc.mu.txn.Status = txn.TxnStatus_Committed
 		tc.closeLocked()
 		return
 	}
@@ -1257,6 +1258,9 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked() {
 	if !tc.mu.closed {
 		tc.mu.closed = true
+		if tc.reset.commitErr != nil {
+			tc.mu.txn.Status = txn.TxnStatus_Aborted
+		}
 		tc.triggerEventLocked(
 			TxnEvent{
 				Event: ClosedEvent,

@@ -207,6 +207,7 @@ drop table if exists t1;
 create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
+-- @pattern
 execute stmt1;
 select * from t1;
 

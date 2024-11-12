@@ -61,7 +61,7 @@ a    b
 2147483647    max
 1    1_1
 CREATE table t6 (a int unique) as select * from t1;
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'a'
 drop table t6;
 CREATE table t6 as select max(a) from t1;
 desc t6;
@@ -1193,7 +1193,7 @@ desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
 col2    DECIMAL(38,0)    YES    UNI    null        
 insert into test03 values (372.324);
-Duplicate entry '372' for key '__mo_index_idx_col'
+Duplicate entry '372' for key '(.*)'
 drop table if exists test04;
 create table test04 (col1 int, col2 varchar(50), key(col1, col2)) as select col1, col3 from test01;
 show create table test04;
@@ -1215,7 +1215,7 @@ col1    col2
 2    39304
 3    372
 insert into test05 values (2, 39304.3424);
-Duplicate entry ('\d\w\d{38}'|'\(2\,39304\)') for key '__mo_cpkey_col'
+Duplicate entry ('\d\w\d{38}'|'\(2\,39304\)') for key '(.*)'
 alter table test01 rename column col1 to newCol;
 show create table test01;
 Table    Create Table
@@ -1353,7 +1353,7 @@ drop table if exists abnormal05;
 create table abnormal04 (col1 int primary key ) as select col1 from abnormal03;
 Duplicate entry '1' for key 'col1'
 create table abnormal05 (col2 bigint unique key) as select col2 from abnormal03;
-Duplicate entry '8324824234' for key '__mo_index_idx_col'
+Duplicate entry '8324824234' for key 'col2'
 drop table abnormal03;
 drop table if exists abnormal06;
 create table abnormal06 (col1 bigint, col2 decimal);

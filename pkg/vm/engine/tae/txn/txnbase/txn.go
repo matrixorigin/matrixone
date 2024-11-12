@@ -85,6 +85,7 @@ type Txn struct {
 	isReplay                 bool
 	DedupType                txnif.DedupPolicy
 
+	FreezeFn          func(txnif.AsyncTxn) error
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
 	ApplyCommitFn     func(txnif.AsyncTxn) error
@@ -140,6 +141,7 @@ func (txn *Txn) MockIncWriteCnt() int        { return txn.Store.IncreateWriteCnt
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
 
+func (txn *Txn) SetFreezeFn(fn func(txnif.AsyncTxn) error)          { txn.FreezeFn = fn }
 func (txn *Txn) SetPrepareCommitFn(fn func(txnif.AsyncTxn) error)   { txn.PrepareCommitFn = fn }
 func (txn *Txn) SetPrepareRollbackFn(fn func(txnif.AsyncTxn) error) { txn.PrepareRollbackFn = fn }
 func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyCommitFn = fn }
@@ -378,6 +380,10 @@ func (txn *Txn) PrePrepare(ctx context.Context) error {
 }
 
 func (txn *Txn) Freeze(ctx context.Context) error {
+	if txn.FreezeFn != nil {
+		err := txn.FreezeFn(txn)
+		return err
+	}
 	return txn.Store.Freeze(ctx)
 }
 

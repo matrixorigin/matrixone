@@ -19,12 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"go.uber.org/zap"
 )
 
 var getDuplicatedRowIDNABlkFunctions = map[types.T]any{
@@ -159,7 +162,7 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 
 func parseAContainsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector,
-	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader,
+	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any) *model.TransDels,
 ) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
@@ -170,6 +173,9 @@ func parseAContainsArgs(args ...any) (
 	}
 	if args[3] != nil {
 		txn = args[3].(txnif.TxnReader)
+	}
+	if args[4] != nil {
+		delsFn = args[4].(func(rowID any) *model.TransDels)
 	}
 	return
 }
@@ -296,6 +302,11 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.Int("row offset", row),
+						zap.String("commit ts", commitTS.ToString()),
+					)
 					return txnif.ErrTxnWWConflict
 				}
 				if skip && commitTS.LT(&startTS) {
@@ -346,6 +357,11 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					commitTS := tsVec.Get(row).(types.TS)
 					startTS := txn.GetStartTS()
 					if commitTS.GT(&startTS) {
+						logutil.Info("Dedup-WW",
+							zap.String("txn", txn.Repr()),
+							zap.Int("row offset", row),
+							zap.String("commit ts", commitTS.ToString()),
+						)
 						return txnif.ErrTxnWWConflict
 					}
 					if skip && commitTS.LT(&startTS) {
@@ -361,7 +377,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 
 func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
-		vec, rowIDs, scanFn, txn := parseAContainsArgs(args...)
+		vec, rowIDs, scanFn, txn, delsFn := parseAContainsArgs(args...)
 		vs := vector.MustFixedColNoTypeCheck[T](vec.GetDownstreamVector())
 		return func(v1 T, _ bool, rowOffset int) error {
 			if rowIDs.IsNull(rowOffset) {
@@ -391,7 +407,24 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
-					return txnif.ErrTxnWWConflict
+					dels := delsFn(v1)
+					ts, ok := dels.Mapping[row]
+					if !ok {
+						logutil.Info("Dedup-WW",
+							zap.String("txn", txn.Repr()),
+							zap.Int("row offset", row),
+							zap.String("commit ts", commitTS.ToString()),
+						)
+						return txnif.ErrTxnWWConflict
+					}
+					if ts.GT(&startTS) {
+						logutil.Info("Dedup-WW",
+							zap.String("txn", txn.Repr()),
+							zap.Int("row offset", row),
+							zap.String("commit ts", commitTS.ToString()),
+						)
+						return txnif.ErrTxnWWConflict
+					}
 				}
 			}
 			return nil
@@ -447,6 +480,11 @@ func dedupABlkClosureFactory(
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.Int("row offset", row),
+						zap.String("commit ts", commitTS.ToString()),
+					)
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)

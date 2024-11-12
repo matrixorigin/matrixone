@@ -1421,7 +1421,7 @@ show create table index02;
 Table    Create Table
 index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `bnewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `bnewnew` (`bnewNew`),\n  KEY `a` (`a`,`bnewNew`),\n  KEY `c` (`c`)\n)
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
-Duplicate entry 'ab' for key '__mo_index_idx_col'
+Duplicate entry 'ab' for key '(.*)'
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';

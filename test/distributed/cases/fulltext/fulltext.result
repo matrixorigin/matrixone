@@ -71,6 +71,14 @@ id    body    title
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
 3    blue is not red    colorful
+select * from src where match(body, title) against('"red"' in boolean mode);
+id    body    title
+0    color is red    t1
+3    blue is not red    colorful
+select * from src where match(body, title) against('"is  not red"' in boolean mode);
+id    body    title
+select * from src where match(body, title) against('"blue is red"' in boolean mode);
+id    body    title
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
 2    sky is blue    no limit    0.5481369

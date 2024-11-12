@@ -480,6 +480,7 @@ select last_insert_id();
 Insert into auto_increment02 values();
 Select * from auto_increment02;
 select last_insert_id();
+-- @pattern
 Insert into auto_increment02 values(10);
 Select * from auto_increment02;
 select last_insert_id();

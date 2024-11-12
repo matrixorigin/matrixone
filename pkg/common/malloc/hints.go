@@ -20,4 +20,5 @@ const (
 	NoHints    Hints = 0
 	DoNotReuse Hints = 1 << iota
 	NoClear
+	IgnoreMunmapError
 )

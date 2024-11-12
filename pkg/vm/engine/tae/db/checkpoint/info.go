@@ -273,6 +273,42 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 	return ckps
 }
 
+func (r *runner) GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry {
+	ckps := make([]*CheckpointEntry, 0)
+	var ts types.TS
+	if compact != nil {
+		ts = compact.GetEnd()
+		ckps = append(ckps, compact)
+	}
+	r.storage.Lock()
+	g := r.getLastFinishedGlobalCheckpointLocked()
+	tree := r.storage.incrementals.Copy()
+	r.storage.Unlock()
+	if g != nil {
+		if ts.IsEmpty() {
+			ts = g.GetEnd()
+		}
+		ckps = append(ckps, g)
+	}
+	pivot := NewCheckpointEntry(r.rt.SID(), ts.Next(), ts.Next(), ET_Incremental)
+	iter := tree.Iter()
+	defer iter.Release()
+	if ok := iter.Seek(pivot); ok {
+		for {
+			e := iter.Item()
+			if !e.IsFinished() {
+				break
+			}
+			ckps = append(ckps, e)
+			if !iter.Next() {
+				break
+			}
+		}
+	}
+	return ckps
+
+}
+
 func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
 	prev := r.gcTS.Load()
 	if prev == nil {

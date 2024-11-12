@@ -1186,7 +1186,11 @@ const (
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
-	getPasswordOfUserFormat = `select user_id, authentication_string, default_role, password_last_changed, password_history, status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+
+	getLockInfoOfUserFormat = `select status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+
+	getExpiredTimeOfUserFormat = `select password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	getPasswordHistotyOfUsrFormat = `select password_history from mo_catalog.mo_user where user_name = "%s";`
 
@@ -1646,6 +1650,14 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 
 func getPasswordHistotyOfUserSql(user string) string {
 	return fmt.Sprintf(getPasswordHistotyOfUsrFormat, user)
+}
+
+func getLockInfoOfUserSql(user string) string {
+	return fmt.Sprintf(getLockInfoOfUserFormat, user)
+}
+
+func getExpiredTimeOfUserSql(user string) string {
+	return fmt.Sprintf(getExpiredTimeOfUserFormat, user)
 }
 
 func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
@@ -5703,6 +5715,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							databaseName:          objRef.GetSchemaName(),
 							tableName:             objRef.GetObjName(),
 							isClusterTable:        node.DeleteCtx.IsClusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
+				}
+			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, updateCtx := range node.UpdateCtxList {
+					if !isIndexTable(updateCtx.ObjRef.GetObjName()) {
+						isClusterTable := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+						appendPt(privilegeTips{
+							typ:                   t,
+							databaseName:          updateCtx.ObjRef.GetSchemaName(),
+							tableName:             updateCtx.ObjRef.GetObjName(),
+							isClusterTable:        isClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}

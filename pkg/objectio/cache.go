@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -96,14 +97,43 @@ func shardMetaCacheKey(key mataCacheKey) uint64 {
 	return xxhash.Sum64(key[:])
 }
 
+var GlobalCacheCapacityHint atomic.Int64
+
+func cacheCapacityFunc(size int64) fscache.CapacityFunc {
+	return func() int64 {
+		if n := GlobalCacheCapacityHint.Load(); n > 0 {
+			return n
+		}
+		return size
+	}
+}
+
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
+	metaCache = fifocache.New[mataCacheKey, []byte](
+		cacheCapacityFunc(metaCacheSize()),
+		shardMetaCacheKey,
+		nil, nil, nil,
+	)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
+		metaCache = fifocache.New[mataCacheKey, []byte](
+			cacheCapacityFunc(size),
+			shardMetaCacheKey,
+			nil, nil, nil,
+		)
 	})
+}
+
+func EvictCache(ctx context.Context) (target int64) {
+	ch := make(chan int64, 1)
+	metaCache.Evict(ctx, ch)
+	target = <-ch
+	logutil.Info("metadata cache forced evicted",
+		zap.Any("target", target),
+	)
+	return
 }
 
 func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
@@ -122,7 +152,7 @@ func LoadObjectMetaByExtent(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return MustObjectMeta(v), nil
 	}
@@ -135,7 +165,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(key, v[:], int64(len(v)))
+	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -146,7 +176,7 @@ func FastLoadBF(
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return v, nil
 	}
@@ -164,7 +194,7 @@ func LoadBFWithMeta(
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
 		return v, nil
 	}
@@ -173,7 +203,7 @@ func LoadBFWithMeta(
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(key, bf, int64(len(bf)))
+	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
 }
 

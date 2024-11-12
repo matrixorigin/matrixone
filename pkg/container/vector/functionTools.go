@@ -559,6 +559,12 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) SetNullResult(length uint64) {
+	fr.vec.nsp.AddRange(0, length)
+	fr.vec.SetLength(int(length))
+	fr.length = length
+}
+
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	if isnull {
 		// XXX LOW PERF

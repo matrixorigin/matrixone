@@ -18,28 +18,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
-
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,8 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -58,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -67,20 +53,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
@@ -88,17 +78,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -545,6 +540,36 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
+	case vm.MultiUpdate:
+		t := sourceOp.(*multi_update.MultiUpdate)
+		op := multi_update.NewArgument()
+		op.MultiUpdateCtx = t.MultiUpdateCtx
+		op.Action = t.Action
+		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.Engine = t.Engine
+		op.SegmentMap = t.SegmentMap
+		op.SetInfo(&info)
+		return op
+	case vm.DedupJoin:
+		t := sourceOp.(*dedupjoin.DedupJoin)
+		op := dedupjoin.NewArgument()
+		if t.Channel == nil {
+			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+		}
+		op.Channel = t.Channel
+		op.NumCPU = uint64(maxParallel)
+		op.IsMerger = (index == 0)
+		op.Result = append(op.Result, t.Result...)
+		op.RightTypes = append(op.RightTypes, t.RightTypes...)
+		op.Conditions = append(op.Conditions, t.Conditions...)
+		op.IsShuffle = t.IsShuffle
+		op.ShuffleIdx = t.ShuffleIdx
+		op.RuntimeFilterSpecs = append(op.RuntimeFilterSpecs, t.RuntimeFilterSpecs...)
+		op.JoinMapTag = t.JoinMapTag
+		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupColName = t.DedupColName
+		op.DedupColTypes = t.DedupColTypes
+		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
 		op := postdml.NewArgument()
@@ -555,7 +580,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
 	op.E = filterExpr
 	op.IsEnd = n.IsEnd
@@ -723,9 +748,9 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
-			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
+			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetFilterColIdxInBat())
 		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 
 	}
@@ -741,6 +766,38 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 		}
 	}
 	return arg, nil
+}
+
+func constructMultiUpdate(n *plan.Node, eg engine.Engine) *multi_update.MultiUpdate {
+	arg := multi_update.NewArgument()
+	arg.Engine = eg
+	arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+
+	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(n.UpdateCtxList))
+	for i, updateCtx := range n.UpdateCtxList {
+		insertCols := make([]int, len(updateCtx.InsertCols))
+		for j, col := range updateCtx.InsertCols {
+			insertCols[j] = int(col.ColPos)
+		}
+
+		deleteCols := make([]int, len(updateCtx.DeleteCols))
+		for j, col := range updateCtx.DeleteCols {
+			deleteCols[j] = int(col.ColPos)
+		}
+
+		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
+			ObjRef:              updateCtx.ObjRef,
+			TableDef:            updateCtx.TableDef,
+			InsertCols:          insertCols,
+			DeleteCols:          deleteCols,
+			PartitionTableIDs:   updateCtx.PartitionTableIds,
+			PartitionTableNames: updateCtx.PartitionTableNames,
+			OldPartitionIdx:     int(updateCtx.OldPartitionIdx),
+			NewPartitionIdx:     int(updateCtx.NewPartitionIdx),
+		}
+	}
+
+	return arg
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
@@ -1007,6 +1064,35 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
+	return arg
+}
+
+func constructDedupJoin(n *plan.Node, right_typs []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		_, result[i] = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	if cond != nil {
+		panic("dedupjoin should not have non-equi join condition")
+	}
+	arg := dedupjoin.NewArgument()
+	arg.RightTypes = right_typs
+	arg.Result = result
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.OnDuplicateAction = n.OnDuplicateAction
+	arg.DedupColName = n.DedupColName
+	arg.DedupColTypes = n.DedupColTypes
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
@@ -1687,6 +1773,21 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
+
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.NeedHashMap = true
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", op.OpType()))
@@ -1799,6 +1900,21 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.NeedBatches = true
 			ret.NeedAllocateSels = true
 		}
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
+
+	case vm.DedupJoin:
+		arg := op.(*dedupjoin.DedupJoin)
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = true
+		ret.NeedBatches = true
+		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

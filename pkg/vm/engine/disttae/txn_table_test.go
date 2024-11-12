@@ -18,14 +18,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,13 +46,20 @@ func newTxnTableForTest() *txnTable {
 				packer.Close()
 			},
 		),
+		catalog: cache.NewCatalog(),
 	}
 	var tnStore DNStore
 	txn := &Transaction{
 		engine:   engine,
 		tnStores: []DNStore{tnStore},
 	}
-	c := client.NewTxnClient("", nil, nil, nil)
+	rt := runtime.DefaultRuntime()
+	s, err := rpc.NewSender(rpc.Config{}, rt)
+	if err != nil {
+		panic(err)
+	}
+	c := client.NewTxnClient("", s)
+	c.Resume()
 	op, _ := c.New(context.Background(), timestamp.Timestamp{})
 	op.AddWorkspace(txn)
 
@@ -59,8 +69,29 @@ func newTxnTableForTest() *txnTable {
 	table := &txnTable{
 		db:         db,
 		primaryIdx: 0,
+		eng:        engine,
 	}
 	return table
+}
+
+func TestIsCreatedInTxn(t *testing.T) {
+	ctx := context.Background()
+	tbl := newTxnTableForTest()
+	e := tbl.eng.(*Engine)
+
+	ts0 := types.BuildTS(0, 0)
+	ts1 := types.BuildTS(10, 10)
+	e.catalog.UpdateDuration(ts0, ts0)
+	assert.NoError(t, tbl.db.op.UpdateSnapshot(ctx, ts1.ToTimestamp()))
+	inTxn, err := tbl.isCreatedInTxn(ctx)
+	assert.NoError(t, err)
+	assert.True(t, inTxn)
+
+	ts2 := types.BuildTS(20, 20)
+	e.catalog.UpdateStart(ts2)
+	inTxn, err = tbl.isCreatedInTxn(ctx)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+	assert.False(t, inTxn)
 }
 
 func makeBatchForTest(
