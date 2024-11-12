@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -92,5 +93,35 @@ func addObject(p *PartitionState, create, delete types.TS) {
 		}
 		p.dataObjectTSIndex.Set(objIndex2)
 	}
+
+}
+
+func TestHasTombstoneChanged(t *testing.T) {
+	state := NewPartitionState("", true, 42)
+	require.False(t, state.HasTombstoneChanged(types.BuildTS(13, 0), types.BuildTS(15, 0)))
+
+	roid := func() objectio.ObjectStats {
+		return *objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, true, false)
+	}
+
+	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)}})
+	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)}})
+	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)}})
+	state.tombstoneObjectDTSIndex.Set(ObjectEntry{ObjectInfo{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(24, 0)}})
+	require.True(t, state.HasTombstoneChanged(types.BuildTS(24, 0), types.BuildTS(30, 0)))
+	require.False(t, state.HasTombstoneChanged(types.BuildTS(25, 0), types.BuildTS(30, 0)))
+
+	for i := 10; i < 20; i++ {
+		state.tombstoneObjectDTSIndex.Set(ObjectEntry{
+			ObjectInfo{
+				ObjectStats: roid(),
+				CreateTime:  types.BuildTS(int64(i), 0),
+			},
+		})
+	}
+
+	require.True(t, state.HasTombstoneChanged(types.BuildTS(13, 0), types.BuildTS(15, 0)))
+	require.True(t, state.HasTombstoneChanged(types.BuildTS(9, 0), types.BuildTS(15, 0)))
+	require.False(t, state.HasTombstoneChanged(types.BuildTS(25, 0), types.BuildTS(30, 0)))
 
 }

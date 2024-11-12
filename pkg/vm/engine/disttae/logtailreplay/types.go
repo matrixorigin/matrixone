@@ -55,9 +55,9 @@ func (o ObjectEntry) ObjectNameIndexLess(than ObjectEntry) bool {
 // ObjectDTSIndexLess has the order:
 // 1. if the delete time is empty, let it be the max ts
 // 2. ascending object with delete ts.
-// 3. ascending object with name when same dts.
+// 3. ascending object with createts when same dts.
 //
-// sort by DELETE time and name
+// sort by DELETE time and then CREATE time
 func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
 	// (c, d), (c, d), (c, d), (c, inf), (c, inf) ...
 	x, y := o.DeleteTime, than.DeleteTime
@@ -70,6 +70,10 @@ func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
 
 	if !x.Equal(&y) {
 		return x.LT(&y)
+	}
+
+	if !o.CreateTime.Equal(&than.CreateTime) {
+		return o.CreateTime.LT(&than.CreateTime)
 	}
 
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
@@ -95,8 +99,6 @@ func (o ObjectInfo) StatsValid() bool {
 // sharedStates is shared among all PartitionStates
 type sharedStates struct {
 	sync.Mutex
-	// last block flush timestamp for table
-	lastFlushTimestamp types.TS
 }
 
 // RowEntry represents a version of a row

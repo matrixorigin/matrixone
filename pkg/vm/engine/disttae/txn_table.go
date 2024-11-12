@@ -1904,6 +1904,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
+	checkTombstone bool,
 ) (bool, error) {
 
 	ctx := tbl.proc.Load().Ctx
@@ -2054,8 +2055,20 @@ func (tbl *txnTable) PKPersistedBetween(
 			return true, nil
 		}
 	}
+	if checkTombstone {
+		return p.HasTombstoneChanged(from, to), nil
+	} else {
+		return false, nil
+	}
+}
 
-	return false, nil
+func (tbl *txnTable) PrimaryKeysMayBeUpserted(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keysVector *vector.Vector,
+) (bool, error) {
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(
@@ -2063,6 +2076,16 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	from types.TS,
 	to types.TS,
 	keysVector *vector.Vector,
+) (bool, error) {
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
+}
+
+func (tbl *txnTable) primaryKeysMayBeChanged(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keysVector *vector.Vector,
+	checkTombstone bool,
 ) (bool, error) {
 	if tbl.db.op.IsSnapOp() {
 		return false,
@@ -2093,19 +2116,12 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false, nil
 	}
 
-	// if tbl.tableName == catalog.MO_DATABASE ||
-	// 	tbl.tableName == catalog.MO_TABLES ||
-	// 	tbl.tableName == catalog.MO_COLUMNS {
-	// 	logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
-	// 	return true, nil
-	// }
-
 	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,
 		from,
 		to,
-		keysVector)
+		keysVector, checkTombstone)
 }
 
 func (tbl *txnTable) MergeObjects(
