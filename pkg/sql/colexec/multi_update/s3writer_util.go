@@ -15,9 +15,14 @@
 package multi_update
 
 import (
+	"context"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -30,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func generateBlockWriter(writer *s3Writer,
@@ -132,6 +136,7 @@ func cloneSomeVecFromCompactBatchs(
 	var err error
 	var newBat *batch.Batch
 	bats := make([]*batch.Batch, 0, src.Length())
+	var sortNulls *nulls.Nulls
 
 	defer func() {
 		if err != nil {
@@ -154,7 +159,9 @@ func cloneSomeVecFromCompactBatchs(
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
-			sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls = oldBat.Vecs[cols[sortIdx]].GetNulls()
+			}
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
@@ -166,7 +173,11 @@ func cloneSomeVecFromCompactBatchs(
 			}
 
 			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(rowIdx)) && !sortNulls.Contains(uint64(rowIdx)) {
+				if !nulls.Contains(uint64(rowIdx)) {
+					if sortNulls != nil && sortNulls.Contains(uint64(rowIdx)) {
+						continue
+					}
+
 					if partition == -1 {
 						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expect {
@@ -192,9 +203,8 @@ func cloneSomeVecFromCompactBatchs(
 			newBat.Attrs = attrs
 			oldBat := src.Get(i)
 
-			sortVec := oldBat.Vecs[cols[sortIdx]]
-			if sortVec.HasNull() {
-				sortNulls := sortVec.GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
 				for newColIdx, oldColIdx := range cols {
 					typ := oldBat.Vecs[oldColIdx].GetType()
 					newBat.Vecs[newColIdx] = vector.NewVec(*typ)
@@ -332,8 +342,8 @@ func fetchMainTableBatchs(
 	return retBats, nil
 }
 
-func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := blockWriter.Sync(proc.Ctx)
+func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+	blocks, _, err := blockWriter.Sync(ctx)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -350,7 +360,6 @@ func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.Bl
 	} else {
 		stats = blockWriter.GetObjectStats(objectio.WithCNCreated())
 	}
-
 	return blkInfos, stats, err
 }
 

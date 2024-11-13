@@ -280,7 +280,7 @@ func TestGenerateTimestamp(t *testing.T) {
 			require.True(t, kase.err)
 			continue
 		}
-		err = initStartAndEndDatetime(&gs, startVec, endVec, 0)
+		err = initStartAndEndDatetime(&gs, proc, startVec, endVec, 0)
 		if err != nil {
 			require.True(t, kase.err)
 			continue

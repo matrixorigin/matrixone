@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -170,6 +171,7 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
 		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
 		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+		node.AnalyzeInfo.WrittenRows += op.OpStats.WrittenRows
 
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
@@ -500,9 +502,11 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 		if statsInfo != nil {
 			buffer.WriteString("\n")
 			// Calculate the total sum of S3 requests for each stage
-			list, head, put, get, delete, deleteMul := models.CalcTotalS3Requests(gblStats, statsInfo)
-			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-				list, head, put, get, delete, deleteMul,
+			list, head, put, get, delete, deleteMul, writtenRows := models.CalcTotalS3Requests(gblStats, statsInfo)
+
+			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
+			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows(%d/8192):%.4f \n",
+				list, head, put, get, delete, deleteMul, writtenRows, s3InputEstByRows,
 			))
 
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
