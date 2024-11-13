@@ -388,13 +388,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
-	if param.Local {
-		return "", nil
-	}
 	if param.ScanType == tree.INLINE {
 		return "", nil
 	}
-	param.Ctx = ctx.GetContext()
+
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
 			return "", err
@@ -404,9 +401,14 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	if param.Local {
+		return param.Filepath, nil
+	}
 	if len(param.Filepath) == 0 {
 		return "", nil
 	}
+
+	param.Ctx = ctx.GetContext()
 	if err := StatFile(param); err != nil {
 		if moerror, ok := err.(*moerr.Error); ok {
 			if moerror.ErrorCode() == moerr.ErrFileNotFound {
