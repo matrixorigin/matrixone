@@ -76,6 +76,9 @@ show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show index from tbl where Key_name = 'idx1';
+table    non_unique    key_name    seq_in_index    column_name    collation    cardinality    sub_part    packed    null    index_type    comment    index_comment    index_params    visible    expression
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
