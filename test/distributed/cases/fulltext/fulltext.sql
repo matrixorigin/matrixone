@@ -177,12 +177,12 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 
 drop table src;
 
@@ -196,12 +196,12 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language  mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 
 drop table src;
 
@@ -304,12 +304,14 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
 
 drop table src;
 
@@ -321,12 +323,16 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
+
+select * from src where match(json1, json2) against('"update json"' in boolean mode);
 
 drop table src;
 
