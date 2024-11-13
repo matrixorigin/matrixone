@@ -3995,13 +3995,8 @@ func collectTombstones(
 }
 
 func (c *Compile) expandRanges(
-	node *plan.Node,
+	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
-
-	rel, db, ctx, err := c.handleDbRelContext(node)
-	if err != nil {
-		return nil, err
-	}
 
 	preAllocSize := 2
 	if !c.IsTpQuery() {
@@ -4013,8 +4008,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-	var relData engine.RelData
-	relData, err = rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
+	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -4069,11 +4063,17 @@ func (c *Compile) expandRanges(
 
 }
 
-func (c *Compile) handleDbRelContext(node *plan.Node) (engine.Relation, engine.Database, context.Context, error) {
+func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.Relation, engine.Database, context.Context, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var txnOp client.TxnOperator
+
+	if onRemoteCN {
+		ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
+		c.proc.GetTxnOperator().AddWorkspace(ws)
+		ws.BindTxnOp(c.proc.GetTxnOperator())
+	}
 
 	//------------------------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
