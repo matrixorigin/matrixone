@@ -17,10 +17,14 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 )
@@ -325,4 +329,89 @@ func TestPasswordTimeIntervalCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_checkPasswordReusePolicy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	ses.SetTenantInfo(tenant)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+	user := "uarontestuser4"
+	newPwd := "M@PasswordTestInTheFutur_129"
+
+	ses.gSysVars.Set("password_reuse_interval", int64(2))
+	ses.gSysVars.Set("password_history", int64(0))
+
+	passwordRecord := []passwordHistoryRecord{
+		{
+			PasswordTimestamp: types.CurrentTimestamp().String2(time.UTC, 0),
+			Password:          "M@PasswordTestInTheFutur_129",
+		},
+		{
+			PasswordTimestamp: types.CurrentTimestamp().String2(time.UTC, 0),
+			Password:          "M@PasswordTestInTheFutur_130",
+		},
+	}
+
+	passwordHistory, err := json.Marshal(passwordRecord)
+	assert.NoError(t, err)
+
+	sql := getPasswordHistotyOfUserSql(user)
+	mrs := newMrsForPasswordOfUser([][]interface{}{
+		{passwordHistory},
+	})
+	bh.sql2result[sql] = mrs
+
+	err = checkPasswordReusePolicy(ctx, ses, bh, newPwd, user)
+	assert.Error(t, err)
+
+	passwordRecord = []passwordHistoryRecord{
+		{
+			PasswordTimestamp: time.Now().AddDate(0, 0, -10).UTC().Format("2006-01-02 15:04:05"),
+			Password:          "M@PasswordTestInTheFutur_129",
+		},
+		{
+			PasswordTimestamp: time.Now().AddDate(0, 0, -10).UTC().Format("2006-01-02 15:04:05"),
+			Password:          "M@PasswordTestInTheFutur_130",
+		},
+	}
+
+	passwordHistory, err = json.Marshal(passwordRecord)
+	assert.NoError(t, err)
+
+	sql = getPasswordHistotyOfUserSql(user)
+	mrs = newMrsForPasswordOfUser([][]interface{}{
+		{passwordHistory},
+	})
+	bh.sql2result[sql] = mrs
+	err = checkPasswordReusePolicy(ctx, ses, bh, newPwd, user)
+	assert.NoError(t, err)
 }
