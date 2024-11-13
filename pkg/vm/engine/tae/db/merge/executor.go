@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -61,11 +62,12 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 	}
 
 	if kind == taskHostDN {
-		objScopes := make([]common.ID, 0, len(objs))
-		for _, obj := range objs {
+		mObjs := slices.Clone(objs)
+		objScopes := make([]common.ID, 0, len(mObjs))
+		for _, obj := range mObjs {
 			objScopes = append(objScopes, *obj.AsCommonID())
 		}
-		e.scheduleMergeObjects(objScopes, objs, entry, isTombstone)
+		e.scheduleMergeObjects(objScopes, mObjs, entry, isTombstone)
 		return
 	}
 
