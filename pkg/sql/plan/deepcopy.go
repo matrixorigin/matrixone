@@ -1029,6 +1029,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
 		WrittenRows:            analyzeinfo.GetWrittenRows(),
+		DeletedRows:            analyzeinfo.GetDeletedRows(),
 		ScanBytes:              analyzeinfo.GetScanBytes(),
 		S3List:                 analyzeinfo.GetS3List(),
 		S3Put:                  analyzeinfo.GetS3Put(),
