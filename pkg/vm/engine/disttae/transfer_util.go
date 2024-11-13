@@ -90,8 +90,10 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		}
 
 		if e.fileName != "" && e.typ == DELETE {
-			stats := objectio.ObjectStats(e.bat.Vecs[0].GetBytesAt(0))
-			tombstoneObjects = append(tombstoneObjects, stats)
+			for i := range e.bat.Vecs[0].Length() {
+				stats := objectio.ObjectStats(e.bat.Vecs[0].GetBytesAt(i))
+				tombstoneObjects = append(tombstoneObjects, stats)
+			}
 		}
 	}
 
@@ -165,7 +167,11 @@ type TransferFlow struct {
 	sinker            *engine_util.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
-	transferred       int
+
+	transferred struct {
+		rowCnt     int
+		objDetails map[string]int
+	}
 }
 
 func (flow *TransferFlow) fillDefaults() {
@@ -192,6 +198,8 @@ func (flow *TransferFlow) fillDefaults() {
 			//engine_util.WithAllMergeSorted(),
 		)
 	}
+
+	flow.transferred.objDetails = make(map[string]int)
 }
 
 func (flow *TransferFlow) getBuffer() *batch.Batch {
@@ -256,7 +264,10 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		if err := staged.UnionOne(buffer, int64(i), flow.mp); err != nil {
 			return err
 		}
-		flow.transferred++
+
+		flow.transferred.rowCnt++
+		flow.transferred.objDetails[objectid.ShortStringEx()]++
+
 		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err
@@ -328,5 +339,6 @@ func (flow *TransferFlow) Close() error {
 	}
 	flow.mp = nil
 	flow.table = nil
+	flow.transferred.objDetails = nil
 	return nil
 }
