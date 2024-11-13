@@ -191,7 +191,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
 		Payload: string(data),
-		IsLocal: s.NodeInfo.IsLocal,
 		CnCnt:   s.NodeInfo.CNCNT,
 		CnIdx:   s.NodeInfo.CNIDX,
 	}
@@ -338,7 +337,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.IsLocal = p.Node.IsLocal
 		s.NodeInfo.CNCNT = p.Node.CnCnt
 		s.NodeInfo.CNIDX = p.Node.CnIdx
 

@@ -649,7 +649,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 	}
 
-	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, !s.NodeInfo.IsLocal)
+	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
 	}
@@ -671,11 +671,17 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	})
 
 	if s.NodeInfo.CNCNT > 1 {
+		if relData.DataCnt() < plan2.BlockThresholdForOneCN/2 {
+			logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
+				s.DataSource.TableDef.Name, relData.DataCnt(), s.DataSource.node.Stats.BlockNum)
+		}
+
 		//need to shuffle blocks
 		//todo: optimize this, shuffle blocks in expand ranges
 		// add memory table block
-		newRelData := relData.BuildEmptyRelData(relData.DataCnt() / int(s.NodeInfo.CNCNT))
-		if s.NodeInfo.IsLocal {
+		averageSize := relData.DataCnt() / int(s.NodeInfo.CNCNT)
+		newRelData := relData.BuildEmptyRelData(averageSize)
+		if !s.IsRemote {
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
 		}
 		if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
@@ -687,7 +693,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			shuffleBlocksByHash(relData, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 		}
 		s.NodeInfo.Data = newRelData
-		logutil.Infof("addr %v blocklist %v", c.addr, s.NodeInfo.Data.DataCnt())
+		if newRelData.DataCnt() > averageSize+averageSize/2 || newRelData.DataCnt() < averageSize/2 {
+			logutil.Warnf("workload distribution for table %v maybe not balanced! total blocks %v average blocks %v current addr %v currnet blocks %v",
+				s.DataSource.TableDef.Name, relData.DataCnt(), averageSize, c.addr, s.NodeInfo.Data.DataCnt())
+		}
 	} else {
 		s.NodeInfo.Data = relData
 	}
