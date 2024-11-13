@@ -892,16 +892,18 @@ func TestConstBackOff_Count(t *testing.T) {
 
 	t.Run("Count in multi cycle", func(t *testing.T) {
 		base := 10 * time.Millisecond
-		b := NewConstBackoff(base)
 
 		runTime := time.Second
 		now := time.Now()
 		end := now.Add(runTime)
 		cnt := uint64(0)
+
+		b := NewConstBackoff(base)
 		for time.Now().Before(end) {
 			if b.Count() {
 				cnt++
 			}
+			time.Sleep(time.Millisecond)
 		}
 		require.Equal(t, cnt, b.count)
 		maxCnt := uint64(runTime / base)
