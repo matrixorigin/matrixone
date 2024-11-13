@@ -173,7 +173,7 @@ func (r *optSplitResult) extend(more int) error {
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
 	maxToExtendWithinTheUsingPart := r.optInformation.eachSplitCapacity - l1
-	if maxToExtendWithinTheUsingPart > more {
+	if maxToExtendWithinTheUsingPart >= more {
 		if err := r.preExtendPartK(r.nowIdx1, more); err != nil {
 			return err
 		}
@@ -189,10 +189,11 @@ func (r *optSplitResult) extend(more int) error {
 
 	// try to full the allocated part first.
 	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.eachSplitCapacity
-	if maxToExtendWithoutPartAppend > more {
-		fullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
+	if maxToExtendWithoutPartAppend >= more {
+		r.nowIdx1++
 
-		for i, j := r.nowIdx1+1, r.nowIdx1+fullPart; i < j; i++ {
+		fullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
+		for i, j := r.nowIdx1, r.nowIdx1+fullPart; i < j; i++ {
 			if err := r.preExtendPartK(i, r.optInformation.eachSplitCapacity); err != nil {
 				return err
 			}
@@ -204,7 +205,7 @@ func (r *optSplitResult) extend(more int) error {
 			if err := r.preExtendPartK(r.nowIdx1, rowMore); err != nil {
 				return err
 			}
-			r.setLengthPartK(r.nowIdx1, r.optInformation.eachSplitCapacity)
+			r.setLengthPartK(r.nowIdx1, rowMore)
 		}
 		return nil
 	}
@@ -232,6 +233,7 @@ func (r *optSplitResult) extend(more int) error {
 		}
 		r.setLengthPartK(k, rowMore)
 	}
+	r.nowIdx1 = len(r.resultList) - 1
 
 	return nil
 }
@@ -283,6 +285,7 @@ func (r *optSplitResult) preAllocate(more int) (err error) {
 			r.emptyList[i].SetLength(0)
 		}
 	}
+	r.nowIdx1 = oldNowIdx1
 	return nil
 }
 
