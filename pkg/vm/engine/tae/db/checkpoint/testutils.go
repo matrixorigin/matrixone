@@ -137,7 +137,9 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
 	prevGlobalEnd := types.TS{}
+	r.storage.RLock()
 	global, _ := r.storage.globals.Max()
+	r.storage.RUnlock()
 	if global != nil {
 		prevGlobalEnd = global.end
 	}
