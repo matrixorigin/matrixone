@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -32,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -82,8 +85,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -97,8 +98,6 @@ const (
 )
 
 var (
-	ncpu = runtime.GOMAXPROCS(0)
-
 	cantCompileForPrepareErr = moerr.NewCantCompileForPrepareNoCtx()
 )
 
@@ -126,6 +125,7 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	c.ncpu = system.GoMaxProcs()
 	if c.proc.GetTxnOperator() != nil {
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
@@ -836,7 +836,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare, c.ncpu)
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -900,7 +900,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			var wr *process.WaitRegister
 			if c.anal.qry.LoadTag {
 				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, ncpu),
+					Ch2: make(chan process.PipelineSignal, c.ncpu),
 				}
 			} else {
 				wr = &process.WaitRegister{
@@ -1388,7 +1388,7 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	ps := calculatePartitions(0, end, int64(ncpu))
+	ps := calculatePartitions(0, end, int64(c.ncpu))
 
 	ss := make([]*Scope, len(ps))
 
@@ -1637,7 +1637,7 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
 
-	mcpu := c.getParallelSizeForExternalScan(n, ncpu) // dop of insert scopes
+	mcpu := c.getParallelSizeForExternalScan(n, c.ncpu) // dop of insert scopes
 	if mcpu == 1 {
 		return []*Scope{scope}, nil
 	}
@@ -2449,8 +2449,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				//product_l2 join is very time_consuming, increase the parallelism
 				rs[i].NodeInfo.Mcpu *= 8
 			}
-			if rs[i].NodeInfo.Mcpu > ncpu {
-				rs[i].NodeInfo.Mcpu = ncpu
+			if rs[i].NodeInfo.Mcpu > c.ncpu {
+				rs[i].NodeInfo.Mcpu = c.ncpu
 			}
 		}
 		c.anal.isFirst = false
@@ -3106,7 +3106,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	dop := plan2.GetShuffleDop(ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3206,7 +3206,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			// reset the channel buffer of sink for load
 			dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
 		}
-		parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
+		parallelSize := c.getParallelSizeForExternalScan(n, c.ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
 		c.hasMergeOp = true
 		for i := 0; i < parallelSize; i++ {
@@ -3279,7 +3279,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
-			mcpu := c.getParallelSizeForExternalScan(n, ncpu)
+			mcpu := c.getParallelSizeForExternalScan(n, c.ncpu)
 			if mcpu > 1 {
 				oldScope := ss[0]
 
@@ -3771,7 +3771,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		}
 	}
 
-	dop := plan2.GetShuffleDop(ncpu, len(cnlist), node.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), node.Stats.HashmapStats.HashmapSize)
 
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
@@ -3898,7 +3898,7 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node) bool {
-	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN)
+	return len(c.cnList) > 1 && !n.Stats.ForceOneCN && c.execType == plan2.ExecTypeAP_MULTICN && n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN(c.ncpu))
 }
 
 func collectTombstones(
@@ -4193,7 +4193,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		})
 	} else {
 		// add current CN
-		mcpu := c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
+		mcpu := c.generateCPUNumber(c.ncpu, int(n.Stats.BlockNum))
 		if forceSingle {
 			mcpu = 1
 		}
@@ -4209,7 +4209,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// for an ordered scan, put all payloads in current CN
 	// or sometimes force on one CN
 	// if not disttae engine, just put all payloads in current CN
-	if len(c.cnList) == 1 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN || forceSingle {
+	if len(c.cnList) == 1 || relData.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu) || n.Stats.ForceOneCN || forceSingle {
 		return putBlocksInCurrentCN(c, relData, forceSingle), nil
 	}
 	// only support disttae engine for now
@@ -4598,7 +4598,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, relData.DataCnt()),
+		Mcpu: c.generateCPUNumber(c.ncpu, relData.DataCnt()),
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
@@ -4730,7 +4730,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
-	mcpu := c.generateCPUNumber(ncpu, relData.DataCnt())
+	mcpu := c.generateCPUNumber(c.ncpu, relData.DataCnt())
 	if forceSingle {
 		mcpu = 1
 	}
@@ -4941,7 +4941,7 @@ func getEngineNode(c *Compile) engine.Node {
 	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	} else {
-		return engine.Node{Addr: c.addr, Mcpu: ncpu}
+		return engine.Node{Addr: c.addr, Mcpu: c.ncpu}
 	}
 }
 
