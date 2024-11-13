@@ -1211,7 +1211,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if txn.workspaceSize > 10*mpool.MB {
 		logutil.Info(
 			"BIG-TXN",
-			zap.Uint64("workspace size", txn.workspaceSize),
+			zap.Uint64("workspace-size", txn.workspaceSize),
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
@@ -1226,9 +1226,9 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		}
 		logutil.Warn(
 			"BIG-TXN",
-			zap.Uint64("workspace statistical size", txn.workspaceSize),
-			zap.Int("actual size", size),
-			zap.String("txn", string(txn.op.Txn().DebugString())),
+			zap.Uint64("statistical-size", txn.workspaceSize),
+			zap.Int("actual-size", size),
+			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	}
 
