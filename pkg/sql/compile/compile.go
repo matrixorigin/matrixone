@@ -4136,7 +4136,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var relData engine.RelData
 	var nodes engine.Nodes
 
-	rel, _, ctx, err := c.handleDbRelContext(n)
+	rel, db, ctx, err := c.handleDbRelContext(n, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4177,7 +4177,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 
 		counterset := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, newFilterExpr, counterset)
+		relData, err = c.expandRanges(n, rel, db, ctx, newFilterExpr, counterset)
 		if err != nil {
 			return nil, err
 		}
