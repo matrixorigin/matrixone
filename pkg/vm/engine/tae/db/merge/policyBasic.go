@@ -15,7 +15,6 @@
 package merge
 
 import (
-	"cmp"
 	"context"
 	"go.uber.org/zap"
 	"slices"
@@ -213,7 +212,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 			return false
 		}
 		if osize < int(config.ObjectMinOsize) {
-			if o.objectsSize > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+			if o.objectsSize > 8*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 				return false
 			}
 			o.objectsSize += osize
@@ -236,7 +235,12 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 
 func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.Rows(), b.Rows())
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+		if c := zmA.CompareMin(zmB); c != 0 {
+			return c
+		}
+		return zmA.CompareMax(zmB)
 	})
 	objs := o.objects
 
