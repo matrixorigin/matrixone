@@ -58,7 +58,7 @@ func Test_handshake(t *testing.T) {
 	proto.ses = ses
 
 	rt := &Routine{}
-	rt.protocol.Store(&holder{proto: proto})
+	rt.protocol.Store(&holder[MysqlRrWr]{value: proto})
 	rt.ses = ses
 
 	rm.setRoutine(ioses, 0, rt)
