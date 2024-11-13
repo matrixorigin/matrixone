@@ -360,9 +360,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
-	if snapshot == nil {
-		return stats, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
-	}
 	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
 		return stats, moerr.NewInternalErrorf(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
