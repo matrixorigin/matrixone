@@ -2576,3 +2576,48 @@ func Test_doCreatePitr(t *testing.T) {
 	})
 
 }
+
+func Test_RestorePitrBadTimeStamp(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-32 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
