@@ -346,11 +346,11 @@ func (txn *Transaction) checkDup() error {
 			bat := e.bat
 			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
-					newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-					newBat.SetAttributes(bat.Attrs[1:])
-					newBat.Vecs = bat.Vecs[1:]
-					newBat.SetRowCount(bat.Vecs[0].Length())
-					bat = newBat
+					bat2 := batch.NewWithSize(len(bat.Vecs) - 1)
+					bat2.SetAttributes(bat.Attrs[1:])
+					bat2.Vecs = bat.Vecs[1:]
+					bat2.SetRowCount(bat.Vecs[0].Length())
+					bat = bat2
 				}
 				if _, ok := insertPks[e.tableId]; !ok {
 					insertPks[e.tableId] = make(map[any]bool)
@@ -746,19 +746,19 @@ func (txn *Transaction) WriteFileLocked(
 	bat *batch.Batch,
 	tnStore DNStore) error {
 	txn.hasS3Op.Store(true)
-	newBat := bat
+	bat2 := bat
 	if typ == INSERT {
-		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
+		bat2 = batch.NewWithSize(len(bat.Vecs))
+		bat2.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
 
-		for idx := 0; idx < newBat.VectorCount(); idx++ {
-			newBat.SetVector(int32(idx), vector.NewVec(*bat.Vecs[idx].GetType()))
+		for idx := 0; idx < bat2.VectorCount(); idx++ {
+			bat2.SetVector(int32(idx), vector.NewVec(*bat.Vecs[idx].GetType()))
 		}
 
 		blkInfosVec := bat.Vecs[0]
 		for idx := 0; idx < blkInfosVec.Length(); idx++ {
 			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
-			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
+			vector.AppendBytes(bat2.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
 			colexec.Get().PutCnSegment(blkInfo.BlockID.Segment(), colexec.CnBlockIdType)
 		}
@@ -766,19 +766,19 @@ func (txn *Transaction) WriteFileLocked(
 		// append obj stats, may multiple
 		statsListVec := bat.Vecs[1]
 		for idx := 0; idx < statsListVec.Length(); idx++ {
-			vector.AppendBytes(newBat.Vecs[1], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
+			vector.AppendBytes(bat2.Vecs[1], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
 		}
-		newBat.SetRowCount(bat.Vecs[0].Length())
+		bat2.SetRowCount(bat.Vecs[0].Length())
 
 		txn.insertPosForCNBlock(
 			bat.GetVector(0),
 			accountId,
-			newBat,
+			bat2,
 			databaseName,
 			tableName)
 	}
 	txn.readOnly.Store(false)
-	txn.workspaceSize += uint64(newBat.Size())
+	txn.workspaceSize += uint64(bat2.Size())
 	entry := Entry{
 		typ:          typ,
 		accountId:    accountId,
@@ -787,7 +787,7 @@ func (txn *Transaction) WriteFileLocked(
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
-		bat:          newBat,
+		bat:          bat2,
 		tnStore:      tnStore,
 	}
 	txn.writes = append(txn.writes, entry)
