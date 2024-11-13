@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ const (
 	defaultLogDBBufferSize     = 768 * 1024
 	defaultTruncateInterval    = 10 * time.Second
 	defaultMaxExportedSnapshot = 20
-	defaultMaxMessageSize      = 1024 * 1024 * 100
+	defaultMaxMessageSize      = math.MaxInt32
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 24 * time.Hour
 
