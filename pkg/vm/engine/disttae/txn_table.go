@@ -571,8 +571,12 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	onRemoteCN bool,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
+	var unCommittedObjs []objectio.ObjectStats
+	if !onRemoteCN {
+		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
 	return tbl.doRanges(
 		ctx,
 		exprs,

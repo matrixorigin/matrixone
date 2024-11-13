@@ -655,7 +655,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	counterSet := new(perfcounter.CounterSet)
-	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet)
+	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet, s.IsRemote)
 	if err != nil {
 		return err
 	}
