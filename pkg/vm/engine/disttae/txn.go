@@ -1208,8 +1208,22 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, nil
 	}
 
+	if txn.workspaceSize > 10*mpool.MB {
+		logutil.Infof("[BIG-TXN] workspace size %v, txn id %v", txn.workspaceSize, txn.op.Txn().ID)
+	}
+
 	if txn.workspaceSize > 100*mpool.MB {
-		return nil, moerr.NewTxnErrorf(ctx, "workspace size is too large: %v", txn.workspaceSize)
+		size := 0
+		for _, e := range txn.writes {
+			if e.bat == nil || e.bat.RowCount() == 0 {
+				continue
+			}
+			size += e.bat.Size()
+		}
+		logutil.Warnf(
+			"[BIG-TXN] workspace size too large, statistical %v, actual %v, txn id %v",
+			txn.workspaceSize, size, txn.op.Txn().ID,
+		)
 	}
 
 	if err := txn.IncrStatementID(ctx, true); err != nil {

@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -64,8 +64,9 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
 		return
 	}
-	// logutil.Info("", common.OperationField("suxi-replay-cmd"),
-	// common.OperandField(mgr.cmd.Desc()))
+	if len(buf) > 10*mpool.MB {
+		logutil.Infof("[BIG-TXN] wal size %v, lsn %v, txn id %v", len(buf), mgr.lsn, txn.GetID())
+	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
