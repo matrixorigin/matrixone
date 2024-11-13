@@ -296,14 +296,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 				if err != nil {
 					return
 				}
-				isClusterBy := writer.isClusterBys[i]
-				for _, bat := range bats {
-					err = colexec.SortByKey(proc, bat, 0, isClusterBy, proc.GetMPool())
-					if err != nil {
-						return
-					}
-				}
-				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, true, delBatchs, true)
+				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, true, delBatchs, true, true)
 				if err != nil {
 					return
 				}
@@ -318,14 +311,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 					if err != nil {
 						return
 					}
-					isClusterBy := writer.isClusterBys[i]
-					for _, bat := range delBatchs {
-						err = colexec.SortByKey(proc, bat, 0, isClusterBy, proc.GetMPool())
-						if err != nil {
-							return
-						}
-					}
-					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), true, delBatchs, true)
+					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), true, delBatchs, true, true)
 					if err != nil {
 						return
 					}
@@ -338,8 +324,8 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 			insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
 			isClusterBy := writer.isClusterBys[i]
 			if parititionCount == 0 {
-				needClone := false
-				if writer.sortIdxs[i] > -1 {
+				needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
+				if !needClone && writer.sortIdxs[i] > -1 {
 					sortIdx := updateCtx.InsertCols[writer.sortIdxs[i]]
 					for j := 0; j < writer.cacheBatchs.Length(); j++ {
 						needSortBat := writer.cacheBatchs.Get(j)
@@ -350,16 +336,11 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 					}
 				}
 
+				var needCleanBatch, needSortBatch bool
 				if needClone {
 					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, 0, updateCtx.InsertCols, insertAttrs, writer.sortIdxs[i])
-					if writer.sortIdxs[i] > -1 {
-						for _, bat := range bats {
-							err = colexec.SortByKey(proc, bat, writer.sortIdxs[i], isClusterBy, proc.GetMPool())
-							if err != nil {
-								return
-							}
-						}
-					}
+					needSortBatch = true
+					needCleanBatch = true
 				} else {
 					if writer.sortIdxs[i] > -1 {
 						sortIdx := updateCtx.InsertCols[writer.sortIdxs[i]]
@@ -372,12 +353,14 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 						}
 					}
 					bats, err = fetchSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.InsertCols, insertAttrs)
+					needSortBatch = false
+					needCleanBatch = false
 				}
 
 				if err != nil {
 					return
 				}
-				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, false, bats, needClone)
+				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, false, bats, needSortBatch, needCleanBatch)
 				if err != nil {
 					return
 				}
@@ -387,15 +370,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 					if err != nil {
 						return
 					}
-					if writer.sortIdxs[i] > -1 {
-						for _, bat := range bats {
-							err = colexec.SortByKey(proc, bat, writer.sortIdxs[i], isClusterBy, proc.GetMPool())
-							if err != nil {
-								return
-							}
-						}
-					}
-					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), false, bats, true)
+					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), false, bats, true, true)
 					if err != nil {
 						return
 					}
@@ -418,7 +393,8 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	partitionIdx int16,
 	isDelete bool,
 	bats []*batch.Batch,
-	cleanBatch bool) (err error) {
+	needSortBatch bool,
+	needCleanBatch bool) (err error) {
 	var blockWriter *blockio.BlockWriter
 	var blockInfos []objectio.BlockInfo
 	var objStats objectio.ObjectStats
@@ -446,7 +422,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 			if err != nil {
 				return
 			}
-			if cleanBatch {
+			if needCleanBatch {
 				bats[i].Clean(proc.GetMPool())
 			}
 			bats[i] = nil
@@ -466,15 +442,20 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	}
 
 	// need sort
-	// isClusterBy := writer.isClusterBys[idx]
+	isClusterBy := writer.isClusterBys[idx]
 	nulls := make([]*nulls.Nulls, len(bats))
-
-	for i := range bats {
-		// err = colexec.SortByKey(proc, bats[i], sortIndex, isClusterBy, proc.GetMPool())
-		// if err != nil {
-		// 	return
-		// }
-		nulls[i] = bats[i].Vecs[sortIndex].GetNulls()
+	if needSortBatch {
+		for i := range bats {
+			err = colexec.SortByKey(proc, bats[i], sortIndex, isClusterBy, proc.GetMPool())
+			if err != nil {
+				return
+			}
+			nulls[i] = bats[i].Vecs[sortIndex].GetNulls()
+		}
+	} else {
+		for i := range bats {
+			nulls[i] = bats[i].Vecs[sortIndex].GetNulls()
+		}
 	}
 
 	blockWriter, err = generateBlockWriter(writer, proc, idx, isDelete)
@@ -505,7 +486,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		return err
 	}
 
-	err = colexec.MergeSortBatches(bats, sortIndex, buf, sinker, proc.GetMPool(), cleanBatch)
+	err = colexec.MergeSortBatches(bats, sortIndex, buf, sinker, proc.GetMPool(), needCleanBatch)
 	if err != nil {
 		return
 	}
