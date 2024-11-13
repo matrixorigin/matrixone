@@ -341,7 +341,8 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 			runC.Release()
 		}
 	}()
-	if defChanged {
+	// temporary workaround for issue #20005, will be remove soon
+	if defChanged || true {
 		var pn *plan2.Plan
 		pn, e = c.buildPlanFunc(topContext)
 		if e != nil {
