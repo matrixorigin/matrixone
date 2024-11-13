@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -67,6 +68,8 @@ var (
 	// Service ports related.
 	defaultServiceHost = "127.0.0.1"
 	defaultTxnMode     = txn.TxnMode_Pessimistic
+	// defaultMaxMessageSize is the default message size of RPC.
+	defaultMaxMessageSize = math.MaxInt32
 )
 
 // Config tn store configuration
@@ -311,6 +314,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
@@ -416,6 +420,7 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
 	}
 
+	c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
 
