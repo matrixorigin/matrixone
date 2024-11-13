@@ -1246,7 +1246,6 @@ func (c *checkpointCleaner) DoCheck() error {
 		"GC-TRACE-MERGE-WINDOW",
 		zap.String("task", c.TaskNameLocked()),
 		zap.Int("files-count", len(mergeWindow.files)),
-		zap.String("files[0]", mergeWindow.files[0].ObjectName().String()),
 	)
 	if _, _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,

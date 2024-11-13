@@ -92,3 +92,22 @@ drop table t1;
 drop table t2;
 drop view v1;
 drop database test;
+
+drop database if exists test;
+create database test;
+use test;
+drop table if exists table01;
+/* cloud_user */create table table01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into table01 values (1, null, 'database');
+insert into table01 values (2, 38291.32132, 'database');
+insert into table01 values (3, null, 'database management system');
+insert into table01 values (4, 10, null);
+insert into table01 values (1, -321.321, null);
+insert into table01 values (2, -1, null);
+select count(*) from table01;
+show create table table01;
+
+drop view if exists v01;
+/* cloud_user */create view v01 as select * from table01;
+show create view v01;
+drop database if exists test;
