@@ -10936,6 +10936,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
+		ses.GetTxnHandler().txnOp = newTestTxnOp()
 
 		//no result set
 		bh.sql2result["begin;"] = nil
