@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestScheduler_CNActiveObjectsString(t *testing.T) {
@@ -105,4 +106,7 @@ func TestExecutorCNMerge(t *testing.T) {
 	executor := newMergeExecutor(&dbutils.Runtime{}, cnScheduler)
 	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
 	require.NotEmpty(t, cnScheduler.activeObjsString())
+
+	executor.cnSched.prune(0, 0)
+	executor.cnSched.prune(0, time.Hour)
 }
