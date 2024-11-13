@@ -990,7 +990,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		return
 	}
 
-	if s.NodeInfo.Data.DataCnt() == 0 {
+	if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() == 0 {
 		return nil, nil
 	}
 
