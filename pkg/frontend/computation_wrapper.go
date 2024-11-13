@@ -309,8 +309,6 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 		jsonHandle := &jsonPlanHandler{
 			jsonBytes:  sqlQueryIgnoreExecPlan,
 			statsBytes: statsBytes,
-			//stats:      stats,
-			//buffer:     h.handoverBuffer(),
 		}
 		stm.SetSerializableExecPlan(jsonHandle)
 	}

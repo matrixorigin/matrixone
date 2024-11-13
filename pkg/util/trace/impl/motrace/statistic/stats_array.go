@@ -77,7 +77,7 @@ const (
 )
 
 func NewStatsArray() *StatsArray {
-	var s StatsArray // call reset() to
+	var s StatsArray
 	return s.Init()
 }
 

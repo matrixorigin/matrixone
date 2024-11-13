@@ -63,8 +63,6 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 	} else {
 		back.statsArray = statistic.NewStatsArray()
 	}
-
-	//>>>>>>> main
 }
 
 func (back *backExec) Service() string {
@@ -447,7 +445,7 @@ func executeStmtInBack(backSes *backSession,
 
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
-		return execInFrontendInBack(backSes, execCtx) // don't care about this
+		return execInFrontendInBack(backSes, execCtx)
 	case tree.EXEC_IN_ENGINE:
 	}
 
@@ -500,8 +498,8 @@ func executeStmtInBack(backSes *backSession,
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().ExecLocation() {
-	//case tree.EXEC_IN_FRONTEND:
-	//	return execInFrontendInBack(backSes, execCtx)
+	case tree.EXEC_IN_FRONTEND:
+		return execInFrontendInBack(backSes, execCtx)
 	case tree.EXEC_IN_ENGINE:
 
 	}

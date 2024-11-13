@@ -2686,19 +2686,9 @@ func executeStmt(ses *Session,
 	}
 	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
-		//if execCtx.input.sql == "restore account sys database snapshot_read from snapshot sp_01" {
-		//	fmt.Printf("---------------wuxiliang---------------sql: %s\n", execCtx.input.sql)
-		//}
-
 		stats, err := execInFrontend(ses, execCtx)
-
-		//if execCtx.input.sql == "restore account sys database snapshot_read from snapshot sp_01" {
-		//	fmt.Printf("---------------wuxiliang---------------sql: %s\n", execCtx.input.sql)
-		//}
-
 		defer execCtx.cw.RecordCompoundStmt(execCtx.reqCtx, stats)
 		return err
-
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
