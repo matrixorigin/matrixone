@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -180,7 +181,7 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 				continue
 			}
 
-			err = ctr.s3Writer.append(proc, input.Batch)
+			err = ctr.s3Writer.append(proc, analyzer, input.Batch)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -189,7 +190,7 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 
 	if ctr.state == vm.Eval {
 		ctr.state = vm.End
-		err := ctr.s3Writer.flushTailAndWriteToOutput(proc)
+		err := ctr.s3Writer.flushTailAndWriteToOutput(proc, analyzer)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -198,6 +199,7 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 		}
 		result := vm.NewCallResult()
 		result.Batch = ctr.s3Writer.outputBat
+		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -214,7 +216,7 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 		return input, nil
 	}
 
-	err = update.updateOneBatch(proc, input.Batch)
+	err = update.updateOneBatch(proc, analyzer, input.Batch)
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -266,7 +268,15 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			update.addDeleteAffectRows(tableType, rowCounts[i])
 			name := nameData[i].UnsafeGetString(nameArea)
 			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
-			err = source.Delete(ctx, batBufs[actionDelete], name)
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Delete(newCtx, batBufs[actionDelete], name)
+			if err != nil {
+				return input, err
+			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
@@ -281,7 +291,16 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addInsertAffectRows(tableType, rowCounts[i])
 			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
-			err = source.Write(ctx, batBufs[actionInsert])
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+			err = source.Write(newCtx, batBufs[actionInsert])
+			if err != nil {
+				return input, err
+			}
+			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {
@@ -293,7 +312,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			err = update.updateOneBatch(proc, batBufs[actionUpdate])
+			err = update.updateOneBatch(proc, analyzer, batBufs[actionUpdate])
 		default:
 			panic("unexpected multi_update.actionType")
 		}
@@ -306,11 +325,11 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	return input, nil
 }
 
-func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batch) (err error) {
+func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
 	for i, updateCtx := range update.MultiUpdateCtx {
 		// delete rows
 		if len(updateCtx.DeleteCols) > 0 {
-			err = update.delete_table(proc, updateCtx, bat, i)
+			err = update.delete_table(proc, analyzer, updateCtx, bat, i)
 			if err != nil {
 				return
 			}
@@ -321,11 +340,11 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, bat *batch.Batc
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			switch tableType {
 			case UpdateMainTable:
-				err = update.insert_main_table(proc, i, bat)
+				err = update.insert_main_table(proc, analyzer, i, bat)
 			case UpdateUniqueIndexTable:
-				err = update.insert_uniuqe_index_table(proc, i, bat)
+				err = update.insert_uniuqe_index_table(proc, analyzer, i, bat)
 			case UpdateSecondaryIndexTable:
-				err = update.insert_secondary_index_table(proc, i, bat)
+				err = update.insert_secondary_index_table(proc, analyzer, i, bat)
 			}
 			if err != nil {
 				return

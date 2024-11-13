@@ -41,6 +41,7 @@ type Analyzer interface {
 	Output(*batch.Batch)
 	WaitStop(time.Time)
 	Network(*batch.Batch)
+	AddWrittenRows(int64)
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
 	AddIncrementTime(t time.Time)
@@ -204,6 +205,13 @@ func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
 	}
 }
 
+func (opAlyzr *operatorAnalyzer) AddWrittenRows(rowCount int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.WrittenRows: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.WrittenRows += rowCount
+}
+
 func (opAlyzr *operatorAnalyzer) AddScanTime(t time.Time) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.AddScanTime: operatorAnalyzer.opStats is nil")
@@ -276,6 +284,7 @@ type OperatorStats struct {
 	OutputRows       int64                `json:"OutputRows,omitempty"`
 	OutputSize       int64                `json:"OutputSize,omitempty"`
 	NetworkIO        int64                `json:"NetworkIO,omitempty"`
+	WrittenRows      int64                `json:"WrittenRows,omitempty"`
 	S3List           int64                `json:"S3List,omitempty"`
 	S3Head           int64                `json:"S3Head,omitempty"`
 	S3Put            int64                `json:"S3Put,omitempty"`
@@ -345,6 +354,7 @@ func (ps *OperatorStats) String() string {
 		"ScanBytes:%dbytes "+
 		"NetworkIO:%dbytes "+
 		"DiskIO:%dbytes "+
+		"WrittenRows:%d "+
 		"S3List:%d "+
 		"S3Head:%d "+
 		"S3Put:%d "+
@@ -364,6 +374,7 @@ func (ps *OperatorStats) String() string {
 		ps.ScanBytes,
 		ps.NetworkIO,
 		ps.DiskIO,
+		ps.WrittenRows,
 		ps.S3List,
 		ps.S3Head,
 		ps.S3Put,

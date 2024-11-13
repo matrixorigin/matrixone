@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -165,7 +166,7 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 	return writer, nil
 }
 
-func (writer *s3Writer) append(proc *process.Process, inBatch *batch.Batch) (err error) {
+func (writer *s3Writer) append(proc *process.Process, analyzer process.Analyzer, inBatch *batch.Batch) (err error) {
 	err = writer.cacheBatchs.Extend(proc.Mp(), inBatch)
 	if err != nil {
 		return
@@ -175,7 +176,7 @@ func (writer *s3Writer) append(proc *process.Process, inBatch *batch.Batch) (err
 	}
 
 	if writer.batchSize >= writer.flushThreshold {
-		err = writer.sortAndSync(proc)
+		err = writer.sortAndSync(proc, analyzer)
 	}
 	return
 }
@@ -269,7 +270,7 @@ func (writer *s3Writer) prepareDeleteBatchs(proc *process.Process, idx int, part
 	return retBatchs, nil
 }
 
-func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
+func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
 	var bats []*batch.Batch
 	onlyDelete := writer.action == actionDelete
 	for i, updateCtx := range writer.updateCtxs {
@@ -295,7 +296,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 					return
 				}
 
-				err = writer.sortAndSyncOneTable(proc, i, 0, true, delBatchs)
+				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, true, delBatchs)
 				if err != nil {
 					return
 				}
@@ -317,7 +318,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 					if err != nil {
 						return
 					}
-					err = writer.sortAndSyncOneTable(proc, i, int16(getPartitionIdx), true, delBatchs)
+					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), true, delBatchs)
 					if err != nil {
 						return
 					}
@@ -339,7 +340,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 				if err != nil {
 					return
 				}
-				err = writer.sortAndSyncOneTable(proc, i, 0, false, bats)
+				err = writer.sortAndSyncOneTable(proc, analyzer, i, 0, false, bats)
 				if err != nil {
 					return
 				}
@@ -355,7 +356,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 					if err != nil {
 						return
 					}
-					err = writer.sortAndSyncOneTable(proc, i, int16(getPartitionIdx), false, bats)
+					err = writer.sortAndSyncOneTable(proc, analyzer, i, int16(getPartitionIdx), false, bats)
 					if err != nil {
 						return
 					}
@@ -373,6 +374,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process) (err error) {
 
 func (writer *s3Writer) sortAndSyncOneTable(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	idx int,
 	partitionIdx int16,
 	isDelete bool,
@@ -407,10 +409,16 @@ func (writer *s3Writer) sortAndSyncOneTable(
 			bats[i].Clean(proc.GetMPool())
 			bats[i] = nil
 		}
-		blockInfos, objStats, err = syncThenGetBlockInfoAndStats(proc, blockWriter, sortIndx)
+
+		crs := analyzer.GetOpCounterSet()
+		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		// `syncThenGetBlockInfoAndStats` will perform write S3 operation
+		blockInfos, objStats, err = syncThenGetBlockInfoAndStats(newCtx, blockWriter, sortIndx)
 		if err != nil {
 			return
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
 
 		if isDelete {
 			return writer.fillDeleteBlockInfo(proc, idx, partitionIdx, objStats, rowCount)
@@ -463,10 +471,15 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	if err != nil {
 		return
 	}
-	blockInfos, objStats, err = syncThenGetBlockInfoAndStats(proc, blockWriter, sortIndx)
+	// `syncThenGetBlockInfoAndStats` will perform write S3 operation
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	blockInfos, objStats, err = syncThenGetBlockInfoAndStats(newCtx, blockWriter, sortIndx)
 	if err != nil {
 		return
 	}
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddDiskIO(crs)
 
 	if isDelete {
 		return writer.fillDeleteBlockInfo(proc, idx, partitionIdx, objStats, rowCount)
@@ -548,10 +561,10 @@ func (writer *s3Writer) fillInsertBlockInfo(
 	return
 }
 
-func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process) (err error) {
+func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
 	if writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
-		err = writer.sortAndSync(proc)
+		err = writer.sortAndSync(proc, analyzer)
 		if err != nil {
 			return
 		}
