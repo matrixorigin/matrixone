@@ -259,6 +259,7 @@ func (back *backExec) Clear() {
 	if back == nil {
 		return
 	}
+	back.statsArray = nil
 	back.backSes.Clear()
 }
 
