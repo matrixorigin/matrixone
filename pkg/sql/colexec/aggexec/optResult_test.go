@@ -22,13 +22,13 @@ import (
 	"testing"
 )
 
-// there is very important to check the result's extend first.
+// there is very important to check the result's extendResultPurely first.
 //
 // we do test for the following three cases:
 // 1. the using block is enough to save all the data.
 // 2. the pre-allocated block is enough to save all the data.
 // 3. the unused space is not enough, and we need to append new block.
-func TestOptResultExtend(t *testing.T) {
+func TestExtendResultPurely(t *testing.T) {
 	blockLimitation := 100
 
 	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
@@ -38,23 +38,23 @@ func TestOptResultExtend(t *testing.T) {
 		osr.optInformation.eachSplitCapacity = blockLimitation
 		osr.noNeedToCountEmptyGroup()
 
-		// pre extend 130 rows.
-		require.NoError(t, osr.preAllocate(130))
+		// pre extendResultPurely 130 rows.
+		require.NoError(t, osr.preExtend(130))
 		checkRowDistribution(t, []int{0, 0}, osr.resultList)
 		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
 
-		// case 1 : extend 50 only use the first block.
-		require.NoError(t, osr.extend(50))
+		// case 1 : extendResultPurely 50 only use the first block.
+		require.NoError(t, osr.extendResultPurely(50))
 		checkRowDistribution(t, []int{50, 0}, osr.resultList)
 		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
 
-		// case 2 : extend 75 will full the first block and set 1 row to the second block.
-		require.NoError(t, osr.extend(75))
+		// case 2 : extendResultPurely 75 will full the first block and set 1 row to the second block.
+		require.NoError(t, osr.extendResultPurely(75))
 		checkRowDistribution(t, []int{100, 25}, osr.resultList)
 		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
 
-		// case 3 : extend 200 will full the last block and append 2 more blocks.
-		require.NoError(t, osr.extend(200))
+		// case 3 : extendResultPurely 200 will full the last block and append 2 more blocks.
+		require.NoError(t, osr.extendResultPurely(200))
 		checkRowDistribution(t, []int{100, 100, 100, 25}, osr.resultList)
 		checkCapSituation(t, []int{100, 100, 100, 25}, osr.resultList, osr.optInformation.eachSplitCapacity)
 	}

@@ -90,6 +90,14 @@ type optSplitResult struct {
 	accessIdx1, accessIdx2 int
 }
 
+func (r *optSplitResult) marshalToBytes() ([]byte, error) {
+	return nil, nil
+}
+
+func (r *optSplitResult) unmarshalFromBytes(data []byte) error {
+	return nil
+}
+
 func (r *optSplitResult) init(
 	mg AggMemoryManager, typ types.Type) {
 	if mg != nil {
@@ -131,21 +139,22 @@ func getNspFromBoolVector(v *vector.Vector) *nulls.Nulls {
 	return nsp
 }
 
-// updateAccessIdx set real index from a logic index.
-//
-// TODO: do a range from outer is more effective, this can reduce many div and mod cost.
-func (r *optSplitResult) updateAccessIdx(logicIndex int) (int, int) {
-	r.accessIdx1 = logicIndex / r.optInformation.eachSplitCapacity
-	r.accessIdx2 = logicIndex % r.optInformation.eachSplitCapacity
-	return r.accessIdx1, r.accessIdx2
+func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
+	x = src / r.optInformation.eachSplitCapacity
+	y = src % r.optInformation.eachSplitCapacity
+	return x, y
 }
 
-func (r *optSplitResult) isEmpty(realIndex1, realIndex2 int) bool {
-	return r.bsFromEmptyList[realIndex1][realIndex2]
+func (r *optSplitResult) isGroupEmpty(x, y int) bool {
+	return r.bsFromEmptyList[x][y]
 }
 
-func (r *optSplitResult) setNotEmpty(realIndex1, realIndex2 int) {
-	r.bsFromEmptyList[realIndex1][realIndex2] = true
+func (r *optSplitResult) setGroupNotEmpty(x, y int) {
+	r.bsFromEmptyList[x][y] = false
+}
+
+func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
+	r.bsFromEmptyList[x][y] = r.bsFromEmptyList[x][y] && anotherIsEmpty
 }
 
 // flushOneVector return the agg result one by one.
@@ -166,9 +175,27 @@ func (r *optSplitResult) flushOneVector() *vector.Vector {
 	return nil
 }
 
-// extend try to expend `more` groups to optSplitResult's result and empty situations.
-// If the capacity is not enough, allocate and update the capacity.
-func (r *optSplitResult) extend(more int) error {
+// flushAll return all the result.
+//
+// todo: for easy refactor without changing too much, I remain this function.
+func (r *optSplitResult) flushAll() []*vector.Vector {
+	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
+		for i := range r.emptyList {
+			r.resultList[i].SetNulls(getNspFromBoolVector(r.emptyList[i]))
+		}
+	}
+
+	ret := r.resultList
+	r.resultList = nil
+	return ret
+}
+
+// extendResultPurely
+// try to expand the length forward from the current position.
+// if there is not enough free space, do memory allocation first.
+//
+// do not call this method directly, plz use the preExtend and resExtend.
+func (r *optSplitResult) extendResultPurely(more int) error {
 
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
@@ -263,13 +290,14 @@ func (r *optSplitResult) appendPartK() int {
 	return len(r.resultList) - 1
 }
 
-// preAllocate only extend the capacity for the result
-// and keep it with the origin using length.
-func (r *optSplitResult) preAllocate(more int) (err error) {
+// preExtend
+// allocate space of length more forward from the current position of the optSplitResult,
+// and without any modification for all the memory usage indicators.
+func (r *optSplitResult) preExtend(more int) (err error) {
 	oldNowIdx1 := r.nowIdx1
 	oldNowIdx2 := r.resultList[oldNowIdx1].Length()
 
-	if err = r.extend(more); err != nil {
+	if err = r.extendResultPurely(more); err != nil {
 		return err
 	}
 
@@ -286,6 +314,22 @@ func (r *optSplitResult) preAllocate(more int) (err error) {
 		}
 	}
 	r.nowIdx1 = oldNowIdx1
+	return nil
+}
+
+// resExtend obtains memory of length more from the current position for use,
+// while also altering the memory usage indicators and other structure related.
+func (r *optSplitResult) resExtend(more int) (err error) {
+	oldNowIdx1 := r.nowIdx1
+
+	if err = r.extendResultPurely(more); err != nil {
+		return err
+	}
+
+	r.bsFromEmptyList[oldNowIdx1] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[oldNowIdx1])
+	for i := oldNowIdx1 + 1; i < r.nowIdx1; i++ {
+		r.bsFromEmptyList = append(r.bsFromEmptyList, vector.MustFixedColNoTypeCheck[bool](r.emptyList[i]))
+	}
 	return nil
 }
 
