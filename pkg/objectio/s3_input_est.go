@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package objectio
 
-import (
-	"github.com/stretchr/testify/require"
-	"testing"
-)
+// Each 8192 rows of data corresponds to an S3 input unit
+const rowsPerS3Input int64 = 8192
 
-func TestResourceController(t *testing.T) {
-	rc := new(resourceController)
-	rc.setMemLimit(10000)
-	require.Equal(t, int64(7500), rc.limit)
-	require.Equal(t, int64(7500), rc.availableMem())
-
-	rc.refresh()
-	rc.limit = rc.using + 1
-	require.Equal(t, int64(1), rc.availableMem())
-
-	require.Panics(t, func() { rc.setMemLimit(0) })
+// Estimating S3input using the number of written lines, Maintained by @LeftHandCold
+func EstimateS3Input(writtenRows int64) float64 {
+	return float64(writtenRows) / float64(rowsPerS3Input)
 }

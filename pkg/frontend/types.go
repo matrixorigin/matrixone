@@ -547,6 +547,7 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
+	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
 	SessionLogger
 }
 
@@ -632,7 +633,6 @@ func (execCtx *ExecCtx) Close() {
 //	batch.Batch
 type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
-// TODO: shared component among the session implmentation
 type feSessionImpl struct {
 	pool          *mpool.MPool
 	buf           *buffer.Buffer
@@ -734,14 +734,32 @@ func (ses *feSessionImpl) ExitRunSql() {
 	}
 }
 
+// Close releases all reference.
+// close txn handler also
 func (ses *feSessionImpl) Close() {
 	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
-	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
+		ses.txnHandler = nil
 	}
+	ses.Reset()
+}
+
+// Reset release resources like buffer,memory,handles,etc.
+//
+//		It also reserves some necessary resources that are carefully designed.
+//	 	does not close txn handler here.
+func (ses *feSessionImpl) Reset() {
+	if ses == nil {
+		return
+	}
+	ses.Clear()
+
+	ses.mrs = nil
+	//release refer but not close it
+	ses.txnHandler = nil
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
@@ -764,6 +782,7 @@ func (ses *feSessionImpl) Close() {
 	ses.upstream = nil
 }
 
+// Clear clean result only
 func (ses *feSessionImpl) Clear() {
 	if ses == nil {
 		return

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -29,6 +30,7 @@ import (
 
 func (update *MultiUpdate) insert_main_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
 	ctr := &update.ctr
@@ -60,12 +62,13 @@ func (update *MultiUpdate) insert_main_table(
 	}
 
 	// insert
-	err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+	err = update.insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	return
 }
 
 func (update *MultiUpdate) insert_uniuqe_index_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
 	ctr := &update.ctr
@@ -82,15 +85,16 @@ func (update *MultiUpdate) insert_uniuqe_index_table(
 
 	idxPkPos := updateCtx.InsertCols[0]
 	if inputBatch.Vecs[idxPkPos].HasNull() {
-		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		err = update.check_null_and_insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	} else {
-		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		err = update.insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	}
 	return
 }
 
 func (update *MultiUpdate) insert_secondary_index_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	tableIndex int,
 	inputBatch *batch.Batch) (err error) {
 	ctr := &update.ctr
@@ -112,15 +116,16 @@ func (update *MultiUpdate) insert_secondary_index_table(
 
 	idxPkPos := updateCtx.InsertCols[0]
 	if inputBatch.Vecs[idxPkPos].HasNull() {
-		err = update.check_null_and_insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		err = update.check_null_and_insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	} else {
-		err = update.insert_table(proc, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		err = update.insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 	}
 	return
 }
 
 func (update *MultiUpdate) insert_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch) (err error) {
@@ -153,10 +158,16 @@ func (update *MultiUpdate) insert_table(
 				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 				update.addInsertAffectRows(tableType, uint64(rowCount))
 				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
-				err = source.Write(proc.Ctx, insertBatch)
+
+				crs := analyzer.GetOpCounterSet()
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+				err = source.Write(newCtx, insertBatch)
 				if err != nil {
 					return err
 				}
+				analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 		}
 	} else {
@@ -173,7 +184,16 @@ func (update *MultiUpdate) insert_table(
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addInsertAffectRows(tableType, uint64(rowCount))
 			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
-			err = source.Write(proc.Ctx, insertBatch)
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Write(newCtx, insertBatch)
+			if err != nil {
+				return err
+			}
+			analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	}
 	return
@@ -181,6 +201,7 @@ func (update *MultiUpdate) insert_table(
 
 func (update *MultiUpdate) check_null_and_insert_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch) (err error) {
@@ -225,10 +246,17 @@ func (update *MultiUpdate) check_null_and_insert_table(
 				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 				update.addInsertAffectRows(tableType, uint64(newRowCount))
 				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
-				err = source.Write(proc.Ctx, insertBatch)
+
+				crs := analyzer.GetOpCounterSet()
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+				err = source.Write(newCtx, insertBatch)
 				if err != nil {
 					return err
 				}
+				analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
+
 			}
 		}
 	} else {
@@ -254,7 +282,16 @@ func (update *MultiUpdate) check_null_and_insert_table(
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addInsertAffectRows(tableType, uint64(newRowCount))
 			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
-			err = source.Write(proc.Ctx, insertBatch)
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Write(newCtx, insertBatch)
+			if err != nil {
+				return err
+			}
+			analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	}
 	return
