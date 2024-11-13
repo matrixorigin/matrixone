@@ -67,7 +67,7 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 	if len(buf) > 10*mpool.MB {
 		logutil.Info(
 			"BIG-TXN",
-			zap.Int("wal size", len(buf)),
+			zap.Int("wal-size", len(buf)),
 			zap.Uint64("lsn", mgr.lsn),
 			zap.String("txn", txn.String()),
 		)
