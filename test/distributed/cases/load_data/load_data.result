@@ -655,6 +655,12 @@ select * from test06;
 col1    col2
 Hello","Hi    null
 database    "db
+delete from test06;
+load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+col1    col2
+Hello","Hi    null
+database    "db
 drop table test06;
 drop table if exists test07;
 create table test07(col1 varchar(20), col2 varchar(20));
