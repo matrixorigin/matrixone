@@ -1439,5 +1439,8 @@ select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from wi
 select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
 select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
 select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
+
+-- information_schema is now a table which is compatible with mysql, it is now an empty table
+select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 drop database test;
 
