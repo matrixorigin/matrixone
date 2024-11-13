@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -51,10 +52,10 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
 	stat := *entry.GetObjectStats()
 	cnScheduler.addActiveObjects([]*catalog.ObjectEntry{entry})
-	t.Log(cnScheduler.activeObjsString())
+	require.NotEmpty(t, cnScheduler.activeObjsString())
 
 	cnScheduler.removeActiveObject([]objectio.ObjectId{*entry.ID()})
-	t.Log(cnScheduler.activeObjsString())
+	require.Empty(t, cnScheduler.activeObjsString())
 
 	taskEntry := &api.MergeTaskEntry{
 		AccountId:   schema.AcInfo.TenantID,
@@ -77,4 +78,31 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	require.NoError(t, meta.Unmarshal(tasks[0].Metadata.Context))
 	require.Equal(t, meta.DbName, tbl.GetDB().GetName())
 	require.Error(t, cnScheduler.sendMergeTask(context.Background(), taskEntry))
+}
+
+func TestExecutorCNMerge(t *testing.T) {
+
+	cata := catalog.MockCatalog()
+	defer cata.Close()
+	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(cata), catalog.MockTxnFactory(cata), types.NewMockHLCClock(1))
+	txnMgr.Start(context.Background())
+	defer txnMgr.Stop()
+	txn1, _ := txnMgr.StartTxn(nil)
+	db, err := cata.CreateDBEntry("db", "", "", txn1)
+	require.NoError(t, err)
+	catalog.MockSchema(1, 0)
+	tbl, err := db.CreateTableEntry(catalog.MockSchema(1, 0), txn1, nil)
+	require.NoError(t, err)
+	require.NoError(t, txn1.Commit(context.Background()))
+
+	txn2, _ := txnMgr.StartTxn(nil)
+	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
+
+	memStorage := taskservice.NewMemTaskStorage()
+	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
+	})
+	executor := newMergeExecutor(&dbutils.Runtime{}, cnScheduler)
+	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
+	require.NotEmpty(t, cnScheduler.activeObjsString())
 }

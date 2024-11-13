@@ -79,7 +79,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 		cids = append(cids, *obj.AsCommonID())
 	}
 	// check objects are merging by TN.
-	if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
+	if e.rt.Scheduler != nil && e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
 		return
 	}
 	schema := entry.GetLastestSchema(false)
