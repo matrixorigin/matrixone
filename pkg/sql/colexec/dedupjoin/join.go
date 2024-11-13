@@ -229,7 +229,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer) error {
-	analyzer.Input(bat)
+	//analyzer.Input(bat)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		return err

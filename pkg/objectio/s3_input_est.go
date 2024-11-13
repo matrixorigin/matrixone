@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fifocache
+package objectio
 
-import (
-	"hash/maphash"
+// Each 8192 rows of data corresponds to an S3 input unit
+const rowsPerS3Input int64 = 8192
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"golang.org/x/exp/constraints"
-)
-
-func ShardInt[T constraints.Integer](v T) uint64 {
-	return maphash.Bytes(seed, util.UnsafeToBytes(&v))
+// Estimating S3input using the number of written lines, Maintained by @LeftHandCold
+func EstimateS3Input(writtenRows int64) float64 {
+	return float64(writtenRows) / float64(rowsPerS3Input)
 }
