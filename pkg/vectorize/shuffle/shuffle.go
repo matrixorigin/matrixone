@@ -15,11 +15,16 @@
 package shuffle
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func FixedLengthShuffle[T types.FixedSizeT](vs, ws []T, sels []int64) []T {
 	for i, sel := range sels {
+		if i >= len(ws) || int(sel) >= len(vs) {
+			fmt.Print("dddd")
+		}
 		ws[i] = vs[sel]
 	}
 	return ws[:len(sels)]
