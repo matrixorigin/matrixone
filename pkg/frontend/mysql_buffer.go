@@ -22,6 +22,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -187,7 +188,7 @@ type Conn struct {
 	allowedPacketSize int
 	timeout           time.Duration
 	allocator         *BufferAllocator
-	ses               *Session
+	ses               atomic.Pointer[holder[*Session]]
 	closeFunc         sync.Once
 	service           string
 }
@@ -275,7 +276,7 @@ func (c *Conn) Close() error {
 		if err != nil {
 			logutil.Error("close conn error", zap.Error(err))
 		}
-		c.ses = nil
+		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)
 		if rm != nil {
 			rm.Closed(c)
@@ -288,7 +289,7 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	var err error
 	if totalLength > c.allowedPacketSize {
 		errMsg := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
-		err = c.ses.GetResponser().MysqlRrWr().WriteERR(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
+		err = c.respErr(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
 		if err != nil {
 			return err
 		}
@@ -732,7 +733,7 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	c.ses.CountFlushPackage(1)
+	c.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -787,7 +788,7 @@ func (c *Conn) WriteToConn(buf []byte) error {
 			return err
 		}
 		sendLength += n
-		c.ses.CountOutputBytes(n)
+		c.CountOutputBytes(n)
 	}
 	return nil
 }
@@ -816,6 +817,32 @@ func (c *Conn) Reset() {
 	c.freeDynamicBuffUnsafe()
 	c.packetInBuf = 0
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+}
+
+func (c *Conn) CountFlushPackage(n int64) {
+	val := c.ses.Load().value
+	if val != nil {
+		val.CountFlushPackage(n)
+	}
+}
+
+func (c *Conn) CountOutputBytes(n int) {
+	val := c.ses.Load().value
+	if val != nil {
+		val.CountOutputBytes(n)
+	}
+}
+
+func (c *Conn) respErr(code uint16, state, msg string) error {
+	val := c.ses.Load().value
+	if val != nil {
+		return val.GetResponser().MysqlRrWr().WriteERR(code, state, msg)
+	}
+	return nil
+}
+
+func (c *Conn) SetSession(ses *Session) {
+	c.ses.Store(&holder[*Session]{value: ses})
 }
 
 // ExecuteFuncWithRecover executes the function and recover the panic

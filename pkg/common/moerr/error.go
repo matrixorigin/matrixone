@@ -164,7 +164,6 @@ const (
 	ErrBlobCantHaveDefault                      uint16 = 20472
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
-	ErrServerNetPacketTooLarge                  uint16 = 20475
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -420,7 +419,6 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
-	ErrServerNetPacketTooLarge:                  {ER_SERVER_NET_PACKET_TOO_LARGE, []string{MySQLDefaultSqlState}, "Got a packet bigger than 'max_allowed_packet' bytes"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1526,10 +1524,6 @@ func NewCantCompileForPrepare(ctx context.Context) *Error {
 
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
-}
-
-func NewServerNetPacketTooLarge(ctx context.Context) *Error {
-	return newError(ctx, ErrServerNetPacketTooLarge)
 }
 
 var contextFunc atomic.Value
