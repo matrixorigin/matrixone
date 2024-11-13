@@ -3750,18 +3750,18 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, node *plan.Node) []*Scope {
 	cnlist := c.cnList
 	if len(cnlist) <= 1 {
-		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	if !reuse {
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
 		//merge build side to avoid bugs
 		if !c.IsSingleScope(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
@@ -3771,10 +3771,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := plan2.GetShuffleDop(ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(ncpu, len(cnlist), node.Stats.HashmapStats.HashmapSize)
 
 	bucketNum := len(cnlist) * dop
-	shuffleJoins := make([]*Scope, 0, bucketNum)
+	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
 	lenLeft := len(probeScopes)
@@ -3802,29 +3802,29 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 				}
 			}
-			shuffleJoins = append(shuffleJoins, probes...)
+			shuffleProbes = append(shuffleProbes, probes...)
 			shuffleBuilds = append(shuffleBuilds, builds...)
 		}
 	} else {
-		shuffleJoins = probeScopes
-		for i := range shuffleJoins {
+		shuffleProbes = probeScopes
+		for i := range shuffleProbes {
 			buildscope := newScope(Remote)
-			buildscope.NodeInfo = shuffleJoins[i].NodeInfo
+			buildscope.NodeInfo = shuffleProbes[i].NodeInfo
 			buildscope.Proc = c.proc.NewNoContextChildProc(lenRight)
 			for _, rr := range buildscope.Proc.Reg.MergeReceivers {
 				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
 			}
 			shuffleBuilds = append(shuffleBuilds, buildscope)
-			prescopes := shuffleJoins[i].PreScopes
-			shuffleJoins[i].PreScopes = []*Scope{buildscope}
-			shuffleJoins[i].PreScopes = append(shuffleJoins[i].PreScopes, prescopes...) //make sure build scope is in prescope[0]
+			prescopes := shuffleProbes[i].PreScopes
+			shuffleProbes[i].PreScopes = []*Scope{buildscope}
+			shuffleProbes[i].PreScopes = append(shuffleProbes[i].PreScopes, prescopes...) //make sure build scope is in prescope[0]
 		}
 	}
 
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), n, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			probeScopes[i].setRootOperator(shuffleProbeOp)
@@ -3833,12 +3833,12 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 			}
 
-			dispatchArg := constructDispatch(i, shuffleJoins, probeScopes[i], n, true)
+			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], node, true)
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			probeScopes[i].setRootOperator(dispatchArg)
 			probeScopes[i].IsEnd = true
 
-			for _, js := range shuffleJoins {
+			for _, js := range shuffleProbes {
 				if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
 					js.PreScopes = append(js.PreScopes, probeScopes[i])
 					break
@@ -3849,7 +3849,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
@@ -3858,7 +3858,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
-		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], n, false)
+		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], node, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScopes[i].setRootOperator(dispatchArg)
 		buildScopes[i].IsEnd = true
@@ -3873,14 +3873,14 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	c.anal.isFirst = false
 	c.hasMergeOp = true
 	if !reuse {
-		for i := range shuffleJoins {
+		for i := range shuffleProbes {
 			mergeOp := merge.NewArgument()
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			shuffleJoins[i].setRootOperator(mergeOp)
+			shuffleProbes[i].setRootOperator(mergeOp)
 		}
 	}
 
-	return shuffleJoins
+	return shuffleProbes
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
