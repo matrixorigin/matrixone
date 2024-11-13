@@ -15,12 +15,15 @@
 package system
 
 import (
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 )
 
 func TestCPU(t *testing.T) {
@@ -38,4 +41,40 @@ func TestMemory(t *testing.T) {
 	totalMemory := MemoryTotal()
 	availableMemory := MemoryAvailable()
 	require.Equal(t, true, totalMemory >= availableMemory)
+}
+
+// Benchmark_GoRutinues
+// goos: darwin
+// goarch: arm64
+// pkg: github.com/matrixorigin/matrixone/pkg/common/system
+// cpu: Apple M1 Pro
+// Benchmark_GoRutinues
+// Benchmark_GoRutinues/Atomic
+// Benchmark_GoRutinues/Atomic-10         	1000000000	         0.5446 ns/op
+// Benchmark_GoRutinues/GoMaxProcs
+// Benchmark_GoRutinues/GoMaxProcs-10     	87136477	        14.06 ns/op
+// Benchmark_GoRutinues/NumGoroutine
+// Benchmark_GoRutinues/NumGoroutine-10   	249281432	         4.795 ns/op
+func Benchmark_GoRutinues(b *testing.B) {
+	var v atomic.Int32
+	b.Logf("v: %d, runtime.GOMAXPROCS(0): %d, runtime.NumGoroutine: %d",
+		v.Load(), runtime.GOMAXPROCS(0), runtime.NumGoroutine())
+	b.Run("Atomic", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			v.Load()
+		}
+	})
+	b.Run("GoMaxProcs", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			runtime.GOMAXPROCS(0)
+		}
+	})
+	b.Run("NumGoroutine", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			runtime.NumGoroutine() // running go routines, not eq GOMAXPROCS
+		}
+	})
 }
