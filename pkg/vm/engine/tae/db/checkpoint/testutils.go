@@ -315,6 +315,10 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
 	}
+	// ut causes all Ickp to be gc too fast, leaving a Gckp
+	if prev == nil {
+		prev = r.MaxGlobalCheckpoint()
+	}
 	start := types.TS{}
 	if prev != nil {
 		start = prev.end.Next()
