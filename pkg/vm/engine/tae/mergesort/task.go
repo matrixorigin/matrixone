@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -88,30 +89,16 @@ func DoMergeAndWrite(
 	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
-	isTombstone bool,
 ) (err error) {
-	now := time.Now()
+	start := time.Now()
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
-	fromObjsDesc := ""
-	fromSize := float64(0)
-	for _, o := range commitEntry.MergedObjs {
-		obj := objectio.ObjectStats(o)
-		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
-			obj.ObjectName().ObjectId().ShortStringEx(),
-			obj.BlkCnt(),
-			units.BytesSize(float64(obj.OriginSize())),
-			obj.Rows())
-		fromSize += float64(obj.OriginSize())
-	}
-	logutil.Info(
-		"[MERGE-START]",
-		zap.String("task", mergehost.Name()),
-		common.AnyField("txn-info", txnInfo),
-		common.AnyField("host", mergehost.HostHintName()),
-		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
-		zap.String("from-objs", fromObjsDesc),
-		zap.String("from-size", units.BytesSize(fromSize)),
+	logMergeStart(
+		mergehost.Name(),
+		txnInfo,
+		mergehost.HostHintName(),
+		commitEntry.StartTs.DebugString(),
+		commitEntry.MergedObjs,
 	)
 	defer func() {
 		if err != nil {
@@ -123,13 +110,8 @@ func DoMergeAndWrite(
 		}
 	}()
 
-	hasSortKey := sortkeyPos >= 0
-	if !hasSortKey {
-		sortkeyPos = 0 // no sort key, use the first column to do reshape
-	}
-
-	if hasSortKey {
-		if err = mergeObjs(ctx, mergehost, sortkeyPos, isTombstone); err != nil {
+	if sortkeyPos >= 0 {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
 			return err
 		}
 	} else {
@@ -138,25 +120,7 @@ func DoMergeAndWrite(
 		}
 	}
 
-	toObjsDesc := ""
-	toSize := float64(0)
-	for _, o := range commitEntry.CreatedObjs {
-		obj := objectio.ObjectStats(o)
-		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
-			obj.ObjectName().ObjectId().ShortStringEx(),
-			obj.BlkCnt(),
-			units.BytesSize(float64(obj.OriginSize())),
-			obj.Rows())
-		toSize += float64(obj.OriginSize())
-	}
-
-	logutil.Info(
-		"[MERGE-END]",
-		zap.String("task", mergehost.Name()),
-		common.AnyField("to-objs", toObjsDesc),
-		common.AnyField("to-size", units.BytesSize(toSize)),
-		common.DurationField(time.Since(now)),
-	)
+	logMergeEnd(mergehost.Name(), start, commitEntry.CreatedObjs)
 	return nil
 }
 
@@ -237,4 +201,66 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 		}
 		totalHandledRows += uint32(size)
 	}
+}
+
+func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
+	fromObjsDesc := ""
+	fromSize, estSize := float64(0), float64(0)
+	rows, blkn := 0, 0
+	for _, o := range mergedObjs {
+		obj := objectio.ObjectStats(o)
+		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+			obj.ObjectName().ObjectId().ShortStringEx(),
+			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
+			obj.Rows())
+		fromSize += float64(obj.OriginSize())
+		estSize += float64(obj.Rows() * 20)
+		rows += int(obj.Rows())
+		blkn += int(obj.BlkCnt())
+	}
+
+	logutil.Info(
+		"[MERGE-START]",
+		zap.String("task", name),
+		common.AnyField("txn-info", txnInfo),
+		common.AnyField("host", host),
+		common.AnyField("timestamp", startTS),
+		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-size", units.BytesSize(fromSize)),
+		zap.String("est-size", units.BytesSize(estSize)),
+		zap.Int("num-obj", len(mergedObjs)),
+		common.AnyField("num-blk", blkn),
+		common.AnyField("rows", rows),
+	)
+
+	if host == "TN" {
+		v2.TaskDNMergeScheduledByCounter.Inc()
+		v2.TaskDNMergedSizeCounter.Add(fromSize)
+	} else if host == "CN" {
+		v2.TaskCNMergeScheduledByCounter.Inc()
+		v2.TaskCNMergedSizeCounter.Add(fromSize)
+	}
+}
+
+func logMergeEnd(name string, start time.Time, objs [][]byte) {
+	toObjsDesc := ""
+	toSize := float64(0)
+	for _, o := range objs {
+		obj := objectio.ObjectStats(o)
+		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+			obj.ObjectName().ObjectId().ShortStringEx(),
+			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
+			obj.Rows())
+		toSize += float64(obj.OriginSize())
+	}
+
+	logutil.Info(
+		"[MERGE-END]",
+		zap.String("task", name),
+		common.AnyField("to-objs", toObjsDesc),
+		common.AnyField("to-size", units.BytesSize(toSize)),
+		common.DurationField(time.Since(start)),
+	)
 }
