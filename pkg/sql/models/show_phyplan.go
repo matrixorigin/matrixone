@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
@@ -77,9 +78,11 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 		if statsInfo != nil {
 			buffer.WriteString("\n")
 			// Calculate the total sum of S3 requests for each stage
-			list, head, put, get, delete, deleteMul := CalcTotalS3Requests(gblStats, statsInfo)
-			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-				list, head, put, get, delete, deleteMul,
+			list, head, put, get, delete, deleteMul, writtenRows := CalcTotalS3Requests(gblStats, statsInfo)
+
+			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
+			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows(%d/8192):%.4f \n",
+				list, head, put, get, delete, deleteMul, writtenRows, s3InputEstByRows,
 			))
 
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
@@ -334,18 +337,20 @@ type GblStats struct {
 	S3GetRequest             int64
 	S3DeleteRequest          int64
 	S3DeleteMultiRequest     int64
+	WrittenRows              int64
 }
 
 // CalcTotalS3Requests calculates the total number of S3 requests (List, Head, Put, Get, Delete, DeleteMul)
 // by summing up values from global statistics (gblStats) and different stages of the execution process
 // (PlanStage, CompileStage, and PrepareRunStage) in the statsInfo.
-func CalcTotalS3Requests(gblStats GblStats, statsInfo *statistic.StatsInfo) (list, head, put, get, delete, deleteMul int64) {
+func CalcTotalS3Requests(gblStats GblStats, statsInfo *statistic.StatsInfo) (list, head, put, get, delete, deleteMul, writtenRows int64) {
 	list = gblStats.S3ListRequest + statsInfo.PlanStage.BuildPlanS3Request.List + statsInfo.CompileStage.CompileS3Request.List + statsInfo.PrepareRunStage.ScopePrepareS3Request.List
 	head = gblStats.S3HeadRequest + statsInfo.PlanStage.BuildPlanS3Request.Head + statsInfo.CompileStage.CompileS3Request.Head + statsInfo.PrepareRunStage.ScopePrepareS3Request.Head
 	put = gblStats.S3PutRequest + statsInfo.PlanStage.BuildPlanS3Request.Put + statsInfo.CompileStage.CompileS3Request.Put + statsInfo.PrepareRunStage.ScopePrepareS3Request.Put
 	get = gblStats.S3GetRequest + statsInfo.PlanStage.BuildPlanS3Request.Get + statsInfo.CompileStage.CompileS3Request.Get + statsInfo.PrepareRunStage.ScopePrepareS3Request.Get
 	delete = gblStats.S3DeleteRequest + statsInfo.PlanStage.BuildPlanS3Request.Delete + statsInfo.CompileStage.CompileS3Request.Delete + statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete
 	deleteMul = gblStats.S3DeleteMultiRequest + statsInfo.PlanStage.BuildPlanS3Request.DeleteMul + statsInfo.CompileStage.CompileS3Request.DeleteMul + statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul
+	writtenRows = gblStats.WrittenRows
 	return
 }
 
@@ -367,6 +372,7 @@ func handlePhyOperator(op *PhyOperator, stats *GblStats) {
 		stats.S3GetRequest += op.OpStats.S3Get
 		stats.S3DeleteRequest += op.OpStats.S3Delete
 		stats.S3DeleteMultiRequest += op.OpStats.S3DeleteMul
+		stats.WrittenRows += op.OpStats.WrittenRows
 	}
 
 	// Recursively process child operators
