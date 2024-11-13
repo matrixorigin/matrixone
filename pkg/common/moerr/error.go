@@ -164,6 +164,7 @@ const (
 	ErrBlobCantHaveDefault                      uint16 = 20472
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
+	ErrServerNetPacketTooLarge                  uint16 = 20475
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
