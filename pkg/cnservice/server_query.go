@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -24,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -512,7 +512,7 @@ func (s *service) handleResetSession(
 func (s *service) handleGoMaxProcs(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
-	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	resp.GoMaxProcsResponse.MaxProcs = int32(system.SetGoMaxProcs(int(req.GoMaxProcsRequest.MaxProcs)))
 	logutil.Info("QueryService::GoMaxProcs",
 		zap.String("op", "set"),
 		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
