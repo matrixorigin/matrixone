@@ -439,12 +439,10 @@ func (c *Compile) FreeOperator() {
 }
 
 func (c *Compile) printPipeline() {
-	if c.IsTpQuery() {
-		fmt.Println("pipeline for tp query!", "sql: ", c.originSQL)
-	} else {
+	if !c.IsTpQuery() {
 		fmt.Println("pipeline for ap query! current cn", c.addr, "sql: ", c.originSQL)
+		fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 	}
-	fmt.Println(DebugShowScopes(c.scopes, OldLevel))
 }
 
 // prePipelineInitializer is responsible for handling some tasks that need to be done before truly launching the pipeline.
@@ -4151,10 +4149,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			mcpu = 1
 		}
 		nodes = append(nodes, engine.Node{
-			Addr:    c.addr,
-			Mcpu:    mcpu,
-			CNCNT:   1,
-			IsLocal: true,
+			Addr:  c.addr,
+			Mcpu:  mcpu,
+			CNCNT: 1,
 		})
 		return nodes, nil
 	}
@@ -4162,12 +4159,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// scan on multi CN
 	for i := range c.cnList {
 		nodes = append(nodes, engine.Node{
-			Id:      c.cnList[i].Id,
-			Addr:    c.cnList[i].Addr,
-			Mcpu:    c.cnList[i].Mcpu,
-			CNCNT:   int32(len(c.cnList)),
-			CNIDX:   int32(i),
-			IsLocal: c.cnList[i].Addr == c.addr,
+			Id:    c.cnList[i].Id,
+			Addr:  c.cnList[i].Addr,
+			Mcpu:  c.cnList[i].Mcpu,
+			CNCNT: int32(len(c.cnList)),
+			CNIDX: int32(i),
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
