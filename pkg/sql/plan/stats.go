@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -46,9 +46,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
-var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+func BlockThresholdForOneCN(ncpu int) int {
+	if ncpu == 0 {
+		ncpu = system.GoMaxProcs()
+	}
+	return ncpu * blockThresholdForTpQuery
+}
+func costThresholdForOneCN() int {
+	return system.GoMaxProcs() * costThresholdForTpQuery
+}
 
 type ExecType int
 
@@ -1367,10 +1373,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Cost = float64(costThresholdForOneCN())
+	stats.Outcnt = float64(costThresholdForOneCN())
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN(0))
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1526,7 +1532,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1534,7 +1540,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1558,7 +1564,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1570,7 +1577,8 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
