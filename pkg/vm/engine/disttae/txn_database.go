@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -605,11 +604,6 @@ func (db *txnDatabase) getTableItem(
 			}
 		}
 		if tableitem == nil {
-			if strings.Contains(name, "_copy_") {
-				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(),
-					zap.String("Stack Trace", string(stackInfo)))
-			}
 			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 		}
 		return *tableitem, nil
