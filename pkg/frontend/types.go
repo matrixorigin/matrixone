@@ -218,7 +218,7 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
-	// RecordExecPlan records the execution plan and calculates CU resources, and stores them in into statementinfo
+	// RecordExecPlan records the execution plan and calculates CU resources, and stores them into statementinfo
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
 
 	// RecordCompoundStmt calculates the CU resources of composite statements, and stores them into statementinfo

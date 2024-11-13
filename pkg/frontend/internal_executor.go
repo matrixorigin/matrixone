@@ -141,7 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	//ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
@@ -170,7 +170,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	//ctx = perfcounter.AttachInternalExecutorKey(ctx)
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)

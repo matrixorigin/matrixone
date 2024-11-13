@@ -98,24 +98,17 @@ func AttachBackgroundExecutorKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, BackgroundExecutorKey{}, struct{}{})
 }
 
-// Internal executor context key(include `SQLExecutor` and `internalExecutor`)
-type InternalExecutorKey struct{}
+// TxnExecutorKey `refers to `TxnExecuter`
+type TxnExecutorKey struct{}
 
-func AttachInternalExecutorKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, InternalExecutorKey{}, struct{}{})
+func AttachTxnExecutorKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, TxnExecutorKey{}, struct{}{})
 }
 
-// IsInternalExecutor checks if the given context contains the InternalExecutorKey
+// IsInternalExecutor checks if the given context contains the TxnExecutorKey
 func IsInternalExecutor(ctx context.Context) bool {
-	_, ok := ctx.Value(InternalExecutorKey{}).(struct{})
+	_, ok := ctx.Value(TxnExecutorKey{}).(struct{})
 	return ok
-}
-
-// Generic executor context key
-type GenericExecutorKey struct{}
-
-func AttachGenericExecutorKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, GenericExecutorKey{}, struct{}{})
 }
 
 // BuildPlanMarkKey is an empty struct used as a key for attaching a build plan counter to a context.

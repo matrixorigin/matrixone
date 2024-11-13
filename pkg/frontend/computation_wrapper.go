@@ -318,7 +318,6 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 }
 
 func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
-	//if stm := cwft.ses.GetStmtInfo(); stm != nil {
 	waitActiveCost := time.Duration(0)
 	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
 		txn := handler.GetTxn()
@@ -327,11 +326,9 @@ func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Con
 		}
 	}
 
-	h := NewMarshalPlanHandlerWithoutPlanV2(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
+	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
 	statsByte, _ = h.Stats(ctx, cwft.ses)
 	return statsByte
-	//}
-	//return
 }
 
 func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {

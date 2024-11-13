@@ -3532,6 +3532,30 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	return h
 }
 
+// NewMarshalPlanHandlerCompositeSubStmt MarshalHandler for child statements of composite statements
+func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, plan *plan.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
+	if plan == nil || plan.GetQuery() == nil {
+		return &marshalPlanHandler{
+			query:             nil,
+			marshalPlan:       nil,
+			buffer:            nil,
+			isInternalSubStmt: true,
+		}
+	}
+	query := plan.GetQuery()
+	h := &marshalPlanHandler{
+		query:             query,
+		buffer:            nil,
+		isInternalSubStmt: true,
+	}
+
+	// SET options
+	for _, opt := range opts {
+		opt(&h.marshalPlanConfig)
+	}
+	return h
+}
+
 // needMarshalPlan return true if statement.duration - waitActive > longQueryTime && NOT mo_logger query
 // check longQueryTime, need after StatementInfo.MarkResponseAt
 // MoLogger NOT record ExecPlan
