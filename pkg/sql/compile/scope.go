@@ -564,7 +564,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
 	var runtimeInExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -593,7 +592,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					// TODO: implement BETWEEN expression
 				}
 				exprs = append(exprs, spec.Expr)
-				filters = append(filters, msg)
 			}
 		}
 	}
