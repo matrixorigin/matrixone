@@ -74,6 +74,17 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+
+	txnPKChangeCheckCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_change_check_total",
+			Help:      "Total number of pk change check.",
+		}, []string{"type"})
+	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
+	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
+	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
 )
 
 var (
