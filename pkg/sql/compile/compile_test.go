@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -161,6 +162,13 @@ func (w *Ws) PPString() string {
 	return ""
 }
 
+func NewMockCompile() *Compile {
+	return &Compile{
+		proc: testutil.NewProcess(),
+		ncpu: system.GoMaxProcs(),
+	}
+}
+
 func TestCompile(t *testing.T) {
 	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
@@ -266,9 +274,7 @@ func GetFilePath() string {
 }
 
 func TestShuffleBlocksByHash(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -283,9 +289,7 @@ func TestShuffleBlocksByHash(t *testing.T) {
 }
 
 func TestShuffleBlocksByMoCtl(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -300,9 +304,7 @@ func TestShuffleBlocksByMoCtl(t *testing.T) {
 }
 
 func TestPutBlocksInCurrentCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -317,9 +319,7 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
