@@ -52,8 +52,14 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 		gs.start = 1
 	} else {
 		if startVec.GetType().Oid == types.T_int32 {
+			if startVec.GetNulls().Contains(uint64(nth)) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 start can't be NULL")
+			}
 			gs.start = int64(vector.GetFixedAtNoTypeCheck[int32](startVec, nth))
 		} else if startVec.GetType().Oid == types.T_int64 {
+			if startVec.GetNulls().Contains(uint64(nth)) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 start can't be NULL")
+			}
 			gs.start = vector.GetFixedAtNoTypeCheck[int64](startVec, nth)
 		} else {
 			return moerr.NewInvalidInput(proc.Ctx, "generate_series start must be int32 or int64")
@@ -62,8 +68,14 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 
 	// end vec is always not null
 	if endVec.GetType().Oid == types.T_int32 {
+		if endVec.GetNulls().Contains(uint64(nth)) {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 end can't be NULL")
+		}
 		gs.end = int64(vector.GetFixedAtNoTypeCheck[int32](endVec, nth))
 	} else if endVec.GetType().Oid == types.T_int64 {
+		if endVec.GetNulls().Contains(uint64(nth)) {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 end can't be NULL")
+		}
 		gs.end = vector.GetFixedAtNoTypeCheck[int64](endVec, nth)
 	} else {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
@@ -77,8 +89,14 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 		}
 	} else {
 		if stepVec.GetType().Oid == types.T_int32 {
+			if stepVec.GetNulls().Contains(uint64(nth)) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 step can't be NULL")
+			}
 			gs.step = int64(vector.GetFixedAtNoTypeCheck[int32](stepVec, nth))
 		} else if stepVec.GetType().Oid == types.T_int64 {
+			if stepVec.GetNulls().Contains(uint64(nth)) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 step can't be NULL")
+			}
 			gs.step = vector.GetFixedAtNoTypeCheck[int64](stepVec, nth)
 		} else {
 			return moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
@@ -96,6 +114,9 @@ func initDateTimeStep(gs *genDatetimeState,
 	var err error
 	if stepVec == nil || stepVec.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step using varchar")
+	}
+	if stepVec.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime step can't be NULL")
 	}
 	stepStr := stepVec.GetStringAt(nthRow)
 	stepStr = strings.TrimSpace(stepStr)
@@ -117,8 +138,14 @@ func initDateTimeStep(gs *genDatetimeState,
 }
 
 func initStartAndEndDatetime(gs *genDatetimeState,
-	startVec, endVec *vector.Vector, nthRow int) error {
+	proc *process.Process, startVec, endVec *vector.Vector, nthRow int) error {
+	if startVec.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime start can't be NULL")
+	}
 	gs.start = vector.GetFixedAtWithTypeCheck[types.Datetime](startVec, nthRow)
+	if endVec.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime end can't be NULL")
+	}
 	gs.end = vector.GetFixedAtWithTypeCheck[types.Datetime](endVec, nthRow)
 	gs.next = gs.start
 	return nil
@@ -128,9 +155,15 @@ func initStartAndEndDatetime(gs *genDatetimeState,
 // XXX: varchar type is always converted to datetime.  we should for example, support
 // timestamp time.
 func initStartAndEndVarChar(gs *genDatetimeState,
-	startVec, endVec *vector.Vector, nthRow int) error {
+	proc *process.Process, startVec, endVec *vector.Vector, nthRow int) error {
 	var err error
+	if startVec.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime start can't be NULL")
+	}
 	startStr := startVec.UnsafeGetStringAt(nthRow)
+	if endVec.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime end can't be NULL")
+	}
 	endStr := endVec.UnsafeGetStringAt(nthRow)
 	gs.scale = int32(findScale(startStr, endStr))
 	gs.start, err = types.ParseDatetime(startStr, gs.scale)
@@ -189,7 +222,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 			return err
 		}
 		// step has been handled, here pass in nil
-		if err = initStartAndEndDatetime(&g.dtState, startVec, endVec, nthRow); err != nil {
+		if err = initStartAndEndDatetime(&g.dtState, proc, startVec, endVec, nthRow); err != nil {
 			return err
 		}
 	case types.T_varchar:
@@ -198,7 +231,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 			return err
 		}
 		// convert varchar to datetime
-		if err = initStartAndEndVarChar(&g.dtState, startVec, endVec, nthRow); err != nil {
+		if err = initStartAndEndVarChar(&g.dtState, proc, startVec, endVec, nthRow); err != nil {
 			return err
 		}
 		// reset schema
