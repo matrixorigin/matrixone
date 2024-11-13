@@ -93,3 +93,4 @@ city;
 [unknown result because it is related to issue#20016]
 drop table sales_data;
 [unknown result because it is related to issue#20016]
+drop database cube_test;

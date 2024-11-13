@@ -94,3 +94,4 @@ order by
 
 drop table sales_data;
 -- @bvt:issue
+drop database cube_test;
