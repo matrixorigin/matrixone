@@ -642,6 +642,9 @@ func (e *Engine) BuildBlockReaders(
 			rds = append(rds, new(engine_util.EmptyReader))
 		}
 	}
+	if blkCnt == 0 {
+		return rds, nil
+	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
