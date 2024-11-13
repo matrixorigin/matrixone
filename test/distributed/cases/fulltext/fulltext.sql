@@ -322,5 +322,8 @@ select * from src where match(json1, json2) against('中文學習教材' in bool
 
 drop table src;
 
-
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+create fulltext index ftidx on t1 (b);
 
