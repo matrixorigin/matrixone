@@ -219,6 +219,21 @@ func TestConnCache(t *testing.T) {
 		})
 	})
 
+	t.Run("pop - nil auth, return err", func(t *testing.T) {
+		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+			c1, _ := net.Pipe()
+			mockConn1 := newMockServerConn(c1)
+			// mock server error
+			mockConn1.setReturnErr(context.DeadlineExceeded)
+			assert.True(t, cc.Push("k100", mockConn1))
+			assert.Equal(t, 1, cc.Count())
+
+			sc := cc.Pop("k100", 1, nil, nil)
+			assert.Nil(t, sc)
+			assert.Equal(t, 0, cc.Count())
+		})
+	})
+
 	t.Run("pop - pwd auth", func(t *testing.T) {
 		runTestWithNewConnCacheWithAuthConstructor(t, newPwdAuthenticator, func(cc ConnCache) {
 			c1, _ := net.Pipe()
