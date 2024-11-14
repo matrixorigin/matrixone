@@ -44,6 +44,8 @@ type ValueScan struct {
 type container struct {
 	// nowIdx indicates which data should send to next operator now.
 	nowIdx int
+	start  int
+	end    int
 }
 
 func init() {
@@ -92,6 +94,8 @@ func (valueScan *ValueScan) Release() {
 
 func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 	valueScan.runningCtx.nowIdx = 0
+	valueScan.runningCtx.start = 0
+	valueScan.runningCtx.end = 0
 	valueScan.doBatchClean(proc)
 	valueScan.ResetProjection(proc)
 }

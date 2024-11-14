@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -744,4 +745,10 @@ func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
 			getPartColsFromExpr(order.Expr, colNameMap)
 		}
 	}
+}
+
+func cleanHint(originSql string) string {
+	re := regexp.MustCompile(`/\*[^!].*?\*/`)
+	cleanSQL := re.ReplaceAllString(originSql, "")
+	return cleanSQL
 }

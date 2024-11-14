@@ -115,7 +115,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		tc.op.Free(proc, false, nil)
 	}
 
-	proc.GetFileService().Close()
+	proc.GetFileService().Close(proc.Ctx)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

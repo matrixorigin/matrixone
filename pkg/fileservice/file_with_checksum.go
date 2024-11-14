@@ -172,19 +172,11 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 		if n, err := f.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
 			putback.Put()
 			return n, err
-		} else {
-			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
-				c.FileService.FileWithChecksum.UnderlyingWrite.Add(int64(n))
-			}, f.perfCounterSets...)
 		}
 
 		if n, err := f.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
 			putback.Put()
 			return n, err
-		} else {
-			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
-				c.FileService.FileWithChecksum.UnderlyingWrite.Add(int64(n))
-			}, f.perfCounterSets...)
 		}
 
 		putback.Put()

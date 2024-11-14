@@ -115,6 +115,24 @@ func TestInsertS3PartitionTable(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestInsertHaveNull(t *testing.T) {
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := true
+
+	_, ctrl, proc := prepareTestCtx(t, true)
+	eng := prepareTestEng(ctrl)
+
+	batchs, _ := prepareTestInsertBatchs(proc.Mp(), 40, hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	pkNull := batchs[0].Vecs[0].GetNulls()
+	pkNull.Set(0)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+
+	runTestCases(t, proc, []*testCase{retCase})
+}
+
 func TestFlushS3Info(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false

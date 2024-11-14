@@ -28,4 +28,6 @@ func TestResourceController(t *testing.T) {
 	rc.refresh()
 	rc.limit = rc.using + 1
 	require.Equal(t, int64(1), rc.availableMem())
+
+	require.Panics(t, func() { rc.setMemLimit(0) })
 }

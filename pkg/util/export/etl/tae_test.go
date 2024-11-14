@@ -40,7 +40,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Nil(t, err)
 	ctx := context.TODO()
 	fs := testutil.NewSharedFS()
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
