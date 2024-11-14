@@ -207,7 +207,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &createAccount{
+		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AdminName:   "root",
@@ -7122,7 +7122,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7169,7 +7169,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7213,7 +7213,7 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
