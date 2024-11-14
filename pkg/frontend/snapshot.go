@@ -1609,7 +1609,18 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// restore to account
+		// 1.0 get new create Account id
+		var newAccountId uint32
+		newAccountId, err = getAccountId(ctx, bh, account.accountName)
+		if err != nil {
+			return err
+		}
 
+		// 2.0 restore droped account to new account
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId))
+		if err != nil {
+			return err
+		}
 	}
 
 	return err
@@ -1679,6 +1690,78 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context,
 	if err = deleteCurFkTables(ctx, ses.GetService(), bh, "", "", uint32(toAccountId)); err != nil {
 		return err
 	}
+	// get topo sorted tables with foreign key
+	var sortedFkTbls []string
+	var fkTableMap map[string]*tableInfo
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
+	if err != nil {
+		return err
+	}
+	// get foreign key table infos
+	fkTableMap, err = getTableInfoMap(ctx, ses.GetService(), bh, newSnapshot, "", "", sortedFkTbls)
+	if err != nil {
+		return err
+	}
+
+	// collect views and tables during table restoration
+	viewMap := make(map[string]*tableInfo)
+
+	// restore to account
+	if err = restoreToAccount(ctx,
+		ses.GetService(),
+		bh,
+		newSnapshot,
+		uint32(toAccountId),
+		fkTableMap,
+		viewMap,
+		snapshotTs,
+		uint32(toAccountId),
+		true,
+		subDbToRestore); err != nil {
+		return err
+	}
+
+	if len(fkTableMap) > 0 {
+		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, newSnapshot, sortedFkTbls, fkTableMap, uint32(toAccountId), snapshotTs); err != nil {
+			return err
+		}
+	}
+
+	if len(viewMap) > 0 {
+		if err = restoreViews(ctx, ses, bh, newSnapshot, viewMap, uint32(toAccountId)); err != nil {
+			return err
+		}
+	}
+
+	deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
+
+	// checks if the given context has been canceled.
+	if err = CancelCheck(ctx); err != nil {
+		return err
+	}
+	return
+}
+
+func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTs int64,
+	account accountRecord,
+	subDbToRestore map[string]*subDbRestoreRecord,
+	toAccountId uint64,
+) (err error) {
+
+	newSnapshot, err := insertSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, snapshotTs, toAccountId, account.accountName)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshotName, newSnapshot)
+		}
+	}()
+
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
