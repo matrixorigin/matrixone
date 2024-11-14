@@ -94,6 +94,7 @@ function run_tests(){
     logger "INF" "Ingore code coverage $(echo ${leave_out[@]}|tr " " "|")"
     local cover_profile='profile.raw'
     make cgo
+    set -o pipefail
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
         CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
