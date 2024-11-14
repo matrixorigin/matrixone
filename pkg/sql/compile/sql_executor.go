@@ -109,7 +109,7 @@ func (s *sqlExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	var res executor.Result
 	err := s.ExecTxn(
 		ctx,
@@ -130,7 +130,7 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
 		return err
@@ -219,7 +219,7 @@ func newTxnExecutor(
 	s *sqlExecutor,
 	opts executor.Options,
 ) (*txnExecutor, error) {
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
 		return nil, err
