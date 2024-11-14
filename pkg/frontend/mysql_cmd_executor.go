@@ -1218,6 +1218,7 @@ func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) err
 // which has been initialized.
 func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
+	var err error
 	create := &createAccount{
 		IfNotExists:  ca.IfNotExists,
 		IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
@@ -1236,10 +1237,22 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	return InitGeneralTenant(execCtx.reqCtx, ses.(*Session), create)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return InitGeneralTenant(execCtx.reqCtx, bh, ses.(*Session), create)
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
+	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -1253,7 +1266,18 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		return b.err
 	}
 
-	return doDropAccount(execCtx.reqCtx, ses.(*Session), drop)
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }
 
 // handleDropAccount drops a new user-level tenant
