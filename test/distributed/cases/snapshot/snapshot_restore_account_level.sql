@@ -634,3 +634,4 @@ drop account if exists test_account_01;
 drop account if exists test_account_02;
 -- @ignore:1
 show snapshots;
+select disable_fault_injection();

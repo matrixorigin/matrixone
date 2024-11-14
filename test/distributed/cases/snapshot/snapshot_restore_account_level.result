@@ -645,3 +645,6 @@ drop account if exists test_account_01;
 drop account if exists test_account_02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+select disable_fault_injection();
+disable_fault_injection()
+true
