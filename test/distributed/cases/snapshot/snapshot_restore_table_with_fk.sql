@@ -1,5 +1,3 @@
-select enable_fault_injection();
-select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
 create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 
 -- @session:id=2&user=acc1:admin1&password=test123
@@ -116,6 +114,6 @@ drop database fk_test2;
 
 select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop account acc1;
+select remove_fault_point('fj/debug/19524');
 -- @ignore:1
 show snapshots;
-select disable_fault_injection();

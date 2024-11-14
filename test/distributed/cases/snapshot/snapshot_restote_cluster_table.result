@@ -30,3 +30,9 @@ drop table if exists cluster_table_1;
 drop account if exists acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+select remove_fault_point('fj/debug/19787');
+remove_fault_point(fj/debug/19787)
+true
+select disable_fault_injection();
+disable_fault_injection()
+true

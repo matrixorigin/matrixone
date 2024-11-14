@@ -39,3 +39,7 @@ drop table if exists cluster_table_1;
 drop account if exists acc01;
 -- @ignore:1
 show snapshots;
+
+
+select remove_fault_point('fj/debug/19787');
+select disable_fault_injection();
