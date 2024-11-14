@@ -597,3 +597,11 @@ col1    col2
 1    2
 drop database db1;
 drop database db2;
+drop account if exists prepare_acc01;
+create account prepare_acc01 admin_name = 'test_prepare_account' identified by '111';
+create database db1;
+use db1;
+prepare stmt1x from 'select count(*) from system.statement_info limit 0';
+execute stmt1x;
+count(*)
+drop account prepare_acc01;
