@@ -455,17 +455,17 @@ func (mr *MockRelDataMockRecorder) AttachTombstones(tombstones interface{}) *gom
 }
 
 // BuildEmptyRelData mocks base method.
-func (m *MockRelData) BuildEmptyRelData() engine.RelData {
+func (m *MockRelData) BuildEmptyRelData(preAllocSize int) engine.RelData {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildEmptyRelData")
+	ret := m.ctrl.Call(m, "BuildEmptyRelData", preAllocSize)
 	ret0, _ := ret[0].(engine.RelData)
 	return ret0
 }
 
 // BuildEmptyRelData indicates an expected call of BuildEmptyRelData.
-func (mr *MockRelDataMockRecorder) BuildEmptyRelData() *gomock.Call {
+func (mr *MockRelDataMockRecorder) BuildEmptyRelData(preAllocSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildEmptyRelData", reflect.TypeOf((*MockRelData)(nil).BuildEmptyRelData))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildEmptyRelData", reflect.TypeOf((*MockRelData)(nil).BuildEmptyRelData), preAllocSize)
 }
 
 // DataCnt mocks base method.
@@ -780,6 +780,20 @@ func (mr *MockDataSourceMockRecorder) SetOrderBy(orderby interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOrderBy", reflect.TypeOf((*MockDataSource)(nil).SetOrderBy), orderby)
 }
 
+// String mocks base method.
+func (m *MockDataSource) String() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "String")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// String indicates an expected call of String.
+func (mr *MockDataSourceMockRecorder) String() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "String", reflect.TypeOf((*MockDataSource)(nil).String))
+}
+
 // MockRanges is a mock of Ranges interface.
 type MockRanges struct {
 	ctrl     *gomock.Controller
@@ -1017,18 +1031,18 @@ func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Ca
 }
 
 // BuildReaders mocks base method.
-func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
+func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BuildReaders indicates an expected call of BuildReaders.
-func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset, orderBy, policy interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
 }
 
 // BuildShardingReaders mocks base method.
@@ -1452,6 +1466,58 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 func (mr *MockRelationMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1)
+}
+
+// MockBaseReader is a mock of BaseReader interface.
+type MockBaseReader struct {
+	ctrl     *gomock.Controller
+	recorder *MockBaseReaderMockRecorder
+}
+
+// MockBaseReaderMockRecorder is the mock recorder for MockBaseReader.
+type MockBaseReaderMockRecorder struct {
+	mock *MockBaseReader
+}
+
+// NewMockBaseReader creates a new mock instance.
+func NewMockBaseReader(ctrl *gomock.Controller) *MockBaseReader {
+	mock := &MockBaseReader{ctrl: ctrl}
+	mock.recorder = &MockBaseReaderMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockBaseReader) EXPECT() *MockBaseReaderMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockBaseReader) Close() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Close")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockBaseReaderMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockBaseReader)(nil).Close))
+}
+
+// Read mocks base method.
+func (m *MockBaseReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 *batch.Batch) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Read", arg0, arg1, arg2, arg3, arg4)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Read indicates an expected call of Read.
+func (mr *MockBaseReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockBaseReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
 // MockReader is a mock of Reader interface.
