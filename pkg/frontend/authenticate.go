@@ -3593,10 +3593,7 @@ type dropAccount struct {
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3624,13 +3621,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
-		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
 		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
 		if rtnErr != nil {
@@ -7267,7 +7257,7 @@ type createAccount struct {
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca *createAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -7313,18 +7303,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	st.End()
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
 	createNewAccount := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
-		}
-
 		start1 := time.Now()
 		//USE the mo_catalog
 		// MOVE into txn, make sure only create ONE txn.
