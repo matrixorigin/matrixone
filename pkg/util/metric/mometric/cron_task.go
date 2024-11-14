@@ -507,6 +507,7 @@ func checkAndResetTaskLabels(
 	opts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
 	executor := sqlExecutor()
 	sql := getQueryCronTaskRecord()
+	logger.Info("query", zap.String("sql", sql))
 	result := executor.Query(ctx, sql, opts)
 
 	tasks := make([]task.CronTask, 0, 2)
@@ -584,6 +585,7 @@ checkL:
 			options,
 			t.ID,
 		)
+		logger.Info("query", zap.String("sql", sql))
 		err = executor.Exec(ctx, sql, opts)
 		if err != nil {
 			return err
