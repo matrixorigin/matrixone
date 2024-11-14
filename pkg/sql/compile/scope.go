@@ -667,7 +667,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	})
 
 	if s.NodeInfo.CNCNT > 1 {
-		if relData.DataCnt() < plan2.BlockThresholdForOneCN/2 {
+		if relData.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
 			logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
 				s.DataSource.TableDef.Name, relData.DataCnt(), s.DataSource.node.Stats.BlockNum)
 		}
