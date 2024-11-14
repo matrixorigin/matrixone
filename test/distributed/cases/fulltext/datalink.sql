@@ -21,6 +21,8 @@ insert into datasrc values (0, 'stage://ftstage/mo.pdf', 'file:///$resources/ful
 
 select id from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
 
+update datasrc set fpath='stage://ftstage/notexist.pdf' where id=0;
+
 drop table datasrc;
 
 drop stage ftstage;
