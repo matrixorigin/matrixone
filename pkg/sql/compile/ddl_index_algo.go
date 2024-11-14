@@ -119,7 +119,7 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, i
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuildV2(c, def, dbSource)
+	err := indexTableBuild(c, def, dbSource)
 	if err != nil {
 		return err
 	}
