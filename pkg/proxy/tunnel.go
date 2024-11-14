@@ -498,14 +498,14 @@ func (t *tunnel) Close() error {
 		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
-		if !t.connCacheEnabled && sc != nil {
-			_ = sc.Close()
-		}
-
-		// close the server connection
-		serverC := t.getServerConn()
-		if serverC != nil {
-			_ = serverC.Close()
+		if !t.connCacheEnabled {
+			// close the server connection
+			serverC := t.getServerConn()
+			if serverC != nil {
+				_ = serverC.Close()
+			} else if sc != nil {
+				_ = sc.Close()
+			}
 		}
 	})
 	return nil
