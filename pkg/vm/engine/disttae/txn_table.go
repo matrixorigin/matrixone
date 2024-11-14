@@ -571,10 +571,10 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
-	onRemoteCN bool,
+	policy engine.TombstoneApplyPolicy,
 ) (data engine.RelData, err error) {
 	var unCommittedObjs []objectio.ObjectStats
-	if !onRemoteCN {
+	if policy != engine.Policy_CheckCommittedOnly {
 		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
 	}
 	return tbl.doRanges(

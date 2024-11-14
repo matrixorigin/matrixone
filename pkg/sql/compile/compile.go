@@ -3998,6 +3998,11 @@ func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet, onRemoteCN bool) (engine.RelData, error) {
 
+	var policy engine.TombstoneApplyPolicy
+	if onRemoteCN {
+		policy = engine.Policy_CheckCommittedOnly
+	}
+
 	preAllocSize := 2
 	if !c.IsTpQuery() {
 		if len(blockFilterList) > 0 {
@@ -4008,7 +4013,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, onRemoteCN)
+	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -4022,7 +4027,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
@@ -4044,7 +4049,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
