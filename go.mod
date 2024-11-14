@@ -8,6 +8,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.1.4
 	github.com/K-Phoen/grabana v0.21.19
+	github.com/K-Phoen/sdk v0.12.3
 	github.com/KimMachineGun/automemlimit v0.6.0
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
@@ -92,7 +93,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/K-Phoen/sdk v0.12.3 // indirect
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
