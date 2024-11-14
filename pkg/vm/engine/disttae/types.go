@@ -173,6 +173,12 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
+func WithMoTableStats(conf MoTableStatsConfig) EngineOptions {
+	return func(e *Engine) {
+		e.config.statsConf = conf
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -191,6 +197,8 @@ type Engine struct {
 		insertEntryMaxCount int
 
 		cnTransferTxnLifespanThreshold time.Duration
+
+		statsConf MoTableStatsConfig
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.

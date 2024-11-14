@@ -130,7 +130,10 @@ type Config struct {
 		Type     EngineType           `toml:"type"`
 		Logstore options.LogstoreType `toml:"logstore"`
 
+		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
+
+		Stats disttae.MoTableStatsConfig `toml:"stats"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -287,8 +290,6 @@ type Config struct {
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
-
-	MoTableStats disttae.Config `toml:"mo-table-stats"`
 }
 
 func (c *Config) Validate() error {
