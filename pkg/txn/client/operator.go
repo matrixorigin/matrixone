@@ -288,6 +288,9 @@ func (tc *txnOperator) init(
 	txnMeta txn.TxnMeta,
 	options ...TxnOption,
 ) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
 	tc.initReset()
 	tc.initProtectedFields()
 
