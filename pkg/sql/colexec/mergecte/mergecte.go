@@ -16,7 +16,7 @@ package mergecte
 
 import (
 	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +38,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
 	ap.ctr.curNodeCnt = ap.ctr.nodeCnt
 	ap.ctr.status = sendInitial
+	ap.ctr.recursiveLever = 0
 	return nil
 }
 
@@ -90,6 +91,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			arg.ctr.curNodeCnt--
 			if arg.ctr.curNodeCnt == 0 {
 				arg.ctr.curNodeCnt = arg.ctr.nodeCnt
+				arg.ctr.recursiveLever++
+				if arg.ctr.recursiveLever > moDefaultRecursionMax {
+					result.Status = vm.ExecStop
+					return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
+				}
 				break
 			} else {
 				proc.PutBatch(arg.buf)

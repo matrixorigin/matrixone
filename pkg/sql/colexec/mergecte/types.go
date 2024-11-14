@@ -31,11 +31,16 @@ const (
 	sendRecursive = 2
 )
 
+const (
+	moDefaultRecursionMax = 100
+)
+
 type container struct {
 	colexec.ReceiverOperator
-	nodeCnt    int32
-	curNodeCnt int32
-	status     int32
+	nodeCnt        int32
+	curNodeCnt     int32
+	status         int32
+	recursiveLever int
 }
 
 type Argument struct {
