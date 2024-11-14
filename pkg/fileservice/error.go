@@ -98,4 +98,13 @@ func wrapSizeMismatchErr(p *error) {
 		httpBadLengthPattern.MatchString(str) {
 		*p = moerr.NewSizeNotMatchNoCtx("")
 	}
+
+}
+
+func isDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	str := err.Error()
+	return strings.Contains(str, "disk quota exceeded")
 }
