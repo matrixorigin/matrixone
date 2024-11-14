@@ -523,6 +523,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 
 	// delete the password records that exceed the password history
 	deleteNum := 0
+	canDeleteNum = min(canDeleteNum, int64(len(userPasswords)))
 	if canDeleteNum > 0 {
 		for i := 0; i < int(canDeleteNum); i++ {
 			// if password time exceeds the password history, delete the password record
