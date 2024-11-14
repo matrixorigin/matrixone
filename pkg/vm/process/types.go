@@ -121,7 +121,7 @@ type SessionInfo struct {
 	SeqDeleteKeys        []uint64
 	SeqAddValues         map[uint64]string
 	SeqLastValue         []string
-	SqlHelper            sqlHelper
+	SqlHelper            SQLHelper
 	Buf                  *buffer.Buffer
 	SourceInMemScanBatch []*kafka.Message
 	LogLevel             zapcore.Level
@@ -312,8 +312,9 @@ type Process struct {
 	Cancel context.CancelFunc
 }
 
-type sqlHelper interface {
+type SQLHelper interface {
 	GetCompilerContext() any
+	ExecSqlWithCtx(context.Context, string) ([][]interface{}, error)
 	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
