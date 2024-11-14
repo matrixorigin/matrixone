@@ -800,7 +800,7 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		ses.respr = &MysqlResp{
 			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
 		}
-		cReader.ses = ses
+		cReader.SetSession(ses)
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		err = cWriter.BeginPacket()
@@ -961,9 +961,8 @@ func TestConn_CheckAllowedPacketSize(t *testing.T) {
 		mysqlRrWr: &testMysqlWriter{mod: 1},
 	}
 
-	conn := &Conn{
-		ses: ses,
-	}
+	conn := &Conn{}
+	conn.SetSession(ses)
 	err := conn.CheckAllowedPacketSize(5)
 	assert.NotNil(t, err)
 }
