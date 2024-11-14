@@ -272,6 +272,7 @@ func (tbl *txnTableDelegate) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	onRemoteCN bool,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
@@ -283,6 +284,7 @@ func (tbl *txnTableDelegate) Ranges(
 			exprs,
 			preAllocSize,
 			txnOffset,
+			onRemoteCN,
 		)
 	}
 

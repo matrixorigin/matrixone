@@ -3996,7 +3996,7 @@ func collectTombstones(
 
 func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
-	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet) (engine.RelData, error) {
+	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet, onRemoteCN bool) (engine.RelData, error) {
 
 	preAllocSize := 2
 	if !c.IsTpQuery() {
@@ -4008,7 +4008,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset)
+	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, onRemoteCN)
 	if err != nil {
 		return nil, err
 	}
@@ -4022,7 +4022,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
 				if err != nil {
 					return nil, err
 				}
@@ -4044,7 +4044,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
 				if err != nil {
 					return nil, err
 				}
@@ -4177,7 +4177,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 
 		counterset := new(perfcounter.CounterSet)
-		relData, err = c.expandRanges(n, rel, db, ctx, newFilterExpr, counterset)
+		relData, err = c.expandRanges(n, rel, db, ctx, newFilterExpr, counterset, false)
 		if err != nil {
 			return nil, err
 		}
