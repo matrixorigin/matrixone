@@ -120,32 +120,12 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 		deleteBlockMap:      make([][]map[types.Blockid]*deleteBlockData, tableCount),
 	}
 
-	var thisUpdateCtxs []*MultiUpdateCtx
-	var mainUpdateCtx *MultiUpdateCtx
 	for _, updateCtx := range update.MultiUpdateCtx {
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-		if tableType == UpdateMainTable {
-			mainUpdateCtx = updateCtx
-			break
-		}
+		appendCfgToWriter(writer, updateCtx.TableDef)
 	}
-	for _, updateCtx := range update.MultiUpdateCtx {
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-		if tableType != UpdateMainTable {
-			thisUpdateCtxs = append(thisUpdateCtxs, updateCtx)
-			appendCfgToWriter(writer, updateCtx.TableDef)
-		}
-	}
-	// main table allways at the end for s3writer.updateCtxs
-	// because main table will write to s3 at last
-	if mainUpdateCtx != nil {
-		// only insert into hidden table
-		thisUpdateCtxs = append(thisUpdateCtxs, mainUpdateCtx)
-		appendCfgToWriter(writer, mainUpdateCtx.TableDef)
-	}
-	writer.updateCtxs = thisUpdateCtxs
+	writer.updateCtxs = update.MultiUpdateCtx
 
-	upCtx := thisUpdateCtxs[len(thisUpdateCtxs)-1]
+	upCtx := writer.updateCtxs[len(writer.updateCtxs)-1]
 	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
 		//update
 		writer.action = actionUpdate
