@@ -618,14 +618,14 @@ func (mp *MysqlProtocolImpl) Close() {
 		mp.binaryNullBuffer = nil
 	}
 	mp.ses = nil
-	mp.tcpConn.ses = nil
+	mp.tcpConn.SetSession(nil)
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.ses = ses
-	mp.tcpConn.ses = ses
+	mp.tcpConn.SetSession(ses)
 }
 
 // handshake response 41
@@ -1434,7 +1434,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
-			if err = ses.InitSystemVariables(ctx); err != nil {
+			bh := ses.GetBackgroundExec(ctx)
+			defer bh.Close()
+			if err = ses.InitSystemVariables(ctx, bh); err != nil {
 				return err
 			}
 		} else {
