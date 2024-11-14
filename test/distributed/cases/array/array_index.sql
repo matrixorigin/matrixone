@@ -50,6 +50,7 @@ insert into tbl values(7, "[120,50,70]");
 insert into tbl values(8, "[130,40,90]");
 create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
+show index from tbl where Key_name = 'idx1';
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
