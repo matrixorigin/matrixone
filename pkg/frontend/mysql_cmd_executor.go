@@ -1282,7 +1282,6 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 
 // handleDropAccount drops a new user-level tenant
 func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, proc *process.Process) error {
-	var err error
 	aa := &alterAccount{
 		IfExists:     st.IfExists,
 		StatusOption: st.StatusOption,
@@ -1307,14 +1306,6 @@ func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, 
 
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doAlterAccount(execCtx.reqCtx, ses.(*Session), aa)
 }
