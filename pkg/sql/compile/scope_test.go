@@ -129,9 +129,7 @@ func checkScopeRoot(t *testing.T, s *Scope) {
 }
 
 func TestScopeSerialization2(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
@@ -264,9 +262,7 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
@@ -316,9 +312,7 @@ func TestNewParallelScope(t *testing.T) {
 }
 
 func TestCompileExternValueScan(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -338,9 +332,7 @@ func TestCompileExternValueScan(t *testing.T) {
 }
 
 func TestCompileExternScanParallelWrite(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -361,9 +353,7 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 }
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN

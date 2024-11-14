@@ -7418,7 +7418,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
 
-	_ = ses.InitSystemVariables(ctx)
+	_ = ses.InitSystemVariables(ctx, nil)
 
 	rm, _ := NewRoutineManager(ctx, "")
 	rm.baseService = new(MockBaseService)
@@ -10936,6 +10936,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
+		ses.GetTxnHandler().txnOp = newTestTxnOp()
 
 		//no result set
 		bh.sql2result["begin;"] = nil
