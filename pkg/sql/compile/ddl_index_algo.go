@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,6 +54,11 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
 	err := c.runSql(insertSQL)
 	if err != nil {
+		c.proc.Error(c.proc.Ctx, "Insert data into the index table",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", indexDef.GetIndexTableName()),
+			zap.Error(err),
+		)
 		return err
 	}
 	return nil
@@ -89,6 +96,11 @@ func (s *Scope) handleMasterIndexTable(c *Compile, dbSource engine.Database,
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
 		if err != nil {
+			c.proc.Error(c.proc.Ctx, "Insert data into the index table",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", indexDef.GetIndexTableName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -107,7 +119,7 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, i
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, def, dbSource)
+	err := indexTableBuildV2(c, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -116,6 +128,11 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, i
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
 		if err != nil {
+			c.proc.Error(c.proc.Ctx, "Insert data into the index table",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", def.GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
