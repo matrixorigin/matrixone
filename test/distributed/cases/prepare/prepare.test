@@ -452,3 +452,17 @@ use db2;
 execute s_pre;
 drop database db1;
 drop database db2;
+
+
+drop account if exists prepare_acc01;
+create account prepare_acc01 admin_name = 'test_prepare_account' identified by '111';
+
+-- @session:id=2&user=prepare_acc01:test_prepare_account&password=111
+create database db1;
+use db1;
+prepare stmt1x from 'select count(*) from system.statement_info limit 0';
+execute stmt1x;
+
+-- @session
+
+drop account prepare_acc01;
