@@ -139,6 +139,12 @@ func getNspFromBoolVector(v *vector.Vector) *nulls.Nulls {
 	return nsp
 }
 
+// isOnlyOneBlock return true if only one block to save the result.
+// this can help we reduce to call getResultRealIndex, because the x is always 0.
+func (r *optSplitResult) isOnlyOneBlock() bool {
+	return len(r.resultList) == 1
+}
+
 func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
 	x = src / r.optInformation.eachSplitCapacity
 	y = src % r.optInformation.eachSplitCapacity
