@@ -1304,9 +1304,6 @@ func handleAlterAccount(ses FeSession, execCtx *ExecCtx, st *tree.AlterAccount, 
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
-	defer bh.Close()
-
 	return doAlterAccount(execCtx.reqCtx, ses.(*Session), aa)
 }
 
