@@ -98,8 +98,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 	defer cancel()
 	err := e.cnSched.sendMergeTask(ctx, cntask)
 	if err != nil {
-		logutil.Info(
-			"MergeExecutorError",
+		logutil.Info("MergeExecutorError",
 			common.OperationField("send-cn-task"),
 			common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
 			common.AnyField("error", err),

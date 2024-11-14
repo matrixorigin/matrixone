@@ -107,6 +107,8 @@ func TestExecutorCNMerge(t *testing.T) {
 	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
 	require.NotEmpty(t, cnScheduler.activeObjsString())
 
+	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
+
 	executor.cnSched.prune(0, 0)
 	executor.cnSched.prune(0, time.Hour)
 }
