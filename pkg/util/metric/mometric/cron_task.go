@@ -586,11 +586,11 @@ checkL:
 		}
 
 		sql = fmt.Sprintf(
-			"update mo_task.sys_cron_task set task_metadata_context='%s' where cron_task_id=%d",
+			"update mo_task.sys_cron_task set task_metadata_option='%s' where cron_task_id=%d",
 			options,
 			t.ID,
 		)
-		logger.Info("query", zap.String("sql", sql))
+		logger.Info("query", zap.String("sql", sql), zap.ByteString("options", options))
 		err = executor.Exec(ctx, sql, opts)
 		if err != nil {
 			return false, err
