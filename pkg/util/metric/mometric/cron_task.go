@@ -184,6 +184,7 @@ func CalculateStorageUsage(
 	service string,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
+	var restart bool
 	var account string
 	var sizeMB, snapshotSizeMB, objectCount float64
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
@@ -202,7 +203,11 @@ func CalculateStorageUsage(
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
 	}()
 
-	err = checkAndResetTaskLabels(ctx, logger, service, sqlExecutor)
+	restart, err = checkAndResetTaskLabels(ctx, logger, service, sqlExecutor)
+	if err != nil || restart {
+		logger.Info("checkAndResetTaskLabels", zap.Error(err), zap.Bool("need-restart", restart))
+		return err
+	}
 
 	// init metric value
 	v2.GetTraceCheckStorageUsageAllCounter().Add(0)
@@ -482,12 +487,7 @@ func getQueryCronTaskRecord() string {
 	)
 }
 
-func checkAndResetTaskLabels(
-	ctx context.Context,
-	logger *log.MOLogger,
-	service string,
-	sqlExecutor func() ie.InternalExecutor,
-) (err error) {
+func checkAndResetTaskLabels(ctx context.Context, logger *log.MOLogger, service string, sqlExecutor func() ie.InternalExecutor) (restart bool, err error) {
 
 	var reset = false
 	var labels = map[string]string{}
@@ -501,7 +501,7 @@ func checkAndResetTaskLabels(
 
 	if !reset {
 		logger.Info("skip reset task labels")
-		return nil
+		return false, nil
 	}
 
 	opts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
@@ -515,7 +515,7 @@ func checkAndResetTaskLabels(
 	cnt := result.RowCount()
 	if cnt == 0 {
 		logger.Warn("got empty sys_cron_task", zap.String("sql", sql))
-		return moerr.NewInternalErrorf(ctx, "ResetTaskLabels: got empty sys_cron_task")
+		return false, moerr.NewInternalErrorf(ctx, "ResetTaskLabels: got empty sys_cron_task")
 	}
 	logger.Debug("fetch sys_cron_task", zap.Uint64("cnt", cnt))
 
@@ -531,20 +531,20 @@ func checkAndResetTaskLabels(
 		var options string
 		t.ID, err = result.GetUint64(ctx, rowIdx, idxCronTaskId)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		t.Metadata.ID, err = result.GetString(ctx, rowIdx, idxTaskMetadataId)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		options, err = result.GetString(ctx, rowIdx, idxTaskMetadataOption)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err = json.Unmarshal([]byte(options), &t.Metadata.Options); err != nil {
-			return err
+			return false, err
 		}
 
 		tasks = append(tasks, t)
@@ -565,6 +565,11 @@ checkL:
 		}
 	}
 
+	if len(dstTask) == 0 {
+		logger.Info("all task label ok", zap.Any("labels", labels))
+		return false, nil
+	}
+
 	// update task
 	for _, t := range dstTask {
 		var options []byte
@@ -577,7 +582,7 @@ checkL:
 
 		options, err = json.Marshal(t.Metadata.Options)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		sql = fmt.Sprintf(
@@ -588,9 +593,9 @@ checkL:
 		logger.Info("query", zap.String("sql", sql))
 		err = executor.Exec(ctx, sql, opts)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 
-	return nil
+	return true, nil
 }

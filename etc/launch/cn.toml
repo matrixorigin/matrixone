@@ -12,3 +12,16 @@ port-base = 18000
 check-fraction = 65536
 enable-metrics = true
 
+[observability.label-selector]
+key1 = "value1"
+key2 = "value2"
+
+[observability.task-label]
+key1 = "value1"
+key2 = "value2"
+
+[observability]
+reset-task-label = true
+
+[cn.frontend]
+proxy-enabled = true
