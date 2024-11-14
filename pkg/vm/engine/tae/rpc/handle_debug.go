@@ -218,7 +218,7 @@ func (h *Handle) HandleGetChangedTableList(
 	from := types.TimestampToTS(*req.From)
 	now := types.BuildTS(time.Now().UnixNano(), 0)
 
-	fmt.Println("handleGetChangedTableList", from.ToString(), req.Limit)
+	//fmt.Println("handleGetChangedTableList", from.ToString(), req.Limit)
 	var (
 		err     error
 		dbEntry *catalog2.DBEntry
@@ -232,7 +232,7 @@ func (h *Handle) HandleGetChangedTableList(
 	}
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
-	fmt.Println("handleGetChangedTableList-ckps", len(ckps))
+	//fmt.Println("handleGetChangedTableList-ckps", len(ckps))
 	var newFrom = from
 	for i := 0; i < len(ckps); i++ {
 		if ckps[i] == nil {
@@ -301,7 +301,7 @@ func (h *Handle) HandleGetChangedTableList(
 		}
 	}
 
-	fmt.Println("handleGetChangedTableList-ckps-done", len(resp.TableIds), newFrom.ToString())
+	//fmt.Println("handleGetChangedTableList-ckps-done", len(resp.TableIds), newFrom.ToString())
 
 	if len(resp.TableIds) >= int(req.Limit) {
 		tt := newFrom.ToTimestamp()
@@ -340,7 +340,7 @@ func (h *Handle) HandleGetChangedTableList(
 	tt := now.ToTimestamp()
 	resp.Newest = &tt
 
-	fmt.Println("handleGetChangedTableList-done", len(resp.TableIds), now.ToString())
+	//fmt.Println("handleGetChangedTableList-done", len(resp.TableIds), now.ToString())
 	return nil, nil
 }
 

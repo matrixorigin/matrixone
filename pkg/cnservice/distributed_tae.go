@@ -74,6 +74,8 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
+		disttae.WithMoTableStats(
+			s.cfg.Engine.Stats),
 	)
 	pu.StorageEngine = s.storeEngine
 
