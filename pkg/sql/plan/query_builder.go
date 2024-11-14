@@ -2255,13 +2255,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		ctx.binder = NewWhereBinder(builder, ctx)
-		if !ctx.isTryBindingCTE {
-			if ctx.initSelect {
-				clause.Exprs = append(clause.Exprs, makeZeroRecursiveLevel())
-			} else if ctx.recSelect {
-				clause.Exprs = append(clause.Exprs, makePlusRecursiveLevel(ctx.cteName, ctx.lower))
-			}
-		}
 		// unfold stars and generate headings
 		selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...)
 		if err != nil {
@@ -2299,21 +2292,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		// rewrite right join to left join
 		builder.rewriteRightJoinToLeftJoin(nodeID)
 
-		if !ctx.isTryBindingCTE && ctx.recSelect {
-			f := &tree.FuncExpr{
-				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moCheckRecursionLevelFun)),
-				Exprs: tree.Exprs{tree.NewComparisonExpr(
-					tree.LESS_THAN,
-					tree.NewUnresolvedName(tree.NewCStr(ctx.cteName, ctx.lower), tree.NewCStr(moRecursiveLevelCol, 1)),
-					tree.NewNumValWithType(constant.MakeInt64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64),
-				)},
-			}
-			if clause.Where != nil {
-				clause.Where = &tree.Where{Type: tree.AstWhere, Expr: tree.NewAndExpr(clause.Where.Expr, f)}
-			} else {
-				clause.Where = &tree.Where{Type: tree.AstWhere, Expr: f}
-			}
-		}
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, NoAlias, ctx)
 			if err != nil {
@@ -2976,9 +2954,6 @@ func appendSelectList(
 				return nil, err
 			}
 			for i, name := range names {
-				if ctx.finalSelect && name == moRecursiveLevelCol {
-					continue
-				}
 				selectList = append(selectList, cols[i])
 				ctx.headings = append(ctx.headings, name)
 			}
@@ -3413,9 +3388,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					initSourceStep := int32(len(builder.qry.Steps))
 					recursiveSteps := make([]int32, len(stmts))
 					recursiveNodeIDs := make([]int32, len(stmts))
-					if len(cteRef.ast.Name.Cols) > 0 {
-						cteRef.ast.Name.Cols = append(cteRef.ast.Name.Cols, moRecursiveLevelCol)
-					}
 
 					for i, r := range stmts {
 						subCtx := NewBindContext(builder, ctx)
