@@ -356,8 +356,12 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
 	for _, obj := range preparePlan.GetSchemas() {
+		accountId := ses.GetAccountId()
+		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
+			accountId = uint32(sysAccountID)
+		}
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  ses.GetAccountId(),
+			AccountId:  accountId,
 			DatabaseId: uint64(obj.Db),
 			Name:       obj.ObjName,
 			Version:    uint32(obj.Server),
