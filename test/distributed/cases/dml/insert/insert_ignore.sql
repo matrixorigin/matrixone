@@ -20,12 +20,10 @@ insert ignore into insert_ignore_02 values(NULL,44.56);
 select * from insert_ignore_02;
 
 -- insert ignore secondary key
--- @bvt:issue#15365
 create table insert_ignore_03(c1 int auto_increment primary key,c2 int,key(c2));
 insert into insert_ignore_03(c2) values(2),(2),(5),(10),(12),(NULL);
 insert ignore into insert_ignore_03(c2) values(7),(2),(5),(10),(12),(NULL);
 select * from insert_ignore_03;
--- @bvt:issue
 -- insert ignore not null and default constraint
 create table insert_ignore_04 (product_id INT NOT NULL AUTO_INCREMENT,product_name VARCHAR(255) NOT NULL,quantity_in_stock INT DEFAULT 0,price DECIMAL(10, 2) NOT NULL,PRIMARY KEY (product_id));
 insert ignore into insert_ignore_04(product_name, price) VALUES('Laptop', 1200.00),('Monitor', 150.00),('Keyboard', NULL),('Mouse', 15.00);
