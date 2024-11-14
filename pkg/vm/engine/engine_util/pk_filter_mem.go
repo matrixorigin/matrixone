@@ -17,6 +17,7 @@ package engine_util
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -216,10 +217,11 @@ func (f *MemPKFilter) Must() bool {
 
 func (f *MemPKFilter) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(
-		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, f.packed, len(f.packed),
-		))
+	buf.WriteString(fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v vals: [", f.op, f.isVec, f.isValid))
+	for x := range f.packed {
+		buf.WriteString(fmt.Sprintf("%x, ", f.packed[x]))
+	}
+	buf.WriteString(fmt.Sprintf("][%d]}", len(f.packed)))
 	return buf.String()
 }
 

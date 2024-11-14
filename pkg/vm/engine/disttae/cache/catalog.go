@@ -392,7 +392,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		Ts:         types.MaxTs().ToTimestamp(), // get the latest version
 	}
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.Name != qry.Name {
+		if item.AccountId != qry.AccountId || item.DatabaseId != qry.DatabaseId || item.Name != qry.Name {
 			return false
 		}
 
