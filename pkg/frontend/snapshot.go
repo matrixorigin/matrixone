@@ -70,7 +70,7 @@ var (
 
 	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
 
-	getRestoreDropedAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_id not in (select account_id from mo_catalog.mo_account) ORDER BY account_id ASC;"
+	getRestoreDropedAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
 	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
@@ -1586,8 +1586,72 @@ func restoreToCluster(ctx context.Context,
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}
 
+	// restore droped accounts
+	currentExistsAccount := make(map[string]bool)
+	for _, account := range accounts {
+		currentExistsAccount[account.accountName] = true
+	}
+	var dropedAccounts []accountRecord
+	dropedAccounts, err = getRestoreDropedAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
+	if err != nil {
+		return err
+	}
+	for _, account := range dropedAccounts {
+		if _, ok := currentExistsAccount[account.accountName]; ok {
+			continue
+		}
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore droped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+
+		// create dropped account
+		err = createDroppedAccount(ctx, ses, bh, snapshotName, snapshotTs, account)
+		if err != nil {
+			return err
+		}
+
+		// restore to account
+
+	}
+
 	return err
 
+}
+
+func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64, account accountRecord) (err error) {
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+
+	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to create account: %v, create account sql: %s", snapshotName, account.accountName, createAccountSql))
+
+	var ast []tree.Statement
+	ast, err = mysql.Parse(ctx, createAccountSql, 1)
+	if err != nil {
+		return
+	}
+
+	ca := ast[0].(*tree.CreateAccount)
+	stmt :=
+		&createAccount{
+			IfNotExists:  ca.IfNotExists,
+			IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
+			StatusOption: ca.StatusOption,
+			Comment:      ca.Comment,
+		}
+	b := strParamBinder{
+		ctx:    ctx,
+		params: ses.proc.GetPrepareParams(),
+	}
+	stmt.Name = b.bind(ca.Name)
+	stmt.AdminName = b.bind(ca.AuthOption.AdminName)
+	stmt.IdentStr = b.bindIdentStr(&ca.AuthOption.IdentifiedType)
+	if b.err != nil {
+		return b.err
+	}
+
+	err = InitGeneralTenant(ctx, bh, ses, stmt)
+	if err != nil {
+		return
+	}
+	return
 }
 
 func restoreAccountUsingClusterSnapshot(ctx context.Context,
@@ -1763,7 +1827,7 @@ func getRestoreDropedAccounts(
 				return nil, err
 			}
 
-			account.comments, err = erArray[0].GetString(ctx, i, 4)
+			account.comments, err = erArray[0].GetString(ctx, i, 3)
 			if err != nil {
 				return nil, err
 			}
@@ -1946,10 +2010,11 @@ func createPub(
 
 	for _, pubInfo := range pubInfos {
 		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
-		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
+		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
+		if err != nil {
 			return
 		}
-		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
 
 		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
 			return

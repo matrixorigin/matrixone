@@ -1,0 +1,27 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111' comment 'test_comment';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111'  comment 'test_comment';
+drop snapshot if exists snapshot_01;
+create snapshot snapshot_01 for cluster;
+drop account if exists acc01;
+drop account if exists acc02;
+drop account if exists acc03;
+drop account if exists acc04;
+restore cluster from snapshot snapshot_01;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-11-14 10:21:09    open    null    5    67    0.0    0.0    
+acc02    test_account    2024-11-14 10:21:09    open    null    5    67    0.0    0.0    test_comment
+acc03    test_account    2024-11-14 10:21:10    open    null    5    67    0.0    0.0    
+acc04    test_account    2024-11-14 10:21:10    open    null    5    67    0.0    0.0    test_comment
+sys    root    2024-11-14 09:35:33    open    null    7    99    2.184028    0.0    system account
+drop account if exists acc01;
+drop account if exists acc02;
+drop account if exists acc03;
+drop account if exists acc04;
+drop snapshot if exists snapshot_01;
