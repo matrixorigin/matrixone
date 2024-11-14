@@ -70,6 +70,8 @@ var (
 
 	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
 
+	getRestoreDropedAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_id not in (select account_id from mo_catalog.mo_account) ORDER BY account_id ASC;"
+
 	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
@@ -139,6 +141,9 @@ type tableInfo struct {
 type accountRecord struct {
 	accountName string
 	accountId   uint64
+	adminName   string
+	comments    string
+	pwd         string
 }
 
 type subDbRestoreRecord struct {
@@ -1695,6 +1700,78 @@ func getRestoreAccounts(ctx context.Context,
 			}
 			accounts = append(accounts, account)
 			getLogger(sid).Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+
+		}
+	}
+	return
+}
+
+func makeCreateAccountSqlByAccountRecord(record accountRecord) string {
+	baseSQL := fmt.Sprintf(
+		"create account IF NOT EXISTS %s ADMIN_NAME '%s' IDENTIFIED BY '%s'",
+		record.accountName,
+		record.adminName,
+		record.pwd,
+	)
+
+	if record.comments != "" {
+		baseSQL += fmt.Sprintf(" comment '%s'", record.comments)
+	}
+
+	baseSQL += ";"
+
+	return baseSQL
+}
+
+func getRestoreDropedAccounts(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTs int64,
+) (accounts []accountRecord, err error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to get restore droped accounts", snapshotName))
+	var erArray []ExecResult
+
+	sql := fmt.Sprintf(getRestoreDropedAccountsFmt, snapshotTs)
+	getLogger(sid).Info(fmt.Sprintf("[%s] get restore droped accounts sql: %s", snapshotName, sql))
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			var account accountRecord
+			account.accountId, err = erArray[0].GetUint64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			account.accountName, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+			account.adminName, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+
+			account.comments, err = erArray[0].GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+
+			account.pwd = "111"
+
+			accounts = append(accounts, account)
+			getLogger(sid).Info(fmt.Sprintf("[%s] get droped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 		}
 	}
