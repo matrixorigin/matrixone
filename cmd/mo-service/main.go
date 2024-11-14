@@ -441,6 +441,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 
 	selector := clusterservice.NewSelector().SelectByLabel(SV.LabelSelector, clusterservice.Contain)
 	mustGetRuntime(cfg).SetGlobalVariables(runtime.BackgroundCNSelector, selector)
+	mustGetRuntime(cfg).SetGlobalVariables(mometric.MOMetricResetTaskLabel, SV.ResetTaskLabel)
+	mustGetRuntime(cfg).SetGlobalVariables(mometric.MOMetricTaskLabel, SV.TaskLabel)
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)

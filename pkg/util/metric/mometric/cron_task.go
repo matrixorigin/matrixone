@@ -457,8 +457,8 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 }
 
 const (
-	MOMetricResetTaskLabels = "mo_metric_reset_task_labels"
-	MOMetricTaskLabels      = "mo_metric_task_labels"
+	MOMetricResetTaskLabel = "mo_metric_reset_task_labels"
+	MOMetricTaskLabel      = "mo_metric_task_labels"
 )
 
 const (
@@ -492,10 +492,10 @@ func checkAndResetTaskLabels(
 	var reset = false
 	var labels = map[string]string{}
 
-	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricResetTaskLabels); exist {
+	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricResetTaskLabel); exist {
 		reset = s.(bool)
 	}
-	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricTaskLabels); exist {
+	if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MOMetricTaskLabel); exist {
 		labels = s.(map[string]string)
 	}
 
