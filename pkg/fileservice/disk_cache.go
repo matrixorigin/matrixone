@@ -48,7 +48,8 @@ type DiskCache struct {
 		m map[string]bool
 	}
 
-	cache *fifocache.Cache[string, struct{}]
+	cache        *fifocache.Cache[string, struct{}]
+	capacityFunc fscache.CapacityFunc
 }
 
 func NewDiskCache(
@@ -89,6 +90,7 @@ func NewDiskCache(
 		cacheDataAllocator: cacheDataAllocator,
 		perfCounterSets:    perfCounterSets,
 
+		capacityFunc: capacityFunc,
 		cache: fifocache.New(
 
 			capacityFunc,
@@ -222,7 +224,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	)
 
 	done := make(chan int64, 1)
-	d.cache.Evict(ctx, done)
+	d.cache.Evict(ctx, done, 0)
 	target := <-done
 	logutil.Info("disk cache evict done",
 		zap.Any("target", target),
@@ -433,9 +435,6 @@ func (d *DiskCache) writeFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
-	// do eviction before write
-	d.cache.Evict(ctx, nil)
-
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -456,6 +455,13 @@ func (d *DiskCache) writeFile(
 				zap.Any("path", diskPath),
 			)
 			err = nil
+		}
+	}()
+
+	// evict if disk is full
+	defer func() {
+		if isDiskFull(err) {
+			d.cache.ForceEvict(ctx, d.capacityFunc()/10)
 		}
 	}()
 
@@ -497,6 +503,18 @@ func (d *DiskCache) writeFile(
 		return false, err
 	}
 	defer from.Close()
+
+	// do eviction before write
+	forceEvict := int64(0)
+	if file, ok := from.(*os.File); ok {
+		// get file size
+		info, err := file.Stat()
+		if err == nil {
+			forceEvict = fileSize(info)
+		}
+	}
+	d.cache.Evict(ctx, nil, forceEvict)
+
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
@@ -509,12 +527,11 @@ func (d *DiskCache) writeFile(
 		return false, err
 	}
 
-	// set cache
 	stat, err = f.Stat()
 	if err != nil {
 		return false, err
 	}
-	d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+	size := fileSize(stat)
 
 	if err := f.Close(); err != nil {
 		return false, err
@@ -525,6 +542,8 @@ func (d *DiskCache) writeFile(
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
 	)
+
+	d.cache.Set(ctx, diskPath, struct{}{}, size)
 
 	numWrite++
 
@@ -639,7 +658,7 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 }
 
 func (d *DiskCache) Evict(ctx context.Context, done chan int64) {
-	d.cache.Evict(ctx, done)
+	d.cache.Evict(ctx, done, 0)
 }
 
 func fileSize(info fs.FileInfo) int64 {
