@@ -83,7 +83,7 @@ type optSplitResult struct {
 	emptyList  []*vector.Vector
 	nowIdx1    int
 
-	// for easy get / set from emptyList.
+	// for easy get from / set to emptyList.
 	bsFromEmptyList [][]bool
 
 	// for easy get / set result and empty from outer.
@@ -149,6 +149,10 @@ func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
 	x = src / r.optInformation.eachSplitCapacity
 	y = src % r.optInformation.eachSplitCapacity
 	return x, y
+}
+
+func (r *optSplitResult) updateNextAccessIdx(idx int) {
+	r.accessIdx1, r.accessIdx2 = r.getResultRealIndex(idx)
 }
 
 func (r *optSplitResult) isGroupEmpty(x, y int) bool {
@@ -325,18 +329,22 @@ func (r *optSplitResult) preExtend(more int) (err error) {
 
 // resExtend obtains memory of length more from the current position for use,
 // while also altering the memory usage indicators and other structure related.
-func (r *optSplitResult) resExtend(more int) (err error) {
-	oldNowIdx1 := r.nowIdx1
+func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, err error) {
+	startX = r.nowIdx1
+	startY = r.resultList[startX].Length()
 
 	if err = r.extendResultPurely(more); err != nil {
-		return err
+		return -1, -1, -1, -1, err
 	}
 
-	r.bsFromEmptyList[oldNowIdx1] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[oldNowIdx1])
-	for i := oldNowIdx1 + 1; i < r.nowIdx1; i++ {
+	endX = r.nowIdx1
+	endY = r.resultList[startY].Length()
+	r.bsFromEmptyList[startX] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[startX])
+	for i := startX + 1; i <= r.nowIdx1; i++ {
 		r.bsFromEmptyList = append(r.bsFromEmptyList, vector.MustFixedColNoTypeCheck[bool](r.emptyList[i]))
 	}
-	return nil
+	setValueFromX1Y1ToX2Y2(r.bsFromEmptyList, startX, startY, endX, endY, true)
+	return startX, startY, endX, endY, nil
 }
 
 func (r *optSplitResult) free() {
@@ -358,4 +366,30 @@ func (r *optSplitResult) free() {
 	}
 	r.resultList = nil
 	r.emptyList = nil
+}
+
+func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
+	src [][]T, x1, y1 int, x2, y2 int, value T) {
+
+	if x1 == x2 {
+		for y1 < y2 {
+			src[x1][y1] = value
+			y1++
+		}
+		return
+	}
+
+	lengthLimitation := len(src[x1])
+	for i := y1; i < lengthLimitation; i++ {
+		src[x1][i] = value
+	}
+	for x := x1 + 1; x < x2; x++ {
+		for i := range src[x] {
+			src[x][i] = value
+		}
+	}
+	for i := 0; i < y2; i++ {
+		src[x2][i] = value
+	}
+	return
 }
