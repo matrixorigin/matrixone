@@ -17,8 +17,7 @@ key1 = "value1"
 key2 = "value2"
 
 [observability.task-label]
-key1 = "value1"
-key2 = "value2"
+key3 = "value3"
 
 [observability]
 reset-task-label = true
