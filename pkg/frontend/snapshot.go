@@ -66,8 +66,6 @@ var (
 
 	restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
 
-	getPubInfoWithSnapshotFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {snapshot = '%s'} where database_name = '%s';`
-
 	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
 
 	getSubsSqlFmt = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
@@ -432,14 +430,16 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
-			return err
+			return
 		}
 
-		if len(subDbToRestore) > 0 {
-			for _, subDb := range subDbToRestore {
-				if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
-					return err
-				}
+		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName); err != nil {
+			return
+		}
+
+		for _, subDb := range subDbToRestore {
+			if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
+				return err
 			}
 		}
 		return
@@ -841,13 +841,6 @@ func restoreToDatabaseOrTable(
 		}
 
 		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
-			return
-		}
-	}
-
-	if !restoreToTbl {
-		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", snapshotName, dbName))
-		if err = createPub(ctx, sid, bh, snapshotName, dbName, toAccountId); err != nil {
 			return
 		}
 	}
@@ -1832,33 +1825,31 @@ func checkDatabaseIsMaster(
 	return false, nil
 }
 
-// createPub create pub after the database is created
-func createPub(
+// only used in restore cluster
+func restorePubsWithSnapshotName(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
-	snapshotName,
-	dbName string,
-	toAccountId uint32) (err error) {
-	// read pub info from mo_pubs
-	sql := fmt.Sprintf(getPubInfoWithSnapshotFormat, snapshotName, dbName)
-	bh.ClearExecResultSet()
-	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", snapshotName, sql))
+	snapshotName string,
+) (err error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restorePub with snapshot", snapshotName))
 
-	if err = bh.Exec(ctx, sql); err != nil {
+	var pubInfos []*pubsub.PubInfo
+	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName); err != nil {
 		return
 	}
 
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return
-	}
+	return createPubs(ctx, sid, bh, snapshotName, pubInfos)
+}
 
-	pubInfos, err := extractPubInfosFromExecResult(ctx, erArray)
-	if err != nil {
-		return err
-	}
-
+// createPub create pub after the database is created
+func createPubs(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	pubInfos []*pubsub.PubInfo,
+) (err error) {
 	// restore pub to toAccount
 	var ast []tree.Statement
 	defer func() {
@@ -1868,7 +1859,7 @@ func createPub(
 	}()
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
+		toCtx := defines.AttachAccount(ctx, pubInfo.PubAccountId, pubInfo.Owner, pubInfo.Creator)
 		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
 			return
 		}
@@ -1887,7 +1878,7 @@ func checkPubExistOrNot(
 	bh BackgroundExec,
 	snapshotName string,
 	subName string,
-	timsStampTs int64,
+	timestampTs int64,
 ) (bool, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to check pub exist or not", snapshotName))
 	subInfos, err := getSubInfosFromSubWithSnapshot(
@@ -1896,7 +1887,7 @@ func checkPubExistOrNot(
 		bh,
 		snapshotName,
 		subName,
-		timsStampTs)
+		timestampTs)
 	if err != nil {
 		return false, err
 	} else if len(subInfos) == 0 {
@@ -1905,7 +1896,7 @@ func checkPubExistOrNot(
 
 	subInfo := subInfos[0]
 	var isPubValid bool
-	isPubValid, err = checkSubscriptionExist(
+	isPubValid, err = checkPubValid(
 		ctx,
 		sid,
 		bh,
@@ -1966,7 +1957,7 @@ func getSubInfosFromSubWithSnapshot(
 	return extractSubInfosFromExecResult(ctx, erArray)
 }
 
-func checkSubscriptionExist(
+func checkPubValid(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,

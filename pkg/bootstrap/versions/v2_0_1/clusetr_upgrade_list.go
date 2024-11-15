@@ -25,10 +25,10 @@ import (
 var needMigrateMoPubs = false
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_pubs_add_account_id,
+	upg_mo_pubs_add_account_id_column,
 }
 
-var upg_mo_pubs_add_account_id = versions.UpgradeEntry{
+var upg_mo_pubs_add_account_id_column = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_PUBS,
 	UpgType:   versions.ADD_COLUMN,

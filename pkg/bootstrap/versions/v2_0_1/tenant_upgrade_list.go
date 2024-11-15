@@ -107,6 +107,10 @@ var drop_mo_pubs = versions.UpgradeEntry{
 	UpgType:   versions.DROP_TABLE,
 	UpgSql:    fmt.Sprintf("drop table %s.%s", catalog.MO_CATALOG, catalog.MO_PUBS),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		if accountId == catalog.System_Account {
+			return true, nil
+		}
+
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_PUBS)
 		if err != nil {
 			return false, err

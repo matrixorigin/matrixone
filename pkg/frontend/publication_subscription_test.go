@@ -411,7 +411,7 @@ func Test_doDropPublication(t *testing.T) {
 }
 
 func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.Background(), 0)
 	kases := []struct {
 		pubName      string
 		databaseName string

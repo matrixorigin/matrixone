@@ -47,6 +47,7 @@ type AccountInfo struct {
 }
 
 type PubInfo struct {
+	PubAccountId   uint32
 	PubAccountName string
 	PubName        string
 	DbName         string

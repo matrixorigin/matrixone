@@ -135,6 +135,7 @@ var GetAccounts = func(txn executor.TxnExecutor) (nameInfoMap map[string]*Accoun
 }
 
 var GetPubInfos = func(txn executor.TxnExecutor, accountId uint32, accountName string) (pubInfos []*PubInfo, err error) {
+	// select from old mo_pubs table, which located in each account
 	sql := "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, comment from mo_catalog.mo_pubs"
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))

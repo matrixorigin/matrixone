@@ -1030,37 +1030,15 @@ func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := "select" +
-		" pub_name as `publication`," +
-		" database_name as `database`," +
-		" created_time as `create_time`," +
-		" update_time as `update_time`," +
-		" case account_list " +
-		" 	when 'all' then cast('*' as text)" +
-		" 	else account_list" +
-		" end as `sub_account`," +
-		" comment as `comments`" +
-		" from mo_catalog.mo_pubs"
-	like := stmt.Like
-	if like != nil {
-		right, ok := like.Right.(*tree.NumVal)
-		if !ok || right.Kind() != tree.Str {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "like clause must be a string")
-		}
-		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", right.String())
-	} else {
-		sql += " order by update_time desc, created_time desc;"
-	}
-	return returnByRewriteSQL(ctx, sql, ddlType)
-}
-
 func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where pub_name='%s';", stmt.Name)
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where account_id = %d and pub_name='%s';", accountId, stmt.Name)
+	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
-
 }
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
