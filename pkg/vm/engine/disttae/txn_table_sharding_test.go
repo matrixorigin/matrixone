@@ -16,9 +16,8 @@ package disttae
 
 import (
 	"context"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -38,7 +37,7 @@ func TestRangesIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.Ranges(context.Background(), nil, 2, 0, false)
+			_, err := tbl.Ranges(context.Background(), nil, 2, 0, 0)
 			require.Error(t, err)
 		},
 	)

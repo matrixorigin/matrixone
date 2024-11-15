@@ -3750,18 +3750,18 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, node *plan.Node) []*Scope {
+func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
 	cnlist := c.cnList
 	if len(cnlist) <= 1 {
-		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	reuse := n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	if !reuse {
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
 		//merge build side to avoid bugs
 		if !c.IsSingleScope(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
@@ -3771,7 +3771,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		}
 	}
 
-	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), node.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
 
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
@@ -3824,7 +3824,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), n, true)
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			probeScopes[i].setRootOperator(shuffleProbeOp)
@@ -3833,7 +3833,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 			}
 
-			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], node, true)
+			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], n, true)
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			probeScopes[i].setRootOperator(dispatchArg)
 			probeScopes[i].IsEnd = true
@@ -3849,7 +3849,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
@@ -3858,7 +3858,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
-		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], node, false)
+		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], n, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScopes[i].setRootOperator(dispatchArg)
 		buildScopes[i].IsEnd = true
@@ -3994,6 +3994,11 @@ func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet, onRemoteCN bool) (engine.RelData, error) {
 
+	var policy engine.DataCollectPolicy = engine.Policy_CollectAllData
+	if onRemoteCN {
+		policy = engine.Policy_CollectCommittedData
+	}
+
 	preAllocSize := 2
 	if !c.IsTpQuery() {
 		if len(blockFilterList) > 0 {
@@ -4004,7 +4009,7 @@ func (c *Compile) expandRanges(
 	}
 
 	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, onRemoteCN)
+	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -4018,7 +4023,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
@@ -4040,7 +4045,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, onRemoteCN)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
