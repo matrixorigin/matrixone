@@ -81,11 +81,11 @@ func (o *objCompactPolicy) revise(rc *resourceController, config *BasicPolicyCon
 	for _, objs := range o.segObjects {
 		if rc.resourceAvailable(objs) {
 			rc.reserveResources(objs)
-			results = append(results, reviseResult{objs, TaskHostDN})
+			results = append(results, reviseResult{objs, taskHostDN})
 		}
 	}
 	if len(o.tombstones) > 0 {
-		results = append(results, reviseResult{o.tombstones, TaskHostDN})
+		results = append(results, reviseResult{o.tombstones, taskHostDN})
 	}
 	return results
 }
