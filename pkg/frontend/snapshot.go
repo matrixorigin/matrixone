@@ -737,6 +737,7 @@ func restoreToDatabaseOrTable(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
 
+	createDbSql = strings.ToLower(createDbSql)
 	// if restore to table, check if the db is sub db
 	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
