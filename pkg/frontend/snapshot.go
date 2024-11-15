@@ -1603,7 +1603,7 @@ func restoreToCluster(ctx context.Context,
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] cluster restore start to restore droped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 		// create dropped account
-		err = createDroppedAccount(ctx, ses, bh, snapshotName, snapshotTs, account)
+		err = createDroppedAccount(ctx, ses, bh, snapshotName, account)
 		if err != nil {
 			return err
 		}
@@ -1627,7 +1627,7 @@ func restoreToCluster(ctx context.Context,
 
 }
 
-func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64, account accountRecord) (err error) {
+func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
