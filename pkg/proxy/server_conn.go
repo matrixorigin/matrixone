@@ -247,9 +247,7 @@ func (s *serverConn) CreateTime() time.Time {
 
 func (s *serverConn) Quit() error {
 	defer func() {
-		// Disconnect from the connection manager, also, close the
-		// raw TCP connection.
-		_ = s.RawConn().Close()
+		_ = s.Close()
 	}()
 	_, err := s.ExecStmt(internalStmt{
 		cmdType: cmdQuit,

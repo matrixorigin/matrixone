@@ -571,8 +571,12 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
+	var unCommittedObjs []objectio.ObjectStats
+	if policy == engine.Policy_CollectAllData {
+		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
 	return tbl.doRanges(
 		ctx,
 		exprs,
@@ -1536,7 +1540,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		tbl.getTxn().StashFlushedTombstones(stats)
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1919,8 +1926,14 @@ func (tbl *txnTable) PKPersistedBetween(
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
-) (bool, error) {
+) (changed bool, err error) {
 
+	v2.TxnPKChangeCheckTotalCounter.Inc()
+	defer func() {
+		if err != nil && changed {
+			v2.TxnPKChangeCheckChangedCounter.Inc()
+		}
+	}()
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2043,6 +2056,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	if len(candidateBlks) > 0 {
+		v2.TxnPKChangeCheckIOCounter.Inc()
+	}
 	for _, blk := range candidateBlks {
 		release, err := blockio.LoadColumns(
 			ctx,
