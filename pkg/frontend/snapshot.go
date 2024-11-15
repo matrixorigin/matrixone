@@ -731,6 +731,7 @@ func restoreToDatabaseOrTable(
 	}
 
 	var createDbSql string
+	var isSubDb bool
 	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
 	if err != nil {
 		return
@@ -739,9 +740,11 @@ func restoreToDatabaseOrTable(
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 	restoreToTbl := tblName != ""
 
-	createDbSql = strings.ToLower(createDbSql)
 	// if restore to table, check if the db is sub db
-	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	isSubDb, err = checkDbIsSubDb(toCtx, createDbSql)
+	if err != nil {
+		return
+	}
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
@@ -2018,4 +2021,22 @@ func checkSubscriptionExist(
 	}
 
 	return true, nil
+}
+
+func checkDbIsSubDb(ctx context.Context, createDbsql string) (bool, error) {
+	var (
+		err error
+		ast []tree.Statement
+	)
+	ast, err = mysql.Parse(ctx, createDbsql, 1)
+	if err != nil {
+		return false, err
+	}
+
+	if createDb, ok := ast[0].(*tree.CreateDatabase); ok {
+		if createDb.SubscriptionOption != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
