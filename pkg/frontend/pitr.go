@@ -1313,7 +1313,6 @@ func restoreToDatabaseOrTableWithPitr(
 	if err != nil {
 		return
 	}
-	isSubDb = strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
