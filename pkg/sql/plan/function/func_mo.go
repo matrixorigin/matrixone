@@ -130,8 +130,8 @@ func MoTableRows(
 // 1. cluster table
 
 type GetMoTableSizeRowsFuncType = func() func(
-	context.Context, string, []uint64, []uint64, []uint64,
-	process.SQLHelper, bool) ([]uint64, error)
+	context.Context, []uint64, []uint64, []uint64,
+	engine.Engine, bool) ([]uint64, error)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -284,10 +284,9 @@ func MoTableSizeRowsHelper(
 	}
 
 	ret, err = (*executor.Load())()(
-		proc.Ctx, proc.GetService(),
+		proc.Ctx,
 		accIds, dbIds, tblIds,
-		proc.Base.SessionInfo.SqlHelper,
-		forceUpdate == "yes")
+		eng, forceUpdate == "yes")
 
 	if err != nil {
 		return err

@@ -16,6 +16,8 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -56,6 +58,16 @@ func (s *service) initDistributedTAE(
 	// start I/O pipeline
 	blockio.Start(s.cfg.UUID)
 
+	sqlExecFunc := func(
+		ctx context.Context,
+		sql string,
+		opts ie.SessionOverrideOptions) ie.InternalExecResult {
+
+		exec := frontend.NewInternalExecutor(s.cfg.UUID)
+		ret := exec.Query(ctx, sql, opts)
+		return ret
+	}
+
 	// engine
 	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
 	if err != nil {
@@ -74,8 +86,8 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
-		disttae.WithMoTableStats(
-			s.cfg.Engine.Stats),
+		disttae.WithMoTableStats(s.cfg.Engine.Stats),
+		disttae.WithSQLExecFunc(sqlExecFunc),
 	)
 	pu.StorageEngine = s.storeEngine
 
