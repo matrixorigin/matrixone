@@ -3998,9 +3998,9 @@ func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet, onRemoteCN bool) (engine.RelData, error) {
 
-	var policy engine.TombstoneApplyPolicy
+	var policy engine.DataCollectPolicy = engine.Policy_CollectAllData
 	if onRemoteCN {
-		policy = engine.Policy_CheckCommittedOnly
+		policy = engine.Policy_CollectCommittedData
 	}
 
 	preAllocSize := 2

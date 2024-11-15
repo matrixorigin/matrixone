@@ -272,7 +272,7 @@ func (tbl *txnTableDelegate) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
-	policy engine.TombstoneApplyPolicy,
+	policy engine.DataCollectPolicy,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {

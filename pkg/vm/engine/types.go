@@ -585,6 +585,13 @@ const (
 	TombstoneData
 )
 
+type DataCollectPolicy uint64
+
+const (
+	Policy_CollectAllData       = 0
+	Policy_CollectCommittedData = 1
+)
+
 type TombstoneCollectPolicy uint64
 
 const (
@@ -817,7 +824,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int, TombstoneApplyPolicy) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
