@@ -136,7 +136,7 @@ func New(
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 
-	initMoTableStatsConfig(e.config.statsConf)
+	initMoTableStatsConfig(ctx, e)
 
 	return e
 }

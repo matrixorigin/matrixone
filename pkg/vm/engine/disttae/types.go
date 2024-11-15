@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"math"
 	"strconv"
 	"sync"
@@ -179,6 +180,16 @@ func WithMoTableStats(conf MoTableStatsConfig) EngineOptions {
 	}
 }
 
+func WithSQLExecFunc(
+	f func(
+		ctx context.Context, sql string,
+		opts ie.SessionOverrideOptions) ie.InternalExecResult) EngineOptions {
+
+	return func(e *Engine) {
+		e.config.sqlExecFunc = f
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -198,7 +209,8 @@ type Engine struct {
 
 		cnTransferTxnLifespanThreshold time.Duration
 
-		statsConf MoTableStatsConfig
+		sqlExecFunc func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult
+		statsConf   MoTableStatsConfig
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
