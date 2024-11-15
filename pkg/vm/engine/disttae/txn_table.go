@@ -571,8 +571,12 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
+	var unCommittedObjs []objectio.ObjectStats
+	if policy == engine.Policy_CollectAllData {
+		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
 	return tbl.doRanges(
 		ctx,
 		exprs,
