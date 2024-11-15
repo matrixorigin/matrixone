@@ -328,11 +328,14 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 	var accId uint32
+	var tempCancel context.CancelFunc
 	accId, err = defines.GetAccountId(execCtx.reqCtx)
 	if err != nil {
 		return err
 	}
 	tempCtx := defines.AttachAccountId(th.txnCtx, accId)
+	tempCtx, tempCancel = context.WithTimeoutCause(tempCtx, getPu(execCtx.ses.GetService()).SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateUnsafe)
+	defer tempCancel()
 	err = th.storage.New(tempCtx, th.txnOp)
 	if err != nil {
 		execCtx.ses.SetTxnId(dumpUUID[:])
@@ -350,7 +353,8 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	var err, err2 error
 	var hasRecovered bool
-	if getPu(execCtx.ses.GetService()).TxnClient == nil {
+	pu := getPu(execCtx.ses.GetService())
+	if pu.TxnClient == nil {
 		panic("must set txn client")
 	}
 
@@ -411,11 +415,14 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	txnClient := getPu(execCtx.ses.GetService()).TxnClient
+	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	defer tempCancel()
+
+	txnClient := pu.TxnClient
 	if th.txnOp == nil {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			th.txnOp, err2 = txnClient.New(
-				th.txnCtx,
+				tempCtx,
 				execCtx.ses.getLastCommitTS(),
 				opts...)
 			return err2
@@ -423,7 +430,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	} else if th.txnOp.Txn().Status != txn.TxnStatus_Active {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			_, err2 = txnClient.RestartTxn(
-				th.txnCtx,
+				tempCtx,
 				th.txnOp,
 				execCtx.ses.getLastCommitTS(),
 				opts...)
