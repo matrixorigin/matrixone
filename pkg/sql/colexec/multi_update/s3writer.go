@@ -283,7 +283,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 			} else {
 				// partition table
 				for getPartitionIdx := range parititionCount {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs, writer.sortIdxs[i])
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs, 0)
 					if err != nil {
 						return
 					}
