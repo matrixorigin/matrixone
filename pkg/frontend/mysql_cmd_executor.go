@@ -1122,7 +1122,6 @@ func createPrepareStmt(
 		PrepareStmt:         saveStmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 
 	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
@@ -1194,7 +1193,7 @@ func handleDropSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.DropSnapShot) e
 	return doDropSnapshot(execCtx.reqCtx, ses, ct)
 }
 
-func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapShot) error {
+func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapShot) (statistic.StatsArray, error) {
 	return doRestoreSnapshot(execCtx.reqCtx, ses, rs)
 }
 
@@ -1210,7 +1209,7 @@ func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
 	return doAlterPitr(execCtx.reqCtx, ses, ap)
 }
 
-func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
+func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) (statistic.StatsArray, error) {
 	return doRestorePitr(execCtx.reqCtx, ses, rp)
 }
 
@@ -2414,7 +2413,7 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	err = executeStmtWithTxn(ses, execCtx)
+	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {
 		return err
 	}
@@ -2445,24 +2444,26 @@ func executeStmtWithResponse(ses *Session,
 }
 
 func executeStmtWithTxn(ses FeSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
 	if !ses.IsDerivedStmt() {
-		err = executeStmtWithWorkspace(ses, execCtx)
+		err = executeStmtWithWorkspace(ses, statsArr, execCtx)
 	} else {
 
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
 		execCtx.proc.Base.TxnOperator = txnOp
 
-		err = dispatchStmt(ses, execCtx)
+		err = dispatchStmt(ses, statsArr, execCtx)
 	}
 	return
 }
 
 func executeStmtWithWorkspace(ses FeSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithWorkspace)
@@ -2558,12 +2559,13 @@ func executeStmtWithWorkspace(ses FeSession,
 		}
 	}()
 
-	err = executeStmtWithIncrStmt(ses, execCtx, txnOp)
+	err = executeStmtWithIncrStmt(ses, statsArr, execCtx, txnOp)
 
 	return
 }
 
 func executeStmtWithIncrStmt(ses FeSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
@@ -2613,18 +2615,18 @@ func executeStmtWithIncrStmt(ses FeSession,
 		//}
 	}()
 
-	err = dispatchStmt(ses, execCtx)
+	err = dispatchStmt(ses, statsArr, execCtx)
 	return
 }
 
 func dispatchStmt(ses FeSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(FPDispatchStmt)
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
 		if checkModify(execCtx.cw.Plan(), ses) {
-
 			//plan changed
 			//clear all cached plan and parse sql again
 			var stmts []tree.Statement
@@ -2646,7 +2648,7 @@ func dispatchStmt(ses FeSession,
 	case *Session:
 		return executeStmt(sesImpl, execCtx)
 	case *backSession:
-		return executeStmtInBack(sesImpl, execCtx)
+		return executeStmtInBack(sesImpl, statsArr, execCtx)
 	default:
 		return moerr.NewInternalError(execCtx.reqCtx, "no such session implementation")
 	}
@@ -2683,8 +2685,9 @@ func executeStmt(ses *Session,
 	}
 	switch getExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
-		return execInFrontend(ses, execCtx)
-
+		stats, err := execInFrontend(ses, execCtx)
+		defer execCtx.cw.RecordCompoundStmt(execCtx.reqCtx, stats)
+		return err
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
@@ -2773,7 +2776,8 @@ func executeStmt(ses *Session,
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().ExecLocation() {
 	case tree.EXEC_IN_FRONTEND:
-		return execInFrontend(ses, execCtx)
+		_, err = execInFrontend(ses, execCtx)
+		return err
 	case tree.EXEC_IN_ENGINE:
 
 	}
@@ -2857,7 +2861,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 
 	pu := getPu(ses.GetService())
-	proc.CopyValueScanBatch(ses.proc)
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3474,6 +3477,8 @@ type marshalPlanHandler struct {
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
+	// internal sub statements, such as sub statements of compound statements, is not user SQL requests,
+	isInternalSubStmt bool
 
 	marshalPlanConfig
 }
@@ -3511,6 +3516,30 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		if phyPlan != nil {
 			h.marshalPlan.PhyPlan = *phyPlan
 		}
+	}
+	return h
+}
+
+// NewMarshalPlanHandlerCompositeSubStmt MarshalHandler for child statements of composite statements
+func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, plan *plan.Plan, opts ...marshalPlanOptions) *marshalPlanHandler {
+	if plan == nil || plan.GetQuery() == nil {
+		return &marshalPlanHandler{
+			query:             nil,
+			marshalPlan:       nil,
+			buffer:            nil,
+			isInternalSubStmt: true,
+		}
+	}
+	query := plan.GetQuery()
+	h := &marshalPlanHandler{
+		query:             query,
+		buffer:            nil,
+		isInternalSubStmt: true,
+	}
+
+	// SET options
+	for _, opt := range opts {
+		opt(&h.marshalPlanConfig)
 	}
 	return h
 }
@@ -3625,19 +3654,21 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if totalTime < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
-				uuid.UUID(h.stmt.StatementID).String(),
-				h.stmt.StatementType,
-				statsInfo.ParseStage.ParseDuration,
-				statsInfo.PlanStage.PlanDuration,
-				statsInfo.CompileStage.CompileDuration,
-				operatorTimeConsumed,
-				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
-				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
-				statsInfo.IOAccessTimeConsumption,
-				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
-				totalTime,
-			)
+			if !h.isInternalSubStmt {
+				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+					uuid.UUID(h.stmt.StatementID).String(),
+					h.stmt.StatementType,
+					statsInfo.ParseStage.ParseDuration,
+					statsInfo.PlanStage.PlanDuration,
+					statsInfo.CompileStage.CompileDuration,
+					operatorTimeConsumed,
+					statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+					statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+					statsInfo.IOAccessTimeConsumption,
+					statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
+					totalTime,
+				)
+			}
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
 			statsByte.WithTimeConsumed(float64(totalTime))
