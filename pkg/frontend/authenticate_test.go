@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -7504,6 +7505,12 @@ func (bt *backgroundExecTest) Close() {
 }
 
 func (bt *backgroundExecTest) Clear() {}
+
+func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
+	var stats statistic.StatsArray
+	stats.Reset()
+	return stats
+}
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
