@@ -208,3 +208,6 @@ count(*)
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 count(*)
 10
+drop database if exists TPCH;
+drop snapshot if exists tpch_snapshot;
+drop snapshot if exists tpch_cluster;

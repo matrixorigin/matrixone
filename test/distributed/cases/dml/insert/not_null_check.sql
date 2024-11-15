@@ -29,4 +29,8 @@ select enable_fault_injection();
 select add_fault_point('inject_send_pipeline', ':::', 'echo', 1, 't1');
 INSERT INTO t1 SELECT result,result FROM generate_series(1,3000000) g;
 select disable_fault_injection();
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a,b));
+insert into t1 select result,result,result from generate_series(200000) g;
+update t1 set c =10;
 drop database if exists test;

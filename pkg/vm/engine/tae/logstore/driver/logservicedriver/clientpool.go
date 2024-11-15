@@ -20,7 +20,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+)
+
+const (
+	DefaultRecordSize = mpool.MB
 )
 
 var ErrNoClientAvailable = moerr.NewInternalErrorNoCtx("no client available")
@@ -79,6 +84,7 @@ type clientpool struct {
 	clientFactory func() *clientWithRecord
 	closefn       func(*clientWithRecord)
 	mu            sync.Mutex
+	cfg           *clientConfig
 }
 
 func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
@@ -87,6 +93,7 @@ func newClientPool(maxsize int, cfg *clientConfig) *clientpool {
 		getTimeout:  cfg.GetClientRetryTimeOut,
 		freeClients: make([]*clientWithRecord, maxsize),
 		mu:          sync.Mutex{},
+		cfg:         cfg,
 	}
 	pool.clientFactory = pool.newClientFactory(cfg)
 	pool.closefn = pool.onClose
@@ -162,6 +169,9 @@ func (c *clientpool) IsClosed() bool {
 }
 
 func (c *clientpool) Put(client *clientWithRecord) {
+	if len(client.record.Payload()) > DefaultRecordSize {
+		client.record = client.c.GetLogRecord(DefaultRecordSize)
+	}
 	if c.IsClosed() {
 		c.closefn(client)
 		return

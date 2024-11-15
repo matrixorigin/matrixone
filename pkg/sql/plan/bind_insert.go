@@ -21,12 +21,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
@@ -159,7 +156,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.qry.LoadTag {
+	if builder.qry.LoadTag || builder.isRestore {
 		// load do not handle primary/unique key confliction
 		for i, tableDef := range dmlCtx.tableDefs {
 			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
@@ -325,6 +322,75 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}, bindCtx)
 			}
 		}
+	}
+
+	newProjLen := len(selectNode.ProjectList)
+	for _, tableDef := range dmlCtx.tableDefs {
+		for _, idxDef := range tableDef.Indexes {
+			if idxDef.TableExist && !idxDef.Unique {
+				newProjLen++
+			}
+		}
+	}
+
+	if newProjLen > len(selectNode.ProjectList) {
+		newProjList := make([]*plan.Expr, 0, newProjLen)
+
+		for i, expr := range selectNode.ProjectList {
+			newProjList = append(newProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: int32(i),
+					},
+				},
+			})
+		}
+
+		for _, tableDef := range dmlCtx.tableDefs {
+			pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+			for _, idxDef := range tableDef.Indexes {
+				if !idxDef.TableExist || idxDef.Unique {
+					continue
+				}
+
+				idxTableName := idxDef.IndexTableName
+				colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
+				argsLen := len(idxDef.Parts) // argsLen is alwarys greater than 1 for secondary index
+				args := make([]*plan.Expr, argsLen)
+
+				var colPos int32
+				var ok bool
+				for k := 0; k < argsLen; k++ {
+					if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
+						errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
+						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					}
+					args[k] = &plan.Expr{
+						Typ: selectNode.ProjectList[colPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: colPos,
+							},
+						},
+					}
+				}
+
+				idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(newProjList))
+				newProjList = append(newProjList, idxExpr)
+			}
+		}
+
+		selectNodeTag = builder.genNewTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: newProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{selectNodeTag},
+		}, bindCtx)
 	}
 
 	dmlNode := &plan.Node{
@@ -646,17 +712,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist {
+		if !idxDef.TableExist || !idxDef.Unique {
 			continue
 		}
 
-		if idxDef.Unique {
-			skipUniqueIdx[i] = true
-			for _, part := range idxDef.Parts {
-				if !columnIsNull[part] {
-					skipUniqueIdx[i] = false
-					break
-				}
+		skipUniqueIdx[i] = true
+		for _, part := range idxDef.Parts {
+			if !columnIsNull[part] {
+				skipUniqueIdx[i] = false
+				break
 			}
 		}
 
@@ -678,11 +742,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				args[k] = DeepCopyExpr(projList2[colPos])
 			}
 
-			fnName := "serial"
-			if !idxDef.Unique {
-				fnName = "serial_full"
-			}
-			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), fnName, args)
+			idxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
 			projList2 = append(projList2, idxExpr)
 		}
@@ -753,13 +813,10 @@ func (builder *QueryBuilder) buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*plan.Expr, colCount)
-	bat := batch.NewWithSize(len(colNames))
 
 	for i, colName := range colNames {
 		col := tableDef.Cols[tableDef.Name2ColIndex[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
-		vec := vector.NewVec(colTyp)
-		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_T{
@@ -768,10 +825,6 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			if err := vector.AppendMultiBytes(vec, nil, true, len(stmt.Rows), proc.Mp()); err != nil {
-				bat.Clean(proc.Mp())
-				return 0, err
-			}
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return 0, err
@@ -780,66 +833,42 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
+			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(stmt.Rows))
 			for j := range stmt.Rows {
-				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Pos:    -1,
-					RowPos: int32(j),
-					Expr:   defExpr,
-				})
+				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
+					Expr: defExpr,
+				}
 			}
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
-			for j, r := range stmt.Rows {
+			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
-					canInsert, err := util.SetInsertValue(proc, nv, vec)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return 0, err
 					}
-					if canInsert {
+					if expr != nil {
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
+							Expr: expr,
+						})
 						continue
 					}
 				}
 
-				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-					bat.Clean(proc.Mp())
-					return 0, err
-				}
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return 0, err
 					}
-				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
-					if !builder.isPrepareStatement {
-						bat.Clean(proc.Mp())
-						return 0, moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
-					}
-					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-						RowPos: int32(j),
-						Pos:    int32(nv.Offset),
-						Expr: &plan.Expr{
-							Typ: constTextType,
-							Expr: &plan.Expr_P{
-								P: &plan.ParamRef{
-									Pos: int32(nv.Offset),
-								},
-							},
-						},
-					})
-					continue
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return 0, err
 					}
 					if col.Typ.Id == int32(types.T_enum) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							bat.Clean(proc.Mp())
 							return 0, err
 						}
 					}
@@ -848,22 +877,8 @@ func (builder *QueryBuilder) buildValueScan(
 				if err != nil {
 					return 0, err
 				}
-				if nv, ok := r[i].(*tree.ParamExpr); ok {
-					if !builder.isPrepareStatement {
-						bat.Clean(proc.Mp())
-						return 0, moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
-					}
-					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-						RowPos: int32(j),
-						Pos:    int32(nv.Offset),
-						Expr:   defExpr,
-					})
-					continue
-				}
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Pos:    -1,
-					RowPos: int32(j),
-					Expr:   defExpr,
+					Expr: defExpr,
 				})
 			}
 		}
@@ -885,7 +900,6 @@ func (builder *QueryBuilder) buildValueScan(
 		projectList[i] = expr
 	}
 
-	bat.SetRowCount(len(stmt.Rows))
 	rowsetData.RowCount = int32(len(stmt.Rows))
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
@@ -894,11 +908,6 @@ func (builder *QueryBuilder) buildValueScan(
 		TableDef:    valueScanTableDef,
 		BindingTags: []int32{lastTag},
 		Uuid:        nodeId[:],
-	}
-	if builder.isPrepareStatement {
-		proc.SetPrepareBatch(bat)
-	} else {
-		proc.SetValueScanBatch(nodeId, bat)
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
 	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {

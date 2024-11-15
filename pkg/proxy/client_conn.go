@@ -511,10 +511,6 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				return nil, err
 			}
 			v2.ProxyConnectSuccessCounter.Inc()
-
-			// manage this connection in the manager.
-			c.tun.rebalancer.connManager.connect(sc.GetCNServer(), c.tun)
-
 			return sc, nil
 		}
 	}

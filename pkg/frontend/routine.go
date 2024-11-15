@@ -34,8 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
-type holder struct {
-	proto MysqlRrWr
+type holder[T any] struct {
+	value T
 }
 
 // Routine handles requests.
@@ -43,7 +43,7 @@ type holder struct {
 // use the executor to handle requests, and response them.
 type Routine struct {
 	//protocol layer
-	protocol atomic.Pointer[holder]
+	protocol atomic.Pointer[holder[MysqlRrWr]]
 
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
@@ -157,7 +157,7 @@ func (rt *Routine) getCancelRoutineCtx() context.Context {
 }
 
 func (rt *Routine) getProtocol() MysqlRrWr {
-	return rt.protocol.Load().proto
+	return rt.protocol.Load().value
 }
 
 func (rt *Routine) getConnectionID() uint32 {
@@ -453,7 +453,7 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.getProtocol().Close()
-		rt.protocol.Store(&holder{})
+		rt.protocol.Store(&holder[MysqlRrWr]{})
 
 		//step E: release the resources related to the session
 		if ses != nil {
@@ -533,7 +533,7 @@ func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.Fron
 		mc:                newMigrateController(),
 		goroutineID:       GetRoutineId(),
 	}
-	ri.protocol.Store(&holder{proto: protocol})
+	ri.protocol.Store(&holder[MysqlRrWr]{value: protocol})
 	protocol.UpdateCtx(cancelRoutineCtx)
 
 	return ri
