@@ -83,3 +83,7 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+
+drop database if exists TPCH;
+drop snapshot if exists tpch_snapshot;
+drop snapshot if exists tpch_cluster;
