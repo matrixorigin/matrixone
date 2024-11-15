@@ -74,6 +74,7 @@ func TestParseTNConfig(t *testing.T) {
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 	// test
+	// test2
 	panic(1)
 }
 
