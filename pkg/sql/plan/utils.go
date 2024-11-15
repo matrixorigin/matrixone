@@ -1049,11 +1049,11 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	case *plan.Expr_F:
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
-			switch arg.Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+			if isRuntimeConstExpr(arg) {
 				continue
+			} else {
+				isConst = false
 			}
-			isConst = false
 			isZonemappable := ExprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false

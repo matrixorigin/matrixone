@@ -1317,9 +1317,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				node.BlockFilterList = nil
 			} else {
 				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
+					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+						copyOfExpr := DeepCopyExpr(node.FilterList[i])
+						copyOfExpr.Selectivity = currentBlockSel
+						blockExprList = append(blockExprList, copyOfExpr)
+					}
 				}
 			}
 		} else {
