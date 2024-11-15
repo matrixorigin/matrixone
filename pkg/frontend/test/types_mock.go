@@ -11,6 +11,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -234,6 +235,20 @@ func (mr *MockComputationWrapperMockRecorder) Plan() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Plan", reflect.TypeOf((*MockComputationWrapper)(nil).Plan))
 }
 
+// RecordCompoundStmt mocks base method.
+func (m *MockComputationWrapper) RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordCompoundStmt", ctx, statsBytes)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordCompoundStmt indicates an expected call of RecordCompoundStmt.
+func (mr *MockComputationWrapperMockRecorder) RecordCompoundStmt(ctx, statsBytes interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordCompoundStmt", reflect.TypeOf((*MockComputationWrapper)(nil).RecordCompoundStmt), ctx, statsBytes)
+}
+
 // RecordExecPlan mocks base method.
 func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
 	m.ctrl.T.Helper()
@@ -285,6 +300,20 @@ func (m *MockComputationWrapper) Run(ts uint64) (*util.RunResult, error) {
 func (mr *MockComputationWrapperMockRecorder) Run(ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationWrapper)(nil).Run), ts)
+}
+
+// StatsCompositeSubStmtResource mocks base method.
+func (m *MockComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) statistic.StatsArray {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StatsCompositeSubStmtResource", ctx)
+	ret0, _ := ret[0].(statistic.StatsArray)
+	return ret0
+}
+
+// StatsCompositeSubStmtResource indicates an expected call of StatsCompositeSubStmtResource.
+func (mr *MockComputationWrapperMockRecorder) StatsCompositeSubStmtResource(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StatsCompositeSubStmtResource", reflect.TypeOf((*MockComputationWrapper)(nil).StatsCompositeSubStmtResource), ctx)
 }
 
 // MockColumnInfo is a mock of ColumnInfo interface.
@@ -609,6 +638,20 @@ func (m *MockBackgroundExec) GetExecResultSet() []interface{} {
 func (mr *MockBackgroundExecMockRecorder) GetExecResultSet() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultSet", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultSet))
+}
+
+// GetExecStatsArray mocks base method.
+func (m *MockBackgroundExec) GetExecStatsArray() statistic.StatsArray {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExecStatsArray")
+	ret0, _ := ret[0].(statistic.StatsArray)
+	return ret0
+}
+
+// GetExecStatsArray indicates an expected call of GetExecStatsArray.
+func (mr *MockBackgroundExecMockRecorder) GetExecStatsArray() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecStatsArray", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecStatsArray))
 }
 
 // Service mocks base method.
