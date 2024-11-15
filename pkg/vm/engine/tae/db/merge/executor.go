@@ -18,6 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -30,92 +34,80 @@ import (
 
 // executor consider resources to decide to merge or not.
 type executor struct {
-	tableName string
-	rt        *dbutils.Runtime
-	cnSched   CNMergeScheduler
+	rt      *dbutils.Runtime
+	cnSched *CNMergeScheduler
 }
 
-func newMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *executor {
+func newMergeExecutor(rt *dbutils.Runtime, sched *CNMergeScheduler) *executor {
 	return &executor{
 		rt:      rt,
 		cnSched: sched,
 	}
 }
 
-func (e *executor) executeFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
-	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema(false).Name)
-
-	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
+func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectEntry, kind taskHostKind) {
+	if len(objs) == 0 {
+		return
+	}
+	// check objects are merging by CNs.
+	if e.cnSched.checkOverlapOnCNActive(objs) {
 		return
 	}
 
-	if kind == TaskHostCN {
-		_, esize := estimateMergeConsume(mobjs)
-		stats := make([][]byte, 0, len(mobjs))
-		cids := make([]common.ID, 0, len(mobjs))
-		for _, obj := range mobjs {
-			stat := *obj.GetObjectStats()
-			stats = append(stats, stat[:])
-			cids = append(cids, *obj.AsCommonID())
-		}
-		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
-			return
-		}
-		schema := entry.GetLastestSchema(false)
-		cntask := &api.MergeTaskEntry{
-			AccountId:         schema.AcInfo.TenantID,
-			UserId:            schema.AcInfo.UserID,
-			RoleId:            schema.AcInfo.RoleID,
-			TblId:             entry.ID,
-			DbId:              entry.GetDB().GetID(),
-			TableName:         entry.GetLastestSchema(false).Name,
-			DbName:            entry.GetDB().GetName(),
-			ToMergeObjs:       stats,
-			EstimatedMemUsage: uint64(esize),
-		}
-		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
-			ActiveCNObj.AddActiveCNObj(mobjs)
-		} else {
-			logutil.Info(
-				"MergeExecutorError",
-				common.OperationField("send-cn-task"),
-				common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
-				common.AnyField("error", err),
-			)
-			return
-		}
-		entry.Stats.SetLastMergeTime()
-	} else {
-		nTombstone, nData := 0, 0
-		for _, obj := range mobjs {
-			if obj.IsTombstone {
-				nTombstone += 1
-			} else {
-				nData += 1
-			}
-		}
-
-		objs := make([]*catalog.ObjectEntry, 0, nData)
-		objScopes := make([]common.ID, 0, nData)
-		tombstones := make([]*catalog.ObjectEntry, 0, nTombstone)
-		tombstoneScopes := make([]common.ID, 0, nTombstone)
-		for _, obj := range mobjs {
-			if obj.IsTombstone {
-				tombstones = append(tombstones, obj)
-				tombstoneScopes = append(tombstoneScopes, *obj.AsCommonID())
-			} else {
-				objs = append(objs, obj)
-				objScopes = append(objScopes, *obj.AsCommonID())
-			}
-		}
-
-		if len(objs) > 0 {
-			e.scheduleMergeObjects(objScopes, objs, entry, false)
-		}
-		if len(tombstones) > 1 {
-			e.scheduleMergeObjects(tombstoneScopes, tombstones, entry, true)
+	isTombstone := objs[0].IsTombstone
+	for _, o := range objs {
+		if o.IsTombstone != isTombstone {
+			panic("merging tombstone and data objects in one merge")
 		}
 	}
+
+	if kind == taskHostDN {
+		mObjs := slices.Clone(objs)
+		objScopes := make([]common.ID, 0, len(mObjs))
+		for _, obj := range mObjs {
+			objScopes = append(objScopes, *obj.AsCommonID())
+		}
+		e.scheduleMergeObjects(objScopes, mObjs, entry, isTombstone)
+		return
+	}
+
+	stats := make([][]byte, 0, len(objs))
+	cids := make([]common.ID, 0, len(objs))
+	for _, obj := range objs {
+		stat := *obj.GetObjectStats()
+		stats = append(stats, stat[:])
+		cids = append(cids, *obj.AsCommonID())
+	}
+	// check objects are merging by TN.
+	if e.rt.Scheduler != nil && e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
+		return
+	}
+	schema := entry.GetLastestSchema(false)
+	cntask := &api.MergeTaskEntry{
+		AccountId:         schema.AcInfo.TenantID,
+		UserId:            schema.AcInfo.UserID,
+		RoleId:            schema.AcInfo.RoleID,
+		TblId:             entry.ID,
+		DbId:              entry.GetDB().GetID(),
+		TableName:         entry.GetLastestSchema(isTombstone).Name,
+		DbName:            entry.GetDB().GetName(),
+		ToMergeObjs:       stats,
+		EstimatedMemUsage: uint64(estimateMergeSize(objs)),
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseCreateCNMerge)
+	defer cancel()
+	err := e.cnSched.sendMergeTask(ctx, cntask)
+	if err != nil {
+		logutil.Info("MergeExecutorError",
+			common.OperationField("send-cn-task"),
+			common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
+			common.AnyField("error", err),
+		)
+		return
+	}
+
+	e.cnSched.addActiveObjects(objs)
+	entry.Stats.SetLastMergeTime()
 }
 
 func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool) {

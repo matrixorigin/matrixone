@@ -90,7 +90,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, taskHostKind) {
 	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
@@ -131,7 +131,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 		set.reset()
 	}
 	if len(m.overlappingObjsSet) == 0 {
-		return nil, TaskHostDN
+		return nil, taskHostDN
 	}
 
 	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
@@ -141,14 +141,14 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 	// get the overlapping set with most objs.
 	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
 	if len(objs) < 2 {
-		return nil, TaskHostDN
+		return nil, taskHostDN
 	}
 
 	if level < 3 && len(objs) > levels[3] {
 		objs = objs[:levels[3]]
 	}
 
-	return objs, TaskHostDN
+	return objs, taskHostDN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {

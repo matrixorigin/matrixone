@@ -15,11 +15,7 @@
 package merge
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,147 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var StopMerge atomic.Bool
 
-type CNMergeScheduler interface {
-	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
-}
-
-func NewTaskServiceGetter(getter taskservice.Getter) CNMergeScheduler {
-	return &taskServiceGetter{
-		Getter: getter,
-	}
-}
-
-type taskServiceGetter struct {
-	taskservice.Getter
-}
-
-func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error {
-	ts, ok := tsg.Getter()
-	if !ok {
-		return taskservice.ErrNotReady
-	}
-	taskIDPrefix := "Merge:" + task.TableName
-	asyncTask, err := ts.QueryAsyncTask(ctx,
-		taskservice.WithTaskMetadataId(taskservice.LIKE, taskIDPrefix+"%"),
-		taskservice.WithTaskStatusCond(taskpb.TaskStatus_Created, taskpb.TaskStatus_Running))
-	if err != nil {
-		return err
-	}
-	if len(asyncTask) != 0 {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("table %q is merging", task.TableName))
-	}
-	b, err := task.Marshal()
-	if err != nil {
-		return err
-	}
-	return ts.CreateAsyncTask(ctx,
-		taskpb.TaskMetadata{
-			ID:       taskIDPrefix + ":" + strconv.FormatInt(time.Now().Unix(), 10),
-			Executor: taskpb.TaskCode_MergeObject,
-			Context:  b,
-			Options:  taskpb.TaskOptions{Resource: &taskpb.Resource{Memory: task.EstimatedMemUsage}},
-		})
-}
-
-type TaskHostKind int
+type taskHostKind int
 
 const (
-	TaskHostCN TaskHostKind = iota
-	TaskHostDN
+	taskHostCN taskHostKind = iota
+	taskHostDN
 )
-
-type activeEntry struct {
-	tid      uint64
-	insertAt time.Time
-}
-
-var ActiveCNObj = ActiveCNObjMap{
-	o: make(map[objectio.ObjectId]activeEntry),
-}
-
-type ActiveCNObjMap struct {
-	sync.Mutex
-	o map[objectio.ObjectId]activeEntry
-}
-
-func (e *ActiveCNObjMap) Prune(id uint64, ago time.Duration) {
-	e.Lock()
-	defer e.Unlock()
-	now := time.Now()
-	if ago == 0 {
-		for k, v := range e.o {
-			if v.tid == id {
-				delete(e.o, k)
-			}
-		}
-		return
-	}
-
-	if id == 0 && ago > 1*time.Second {
-		for k, v := range e.o {
-			if now.Sub(v.insertAt) > ago {
-				delete(e.o, k)
-			}
-		}
-		return
-	}
-	for k, v := range e.o {
-		if v.tid == id && now.Sub(v.insertAt) > ago {
-			delete(e.o, k)
-		}
-	}
-}
-
-func (e *ActiveCNObjMap) String() string {
-	e.Lock()
-	defer e.Unlock()
-
-	b := &bytes.Buffer{}
-	now := time.Now()
-	for k, v := range e.o {
-		b.WriteString(fmt.Sprintf(" id: %v, table: %v, insertAt: %s ago\n",
-			k.String(), v.tid, now.Sub(v.insertAt).String()))
-	}
-	return b.String()
-}
-
-func (e *ActiveCNObjMap) AddActiveCNObj(entries []*catalog.ObjectEntry) {
-	e.Lock()
-	for _, entry := range entries {
-		e.o[*entry.ID()] = activeEntry{
-			entry.GetTable().ID,
-			time.Now(),
-		}
-	}
-	e.Unlock()
-}
-
-func (e *ActiveCNObjMap) RemoveActiveCNObj(ids []objectio.ObjectId) {
-	e.Lock()
-	defer e.Unlock()
-	for _, id := range ids {
-		delete(e.o, id)
-	}
-}
-
-func (e *ActiveCNObjMap) CheckOverlapOnCNActive(entries []*catalog.ObjectEntry) bool {
-	e.Lock()
-	defer e.Unlock()
-	for _, entry := range entries {
-		if _, ok := e.o[*entry.ID()]; ok {
-			return true
-		}
-	}
-	return false
-}
 
 func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService) {
 	if entry == nil {
