@@ -34,9 +34,8 @@ func TestExtendResultPurely(t *testing.T) {
 	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
 	{
 		osr := optSplitResult{}
-		osr.init(mg, types.T_bool.ToType())
+		osr.init(mg, types.T_bool.ToType(), false)
 		osr.optInformation.eachSplitCapacity = blockLimitation
-		osr.noNeedToCountEmptyGroup()
 
 		// pre extendResultPurely 130 rows.
 		require.NoError(t, osr.preExtend(130))

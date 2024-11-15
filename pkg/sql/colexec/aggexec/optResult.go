@@ -99,14 +99,14 @@ func (r *optSplitResult) unmarshalFromBytes(data []byte) error {
 }
 
 func (r *optSplitResult) init(
-	mg AggMemoryManager, typ types.Type) {
+	mg AggMemoryManager, typ types.Type, needEmptyList bool) {
 	if mg != nil {
 		r.mp = mg.Mp()
 	}
 	r.resultType = typ
 
-	r.optInformation.doesThisNeedEmptyList = true
-	r.optInformation.shouldSetNullToEmptyGroup = true
+	r.optInformation.doesThisNeedEmptyList = needEmptyList
+	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
 
 	r.optInformation.eachSplitCapacity = blockCapacityForStrType
 	if !typ.IsVarlen() {
@@ -116,7 +116,10 @@ func (r *optSplitResult) init(
 	}
 
 	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(typ))
-	r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+	if needEmptyList {
+		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
+	}
 	r.nowIdx1 = 0
 }
 

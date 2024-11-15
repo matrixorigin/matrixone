@@ -25,14 +25,11 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	setEmptyGroupToNull bool, initialValue T) aggResultWithFixedType[T] {
 
 	res := aggResultWithFixedType[T]{}
-	res.init(mg, resultType)
-	if !setEmptyGroupToNull {
-		res.noNeedToCountEmptyGroup()
-	}
+	res.init(mg, resultType, setEmptyGroupToNull)
 	res.InitialValue = initialValue
 	res.values = make([][]T, 1)
 
-	return aggResultWithFixedType[T]{}
+	return res
 }
 
 func initAggResultWithBytesTypeResult(
@@ -41,13 +38,10 @@ func initAggResultWithBytesTypeResult(
 	setEmptyGroupToNull bool, initialValue string) aggResultWithBytesType {
 
 	res := aggResultWithBytesType{}
-	res.init(mg, resultType)
-	if !setEmptyGroupToNull {
-		res.noNeedToCountEmptyGroup()
-	}
+	res.init(mg, resultType, setEmptyGroupToNull)
 	res.InitialValue = []byte(initialValue)
 
-	return aggResultWithBytesType{}
+	return res
 }
 
 type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
