@@ -90,11 +90,56 @@ type optSplitResult struct {
 	accessIdx1, accessIdx2 int
 }
 
-func (r *optSplitResult) marshalToBytes() ([]byte, error) {
-	return nil, nil
+func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, error) {
+	var err error
+
+	resultData := make([][]byte, len(r.resultList))
+	emptyData := make([][]byte, len(r.emptyList))
+
+	for i := range r.resultList {
+		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
+			return nil, nil, err
+		}
+	}
+	for i := range r.emptyList {
+		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
+			return nil, nil, err
+		}
+	}
+	return resultData, emptyData, nil
 }
 
-func (r *optSplitResult) unmarshalFromBytes(data []byte) error {
+func (r *optSplitResult) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) error {
+	var err error
+	defer func() {
+		if err != nil {
+			for i := range r.resultList {
+				if r.resultList[i] != nil {
+					r.resultList[i].Free(r.mp)
+				}
+			}
+			for i := range r.emptyList {
+				if r.emptyList[i] != nil {
+					r.emptyList[i].Free(r.mp)
+				}
+			}
+		}
+	}()
+
+	r.resultList = make([]*vector.Vector, len(resultData))
+	r.emptyList = make([]*vector.Vector, len(emptyData))
+	for i := range r.resultList {
+		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
+		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {
+			return err
+		}
+	}
+	for i := range r.emptyList {
+		r.emptyList[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+		if err = vectorUnmarshal(r.emptyList[i], emptyData[i], r.mp); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
