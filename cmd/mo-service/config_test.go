@@ -75,6 +75,7 @@ func TestParseTNConfig(t *testing.T) {
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 	// test
 	// test2
+	// 3
 	panic(1)
 }
 
