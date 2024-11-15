@@ -209,6 +209,7 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	printShuffle               int
+	skipDedup                  int
 }
 
 type CTERef struct {
