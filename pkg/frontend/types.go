@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -272,11 +271,7 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
-	IsInsertValues bool
-	InsertBat      *batch.Batch
 	proc           *process.Process
-
-	exprList [][]colexec.ExpressionExecutor
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -386,17 +381,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
-	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
-		prepareStmt.InsertBat = nil
-	}
-	if prepareStmt.exprList != nil {
-		for _, exprs := range prepareStmt.exprList {
-			for _, expr := range exprs {
-				expr.Free()
-			}
-		}
-	}
+
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
