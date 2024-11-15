@@ -100,6 +100,8 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+	panic(2)
+
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {
@@ -183,6 +185,7 @@ service-addresses = [
 	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
+	panic(3)
 }
 
 func TestDumpCommonConfig(t *testing.T) {
