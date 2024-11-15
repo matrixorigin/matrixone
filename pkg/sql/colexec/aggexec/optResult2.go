@@ -60,6 +60,10 @@ type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	values [][]T
 }
 
+func (r *aggResultWithFixedType[T]) marshal() [][]byte {
+	return nil
+}
+
 func (r *aggResultWithFixedType[T]) grows(more int) error {
 	x1, y1, x2, y2, err := r.resExtend(more)
 	if err != nil {
@@ -87,6 +91,10 @@ type aggResultWithBytesType struct {
 
 	// the initial value for a new result row.
 	InitialValue []byte
+}
+
+func (r *aggResultWithBytesType) marshal() [][]byte {
+	return nil
 }
 
 func (r *aggResultWithBytesType) grows(more int) error {

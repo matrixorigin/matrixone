@@ -151,8 +151,17 @@ func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
 	return x, y
 }
 
-func (r *optSplitResult) updateNextAccessIdx(idx int) {
+func (r *optSplitResult) updateNextAccessIdx(idx int) (x, y int) {
 	r.accessIdx1, r.accessIdx2 = r.getResultRealIndex(idx)
+	return r.accessIdx1, r.accessIdx2
+}
+
+func (r *optSplitResult) setNextAccessDirectly(x, y int) {
+	r.accessIdx1, r.accessIdx2 = x, y
+}
+
+func (r *optSplitResult) totalGroupCount() int {
+	return r.resultList[r.nowIdx1].Length() + (len(r.resultList)-1)*r.optInformation.eachSplitCapacity
 }
 
 func (r *optSplitResult) isGroupEmpty(x, y int) bool {
@@ -165,6 +174,18 @@ func (r *optSplitResult) setGroupNotEmpty(x, y int) {
 
 func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 	r.bsFromEmptyList[x][y] = r.bsFromEmptyList[x][y] && anotherIsEmpty
+}
+
+func (r *optSplitResult) getEachBlockLimitation() int {
+	return r.optInformation.eachSplitCapacity
+}
+
+func (r *optSplitResult) getEmptyList() [][]bool {
+	return r.bsFromEmptyList
+}
+
+func (r *optSplitResult) getEmptyListOnX(x int) []bool {
+	return r.bsFromEmptyList[x]
 }
 
 // flushOneVector return the agg result one by one.
@@ -211,14 +232,14 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	l1 := r.resultList[r.nowIdx1].Length()
 	maxToExtendWithinTheUsingPart := r.optInformation.eachSplitCapacity - l1
 	if maxToExtendWithinTheUsingPart >= more {
-		if err := r.preExtendPartK(r.nowIdx1, more); err != nil {
+		if err := r.extendMoreToKthGroup(r.nowIdx1, more); err != nil {
 			return err
 		}
 
 		r.setLengthPartK(r.nowIdx1, l1+more)
 		return nil
 	}
-	if err := r.preExtendPartK(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
+	if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
 		return err
 	}
 	r.setLengthPartK(r.nowIdx1, r.optInformation.eachSplitCapacity)
@@ -231,7 +252,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 
 		fullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
 		for i, j := r.nowIdx1, r.nowIdx1+fullPart; i < j; i++ {
-			if err := r.preExtendPartK(i, r.optInformation.eachSplitCapacity); err != nil {
+			if err := r.extendMoreToKthGroup(i, r.optInformation.eachSplitCapacity); err != nil {
 				return err
 			}
 			r.setLengthPartK(i, r.optInformation.eachSplitCapacity)
@@ -239,7 +260,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 
 		if rowMore > 0 {
 			r.nowIdx1 += fullPart
-			if err := r.preExtendPartK(r.nowIdx1, rowMore); err != nil {
+			if err := r.extendMoreToKthGroup(r.nowIdx1, rowMore); err != nil {
 				return err
 			}
 			r.setLengthPartK(r.nowIdx1, rowMore)
@@ -247,7 +268,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 		return nil
 	}
 	for i := r.nowIdx1 + 1; i < len(r.resultList); i++ {
-		if err := r.preExtendPartK(i, r.optInformation.eachSplitCapacity); err != nil {
+		if err := r.extendMoreToKthGroup(i, r.optInformation.eachSplitCapacity); err != nil {
 			return err
 		}
 		r.setLengthPartK(i, r.optInformation.eachSplitCapacity)
@@ -258,14 +279,14 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	apFullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
-		if err := r.preExtendPartK(k, r.optInformation.eachSplitCapacity); err != nil {
+		if err := r.extendMoreToKthGroup(k, r.optInformation.eachSplitCapacity); err != nil {
 			return nil
 		}
 		r.setLengthPartK(k, r.optInformation.eachSplitCapacity)
 	}
 	if rowMore > 0 {
 		k := r.appendPartK()
-		if err := r.preExtendPartK(k, rowMore); err != nil {
+		if err := r.extendMoreToKthGroup(k, rowMore); err != nil {
 			return err
 		}
 		r.setLengthPartK(k, rowMore)
@@ -275,7 +296,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	return nil
 }
 
-func (r *optSplitResult) preExtendPartK(k int, more int) error {
+func (r *optSplitResult) extendMoreToKthGroup(k int, more int) error {
 	if err := r.resultList[k].PreExtend(more, r.mp); err != nil {
 		return err
 	}
