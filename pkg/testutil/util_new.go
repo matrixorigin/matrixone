@@ -46,7 +46,7 @@ func WithMPool(pool *mpool.MPool) ProcOptions {
 func WithFileService(fs fileservice.FileService) ProcOptions {
 	return func(proc *process.Process) {
 		if proc.GetFileService() != nil {
-			proc.GetFileService().Close()
+			proc.GetFileService().Close(proc.Ctx)
 		}
 		proc.SetFileService(fs)
 	}

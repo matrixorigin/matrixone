@@ -60,13 +60,13 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+					ToCacheData: func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.CopyToCacheData(bs)
+						cacheData := allocator.CopyToCacheData(ctx, bs)
 						return cacheData, nil
 					},
 				},
@@ -119,6 +119,6 @@ func testCachingFileService(
 	vec.Release()
 
 	// flush
-	fs.FlushCache()
+	fs.FlushCache(ctx)
 
 }

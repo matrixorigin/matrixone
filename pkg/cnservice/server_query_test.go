@@ -145,6 +145,68 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 	}
 }
 
+func Test_service_handleGoGCPercent(t *testing.T) {
+	ctx := context.Background()
+	// reset GCPercent
+	_ = debug.SetGCPercent(100)
+	type fields struct{}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:   "disable_gc",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: -1}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: 100}},
+		},
+		{
+			name:   "set_90",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: 90}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: -1}},
+		},
+		{
+			name:   "set_100",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: 100}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: 90}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			err := s.handleGoGCPercent(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleGoGCPercent(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
 func Test_service_handleFileServiceCacheRequest(t *testing.T) {
 	ctx := context.Background()
 	type fields struct{}
@@ -1116,4 +1178,19 @@ func Test_service_copy(t *testing.T) {
 	got := copyTxnInfo(srcLock)
 	require.Falsef(t, unsafe.Pointer(&srcLock.Rows) == unsafe.Pointer(&got.Rows), "copyTxnInfo Rows should diff. src: %p, got: %p", srcLock.Rows, got.Rows)
 	require.Falsef(t, unsafe.Pointer(&srcLock.Options) == unsafe.Pointer(got.Options), "copyTxnInfo Options should diff. src: %p, got: %p", &srcLock.Options, got.Options)
+}
+
+func Test_service_handleMetadataCacheRequest(t *testing.T) {
+	ctx := context.Background()
+	s := &service{}
+	var resp query.Response
+	err := s.handleMetadataCacheRequest(ctx, &query.Request{
+		MetadataCacheRequest: query.MetadataCacheRequest{
+			CacheSize: 42,
+		},
+	}, &resp, nil)
+	require.Nil(t, err)
+	if resp.MetadataCacheResponse.CacheCapacity != 42 {
+		t.Fatal()
+	}
 }

@@ -290,6 +290,6 @@ func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
 	mergeBlock.container.mp2 = nil
 }
 
-func (mergeBlock *MergeBlock) AffectedRows() uint64 {
+func (mergeBlock *MergeBlock) GetAffectedRows() uint64 {
 	return mergeBlock.container.affectedRows
 }

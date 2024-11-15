@@ -1496,7 +1496,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		bhStub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1530,12 +1530,76 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
 		assert.Nil(t, err)
 
-		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		typ := new(types.Type)
+		typBytes, err := typ.Marshal()
+		assert.Nil(t, err)
+
+		def := new(plan2.Default)
+		defBytes, err := types.Encode(def)
+		assert.Nil(t, err)
+
+		mrs := newMrsForTableColumnDef([][]interface{}{
+			{
+				"abc",
+				string(typBytes),
+				10,
+				nil,
+				string(defBytes),
+				nil,
+				1,
+			},
+		})
 		bh.sql2result[sql] = mrs
 
 		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("attname")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("atttyp")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("attnum")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("attnotnull")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("att_default")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col6 := &MysqlColumn{}
+	col6.SetName("att_is_auto_increment")
+	col6.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col7 := &MysqlColumn{}
+	col7.SetName("att_is_hidden")
+	col7.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
 }
 
 func Test_getTableColumnDefSql(t *testing.T) {

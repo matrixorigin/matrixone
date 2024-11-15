@@ -99,7 +99,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := result.Batch
 
 			if bat == nil {
-				ctr.state = SendLast
+				ctr.state = Finalize
 				continue
 			}
 			if bat.IsEmpty() {
@@ -115,28 +115,25 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			continue
 
-		case SendLast:
-			if rightSemi.ctr.buf == nil {
-				rightSemi.ctr.lastpos = 0
-				setNil, err := ctr.sendLast(rightSemi, proc, analyzer)
+		case Finalize:
+			if ctr.buf == nil {
+				ctr.lastPos = 0
+				err := ctr.finalize(rightSemi, proc)
 				if err != nil {
 					return result, err
 				}
-				if setNil {
-					ctr.state = End
-				}
-				continue
-			} else {
-				if rightSemi.ctr.lastpos >= len(rightSemi.ctr.buf) {
-					ctr.state = End
-					continue
-				}
-				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
-				rightSemi.ctr.lastpos++
-				result.Status = vm.ExecHasMore
-				analyzer.Output(result.Batch)
-				return result, nil
 			}
+
+			if ctr.lastPos >= len(ctr.buf) {
+				ctr.state = End
+				continue
+			}
+
+			result.Batch = ctr.buf[ctr.lastPos]
+			ctr.lastPos++
+			result.Status = vm.ExecHasMore
+			analyzer.Output(result.Batch)
+			return result, nil
 
 		default:
 			result.Batch = nil
@@ -166,24 +163,24 @@ func (rightSemi *RightSemi) build(analyzer process.Analyzer, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer process.Analyzer) (bool, error) {
+func (ctr *container) finalize(ap *RightSemi, proc *process.Process) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
-		return true, nil
+		return nil
 	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
-			return true, nil
+			return nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {
-					return true, nil
+					return nil
 				}
 			}
 			close(ap.Channel)
@@ -209,20 +206,20 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 			}
 		}
 		if err := ctr.rbat.PreExtend(proc.Mp(), len(sels)); err != nil {
-			return false, err
+			return err
 		}
 		for j, pos := range ap.Result {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 				if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
-					return false, err
+					return err
 				}
 			}
 		}
 		ctr.rbat.AddRowCount(len(sels))
 
 		ctr.buf = []*batch.Batch{ctr.rbat}
-		return false, nil
+		return nil
 	} else {
 		n := (len(sels)-1)/colexec.DefaultBatchSize + 1
 		ctr.buf = make([]*batch.Batch, n)
@@ -232,7 +229,7 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 				ctr.buf[k].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
 			}
 			if err := ctr.buf[k].PreExtend(proc.Mp(), colexec.DefaultBatchSize); err != nil {
-				return false, err
+				return err
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {
@@ -244,13 +241,13 @@ func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyzer pr
 				for _, sel := range newsels {
 					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 					if err := ap.ctr.buf[k].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
-						return false, err
+						return err
 					}
 				}
 			}
 			ctr.buf[k].SetRowCount(len(newsels))
 		}
-		return false, nil
+		return nil
 	}
 
 }

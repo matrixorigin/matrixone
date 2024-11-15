@@ -215,19 +215,21 @@ a    b
 100    200
 101    201
 update t1 set a=null;
+constraint violation: Column 'a' cannot be null
 select * from t1;
 a    b
-102    1
-103    2
-104    200
-105    201
+1    1
+2    2
+100    200
+101    201
 update t1 set b=null;
+constraint violation: Column 'b' cannot be null
 select * from t1;
 a    b
-102    202
-103    203
-104    204
-105    205
+1    1
+2    2
+100    200
+101    201
 drop table if exists t1;
 create table t1(
 id int,

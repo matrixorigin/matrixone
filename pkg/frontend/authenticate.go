@@ -4145,7 +4145,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(ctx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -5703,6 +5703,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							databaseName:          objRef.GetSchemaName(),
 							tableName:             objRef.GetObjName(),
 							isClusterTable:        node.DeleteCtx.IsClusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
+				}
+			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, updateCtx := range node.UpdateCtxList {
+					if !isIndexTable(updateCtx.ObjRef.GetObjName()) {
+						isClusterTable := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+						appendPt(privilegeTips{
+							typ:                   t,
+							databaseName:          updateCtx.ObjRef.GetSchemaName(),
+							tableName:             updateCtx.ObjRef.GetObjName(),
+							isClusterTable:        isClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
@@ -8156,17 +8169,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
 		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
-
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
-	defer bh.Close()
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))

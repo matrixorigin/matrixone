@@ -129,9 +129,7 @@ func checkScopeRoot(t *testing.T, s *Scope) {
 }
 
 func TestScopeSerialization2(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
@@ -264,9 +262,7 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
@@ -316,9 +312,7 @@ func TestNewParallelScope(t *testing.T) {
 }
 
 func TestCompileExternValueScan(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -338,9 +332,7 @@ func TestCompileExternValueScan(t *testing.T) {
 }
 
 func TestCompileExternScanParallelWrite(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -361,9 +353,7 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 }
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -534,4 +524,40 @@ func TestNotifyMessageClean(t *testing.T) {
 
 	n2.clean(proc)
 	require.Equal(t, 2, ff.number)
+}
+
+func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
+	s0 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: false},
+	}
+	s1 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: true},
+	}
+	s2 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: false},
+	}
+	s0.PreScopes = []*Scope{s1, s2}
+
+	require.NotNil(t, s1.holdAnyCannotRemoteOperator())
+	require.NotNil(t, s0.holdAnyCannotRemoteOperator())
+	require.Nil(t, s2.holdAnyCannotRemoteOperator())
+}
+
+func TestCleanPipelineWitchStartFail(t *testing.T) {
+	s := &Scope{
+		Proc: testutil.NewProcess(),
+	}
+	s.Proc.BuildPipelineContext(context.Background())
+	op := connector.NewArgument()
+	op.Reg = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}
+	s.RootOp = op
+
+	cleanPipelineWitchStartFail(s, moerr.NewInternalErrorNoCtx("test cleanPipelineWitchStartFail"), false)
+
+	require.Equal(t, 1, len(op.Reg.Ch2))
+	signal := <-op.Reg.Ch2
+	_, err := signal.Action()
+	require.Error(t, err)
 }

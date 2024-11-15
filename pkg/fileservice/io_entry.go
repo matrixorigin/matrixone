@@ -40,7 +40,7 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 		return nil
 	}
 	LogEvent(ctx, str_to_cache_data_begin)
-	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
+	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, allocator)
 	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
@@ -81,14 +81,14 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 	return nil
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
+func CacheOriginalData(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData fscache.Data, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {
 			return
 		}
 	}
-	cacheData = allocator.CopyToCacheData(data)
+	cacheData = allocator.CopyToCacheData(ctx, data)
 	return
 }
 

@@ -18,33 +18,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (update *MultiUpdate) delete_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
-	deleteBatch *batch.Batch) (err error) {
-	deleteBatch.CleanOnlyData()
+	idx int,
+) (err error) {
 
-	rowIdIdx := updateCtx.deleteCols[0]
+	// init buf
+	ctr := &update.ctr
+	if ctr.deleteBuf[idx] == nil {
+		mainPkIdx := updateCtx.DeleteCols[1]
+		ctr.deleteBuf[idx] = newDeleteBatch(inputBatch, mainPkIdx)
+	}
+	deleteBatch := ctr.deleteBuf[idx]
+	rowIdIdx := updateCtx.DeleteCols[0]
+	rowIdVec := inputBatch.Vecs[rowIdIdx]
+	if rowIdVec.IsConstNull() {
+		return
+	}
+	rowCount := inputBatch.RowCount()
 
-	if len(updateCtx.partitionTableIDs) > 0 {
-		for partIdx := range len(updateCtx.partitionTableIDs) {
+	if len(updateCtx.PartitionTableIDs) > 0 {
+		partTableNulls := inputBatch.Vecs[updateCtx.OldPartitionIdx].GetNulls()
+		partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.OldPartitionIdx])
+
+		for partIdx := range len(updateCtx.PartitionTableIDs) {
+			rowIdNulls := rowIdVec.GetNulls()
+			if rowIdNulls.Count() == rowCount {
+				continue
+			}
+
 			deleteBatch.CleanOnlyData()
 			expected := int32(partIdx)
-			partTableIDs := vector.MustFixedColWithTypeCheck[int32](inputBatch.Vecs[updateCtx.partitionIdx])
-			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
 
 			for i, partition := range partTableIDs {
-				if !inputBatch.Vecs[updateCtx.partitionIdx].GetNulls().Contains(uint64(i)) {
+				if !partTableNulls.Contains(uint64(i)) {
 					if partition == -1 {
 						return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expected {
 						if !rowIdNulls.Contains(uint64(i)) {
-							for deleteIdx, inputIdx := range updateCtx.deleteCols {
+							for deleteIdx, inputIdx := range updateCtx.DeleteCols {
 								err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 								if err != nil {
 									return err
@@ -55,20 +76,35 @@ func (update *MultiUpdate) delete_table(
 				}
 			}
 
-			err = updateCtx.partitionSources[partIdx].Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
-			if err != nil {
-				return err
+			rowCount := deleteBatch.Vecs[0].Length()
+			if rowCount > 0 {
+				deleteBatch.SetRowCount(rowCount)
+				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+				update.addDeleteAffectRows(tableType, uint64(rowCount))
+				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
+
+				crs := analyzer.GetOpCounterSet()
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+				err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+				if err != nil {
+					return err
+				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 		}
 	} else {
 		deleteBatch.CleanOnlyData()
+		if rowIdVec.HasNull() {
+			// multi delete or delete unique table with null value
+			rowIdNulls := rowIdVec.GetNulls()
+			if rowIdNulls.Count() == rowCount {
+				return
+			}
 
-		if inputBatch.Vecs[rowIdIdx].HasNull() {
-			// multi delete
-			rowIdNulls := inputBatch.Vecs[rowIdIdx].GetNulls()
-			for i := 0; i < inputBatch.RowCount(); i++ {
+			for i := 0; i < rowCount; i++ {
 				if !rowIdNulls.Contains(uint64(i)) {
-					for deleteIdx, inputIdx := range updateCtx.deleteCols {
+					for deleteIdx, inputIdx := range updateCtx.DeleteCols {
 						err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 						if err != nil {
 							return err
@@ -78,15 +114,37 @@ func (update *MultiUpdate) delete_table(
 			}
 
 		} else {
-			for deleteIdx, inputIdx := range updateCtx.deleteCols {
+			for deleteIdx, inputIdx := range updateCtx.DeleteCols {
 				err = deleteBatch.Vecs[deleteIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
 				if err != nil {
 					return err
 				}
 			}
 		}
-		err = updateCtx.source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+		rowCount := deleteBatch.Vecs[0].Length()
+		if rowCount > 0 {
+			deleteBatch.SetRowCount(rowCount)
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addDeleteAffectRows(tableType, uint64(rowCount))
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+			if err != nil {
+				return err
+			}
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+		}
 	}
 
 	return
+}
+
+func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int) *batch.Batch {
+	buf := batch.New([]string{catalog.Row_ID, "pk"})
+	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
+	return buf
 }

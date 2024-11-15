@@ -27,7 +27,7 @@ func Test_objGetArg(t *testing.T) {
 	defer cancel()
 	err := get.InitReader(ctx, "abc")
 	assert.Nil(t, err)
-	defer get.fs.Close()
+	defer get.fs.Close(ctx)
 
 	_, err = get.GetData(ctx)
 	assert.Error(t, err)

@@ -27,4 +27,23 @@ insert into t values (2, null);
 insert into t values (3, null);
 update t set a=null;
 constraint violation: Column 'a' cannot be null
+drop table if exists t1;
+create table t1 (a int primary key, b int, c int, unique key(b,c));
+INSERT INTO t1 SELECT result,result,null FROM generate_series(1,1000000) g;
+drop table t1;
+create table t1 (a int primary key, b int);
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('inject_send_pipeline', ':::', 'echo', 1, 't1');
+add_fault_point(inject_send_pipeline, :::, echo, 1, t1) 
+true
+INSERT INTO t1 SELECT result,result FROM generate_series(1,3000000) g;
+select disable_fault_injection();
+disable_fault_injection()
+true
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a,b));
+insert into t1 select result,result,result from generate_series(200000) g;
+update t1 set c =10;
 drop database if exists test;

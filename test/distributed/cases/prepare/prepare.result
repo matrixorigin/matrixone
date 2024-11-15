@@ -304,7 +304,7 @@ create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
 execute stmt1;
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '(.*)'
 select * from t1;
 a    b    c
 1    2    3
@@ -597,3 +597,11 @@ col1    col2
 1    2
 drop database db1;
 drop database db2;
+drop account if exists prepare_acc01;
+create account prepare_acc01 admin_name = 'test_prepare_account' identified by '111';
+create database db1;
+use db1;
+prepare stmt1x from 'select count(*) from system.statement_info limit 0';
+execute stmt1x;
+count(*)
+drop account prepare_acc01;

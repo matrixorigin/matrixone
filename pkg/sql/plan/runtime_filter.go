@@ -52,6 +52,14 @@ func GetInFilterCardLimitOnPK(
 	return int32(upper)
 }
 
+func mustRuntimeFilter(n *plan.Node) bool {
+	switch n.JoinType {
+	case plan.Node_INDEX, plan.Node_DEDUP:
+		return true
+	}
+	return false
+}
+
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
@@ -97,7 +105,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Outcnt > 5000000 {
+	if !mustRuntimeFilter(node) && rightChild.Stats.Outcnt > 5000000 {
 		return
 	}
 	if node.Stats.HashmapStats.HashOnPK && rightChild.Stats.Outcnt > 320000 {
@@ -173,7 +181,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			//}
 		}
 
-		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
+		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
 			return
 		}
 

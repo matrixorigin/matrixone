@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -59,6 +60,14 @@ func TestBatches(t *testing.T) {
 	require.Equal(t, 8192, batches.Buf[0].RowCount())
 	require.Equal(t, 8192, batches.Buf[1].RowCount())
 	require.Equal(t, 20, batches.Buf[2].RowCount())
+
+	rowCnt := batches.RowCount()
+	bm := &bitmap.Bitmap{}
+	bm.InitWithSize(int64(rowCnt))
+	bm.AddRange(1000, 11000)
+	batches.Shrink(bm, proc)
+	require.Equal(t, rowCnt-10000, batches.RowCount())
+
 	batches.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

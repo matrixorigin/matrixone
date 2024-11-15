@@ -750,6 +750,7 @@ show create table index02;
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 show create table index02;
+-- @pattern
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';

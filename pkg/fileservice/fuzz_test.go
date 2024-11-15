@@ -36,12 +36,11 @@ func fuzzFS(
 	),
 ) {
 
+	ctx := context.Background()
 	counterSet := new(perfcounter.CounterSet)
 
 	fs := newFS(counterSet)
-	defer fs.Close()
-
-	ctx := context.Background()
+	defer fs.Close(ctx)
 
 	type FileInfo struct {
 		Path    string

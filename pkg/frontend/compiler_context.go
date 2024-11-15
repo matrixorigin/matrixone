@@ -273,6 +273,19 @@ func (tcc *TxnCompilerContext) GetConfig(varName string, dbName string, tblName 
 	return "", moerr.NewInternalErrorf(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
+// for system_metrics.metric and system.statement_info,
+// it is special under the no sys account, should switch into the sys account first.
+func ShouldSwitchToSysAccount(dbName string, tableName string) bool {
+	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+		return true
+	}
+
+	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
+		return true
+	}
+	return false
+}
+
 // getRelation returns the context (maybe updated) and the relation
 func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub *plan.SubscriptionMeta, snapshot *plan2.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
@@ -309,13 +322,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		dbName = sub.DbName
 	}
 
-	//for system_metrics.metric and system.statement_info,
-	//it is special under the no sys account, should switch into the sys account first.
-	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
-	}
-
-	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
+	if ShouldSwitchToSysAccount(dbName, tableName) {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
 
@@ -1024,11 +1031,15 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
-	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn)
+	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tempCtx, false)
+	defer bh.Close()
+	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
-	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName)
+	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tcc.GetContext(), false)
+	defer bh.Close()
+	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
 }
 

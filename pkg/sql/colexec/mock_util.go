@@ -44,10 +44,8 @@ func NewMockOperator() *MockOperator {
 	return &MockOperator{}
 }
 
-func (op *MockOperator) ResetBatchs(proc *process.Process, batchs []*batch.Batch) *MockOperator {
-	op.Free(proc, false, nil)
-	op.WithBatchs(batchs)
-	return op
+func (op *MockOperator) ResetBatchs() {
+	op.batchs = nil
 }
 
 func (op *MockOperator) WithBatchs(batchs []*batch.Batch) *MockOperator {
@@ -68,6 +66,7 @@ func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err er
 			op.batchs[i].CleanOnlyData()
 		}
 	}
+	op.current = 0
 }
 
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -97,9 +96,6 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 	if op.current >= len(op.batchs) {
 		result.Status = vm.ExecStop
 		return result, nil
-	}
-	if op.current > 0 {
-		op.batchs[op.current-1].CleanOnlyData()
 	}
 	result.Batch = op.batchs[op.current]
 	op.current = op.current + 1

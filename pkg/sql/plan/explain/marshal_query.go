@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -638,7 +639,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 	case plan.Node_MATERIAL:
 		labels = append(labels, models.Label{
-			Name:  Label_Meterial,
+			Name:  Label_Material,
 			Value: []string{},
 		})
 	case plan.Node_APPLY:
@@ -732,7 +733,7 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
 			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
-			WithS3IOInputCount(float64(analyzeInfo.S3Put)).
+			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows)).
 			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
 			WithS3IOListCount(float64(analyzeInfo.S3List)).
 			WithS3IODeleteCount(float64(analyzeInfo.S3Delete + analyzeInfo.S3DeleteMul))

@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -46,9 +46,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
-var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+func BlockThresholdForOneCN(ncpu int) int {
+	if ncpu == 0 {
+		ncpu = system.GoMaxProcs()
+	}
+	return ncpu * blockThresholdForTpQuery
+}
+func costThresholdForOneCN() int {
+	return system.GoMaxProcs() * costThresholdForTpQuery
+}
 
 type ExecType int
 
@@ -884,7 +890,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
-			node.Stats.Selectivity = selectivity_out
+			node.Stats.Selectivity = selectivity
+
+		case plan.Node_DEDUP:
+			node.Stats.Outcnt = rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
@@ -1111,7 +1123,9 @@ func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
 	}
 	var cost float64
 	var canGetCost bool
-	if len(exprs) == 2 {
+	if len(exprs) == 1 {
+		cost, canGetCost = getCost(nil, exprs[0], nil)
+	} else if len(exprs) == 2 {
 		if exprs[0].Typ.Id != exprs[1].Typ.Id {
 			return false
 		}
@@ -1154,9 +1168,13 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 		return 0, false
 	}
 
-	switch start.Typ.Id {
+	switch end.Typ.Id {
 	case int32(types.T_int32):
-		startNum, flag1 = getInt32Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt32Val(start)
+		}
 		endNum, flag2 = getInt32Val(end)
 		flag3 = true
 		if step != nil {
@@ -1166,7 +1184,11 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			return 0, false
 		}
 	case int32(types.T_int64):
-		startNum, flag1 = getInt64Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt64Val(start)
+		}
 		endNum, flag2 = getInt64Val(end)
 		flag3 = true
 		if step != nil {
@@ -1213,7 +1235,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.JoinType == plan.Node_DEDUP || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
@@ -1351,10 +1373,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Cost = float64(costThresholdForOneCN())
+	stats.Outcnt = float64(costThresholdForOneCN())
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN(0))
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1510,7 +1532,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1518,7 +1540,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1542,7 +1564,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1554,7 +1577,8 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:

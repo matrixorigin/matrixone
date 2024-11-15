@@ -1,0 +1,31 @@
+select @@global.validnode_checking;
+@@validnode_checking
+0
+select @@global.invited_nodes;
+@@invited_nodes
+*
+SET GLOBAL validnode_checking = on;
+SET GLOBAL invited_nodes = '';
+invalid input: invited_nodes is empty
+SET GLOBAL invited_nodes = '127.0.0.1';
+SET GLOBAL invited_nodes = '*';
+SET GLOBAL invited_nodes = '192.168.1.0/24';
+SET GLOBAL invited_nodes = '127.0.0.1,192.168.1.1';
+SET GLOBAL invited_nodes = '127.0.0.1,192.168.1.1/24';
+SET GLOBAL invited_nodes = '192.168.1.1, 10.0.0.0/33';
+invalid input: invalid CIDR: 10.0.0.0/33
+SET GLOBAL invited_nodes = '192.168.1.1, invalid_ip';
+invalid input: invalid IP: invalid_ip
+SET GLOBAL invited_nodes = '192.168.1.1, *';
+invalid input: invited_nodes contains '*', it should be the only element
+SET GLOBAL invited_nodes = '192.168.1.1, 10.0.0.0/33, invalid_ip';
+invalid input: invalid CIDR: 10.0.0.0/33
+SET GLOBAL invited_nodes = '127.0.0.1';
+SET GLOBAL invited_nodes = '*';
+drop user if exists user1;
+create user user1 identified by '123456';
+alter user user1 identified by '1234567';
+internal error: do not have privilege to execute the statement
+drop user user1;
+SET GLOBAL validnode_checking = default;
+SET GLOBAL invited_nodes = default;
