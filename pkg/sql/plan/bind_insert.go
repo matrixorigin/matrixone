@@ -159,7 +159,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.qry.LoadTag {
+	if builder.qry.LoadTag || builder.isRestore {
 		// load do not handle primary/unique key confliction
 		for i, tableDef := range dmlCtx.tableDefs {
 			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
