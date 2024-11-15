@@ -402,17 +402,6 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 		}
 	}
 
-	// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
-	//  Convenient to reuse memory next time
-	if prepareStmt.InsertBat != nil {
-		cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
-		for i := 0; i < len(prepareStmt.exprList); i++ {
-			for j := range prepareStmt.exprList[i] {
-				prepareStmt.exprList[i][j].ResetForNextQuery()
-			}
-		}
-		cwft.proc.SetPrepareExprList(prepareStmt.exprList)
-	}
 	numParams := len(preparePlan.ParamTypes)
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
