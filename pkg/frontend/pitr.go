@@ -1299,6 +1299,7 @@ func restoreToDatabaseOrTableWithPitr(
 	var (
 		createDbSql string
 		tableInfos  []*tableInfo
+		isSubDb     bool
 	)
 	createDbSql, err = getCreateDatabaseSqlInPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts)
 	if err != nil {
@@ -1308,8 +1309,11 @@ func restoreToDatabaseOrTableWithPitr(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
-	createDbSql = strings.ToLower(createDbSql)
-	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	isSubDb, err = checkDbIsSubDb(ctx, createDbSql)
+	if err != nil {
+		return
+	}
+	isSubDb = strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
