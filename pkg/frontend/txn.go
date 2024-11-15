@@ -328,14 +328,12 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 	var accId uint32
-	var tempCancel context.CancelFunc
 	accId, err = defines.GetAccountId(execCtx.reqCtx)
 	if err != nil {
 		return err
 	}
 	tempCtx := defines.AttachAccountId(th.txnCtx, accId)
-	tempCtx, tempCancel = context.WithTimeoutCause(tempCtx, getPu(execCtx.ses.GetService()).SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateUnsafe)
-	defer tempCancel()
+	//carefully, this context must be valid for a long term.
 	err = th.storage.New(tempCtx, th.txnOp)
 	if err != nil {
 		execCtx.ses.SetTxnId(dumpUUID[:])
