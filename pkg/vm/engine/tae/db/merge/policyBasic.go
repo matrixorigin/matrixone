@@ -219,7 +219,7 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 			return true
 		}
 		// skip big object as an insurance
-		if osize > 110*common.Const1MBytes {
+		if osize > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			return false
 		}
 
