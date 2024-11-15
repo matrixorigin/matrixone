@@ -284,7 +284,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 				if onlyDelete && tableType == UpdateMainTable {
 					bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols, DeleteBatchAttrs)
 				} else {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols, DeleteBatchAttrs, writer.sortIdxs[i])
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, -1, 0, updateCtx.DeleteCols, DeleteBatchAttrs, 0)
 				}
 				if err != nil {
 					return
@@ -307,7 +307,7 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 					if onlyDelete && tableType == UpdateMainTable && getPartitionIdx == lastIdx {
 						bats, err = fetchMainTableBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs)
 					} else {
-						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs, writer.sortIdxs[i])
+						bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.OldPartitionIdx, getPartitionIdx, updateCtx.DeleteCols, DeleteBatchAttrs, 0)
 					}
 					if err != nil {
 						return
