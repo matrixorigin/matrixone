@@ -1710,12 +1710,14 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // GetUniqueColAndIdxFromTableDef
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) ([]map[string]int, map[string]bool) {
 	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	uniqueColNames := make(map[string]bool)
 	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
 			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+			uniqueColNames[colName] = true
 		}
 		uniqueCols = append(uniqueCols, pkMap)
 	}
@@ -1725,11 +1727,12 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 			pkMap := make(map[string]int)
 			for _, part := range index.Parts {
 				pkMap[part] = int(tableDef.Name2ColIndex[part])
+				uniqueColNames[part] = true
 			}
 			uniqueCols = append(uniqueCols, pkMap)
 		}
 	}
-	return uniqueCols
+	return uniqueCols, uniqueColNames
 }
 
 // GenUniqueColJoinExpr
