@@ -156,7 +156,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.qry.LoadTag || builder.isRestore {
+	if builder.qry.LoadTag || builder.isRestore || (builder.optimizerHints != nil && builder.optimizerHints.skipDedup == 1) {
 		// load do not handle primary/unique key confliction
 		for i, tableDef := range dmlCtx.tableDefs {
 			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
