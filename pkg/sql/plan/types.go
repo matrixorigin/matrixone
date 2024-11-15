@@ -181,9 +181,10 @@ type QueryBuilder struct {
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isSkipResolveTableDef bool
+	skipStats             bool
 
-	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
-	skipStats      bool
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+
 	optimizerHints *OptimizerHints
 }
 
@@ -234,9 +235,14 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	recRecursiveScanNodeId int32
 	isTryBindingCTE        bool
 	sliding                bool
+	isDistinct             bool
+	isCorrelated           bool
+	hasSingleRow           bool
+	forceWindows           bool
+	isGroupingSet          bool
+	recRecursiveScanNodeId int32
 
 	cteName  string
 	headings []string
@@ -276,17 +282,11 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	isDistinct   bool
-	isCorrelated bool
-	hasSingleRow bool
-
 	parent     *BindContext
 	leftChild  *BindContext
 	rightChild *BindContext
 
 	defaultDatabase string
-
-	forceWindows bool
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
@@ -300,8 +300,7 @@ type BindContext struct {
 	// lower is sys var lower_case_table_names
 	lower int64
 
-	isGroupingSet bool
-	groupingFlag  []bool
+	groupingFlag []bool
 }
 
 type NameTuple struct {
