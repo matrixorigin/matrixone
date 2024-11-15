@@ -299,7 +299,8 @@ func (ip *internalProtocol) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet,
 	if err != nil {
 		return err
 	}
-	return ip.sendRows(mrs, uint64(bat.RowCount()))
+	cnt := uint64(bat.RowCount())
+	return ip.sendRows(mrs, cnt, mrs.GetRowCount()-cnt)
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
@@ -364,7 +365,7 @@ func (ip *internalProtocol) WriteResponse(ctx context.Context, resp *Response) e
 	ip.ResetStatistics()
 	if resp.category == ResultResponse {
 		if mer := resp.data.(*MysqlExecutionResult); mer != nil && mer.Mrs() != nil {
-			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount())
+			ip.sendRows(mer.Mrs(), mer.mrs.GetRowCount(), 0)
 		}
 	} else {
 		// OkResponse. this is NOT ErrorResponse because error will be returned by doComQuery
@@ -468,7 +469,11 @@ func (ip *internalProtocol) SetUserName(username string) {
 
 func (ip *internalProtocol) Close() {}
 
-func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
+// sendRows
+// case 1: used in WriteResponse and WriteResultSetRow, which are 'copy' op
+// case 2: used in Write, which is 'append' op.
+//   - add @startIdx to adapt append op.
+func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64, startIdx uint64) error {
 	if ip.stashResult {
 		res := ip.result.resultSet
 		if res == nil {
@@ -487,7 +492,7 @@ func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 			}
 		}
 		colCnt := res.GetColumnCount()
-		for i := uint64(0); i < cnt; i++ {
+		for i := startIdx; i < cnt; i++ {
 			row := make([]any, colCnt)
 			copy(row, mrs.Data[i])
 			res.Data = append(res.Data, row)
@@ -510,7 +515,7 @@ func (ip *internalProtocol) swapOutResult() *internalExecResult {
 func (ip *internalProtocol) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
 	ip.Lock()
 	defer ip.Unlock()
-	return ip.sendRows(mrs, cnt)
+	return ip.sendRows(mrs, cnt, 0)
 }
 func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
 	return nil
