@@ -162,7 +162,7 @@ var (
 	// defaultLoggerLabelKey and defaultLoggerLabelVal
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
-	defaultLoggerMap      = map[string]string{}
+	defaultLoggerMap      = map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}
 
 	defaultMaxLogMessageSize = 16 << 10
 
