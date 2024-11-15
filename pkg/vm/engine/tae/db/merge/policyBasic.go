@@ -32,7 +32,7 @@ import (
 
 type reviseResult struct {
 	objs []*catalog.ObjectEntry
-	kind TaskHostKind
+	kind taskHostKind
 }
 
 type policyGroup struct {
@@ -250,7 +250,7 @@ func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []revi
 		return nil
 	}
 
-	dnosize, _ := estimateMergeConsume(dnobjs)
+	dnosize := originalSize(dnobjs)
 
 	schedDN := func() []reviseResult {
 		if rc.cpuPercent > 85 {
@@ -261,7 +261,7 @@ func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []revi
 		}
 		if len(dnobjs) > 1 {
 			rc.reserveResources(dnobjs)
-			return []reviseResult{{dnobjs, TaskHostDN}}
+			return []reviseResult{{dnobjs, taskHostDN}}
 		}
 		return nil
 	}
