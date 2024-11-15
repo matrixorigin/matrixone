@@ -302,6 +302,33 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 	return nil
 }
 
+// RecordCompoundStmt Check if it is a compound statement, What is a compound statement?
+func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
+		// Check if it is a compound statement, What is a compound statement?
+		jsonHandle := &jsonPlanHandler{
+			jsonBytes:  sqlQueryIgnoreExecPlan,
+			statsBytes: statsBytes,
+		}
+		stm.SetSerializableExecPlan(jsonHandle)
+	}
+	return nil
+}
+
+func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
+	waitActiveCost := time.Duration(0)
+	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
+		txn := handler.GetTxn()
+		if txn != nil {
+			waitActiveCost = txn.GetWaitActiveCost()
+		}
+	}
+
+	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
+	statsByte, _ = h.Stats(ctx, cwft.ses)
+	return statsByte
+}
+
 func (cwft *TxnComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
 	cwft.explainBuffer = buf
 }
@@ -356,8 +383,12 @@ func initExecuteStmtParam(reqCtx context.Context, ses *Session, cwft *TxnComputa
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
 	for _, obj := range preparePlan.GetSchemas() {
+		accountId := ses.GetAccountId()
+		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
+			accountId = uint32(sysAccountID)
+		}
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  ses.GetAccountId(),
+			AccountId:  accountId,
 			DatabaseId: uint64(obj.Db),
 			Name:       obj.ObjName,
 			Version:    uint32(obj.Server),
