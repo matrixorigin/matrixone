@@ -618,14 +618,14 @@ func (mp *MysqlProtocolImpl) Close() {
 		mp.binaryNullBuffer = nil
 	}
 	mp.ses = nil
-	mp.tcpConn.ses = nil
+	mp.tcpConn.SetSession(nil)
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.ses = ses
-	mp.tcpConn.ses = ses
+	mp.tcpConn.SetSession(ses)
 }
 
 // handshake response 41
