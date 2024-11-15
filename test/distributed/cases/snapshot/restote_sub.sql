@@ -72,7 +72,6 @@ restore account acc01 from snapshot sp01;
 show subscriptions;
 -- @session
 
-show databases;
 use test01;
 drop table aff01;
 -- @ignore:5,6
@@ -268,7 +267,6 @@ create snapshot sp05 for account sys;
 drop database sub05;
 restore account sys database sub05 table t4 from snapshot sp05;
 restore account sys database sub05 from snapshot sp05;
-show databases;
 use sub05;
 show tables;
 select * from t1;
@@ -455,7 +453,6 @@ restore account sys from snapshot sp10;
 
 -- @ignore:5,6
 show PUBLICATIONs;
-show databases;
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
