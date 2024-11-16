@@ -533,3 +533,11 @@ func Test_doShowSubscriptions(t *testing.T) {
 		convey.So(ok, convey.ShouldBeTrue)
 	})
 }
+
+func Test_getSqlForDbPubCount(t *testing.T) {
+	ctx := context.Background()
+	_, err := getSqlForDbPubCount(ctx, "db1")
+	require.Error(t, err)
+	_, err = getSqlForDbPubCount(ctx, "db 1")
+	require.Error(t, err)
+}
