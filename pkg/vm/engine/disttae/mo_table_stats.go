@@ -478,11 +478,7 @@ func (tp *tablePair) String() string {
 		tp.acc, tp.dbName, tp.db, tp.tblName, tp.tbl)
 }
 
-var x int
-
 func (tp *tablePair) Done(err error) {
-	x++
-	fmt.Println("pair done", x)
 	tp.waiter.err = err
 	if tp.waiter.errQueue != nil {
 		tp.waiter.errQueue <- err
@@ -586,7 +582,7 @@ func tableStatsExecutor(
 		}
 	}()
 
-	tickerDur := time.Second * 1000000000
+	tickerDur := time.Second
 	executeTicker := time.NewTicker(tickerDur)
 
 	for {
@@ -617,7 +613,7 @@ func tableStatsExecutor(
 			}
 
 			dynamicConfig.tableStock.tbls = dynamicConfig.tableStock.tbls[:0]
-			executeTicker.Reset(dynamicConfig.alphaCycleDur / 10)
+			executeTicker.Reset(dynamicConfig.alphaCycleDur)
 		}
 
 		if err != nil {
@@ -669,9 +665,14 @@ func alphaTask(
 		processed        int
 	)
 
-	//now := time.Now()
+	//fmt.Println("alpha received", len(tbls))
+
+	now := time.Now()
 	defer func() {
 		if len(tbls) == 0 {
+			logutil.Info("alpha processed",
+				zap.Int("processed", processed),
+				zap.Duration("takes", time.Since(now)))
 			//fmt.Printf("procced: %d/%d, left: %d, spent: %v\n",
 			//	processed, dynamicConfig.changeTableListLimit, len(dynamicConfig.tableStock.tbls), time.Since(now))
 		}
@@ -701,7 +702,6 @@ func alphaTask(
 				return err
 			}
 			errWaitToReceive--
-			fmt.Println("err received", errWaitToReceive)
 			if errWaitToReceive <= 0 {
 				// all processed
 				return nil
@@ -710,7 +710,7 @@ func alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				fmt.Println("all submitted, waiting err")
+				//fmt.Println("all submitted, waiting err")
 				ticker.Reset(time.Second)
 				continue
 			}
@@ -728,10 +728,7 @@ func alphaTask(
 					var pState *logtailreplay.PartitionState
 					if pState, err = subscribeTable(ctx, service, eng, tbls[i]); err != nil {
 						return
-					} else if pState == nil {
-						return
 					}
-					pState = pState.Copy()
 
 					tbls[i].pState = pState
 					tbls[i].snapshot = to
@@ -754,11 +751,11 @@ func alphaTask(
 			processed += submitted
 			tbls = tbls[submitted:]
 
-			fmt.Printf("wait done, processed: %d/%d, left: %d, spent: %v\n",
-				processed,
-				dynamicConfig.changeTableListLimit,
-				len(tbls),
-				dur)
+			//fmt.Printf("wait done, processed: %d/%d, left: %d, spent: %v\n",
+			//	processed,
+			//	dynamicConfig.changeTableListLimit,
+			//	len(tbls),
+			//	dur)
 		}
 	}
 }
@@ -884,6 +881,11 @@ func betaTask(
 			return
 
 		case tbl := <-dynamicConfig.tblQueue:
+			if tbl == nil || tbl.pState == nil {
+				tbl.Done(nil)
+				continue
+			}
+
 			if err = dynamicConfig.betaTaskPool.Submit(func() {
 				_, err = statsCalculateOp(ctx, service, de.fs, tbl)
 				tbl.Done(err)
@@ -953,7 +955,7 @@ func getChangedTableList(
 		req := cmd_util.GetChangedTableListReq{}
 		ts := from.ToTimestamp()
 		req.From = &ts
-		req.Limit = defaultGetTableListLimit
+		req.Limit = int32(dynamicConfig.changeTableListLimit)
 		return req.Marshal()
 	}
 
@@ -988,8 +990,6 @@ func getChangedTableList(
 	cc := de.GetLatestCatalogCache()
 
 	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
-
-	fmt.Println("get table stats", len(resp.AccIds))
 
 	if len(resp.AccIds) == 0 {
 		return nil
