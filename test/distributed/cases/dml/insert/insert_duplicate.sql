@@ -11,6 +11,7 @@ select * from indup_00;
 
 -- insert unique index duplicate data part,update value() and insert
 insert into indup_00 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+-- @bvt:issue#4423
 select * from indup_00;
 -- insert unique index duplicate data all,update
 insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
@@ -23,6 +24,7 @@ insert into indup_00 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','00
 select * from indup_00;
 insert into indup_00 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_00;
+-- @bvt:issue
 
 CREATE TABLE IF NOT EXISTS indup_01(
     `id` INT UNSIGNED,
@@ -38,6 +40,7 @@ select * from indup_01;
 
 -- insert unique index duplicate data part,update value() and insert
 insert into indup_01 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+-- @bvt:issue#4423
 select * from indup_01;
 -- insert unique index duplicate data all,update
 insert into indup_01 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
@@ -50,6 +53,7 @@ insert into indup_01 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','00
 select * from indup_01;
 insert into indup_01 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_01;
+-- @bvt:issue
 
 CREATE TABLE IF NOT EXISTS indup_02(
     col1 INT ,
@@ -62,6 +66,7 @@ insert into indup_02 values (1,'apple','left',NULL),(2,'bear','right',1000);
 select * from indup_02;
 --insert primary key duplicate data,update col=expression
 insert into indup_02 select 1,'banana','lower',NULL on duplicate key update col1=col1*10;
+-- @bvt:issue#4423
 select * from indup_02;
 --insert primary key duplicate data part,update and insert
 insert into indup_02(col1,col2,col3) values(2,'wechat','tower'),(3,'paper','up') on duplicate key update col1=col1+20,col3=values(col3);
@@ -77,6 +82,7 @@ create table indup_tmp(col1 int,col2 varchar(20),col3 varchar(20));
 insert into indup_tmp values (1,'apple','left'),(2,'bear','right'),(3,'paper','up'),(10,'wine','down'),(300,'box','high');
 insert into indup_02(col1,col2,col3) select col1,col2,col3 from  indup_tmp on duplicate key update indup_02.col3=left(indup_02.col3,2),col2='wow';
 select * from indup_02;
+-- @bvt:issue
 delete from indup_02;
 select * from indup_02;
 
@@ -102,6 +108,7 @@ select * from indup_03;
 --update pk constraint
 insert into indup_03(col1,col2,col3) values(2,'bear','left') on duplicate key update col1=1;
 -- update null/''/constant/expression
+-- @bvt:issue#4423
 insert into indup_03(col1,col2,col3) values(1,'apple','') on duplicate key update col3='constant';
 select * from indup_03;
 insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key update col3=NULL;
@@ -110,6 +117,7 @@ insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key u
 select * from indup_03;
 insert into indup_03(col1,col2,col3) values(1,'apple','uuuu') on duplicate key update col1=2+3;
 select * from indup_03;
+-- @bvt:issue
 
 CREATE TABLE IF NOT EXISTS indup_04(
     `id` INT,
@@ -124,6 +132,7 @@ select * from indup_04;
 
 -- insert comprimary key duplicate data part,update value() and insert
 insert into indup_04 values (4,'shenzheng','004',4,'2021-05-28'),(1,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+-- @bvt:issue#4423
 select * from indup_04;
 -- insert comprimary key duplicate data all,update
 insert into indup_04 values (2,'shanghai','002',21,'1999-09-23'),(3,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
@@ -136,6 +145,7 @@ insert into indup_04 values (5,'shanxi','005',4,'2022-10-08'),(6,'shandong','006
 select * from indup_04;
 insert into indup_04 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_04;
+-- @bvt:issue
 
 -- foreign key constraint
 create table indup_fk1(col1 int primary key,col2 varchar(25),col3 tinyint);
@@ -164,11 +174,13 @@ select * from indup_05;
 create table indup_06(col1 int primary key,col2 int);
 insert into indup_06 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
+-- @bvt:issue#4423
 truncate table  indup_06;
 insert into indup_06 values(1,1);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2*10;
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1,col2=col2/10;
+-- @bvt:issue
 
 --insert duplicate data to null table
 CREATE TABLE IF NOT EXISTS indup_07(
@@ -178,6 +190,7 @@ CREATE TABLE IF NOT EXISTS indup_07(
     col4 BIGINT default 30
 );
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+-- @bvt:issue#4423
 select * from indup_07;
 
 --update out of date range
@@ -192,6 +205,7 @@ set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
 deallocate prepare stmt1;
+-- @bvt:issue
 
 --escape
 drop table if exists indup_08;
