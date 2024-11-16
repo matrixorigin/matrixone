@@ -36,14 +36,13 @@ const (
 	// account
 	getAccountIdNamesSql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
 	// pub
-	insertIntoMoPubsFormat               = `insert into mo_catalog.mo_pubs (account_id, pub_name, database_name, database_id, all_table, table_list, account_list, created_time, owner, creator, comment) values (%d, '%s', '%s', %d, %t, '%s', '%s', now(), %d, %d, '%s');`
-	getAllPubInfoSql                     = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs"
-	getPubInfoSql                        = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where account_id = %d"
-	updatePubInfoFormat                  = `update mo_catalog.mo_pubs set account_list = '%s', comment = '%s', database_name = '%s', database_id = %d, update_time = now(), table_list = '%s' where account_id = %d and pub_name = '%s';`
-	updatePubInfoAccountListFormat       = `update mo_catalog.mo_pubs set account_list = '%s' where account_id = %d and pub_name = '%s';`
-	dropPubFormat                        = `delete from mo_catalog.mo_pubs where account_id = %d and pub_name = '%s';`
-	deleteMoPubsRecordsByAccountIdFormat = "delete from mo_catalog.mo_pubs where account_id = %d"
-	getDbPubCountFormat                  = `select count(1) from mo_catalog.mo_pubs where account_id = %d and database_name = '%s';`
+	insertIntoMoPubsFormat         = `insert into mo_catalog.mo_pubs (account_id, pub_name, database_name, database_id, all_table, table_list, account_list, created_time, owner, creator, comment) values (%d, '%s', '%s', %d, %t, '%s', '%s', now(), %d, %d, '%s');`
+	getAllPubInfoSql               = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs"
+	getPubInfoSql                  = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where account_id = %d"
+	updatePubInfoFormat            = `update mo_catalog.mo_pubs set account_list = '%s', comment = '%s', database_name = '%s', database_id = %d, update_time = now(), table_list = '%s' where account_id = %d and pub_name = '%s';`
+	updatePubInfoAccountListFormat = `update mo_catalog.mo_pubs set account_list = '%s' where account_id = %d and pub_name = '%s';`
+	dropPubFormat                  = `delete from mo_catalog.mo_pubs where account_id = %d and pub_name = '%s';`
+	getDbPubCountFormat            = `select count(1) from mo_catalog.mo_pubs where account_id = %d and database_name = '%s';`
 	// sub
 	insertIntoMoSubsFormat                  = "insert into mo_catalog.mo_subs (sub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values (%d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
 	batchInsertIntoMoSubsFormat             = "insert into mo_catalog.mo_subs (sub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values %s"
@@ -1409,16 +1408,6 @@ func deleteMoSubsBySubAccountId(ctx context.Context, bh BackgroundExec) (err err
 	}
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(deleteMoSubsRecordsBySubAccountIdFormat, subAccountId)
-	return bh.Exec(ctx, sql)
-}
-
-func deleteMoPubsByAccountId(ctx context.Context, bh BackgroundExec) (err error) {
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	sql := fmt.Sprintf(deleteMoPubsRecordsByAccountIdFormat, accountId)
 	return bh.Exec(ctx, sql)
 }
 

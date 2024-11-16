@@ -3744,12 +3744,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoPubsRecordsByAccountIdFormat)
-		// delete records in mo_pubs
-		if rtnErr = deleteMoPubsByAccountId(deleteCtx, bh); rtnErr != nil {
-			return rtnErr
-		}
-
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)

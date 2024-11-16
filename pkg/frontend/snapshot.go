@@ -1225,8 +1225,11 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 	}
 
 	var accountId uint32
-	if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
-		return
+	// cluster level record has no accountName, so accountId is 0
+	if record.accountName != "" {
+		if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
+			return
+		}
 	}
 
 	return &pbplan.Snapshot{
@@ -1746,8 +1749,11 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 	}
 
 	var accountId uint32
-	if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
-		return
+	// cluster level record has no accountName, so accountId is 0
+	if record.accountName != "" {
+		if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
+			return
+		}
 	}
 
 	return &pbplan.Snapshot{
