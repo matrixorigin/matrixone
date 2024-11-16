@@ -31,6 +31,7 @@ select * from dis_table_03;
 -- @session:id=1{
 use drop_table_truncate;
 select * from dis_table_03;
+-- @wait:0:commit
 truncate table dis_table_03;
 -- @session}
 insert into dis_table_03 select 'bbb','2012-09-30';

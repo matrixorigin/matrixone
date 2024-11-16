@@ -123,7 +123,8 @@ func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
 	}
 }
 
-// cloneSomeVecFromCompactBatchs  copy vec to new batch
+// cloneSomeVecFromCompactBatchs  copy some vectors to new batch
+// clean these batchs after used
 func cloneSomeVecFromCompactBatchs(
 	proc *process.Process,
 	src *batch.CompactBatchs,
@@ -241,104 +242,38 @@ func cloneSomeVecFromCompactBatchs(
 	return bats, nil
 }
 
-// fetchMainTableBatchs for main table. move vec to new batch
-func fetchMainTableBatchs(
+// fetchSomeVecFromCompactBatchs fetch some vectors from CompactBatchs
+// do not clean these batchs
+func fetchSomeVecFromCompactBatchs(
 	proc *process.Process,
 	src *batch.CompactBatchs,
-	partitionIdxInBatch int,
-	getPartitionIdx int,
 	cols []int,
 	attrs []string) ([]*batch.Batch, error) {
-	var err error
-	var newBat *batch.Batch
 	mp := proc.GetMPool()
+	var newBat *batch.Batch
 	retBats := make([]*batch.Batch, src.Length())
-	srcBats := src.TakeBatchs()
-
-	defer func() {
-		for i, bat := range srcBats {
-			for _, vec := range bat.Vecs {
-				if vec != nil {
-					vec.Free(mp)
+	for i := 0; i < src.Length(); i++ {
+		oldBat := src.Get(i)
+		newBat = batch.NewWithSize(len(cols))
+		newBat.Attrs = attrs
+		for j, idx := range cols {
+			oldVec := oldBat.Vecs[idx]
+			//expand constant vector
+			if oldVec.IsConst() {
+				newVec := vector.NewVec(*oldVec.GetType())
+				err := vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
+				if err != nil {
+					return nil, err
 				}
+				oldBat.ReplaceVector(oldVec, newVec, 0)
+				newBat.Vecs[j] = newVec
+			} else {
+				newBat.Vecs[j] = oldVec
 			}
-			srcBats[i] = nil
 		}
-		srcBats = nil
-
-		if err != nil {
-			for _, bat := range retBats {
-				bat.Clean(mp)
-			}
-			retBats = nil
-
-			if newBat != nil {
-				newBat.Clean(mp)
-			}
-			newBat = nil
-		}
-	}()
-
-	if partitionIdxInBatch > -1 {
-		expect := int32(getPartitionIdx)
-		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
-			newBat.Attrs = attrs
-			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
-			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
-
-			for newColIdx, oldColIdx := range cols {
-				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
-			}
-			err = newBat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
-			if err != nil {
-				return nil, err
-			}
-
-			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(i)) {
-					if partition == -1 {
-						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-					} else if partition == expect {
-						for newColIdx, oldColIdx := range cols {
-							if err = newBat.Vecs[newColIdx].UnionOne(oldBat.Vecs[oldColIdx], int64(rowIdx), proc.GetMPool()); err != nil {
-								return nil, err
-							}
-						}
-					}
-				}
-			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			retBats[i] = newBat
-			newBat = nil
-		}
-	} else {
-		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
-			newBat.Attrs = attrs
-			for j, idx := range cols {
-				oldVec := oldBat.Vecs[idx]
-				srcBats[i].ReplaceVector(oldVec, nil, 0)
-
-				//expand constant vector
-				if oldVec.IsConst() {
-					newVec := vector.NewVec(*oldVec.GetType())
-					err = vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
-					if err != nil {
-						return nil, err
-					}
-					oldVec.Free(mp)
-					newBat.Vecs[j] = newVec
-				} else {
-					newBat.Vecs[j] = oldVec
-				}
-			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			retBats[i] = newBat
-		}
+		newBat.SetRowCount(newBat.Vecs[0].Length())
+		retBats[i] = newBat
 	}
-
 	return retBats, nil
 }
 
