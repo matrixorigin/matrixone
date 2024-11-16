@@ -25,7 +25,7 @@ import (
 
 var insertIntoNewMoPubsFormat = `insert into mo_catalog.mo_pubs (account_id, pub_name, database_name, database_id, all_table, table_list, account_list, created_time, update_time, owner, creator, comment) values (%d, '%s', '%s', %d, %t,'%s', '%s', '%s', '%s', %d, %d, '%s');`
 
-func getSubbedAccNames(
+var getSubbedAccNames = func(
 	txn executor.TxnExecutor,
 	pubAccountName, pubName string,
 	accIdInfoMap map[int32]*pubsub.AccountInfo,
