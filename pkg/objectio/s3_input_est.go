@@ -21,3 +21,7 @@ const rowsPerS3Input int64 = 8192
 func EstimateS3Input(writtenRows int64) float64 {
 	return float64(writtenRows) / float64(rowsPerS3Input)
 }
+
+func EstimateS3InputForDeleteRows(deletedRows int64) float64 {
+	return float64(deletedRows) / float64(rowsPerS3Input)
+}
