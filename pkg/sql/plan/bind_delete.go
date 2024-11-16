@@ -440,12 +440,10 @@ func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
 			builder.updateLocksOnDemand(childID)
 		}
 	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		node.LockTargets[0].LockTable = true
 		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
-
-		if len(node.LockTargets) > 1 && node.LockTargets[1].IsPartitionTable {
-			node.LockTargets[1].LockTable = true
+		for _, target := range node.LockTargets {
+			target.LockTable = true
 		}
 	}
 }
