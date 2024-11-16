@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -1434,12 +1435,13 @@ func (tc *txnOperator) inRollbackStmt() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
 		tc.reset.runSqlCounter.String(),
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
+		tc.Txn().DebugString(),
 		tc.reset.fprints.String())
 }
 
