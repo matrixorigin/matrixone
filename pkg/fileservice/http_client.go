@@ -36,6 +36,13 @@ var (
 	idleConnTimeout     = 10 * time.Second
 )
 
+func init() {
+	// set global default http client
+	http.DefaultClient = &http.Client{
+		Transport: httpTransport,
+	}
+}
+
 var dnsResolver = dns.NewCachingResolver(
 	nil,
 	dns.MaxCacheEntries(128),
