@@ -209,7 +209,7 @@ func HandleShardingReadApproxObjectsNum(
 func HandleShardingReadRanges(
 	ctx context.Context,
 	shard shard.TableShard,
-	engine engine.Engine,
+	eng engine.Engine,
 	param shard.ReadParam,
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
@@ -217,17 +217,17 @@ func HandleShardingReadRanges(
 	tbl, err := getTxnTable(
 		ctx,
 		param,
-		engine,
+		eng,
 	)
 	if err != nil {
 		return nil, err
 	}
-
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		2,
-		nil,
+		int(param.RangesParam.PreAllocSize),
+		engine.DataCollectPolicy(param.RangesParam.DataCollectPolicy),
+		int(param.RangesParam.TxnOffset),
 	)
 	if err != nil {
 		return nil, err
