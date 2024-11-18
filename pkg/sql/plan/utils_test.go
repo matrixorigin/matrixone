@@ -95,3 +95,9 @@ func TestInitStageS3Param(t *testing.T) {
 	err = InitStageS3Param(param, s)
 	require.Nil(t, err)
 }
+
+func TestHandleOptimizerHints(t *testing.T) {
+	builder := &QueryBuilder{}
+	handleOptimizerHints("skipDedup=1", builder)
+	require.Equal(t, 1, builder.optimizerHints.skipDedup)
+}

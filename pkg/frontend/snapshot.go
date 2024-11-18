@@ -731,6 +731,7 @@ func restoreToDatabaseOrTable(
 	}
 
 	var createDbSql string
+	var isSubDb bool
 	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
 	if err != nil {
 		return
@@ -740,7 +741,10 @@ func restoreToDatabaseOrTable(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
-	isSubDb := strings.Contains(createDbSql, "from") && strings.Contains(createDbSql, "publication")
+	isSubDb, err = checkDbIsSubDb(toCtx, createDbSql)
+	if err != nil {
+		return
+	}
 	if isSubDb && restoreToTbl {
 		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
@@ -865,9 +869,14 @@ func restoreSystemDatabase(
 	snapshotTs int64,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
-	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, moCatalog, "")
+	var (
+		dbName     = moCatalog
+		tableInfos []*tableInfo
+	)
+
+	tableInfos, err = showFullTables(ctx, sid, bh, snapshotName, dbName, "")
 	if err != nil {
-		return
+		return err
 	}
 
 	for _, tblInfo := range tableInfos {
@@ -878,6 +887,10 @@ func restoreSystemDatabase(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+		tblInfo.createSql, err = getCreateTableSql(ctx, bh, snapshotName, dbName, tblInfo.tblName)
+		if err != nil {
+			return err
+		}
 
 		// checks if the given context has been canceled.
 		if err = CancelCheck(ctx); err != nil {
@@ -1414,7 +1427,7 @@ func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName stri
 	// cols: table_name, create_sql
 	colsList, err := getStringColsList(ctx, bh, sql, 1)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
@@ -2017,4 +2030,22 @@ func checkSubscriptionExist(
 	}
 
 	return true, nil
+}
+
+func checkDbIsSubDb(ctx context.Context, createDbsql string) (bool, error) {
+	var (
+		err error
+		ast []tree.Statement
+	)
+	ast, err = mysql.Parse(ctx, createDbsql, 1)
+	if err != nil {
+		return false, err
+	}
+
+	if createDb, ok := ast[0].(*tree.CreateDatabase); ok {
+		if createDb.SubscriptionOption != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
