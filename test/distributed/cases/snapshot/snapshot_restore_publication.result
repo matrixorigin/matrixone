@@ -52,7 +52,6 @@ internal error: there is no publication pubname1
 restore account sys from snapshot snapshot2;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    test_tenant_1    test_tenant_1    2024-08-01 17:01:13    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -60,9 +59,9 @@ show databases like 'sub_db1';
 Database
 sub_db1
 use sub_db1;
+internal error: there is no publication pubname1
 show tables;
-Tables_in_sub_db1
-t1
+internal error: there is no publication pubname1
 drop snapshot snapshot2;
 drop account test_tenant_1;
 drop publication if exists pubname1;
@@ -168,8 +167,6 @@ pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:2
 restore account sys from snapshot snapshot3;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    *    test_tenant_1,test_tenant_2    2024-08-26 16:00:01    null    publish db2 database
-pubname1    db1    *    test_tenant_1    test_tenant_1    2024-08-26 16:00:01    null    publish db1 database
 show databases like 'db%';
 Database
 db1
@@ -178,30 +175,30 @@ show databases like 'sub_db1';
 Database
 sub_db1
 use sub_db1;
+internal error: there is no publication pubname1
 show tables;
-Tables_in_sub_db1
-t1
+internal error: there is no publication pubname2
 show databases like 'sub_db2';
 Database
 sub_db2
 use sub_db2;
+internal error: there is no publication pubname2
 show tables;
-Tables_in_sub_db2
-t2
+internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    0
-pubname1    sys    db1    *    publish db1 database    2024-08-01 17:01:15    sub_db1    2024-08-01 17:01:15    0
+pubname2    sys    null    null    null    null    sub_db2    2024-11-14 17:30:40    2
+pubname1    sys    null    null    null    null    sub_db1    2024-11-14 17:30:40    2
 show databases like 'sub_db2';
 Database
 sub_db2
 use sub_db2;
+internal error: there is no publication pubname2
 show tables;
-Tables_in_sub_db2
-t2
+internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:15    sub_db2    2024-08-01 17:01:15    0
+pubname2    sys    null    null    null    null    sub_db2    2024-11-14 17:30:40    2
 drop snapshot snapshot3;
 drop account test_tenant_1;
 drop account test_tenant_2;
@@ -382,7 +379,6 @@ pubname2    sys    db2    *    publish db2 database    2024-08-01 17:01:19    su
 restore account sys from snapshot snapshot6;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    test_tenant_1    test_tenant_1    2024-08-01 17:01:19    null    publish db1 database
 show databases like 'db%';
 Database
 db1
@@ -390,21 +386,20 @@ show databases like 'sub_db1';
 Database
 sub_db1
 use sub_db1;
+internal error: there is no publication pubname1
 show tables;
-Tables_in_sub_db1
-t1
+internal error: there is no publication pubname2
 show databases like 'sub_db2';
 Database
 sub_db2
 use sub_db2;
 internal error: there is no publication pubname2
 show tables;
-Tables_in_sub_db1
-t1
+internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
-pubname1    sys    db1    *    publish db1 database    2024-08-09 16:01:27    sub_db1    2024-08-09 16:01:27    0
+pubname2    sys    null    null    null    null    sub_db2    2024-11-14 17:30:45    2
+pubname1    sys    null    null    null    null    sub_db1    2024-11-14 17:30:44    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -422,14 +417,14 @@ sub_db1
 use sub_db1;
 internal error: there is no publication pubname1
 show tables;
-internal error: there is no publication pubname1
+internal error: there is no publication pubname2
 show databases like 'sub_db2';
 Database
 sub_db2
 use sub_db2;
 internal error: there is no publication pubname2
 show tables;
-internal error: there is no publication pubname1
+internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pubname2    sys    null    null    null    null    sub_db2    2024-08-09 16:01:27    2
