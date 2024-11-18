@@ -577,10 +577,12 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 // kickoff starts up the pipe and the data would flow in it.
 func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	start := func() (bool, error) {
-		p.goId = goid.Get()
-		p.logger = p.logger.With(zap.Int64("pipe goId", p.goId))
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		p.goId = goid.Get()
+		if p.logger != nil {
+			p.logger = p.logger.With(zap.Int64("pipe goId", p.goId))
+		}
 		if p.mu.closed {
 			return false, errPipeClosed
 		}
