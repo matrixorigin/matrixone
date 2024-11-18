@@ -636,6 +636,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
 	}
 
+	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
+	if err != nil {
+		return err
+	}
+
 	if s.NodeInfo.NeedExpandRanges {
 		scanNode := s.DataSource.node
 		if scanNode == nil {
@@ -655,12 +660,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 
 		counterSet := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, newExprList, counterSet)
+		relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet, s.IsRemote)
 		if err != nil {
 			return err
 		}
 
-		ctx := c.proc.GetTopContext()
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      counterSet.FileService.S3.List.Load(),
@@ -682,7 +686,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
-	err = s.aggOptimize(c)
+	err = s.aggOptimize(c, rel, ctx)
 	if err != nil {
 		return err
 	}
@@ -888,15 +892,11 @@ func removeStringBetween(s, start, end string) string {
 	return s
 }
 
-func (s *Scope) aggOptimize(c *Compile) error {
+func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	scanNode := s.DataSource.node
 	if scanNode != nil && len(scanNode.AggList) > 0 {
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
-			rel, _, ctx, err := c.handleDbRelContext(scanNode)
-			if err != nil {
-				return err
-			}
 
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			blk := s.NodeInfo.Data.GetBlockInfo(0)

@@ -124,7 +124,7 @@ func TestPolicyBasic(t *testing.T) {
 	result := p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, taskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
 	p.resetForTable(catalog.MockStaloneTableEntry(1, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
@@ -135,7 +135,7 @@ func TestPolicyBasic(t *testing.T) {
 	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, taskHostDN, result[0].kind)
 
 	// basic policy do not schedule tombstones
 	p.resetForTable(catalog.MockStaloneTableEntry(2, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
@@ -176,7 +176,7 @@ func TestPolicyTombstone(t *testing.T) {
 	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, taskHostDN, result[0].kind)
 
 	// only schedule objects less than cfg.maxOneRun
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
@@ -187,7 +187,7 @@ func TestPolicyTombstone(t *testing.T) {
 	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 2, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, taskHostDN, result[0].kind)
 
 	// tombstone do not consider size limit
 	p.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{BlockMaxRows: options.DefaultBlockMaxRows}}), nil)
@@ -198,7 +198,7 @@ func TestPolicyTombstone(t *testing.T) {
 	result = p.revise(rc, cfg)
 	require.Equal(t, 1, len(result))
 	require.Equal(t, 3, len(result[0].objs))
-	require.Equal(t, TaskHostDN, result[0].kind)
+	require.Equal(t, taskHostDN, result[0].kind)
 }
 
 func TestPolicyGroup(t *testing.T) {
@@ -217,8 +217,8 @@ func TestPolicyGroup(t *testing.T) {
 
 	results := g.revise(rc)
 	require.Equal(t, 2, len(results))
-	require.Equal(t, TaskHostDN, results[0].kind)
-	require.Equal(t, TaskHostDN, results[1].kind)
+	require.Equal(t, taskHostDN, results[0].kind)
+	require.Equal(t, taskHostDN, results[1].kind)
 
 	require.Equal(t, 2, len(results[0].objs))
 	require.Equal(t, 2, len(results[1].objs))
@@ -264,7 +264,7 @@ func TestObjOverlap(t *testing.T) {
 		}
 		require.Equal(t, 0, len(obj.objs))
 	}
-	require.Equal(t, TaskHostDN, objs[0].kind)
+	require.Equal(t, taskHostDN, objs[0].kind)
 
 	policy.resetForTable(nil, nil)
 
@@ -300,7 +300,7 @@ func TestObjOverlap(t *testing.T) {
 	objs = policy.revise(rc, defaultBasicConfig)
 	require.Equal(t, 6, len(objs))
 	require.Equal(t, 3, len(objs[0].objs))
-	require.Equal(t, TaskHostDN, objs[0].kind)
+	require.Equal(t, taskHostDN, objs[0].kind)
 
 	policy.resetForTable(nil, nil)
 

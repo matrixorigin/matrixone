@@ -839,7 +839,6 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
 	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
 	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
-
 	return ses.InitBackExec(nil, "", batchFetcher2)
 }
 

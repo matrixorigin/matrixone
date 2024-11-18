@@ -128,6 +128,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -157,6 +158,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -186,6 +188,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -215,6 +218,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -244,6 +248,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -273,6 +278,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -302,6 +308,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -331,6 +338,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -360,6 +368,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)
@@ -389,6 +398,7 @@ func TestMergeSortBatches(t *testing.T) {
 			buffer,
 			sinker,
 			pool,
+			true,
 		)
 		require.NoError(t, err)
 		require.Equal(t, restult.Vecs[0].Length(), 2)

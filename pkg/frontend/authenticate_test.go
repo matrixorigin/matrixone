@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -206,7 +207,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &createAccount{
+		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AdminName:   "root",
@@ -7121,7 +7122,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7168,7 +7169,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7212,7 +7213,7 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7503,6 +7504,12 @@ func (bt *backgroundExecTest) Close() {
 }
 
 func (bt *backgroundExecTest) Clear() {}
+
+func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
+	var stats statistic.StatsArray
+	stats.Reset()
+	return stats
+}
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
