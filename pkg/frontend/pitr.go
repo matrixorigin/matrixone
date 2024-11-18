@@ -1762,7 +1762,7 @@ func restoreSystemDatabaseWithPitr(
 		tableInfos []*tableInfo
 	)
 
-	tableInfos, err = showFullTables(ctx, sid, bh, pitrName, dbName, "")
+	tableInfos, err = showFullTablesWitsTs(ctx, sid, bh, pitrName, ts, dbName, "")
 	if err != nil {
 		return err
 	}
