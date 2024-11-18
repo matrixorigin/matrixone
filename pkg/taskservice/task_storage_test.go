@@ -583,6 +583,9 @@ func TestAddDaemonTask(t *testing.T) {
 				b, err := json.Marshal(v.Metadata.Options)
 				require.NoError(t, err)
 
+				d, err := v.Details.Marshal()
+				require.NoError(t, err)
+
 				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
 					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(1, 1))
@@ -593,7 +596,7 @@ func TestAddDaemonTask(t *testing.T) {
 
 				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
 					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
-						AddRow(v.ID, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.AccountID, v.Account, v.TaskType, v.TaskRunner, v.TaskStatus, v.LastHeartbeat, v.CreateAt, v.UpdateAt, v.EndAt, v.LastRun, v.Details))
+						AddRow(v.ID, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.AccountID, v.Account, v.TaskType, v.TaskRunner, v.TaskStatus, v.LastHeartbeat, v.CreateAt, v.UpdateAt, v.EndAt, v.LastRun, d))
 
 				mock.ExpectClose()
 			}
@@ -608,12 +611,39 @@ func TestAddDaemonTask(t *testing.T) {
 func TestUpdateDaemonTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s, _ := factory(t)
+			s, mock := factory(t)
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
 
 			v := newTestDaemonTask(1, "t1")
+
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+
+				d, err := v.Details.Marshal()
+				require.NoError(t, err)
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v.ID, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.AccountID, v.Account, v.TaskType, v.TaskRunner, v.TaskStatus, v.LastHeartbeat, v.CreateAt, v.UpdateAt, v.EndAt, v.LastRun, d))
+
+				mock.ExpectBegin()
+
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=?").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectCommit()
+
+				mock.ExpectClose()
+			}
+
 			mustAddTestDaemonTask(t, s, 1, v)
 
 			tasks := mustGetTestDaemonTask(t, s, 1)
@@ -626,12 +656,59 @@ func TestUpdateDaemonTask(t *testing.T) {
 func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s, _ := factory(t)
+			s, mock := factory(t)
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
 
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
+			v := newTestDaemonTask(1, "t1")
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+
+				d, err := v.Details.Marshal()
+				require.NoError(t, err)
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v.ID, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.AccountID, v.Account, v.TaskType, v.TaskRunner, v.TaskStatus, v.LastHeartbeat, v.CreateAt, v.UpdateAt, v.EndAt, v.LastRun, d))
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=? AND task_runner='t2'").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 0))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=? AND task_runner='t1'").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=? AND task_id=2").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 0))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=? AND task_id=1").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_daemon_task set task_metadata_executor=?, task_metadata_context=?, task_metadata_option=?, task_type=?, task_status=?, task_runner=?, last_heartbeat=?, update_at=?, end_at=?, last_run=?, details=? where task_id=? AND task_id>0").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+				mock.ExpectClose()
+			}
+
+			mustAddTestDaemonTask(t, s, 1, v)
 			tasks := mustGetTestDaemonTask(t, s, 1)
 
 			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
@@ -649,14 +726,65 @@ func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s, _ := factory(t)
+			s, mock := factory(t)
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
 
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(3, "t3"))
+			v1 := newTestDaemonTask(1, "t1")
+			v2 := newTestDaemonTask(2, "t2")
+			v3 := newTestDaemonTask(3, "t3")
+			if mock != nil {
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+
+				d1, err := v1.Details.Marshal()
+				require.NoError(t, err)
+
+				b2, err := json.Marshal(v2.Metadata.Options)
+				require.NoError(t, err)
+
+				d2, err := v2.Details.Marshal()
+				require.NoError(t, err)
+
+				b3, err := json.Marshal(v3.Metadata.Options)
+				require.NoError(t, err)
+
+				d3, err := v3.Details.Marshal()
+				require.NoError(t, err)
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(3, 1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.AccountID, v2.Account, v2.TaskType, v2.TaskRunner, v2.TaskStatus, v2.LastHeartbeat, v2.CreateAt, v2.UpdateAt, v2.EndAt, v2.LastRun, d2).
+						AddRow(v3.ID, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.AccountID, v3.Account, v3.TaskType, v3.TaskRunner, v3.TaskStatus, v3.LastHeartbeat, v3.CreateAt, v3.UpdateAt, v3.EndAt, v3.LastRun, d3))
+
+				mock.ExpectExec("delete from sys_daemon_task where 1=1 AND task_runner='t4'").WillReturnResult(sqlmock.NewResult(3, 0))
+				mock.ExpectExec("delete from sys_daemon_task where 1=1 AND task_runner='t1'").WillReturnResult(sqlmock.NewResult(3, 1))
+				mock.ExpectExec("delete from sys_daemon_task where 1=1 AND task_id=4").WillReturnResult(sqlmock.NewResult(3, 0))
+				mock.ExpectExec("delete from sys_daemon_task where 1=1 AND task_id>1").WillReturnResult(sqlmock.NewResult(3, 2))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}))
+
+				mock.ExpectClose()
+			}
+
+			mustAddTestDaemonTask(t, s, 1, v1)
+			mustAddTestDaemonTask(t, s, 1, v2)
+			mustAddTestDaemonTask(t, s, 1, v3)
 			tasks := mustGetTestDaemonTask(t, s, 3)
 
 			mustDeleteTestDaemonTask(t, s, 0, WithTaskRunnerCond(EQ, "t4"))
@@ -673,10 +801,91 @@ func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 func TestQueryDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s, _ := factory(t)
+			s, mock := factory(t)
 			defer func() {
 				require.NoError(t, s.Close())
 			}()
+
+			v1 := newTestDaemonTask(1, "t1")
+			v2 := newTestDaemonTask(2, "t2")
+			v3 := newTestDaemonTask(3, "t3")
+			if mock != nil {
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+
+				d1, err := v1.Details.Marshal()
+				require.NoError(t, err)
+
+				b2, err := json.Marshal(v2.Metadata.Options)
+				require.NoError(t, err)
+
+				d2, err := v2.Details.Marshal()
+				require.NoError(t, err)
+
+				b3, err := json.Marshal(v3.Metadata.Options)
+				require.NoError(t, err)
+
+				d3, err := v3.Details.Marshal()
+				require.NoError(t, err)
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(3, 1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.AccountID, v2.Account, v2.TaskType, v2.TaskRunner, v2.TaskStatus, v2.LastHeartbeat, v2.CreateAt, v2.UpdateAt, v2.EndAt, v2.LastRun, d2).
+						AddRow(v3.ID, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.AccountID, v3.Account, v3.TaskType, v3.TaskRunner, v3.TaskStatus, v3.LastHeartbeat, v3.CreateAt, v3.UpdateAt, v3.EndAt, v3.LastRun, d3))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id limit 1").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_runner='t1' order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id>1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v3.ID, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.AccountID, v3.Account, v3.TaskType, v3.TaskRunner, v3.TaskStatus, v3.LastHeartbeat, v3.CreateAt, v3.UpdateAt, v3.EndAt, v3.LastRun, d3))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id>=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.AccountID, v2.Account, v2.TaskType, v2.TaskRunner, v2.TaskStatus, v2.LastHeartbeat, v2.CreateAt, v2.UpdateAt, v2.EndAt, v2.LastRun, d2).
+						AddRow(v3.ID, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.AccountID, v3.Account, v3.TaskType, v3.TaskRunner, v3.TaskStatus, v3.LastHeartbeat, v3.CreateAt, v3.UpdateAt, v3.EndAt, v3.LastRun, d3))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id<=3 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.AccountID, v2.Account, v2.TaskType, v2.TaskRunner, v2.TaskStatus, v2.LastHeartbeat, v2.CreateAt, v2.UpdateAt, v2.EndAt, v2.LastRun, d2).
+						AddRow(v3.ID, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.AccountID, v3.Account, v3.TaskType, v3.TaskRunner, v3.TaskStatus, v3.LastHeartbeat, v3.CreateAt, v3.UpdateAt, v3.EndAt, v3.LastRun, d3))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id<3 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1).
+						AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.AccountID, v2.Account, v2.TaskType, v2.TaskRunner, v2.TaskStatus, v2.LastHeartbeat, v2.CreateAt, v2.UpdateAt, v2.EndAt, v2.LastRun, d2))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id>1 order by task_id limit 1").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 AND task_id=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.AccountID, v1.Account, v1.TaskType, v1.TaskRunner, v1.TaskStatus, v1.LastHeartbeat, v1.CreateAt, v1.UpdateAt, v1.EndAt, v1.LastRun, d1))
+
+				mock.ExpectClose()
+			}
 
 			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
 			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
