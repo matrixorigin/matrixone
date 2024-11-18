@@ -318,7 +318,12 @@ func (writer *s3Writer) sortAndSync(proc *process.Process, analyzer process.Anal
 
 				var needCleanBatch, needSortBatch bool
 				if needClone {
-					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, 0, updateCtx.InsertCols, insertAttrs, writer.sortIdxs[i])
+					// cluster by do not check if sort vector is null
+					sortIdx := writer.sortIdxs[i]
+					if isClusterBy {
+						sortIdx = -1
+					}
+					bats, err = cloneSomeVecFromCompactBatchs(proc, writer.cacheBatchs, updateCtx.NewPartitionIdx, 0, updateCtx.InsertCols, insertAttrs, sortIdx)
 					needSortBatch = true
 					needCleanBatch = true
 				} else {
