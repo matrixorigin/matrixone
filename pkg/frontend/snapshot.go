@@ -281,6 +281,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return err
 		}
 	}
+	getLogger(ses.GetService()).Info(fmt.Sprintf("create snapshot %s success", snapshotName))
 
 	// insert record to the system table
 
@@ -328,6 +329,8 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 			return err
 		}
 	}
+
+	getLogger(ses.GetService()).Info(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
 	return err
 }
 
