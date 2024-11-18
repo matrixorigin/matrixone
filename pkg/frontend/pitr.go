@@ -1618,7 +1618,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s.%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
