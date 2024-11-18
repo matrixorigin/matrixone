@@ -1539,7 +1539,7 @@ func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, d
 	// cols: table_name, create_sql
 	colsList, err := getStringColsList(ctx, bh, sql, 1)
 	if err != nil {
-		return "", err
+		return "", nil
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
