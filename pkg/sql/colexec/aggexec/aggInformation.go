@@ -30,14 +30,6 @@ type singleAggInfo struct {
 	emptyNull bool
 }
 
-func (info singleAggInfo) eq(other singleAggInfo) bool {
-	return info.aggID == other.aggID &&
-		info.distinct == other.distinct &&
-		info.argType.Eq(other.argType) &&
-		info.retType.Eq(other.retType) &&
-		info.emptyNull == other.emptyNull
-}
-
 func (info singleAggInfo) String() string {
 	return fmt.Sprintf("{aggID: %d, argType: %s, retType: %s}", info.aggID, info.argType.String(), info.retType.String())
 }
