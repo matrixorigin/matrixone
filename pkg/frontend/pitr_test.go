@@ -2456,6 +2456,15 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
 		assert.Error(t, err)
+
+		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{"mo_user", "BASE TABLE"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = restoreSystemDatabase(ctx, "", bh, "pitr01", 0, resovleTs)
+		assert.Error(t, err)
 	})
 }
 
