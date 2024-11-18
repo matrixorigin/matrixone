@@ -171,7 +171,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					return
 				}
 			} else {
-				if len(tableDef.Pkey.Names) > 1 {
+				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
 					convertToCPKey = true
 				}
 			}
