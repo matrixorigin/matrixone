@@ -737,16 +737,16 @@ func alphaTask(
 				})
 			}
 
-			dur := time.Since(start)
-			// the longer the update takes, the longer we would pause,
-			// but waiting for 5s at most.
-			ticker.Reset(max(min(dur*2, time.Second*5), time.Millisecond*10))
-
 			if submitted == 0 {
 				continue
 			}
 
 			wg.Wait()
+
+			dur := time.Since(start)
+			// the longer the update takes, the longer we would pause,
+			// but waiting for 1s at most, 10ms at least.
+			ticker.Reset(max(min(dur, time.Millisecond*50), time.Millisecond*5))
 
 			processed += submitted
 			tbls = tbls[submitted:]
