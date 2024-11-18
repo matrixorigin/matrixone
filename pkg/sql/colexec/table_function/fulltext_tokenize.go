@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/datalink"
@@ -30,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/monlp/tokenizer"
 )
+
+var max_batch_size int = 8192
 
 type FullTextEntry struct {
 	DocId any
@@ -198,6 +201,10 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
+	}
+
+	if len(doc.Words) > max_batch_size {
+		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("number of words exceed limit (%d > %d)", len(doc.Words), max_batch_size))
 	}
 
 	// write the batch

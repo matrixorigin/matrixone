@@ -13,14 +13,19 @@ select id from datasrc where match(fpath) against('慢慢地' in natural languag
 
 select id from datasrc where match(fpath) against('Nulla facilisi' in natural language mode);
 
+
 drop table datasrc;
 
 create table datasrc (id bigint primary key, fpath datalink, fpath2 datalink, fulltext(fpath, fpath2));
 
+-- error total number of words > 8192
 insert into datasrc values (0, 'stage://ftstage/mo.pdf', 'file:///$resources/fulltext/chinese.pdf');
 
-select id from datasrc where match(fpath, fpath2) against('+matrixone +慢慢地' in boolean mode);
+insert into datasrc values (0, 'stage://ftstage/mo.pdf', 'file:///$resources/fulltext/file-sample_100kB.docx');
 
+select id from datasrc where match(fpath, fpath2) against('+matrixone +Nulla' in boolean mode);
+
+-- error file not found
 update datasrc set fpath='stage://ftstage/notexist.pdf' where id=0;
 
 drop table datasrc;
