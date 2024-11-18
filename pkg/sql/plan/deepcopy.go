@@ -551,9 +551,7 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	}
 	for i, e := range col.Data {
 		newCol.Data[i] = &plan.RowsetExpr{
-			Pos:    e.Pos,
-			RowPos: e.RowPos,
-			Expr:   DeepCopyExpr(e.Expr),
+			Expr: DeepCopyExpr(e.Expr),
 		}
 	}
 
@@ -1028,6 +1026,8 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 		MemorySize:             analyzeinfo.GetMemorySize(),
 		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
 		DiskIO:                 analyzeinfo.GetDiskIO(),
+		WrittenRows:            analyzeinfo.GetWrittenRows(),
+		DeletedRows:            analyzeinfo.GetDeletedRows(),
 		ScanBytes:              analyzeinfo.GetScanBytes(),
 		S3List:                 analyzeinfo.GetS3List(),
 		S3Put:                  analyzeinfo.GetS3Put(),

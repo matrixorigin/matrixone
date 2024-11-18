@@ -285,6 +285,7 @@ func HandleShardingReadBuildReader(
 		param.ReaderBuildParam.Expr,
 		ds,
 		engine_util.GetThresholdForReader(1),
+		engine.FilterHint{},
 	)
 	if err != nil {
 		return nil, err

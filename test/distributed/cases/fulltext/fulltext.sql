@@ -57,6 +57,14 @@ select * from src where match(body, title) against('+red +(<blue >is)' in boolea
 
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 
+select * from src where match(body, title) against('"red"' in boolean mode);
+
+-- phrase exact match.  double space cannot be matched and empty result
+select * from src where match(body, title) against('"is  not red"' in boolean mode);
+
+-- phrase exact match. all words match but not exact match
+select * from src where match(body, title) against('"blue is red"' in boolean mode);
+
 -- match in projection
 select src.*, match(body, title) against('blue') from src;
 
@@ -169,12 +177,15 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -188,12 +199,12 @@ create fulltext index ftidx on src (json1) with parser json;
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language  mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 
 drop table src;
 
@@ -286,6 +297,9 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 select * from src2 where match(body, title) against('red');
 select src2.*, match(body, title) against('blue') from src2;
 
+desc src;
+show create table src;
+
 drop table src2;
 
 -- bytejson parser
@@ -296,12 +310,17 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -313,12 +332,19 @@ insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"
 
 select * from src where match(json1) against('red' in boolean mode);
 
-select * from src where match(json1) against('中文學習教材' in boolean mode);
+select * from src where match(json1) against('中文學習教材' in natural language mode);
 
 create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
-select * from src where match(json1, json2) against('中文學習教材' in boolean mode);
+select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+
+update src set json1='{"c":"update json"}' where id=0;
+
+select * from src where match(json1, json2) against('"update json"' in boolean mode);
+
+desc src;
+show create table src;
 
 drop table src;
 
@@ -326,4 +352,5 @@ drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
 insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
 create fulltext index ftidx on t1 (b);
+
 
