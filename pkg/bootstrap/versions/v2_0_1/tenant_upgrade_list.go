@@ -15,6 +15,8 @@
 package v2_0_1
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -25,6 +27,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_user_add_password_history,
 	upg_mo_user_add_login_attempts,
 	upg_mo_user_add_lock_time,
+	drop_mo_pubs,
 }
 
 var upg_mo_user_add_password_last_changed = versions.UpgradeEntry{
@@ -95,5 +98,23 @@ var upg_mo_user_add_lock_time = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
+	},
+}
+
+var drop_mo_pubs = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
+	UpgType:   versions.DROP_TABLE,
+	UpgSql:    fmt.Sprintf("drop table %s.%s", catalog.MO_CATALOG, catalog.MO_PUBS),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		if accountId == catalog.System_Account {
+			return true, nil
+		}
+
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_PUBS)
+		if err != nil {
+			return false, err
+		}
+		return !exist, nil
 	},
 }

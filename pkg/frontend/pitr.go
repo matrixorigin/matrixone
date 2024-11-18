@@ -70,7 +70,7 @@ var (
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
-	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
+	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d, modified_time = '%s' where account_name = '%s';`
@@ -152,8 +152,8 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 	return fmt.Sprintf(checkDupPitrFormat, accountId, objId)
 }
 
-func getPubInfoWithPitr(ts int64, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, dbName)
+func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, modifiedTime string) string {
@@ -2306,11 +2306,11 @@ func createPubByPitr(
 	toAccountId uint32,
 	ts int64) (err error) {
 	// read pub info from mo_pubs
-	sql := getPubInfoWithPitr(ts, dbName)
-	bh.ClearExecResultSet()
+	sql := getPubInfoWithPitr(ts, toAccountId, dbName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
 
-	if err = bh.Exec(ctx, sql); err != nil {
+	bh.ClearExecResultSet()
+	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
 		return
 	}
 
