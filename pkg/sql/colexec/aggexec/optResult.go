@@ -408,11 +408,14 @@ func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, er
 
 	endX = r.nowIdx1
 	endY = r.resultList[startY].Length()
-	r.bsFromEmptyList[startX] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[startX])
-	for i := startX + 1; i <= r.nowIdx1; i++ {
-		r.bsFromEmptyList = append(r.bsFromEmptyList, vector.MustFixedColNoTypeCheck[bool](r.emptyList[i]))
+
+	if r.optInformation.doesThisNeedEmptyList {
+		r.bsFromEmptyList[startX] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[startX])
+		for i := startX + 1; i <= r.nowIdx1; i++ {
+			r.bsFromEmptyList = append(r.bsFromEmptyList, vector.MustFixedColNoTypeCheck[bool](r.emptyList[i]))
+		}
+		setValueFromX1Y1ToX2Y2(r.bsFromEmptyList, startX, startY, endX, endY, true)
 	}
-	setValueFromX1Y1ToX2Y2(r.bsFromEmptyList, startX, startY, endX, endY, true)
 	return startX, startY, endX, endY, nil
 }
 
