@@ -516,7 +516,7 @@ func TestRequestMultipleCn2(t *testing.T) {
 
 	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
 	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
+		ctx, cancel := context.WithTimeout(context.Background(), 0)
 		cancel()
 
 		//////
@@ -589,7 +589,7 @@ func TestQueryService_RemoteCache(t *testing.T) {
 			QueryClient:        qt,
 		}, nil)
 	assert.Nil(t, err)
-	defer func() { fs.Close() }()
+	defer func() { fs.Close(ctx) }()
 
 	t.Run("main", func(t *testing.T) {
 		runTestWithQueryService(t, cn, fs, func(cli client.QueryClient, addr string) {

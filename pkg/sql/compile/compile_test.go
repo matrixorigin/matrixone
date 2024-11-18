@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -107,6 +108,10 @@ func (w *Ws) Readonly() bool {
 	return false
 }
 
+func (w *Ws) Snapshot() bool {
+	return false
+}
+
 func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
@@ -155,6 +160,13 @@ func (w *Ws) GetHaveDDL() bool {
 
 func (w *Ws) PPString() string {
 	return ""
+}
+
+func NewMockCompile() *Compile {
+	return &Compile{
+		proc: testutil.NewProcess(),
+		ncpu: system.GoMaxProcs(),
+	}
 }
 
 func TestCompile(t *testing.T) {
@@ -225,6 +237,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -261,9 +274,7 @@ func GetFilePath() string {
 }
 
 func TestShuffleBlocksByHash(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -278,9 +289,7 @@ func TestShuffleBlocksByHash(t *testing.T) {
 }
 
 func TestShuffleBlocksByMoCtl(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -295,9 +304,7 @@ func TestShuffleBlocksByMoCtl(t *testing.T) {
 }
 
 func TestPutBlocksInCurrentCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -312,9 +319,7 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()

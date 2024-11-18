@@ -16,6 +16,9 @@ package compile
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -533,7 +534,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: dispatch.NewArgument(),
 	}
-	s2.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s2.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
@@ -542,9 +543,9 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	// this should return withoutOut == true.
 	s3 := &Scope{
 		Proc:   proc,
-		RootOp: value_scan.NewValueScanFromItSelf(),
+		RootOp: value_scan.NewArgument(),
 	}
-	s3.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s3.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
@@ -561,7 +562,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
@@ -572,7 +573,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
@@ -583,7 +584,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
 		sender.streamSender.(*fakeStreamSender).nextSendError = moerr.NewInternalErrorNoCtx("timeout")
 
-		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100)
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.NotNil(t, err)
 	}
 }
@@ -635,7 +636,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if others.
 		s3 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)
@@ -649,7 +650,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if not withoutOutput and no connector / dispatch, it's an unexpected case, should throw error.
 		s4 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)

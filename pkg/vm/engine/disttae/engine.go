@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -59,7 +59,6 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
-var ncpu = runtime.GOMAXPROCS(0)
 
 func New(
 	ctx context.Context,
@@ -355,34 +354,23 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	switch tableId {
-	case catalog.MO_DATABASE_ID:
+	if catalog.IsSystemTable(tableId) {
+		dbName = catalog.MO_CATALOG
 		db := &txnDatabase{
 			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+			databaseName: dbName,
 		}
-		defs := catalog.GetDefines(e.service).MoDatabaseTableDefs
-		return catalog.MO_CATALOG, catalog.MO_DATABASE,
-			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
-	case catalog.MO_TABLES_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
+		switch tableId {
+		case catalog.MO_DATABASE_ID:
+			tableName = catalog.MO_DATABASE
+		case catalog.MO_TABLES_ID:
+			tableName = catalog.MO_TABLES
+		case catalog.MO_COLUMNS_ID:
+			tableName = catalog.MO_COLUMNS
 		}
-		defs := catalog.GetDefines(e.service).MoTablesTableDefs
-		return catalog.MO_CATALOG, catalog.MO_TABLES,
-			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
-	case catalog.MO_COLUMNS_ID:
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: catalog.MO_CATALOG,
-		}
-		defs := catalog.GetDefines(e.service).MoColumnsTableDefs
-		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
-			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
+		rel, err = db.Relation(ctx, tableName, nil)
+		return
 	}
 
 	accountId, _ := defines.GetAccountId(ctx)
@@ -564,6 +552,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
+	var ncpu = system.GoMaxProcs()
 	var nodes engine.Nodes
 
 	start := time.Now()
@@ -681,6 +670,7 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			engine.FilterHint{},
 		)
 		if err != nil {
 			return nil, err

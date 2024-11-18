@@ -59,19 +59,14 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 	var err error
 	var res vm.CallResult
 
-	// dupBatchs := func(bats []*batch.Batch) []*batch.Batch {
-	// 	ret := make([]*batch.Batch, len(bats))
-	// 	for i, bat := range bats {
-	// 		ret[i], _ = bat.Dup(proc.GetMPool())
-	// 	}
-	// 	return ret
-	// }
-
-	// logutil.Info("begin to run multi_update test")
 	for _, tc := range tcs {
 		child := colexec.NewMockOperator().WithBatchs(tc.inputBatchs)
 		tc.op.AppendChild(child)
 		err = tc.op.Prepare(proc)
+		// use small Threshold for ut
+		if tc.op.ctr.s3Writer != nil {
+			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
+		}
 		require.NoError(t, err)
 		for {
 			res, err = tc.op.Call(proc)
@@ -102,6 +97,10 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 
 		child.WithBatchs(tc.inputBatchs)
 		err = tc.op.Prepare(proc)
+		// use small Threshold for ut
+		if tc.op.ctr.s3Writer != nil {
+			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
+		}
 		require.NoError(t, err)
 		for {
 			res, err = tc.op.Call(proc)
@@ -116,7 +115,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		tc.op.Free(proc, false, nil)
 	}
 
-	proc.GetFileService().Close()
+	proc.GetFileService().Close(proc.Ctx)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }

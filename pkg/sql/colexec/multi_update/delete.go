@@ -20,11 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (update *MultiUpdate) delete_table(
 	proc *process.Process,
+	analyzer process.Analyzer,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
 	idx int,
@@ -80,10 +82,16 @@ func (update *MultiUpdate) delete_table(
 				tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 				update.addDeleteAffectRows(tableType, uint64(rowCount))
 				source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partIdx]
-				err = source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+
+				crs := analyzer.GetOpCounterSet()
+				newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+				err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
 				if err != nil {
 					return err
 				}
+				analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
 			}
 		}
 	} else {
@@ -120,7 +128,16 @@ func (update *MultiUpdate) delete_table(
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addDeleteAffectRows(tableType, uint64(rowCount))
 			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
-			err = source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+			if err != nil {
+				return err
+			}
+			analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
 		}
 	}
 

@@ -103,7 +103,7 @@ func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 200, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
@@ -169,9 +169,11 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ObjRef:     objRef,
-		TableDef:   tableDef,
-		DeleteCols: []int{0, 1}, //row_id & pk
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		DeleteCols:      []int{0, 1}, //row_id & pk
+		OldPartitionIdx: -1,
+		NewPartitionIdx: -1,
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 	colCount := 2
@@ -192,9 +194,11 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     uniqueObjRef,
-			TableDef:   uniqueTableDef,
-			DeleteCols: []int{2, 3}, //row_id & pk
+			ObjRef:          uniqueObjRef,
+			TableDef:        uniqueTableDef,
+			DeleteCols:      []int{2, 3}, //row_id & pk
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 2
 	}
@@ -220,9 +224,11 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		}
 		colCount += 2
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     secondaryIdxObjRef,
-			TableDef:   secondaryIdxTableDef,
-			DeleteCols: secondaryPkPos,
+			ObjRef:          secondaryIdxObjRef,
+			TableDef:        secondaryIdxTableDef,
+			DeleteCols:      secondaryPkPos,
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 	}
 

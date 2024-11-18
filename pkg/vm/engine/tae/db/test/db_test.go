@@ -2563,8 +2563,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // data object + tombstone object
 
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.True(t, strings.HasSuffix(resp.Commands[0].TableName, "data_meta"))
+	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)
 	assert.Equal(t, uint32(9), resp.Commands[0].Bat.Vecs[0].Len) /* 5 create + 4 delete */
 	// start ts should not be empty
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
@@ -2575,8 +2574,7 @@ func TestSegDelLogtail(t *testing.T) {
 		assert.False(t, ts.IsEmpty())
 	}
 
-	assert.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
-	assert.True(t, strings.HasSuffix(resp.Commands[1].TableName, "tombstone_meta"))
+	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType)
 	assert.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 create + 2 delete */
 	// start ts should not be empty
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
@@ -6126,10 +6124,10 @@ func TestAlterFakePk(t *testing.T) {
 	for i, cmd := range resp.Commands {
 		t.Logf("command %d, table name %v, type %d", i, cmd.TableName, cmd.EntryType)
 	}
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType) // data insert
-	assert.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType) // data insert
-	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType) // data insert
-	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType) // data delete
+	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)      // data insert
+	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType) // data insert
+	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
+	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
 	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	assert.NoError(t, err)
@@ -6361,9 +6359,8 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	common.RuntimeMaxMergeObjN.Store(0)
-	common.RuntimeOsizeRowsQualified.Store(0)
-	common.RuntimeMaxObjOsize.Store(0)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
@@ -10237,4 +10234,63 @@ func TestMergeAndTransfer(t *testing.T) {
 	assert.NoError(t, txn.Commit(ctx))
 	t.Log(tae.Catalog.SimplePPString(3))
 
+}
+
+func TestS3TransferInMerge(t *testing.T) {
+	/*
+		merge start
+		s3 delete enqueue
+		merge exe end
+		s3 delete commit
+		merge commit
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	var wg sync.WaitGroup
+	{
+		deleteTxn, _ := tae.StartTxn(nil)
+		v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+		ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, deleteTxn)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		deleteTxn.SetPrepareCommitFn(func(at txnif.AsyncTxn) error {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+				assert.NoError(t, err)
+				err = task.OnExec(context.Background())
+				assert.NoError(t, err)
+			}()
+			time.Sleep(time.Millisecond * 100)
+			return at.GetStore().PrepareCommit()
+		})
+		assert.NoError(t, deleteTxn.Commit(context.Background()))
+
+	}
+	wg.Wait()
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(9, true)
 }

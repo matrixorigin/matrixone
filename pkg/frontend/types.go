@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -48,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -187,6 +187,7 @@ const (
 	FPRestartCDC
 	FPResumeCDC
 	FPShowCDC
+	FPCommitUnsafeBeforeRollbackWhenCommitPanic
 )
 
 type (
@@ -216,7 +217,14 @@ type ComputationWrapper interface {
 
 	GetUUID() []byte
 
+	// RecordExecPlan records the execution plan and calculates CU resources, and stores them into statementinfo
 	RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error
+
+	// RecordCompoundStmt calculates the CU resources of composite statements, and stores them into statementinfo
+	RecordCompoundStmt(ctx context.Context, statsBytes statistic.StatsArray) error
+
+	// StatsCompositeSubStmtResource Statistics on CU resources of sub statements in composite statements
+	StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray)
 
 	SetExplainBuffer(buf *bytes.Buffer)
 
@@ -263,11 +271,7 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
-	IsInsertValues bool
-	InsertBat      *batch.Batch
 	proc           *process.Process
-
-	exprList [][]colexec.ExpressionExecutor
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -341,6 +345,7 @@ type BackgroundExec interface {
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
+	GetExecStatsArray() statistic.StatsArray
 
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
@@ -376,17 +381,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
-	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
-		prepareStmt.InsertBat = nil
-	}
-	if prepareStmt.exprList != nil {
-		for _, exprs := range prepareStmt.exprList {
-			for _, expr := range exprs {
-				expr.Free()
-			}
-		}
-	}
+
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
@@ -537,6 +532,7 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
+	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
 	SessionLogger
 }
 
@@ -622,7 +618,6 @@ func (execCtx *ExecCtx) Close() {
 //	batch.Batch
 type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error
 
-// TODO: shared component among the session implmentation
 type feSessionImpl struct {
 	pool          *mpool.MPool
 	buf           *buffer.Buffer
@@ -724,14 +719,32 @@ func (ses *feSessionImpl) ExitRunSql() {
 	}
 }
 
+// Close releases all reference.
+// close txn handler also
 func (ses *feSessionImpl) Close() {
 	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
-	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler.Close()
+		ses.txnHandler = nil
 	}
+	ses.Reset()
+}
+
+// Reset release resources like buffer,memory,handles,etc.
+//
+//		It also reserves some necessary resources that are carefully designed.
+//	 	does not close txn handler here.
+func (ses *feSessionImpl) Reset() {
+	if ses == nil {
+		return
+	}
+	ses.Clear()
+
+	ses.mrs = nil
+	//release refer but not close it
+	ses.txnHandler = nil
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
@@ -754,6 +767,7 @@ func (ses *feSessionImpl) Close() {
 	ses.upstream = nil
 }
 
+// Clear clean result only
 func (ses *feSessionImpl) Clear() {
 	if ses == nil {
 		return
@@ -995,6 +1009,7 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
 	}
 
+	// special handle for validate_password.policy
 	if policy, ok := val.(string); ok && name == validatePasswordPolicyTag {
 		if strings.ToLower(policy) == validatePasswordPolicyLow {
 			// convert to 0
@@ -1002,6 +1017,14 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		} else if strings.ToLower(policy) == validatePasswordPolicyMed {
 			// convert to 1
 			val = int64(1)
+		}
+	}
+
+	// special check for invited_nodes
+	if invitedlist, ok := val.(string); ok && name == InvitedNodes {
+		err = checkInvitedNodes(ctx, invitedlist)
+		if err != nil {
+			return err
 		}
 	}
 

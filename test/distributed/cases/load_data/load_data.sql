@@ -303,6 +303,9 @@ load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06
 select * from test06;
 load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
+delete from test06;
+load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
 drop table test06;
 
 drop table if exists test07;

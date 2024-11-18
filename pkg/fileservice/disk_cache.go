@@ -29,12 +29,13 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 type DiskCache struct {
@@ -47,7 +48,8 @@ type DiskCache struct {
 		m map[string]bool
 	}
 
-	cache *fifocache.Cache[string, struct{}]
+	cache        *fifocache.Cache[string, struct{}]
+	capacityFunc fscache.CapacityFunc
 }
 
 func NewDiskCache(
@@ -71,29 +73,42 @@ func NewDiskCache(
 
 	seed := maphash.MakeSeed()
 
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "disk")
+	capacityBytes.Set(float64(capacity()))
+
+	capacityFunc := func() int64 {
+		// read from global size hint
+		if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+			return n
+		}
+		// fallback
+		return capacity()
+	}
+
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
 		perfCounterSets:    perfCounterSets,
 
+		capacityFunc: capacityFunc,
 		cache: fifocache.New(
 
-			func() int64 {
-				// read from global size hint
-				if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
-					return n
-				}
-				// fallback
-				return capacity()
-			},
+			capacityFunc,
 
 			func(key string) uint64 {
 				return maphash.String(seed, key)
 			},
 
+			func(_ context.Context, _ string, _ struct{}, size int64) { // postSet
+				inuseBytes.Add(float64(size))
+				capacityBytes.Set(float64(capacityFunc()))
+			},
+
 			nil,
-			nil,
-			func(path string, _ struct{}) {
+
+			func(ctx context.Context, path string, _ struct{}, size int64) {
+				inuseBytes.Add(float64(-size))
+				capacityBytes.Set(float64(capacityFunc()))
 				err := os.Remove(path)
 				if err == nil {
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -111,9 +126,9 @@ func NewDiskCache(
 	ret.updatingPaths.m = make(map[string]bool)
 
 	if asyncLoad {
-		go ret.loadCache()
+		go ret.loadCache(ctx)
 	} else {
-		ret.loadCache()
+		ret.loadCache(ctx)
 	}
 
 	if name != "" {
@@ -123,7 +138,7 @@ func NewDiskCache(
 	return ret, nil
 }
 
-func (d *DiskCache) loadCache() {
+func (d *DiskCache) loadCache(ctx context.Context) {
 	t0 := time.Now()
 
 	type Info struct {
@@ -145,7 +160,7 @@ func (d *DiskCache) loadCache() {
 					continue // ignore
 				}
 
-				d.cache.Set(work.Path, struct{}{}, int64(fileSize(info)))
+				d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 			}
 		}()
 	}
@@ -209,7 +224,7 @@ func (d *DiskCache) loadCache() {
 	)
 
 	done := make(chan int64, 1)
-	d.cache.Evict(done)
+	d.cache.Evict(ctx, done, 0)
 	target := <-done
 	logutil.Info("disk cache evict done",
 		zap.Any("target", target),
@@ -233,6 +248,7 @@ func (d *DiskCache) Read(
 	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
 	defer func() {
 		metric.FSReadHitDiskCounter.Add(float64(numHit))
+		metric.FSReadReadDiskCounter.Add(float64(numRead))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
@@ -322,13 +338,13 @@ func (d *DiskCache) Read(
 			return nil
 		}
 
-		if _, ok := d.cache.Get(diskPath); !ok {
+		if _, ok := d.cache.Get(ctx, diskPath); !ok {
 			// set cache
 			stat, err := file.Stat()
 			if err != nil {
 				return err
 			}
-			d.cache.Set(diskPath, struct{}{}, fileSize(stat))
+			d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
 		}
 
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
@@ -419,9 +435,6 @@ func (d *DiskCache) writeFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
-	// do eviction before write
-	d.cache.Evict(nil)
-
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -445,17 +458,24 @@ func (d *DiskCache) writeFile(
 		}
 	}()
 
+	// evict if disk is full
+	defer func() {
+		if isDiskFull(err) {
+			d.cache.ForceEvict(ctx, d.capacityFunc()/10)
+		}
+	}()
+
 	doneUpdate := d.startUpdate(diskPath)
 	defer doneUpdate()
 
-	if _, ok := d.cache.Get(diskPath); ok {
+	if _, ok := d.cache.Get(ctx, diskPath); ok {
 		// already exists
 		return false, nil
 	}
 	stat, err := os.Stat(diskPath)
 	if err == nil {
 		// file exists
-		d.cache.Set(diskPath, struct{}{}, fileSize(stat))
+		d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
 		numStat++
 		return false, nil
 	}
@@ -483,6 +503,18 @@ func (d *DiskCache) writeFile(
 		return false, err
 	}
 	defer from.Close()
+
+	// do eviction before write
+	forceEvict := int64(0)
+	if file, ok := from.(*os.File); ok {
+		// get file size
+		info, err := file.Stat()
+		if err == nil {
+			forceEvict = fileSize(info)
+		}
+	}
+	d.cache.Evict(ctx, nil, forceEvict)
+
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
@@ -495,12 +527,11 @@ func (d *DiskCache) writeFile(
 		return false, err
 	}
 
-	// set cache
 	stat, err = f.Stat()
 	if err != nil {
 		return false, err
 	}
-	d.cache.Set(diskPath, struct{}{}, fileSize(stat))
+	size := fileSize(stat)
 
 	if err := f.Close(); err != nil {
 		return false, err
@@ -512,12 +543,14 @@ func (d *DiskCache) writeFile(
 		zap.Any("path", diskPath),
 	)
 
+	d.cache.Set(ctx, diskPath, struct{}{}, size)
+
 	numWrite++
 
 	return true, nil
 }
 
-func (d *DiskCache) Flush() {
+func (d *DiskCache) Flush(ctx context.Context) {
 }
 
 const (
@@ -602,7 +635,7 @@ func (d *DiskCache) DeletePaths(
 ) (err error) {
 	for _, path := range paths {
 		//TODO also delete IOEntry files
-		if err = d.removeOnePath(path); err != nil {
+		if err = d.removeOnePath(ctx, path); err != nil {
 			return
 		}
 	}
@@ -610,7 +643,7 @@ func (d *DiskCache) DeletePaths(
 	return
 }
 
-func (d *DiskCache) removeOnePath(path string) (err error) {
+func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) {
 	diskPath := d.pathForFile(path)
 	doneUpdate := d.startUpdate(diskPath)
 	defer doneUpdate()
@@ -620,12 +653,12 @@ func (d *DiskCache) removeOnePath(path string) (err error) {
 		}
 		err = nil
 	}
-	d.cache.Delete(diskPath)
+	d.cache.Delete(ctx, diskPath)
 	return
 }
 
-func (d *DiskCache) Evict(done chan int64) {
-	d.cache.Evict(done)
+func (d *DiskCache) Evict(ctx context.Context, done chan int64) {
+	d.cache.Evict(ctx, done, 0)
 }
 
 func fileSize(info fs.FileInfo) int64 {
@@ -635,6 +668,6 @@ func fileSize(info fs.FileInfo) int64 {
 	return info.Size()
 }
 
-func (d *DiskCache) Close() {
+func (d *DiskCache) Close(ctx context.Context) {
 	allDiskCaches.Delete(d)
 }

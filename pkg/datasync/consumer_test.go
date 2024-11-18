@@ -217,7 +217,7 @@ func withCheckpointData(t *testing.T, f func(
 	opts.Fs = newTestFS()
 	db := testutil.NewTestEngine(ctx, "datasync", t, opts)
 	defer func() {
-		opts.Fs.Close()
+		opts.Fs.Close(ctx)
 		_ = db.Close()
 	}()
 

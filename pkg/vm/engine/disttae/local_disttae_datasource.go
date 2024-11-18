@@ -600,6 +600,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				for i := range deleted {
 					deleted[i] += int64(inputRowCnt)
 				}
+				// negative shrink requires the bat sorted already
 				outBatch.Shrink(deleted, true)
 			} else {
 				for i := range deleted {
@@ -865,22 +866,52 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	return leftRows
 }
 
+func (ls *LocalDisttaeDataSource) getInMemDelIter(
+	bid *types.Blockid,
+) (logtailreplay.RowsIter, bool) {
+
+	inMemTombstoneCnt := ls.pState.ApproxInMemTombstones()
+	if inMemTombstoneCnt == logtailreplay.IndexScaleZero {
+		return nil, true
+	}
+
+	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
+		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+	}
+
+	inValCnt, ok := ls.memPKFilter.InKind()
+	if !ok {
+		return ls.pState.NewPrimaryKeyDelIter(
+			&ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+	}
+
+	if inValCnt == 0 {
+		return nil, true
+	}
+
+	// special logic for in kind filter
+	if ls.memPKFilter.Must() || inMemTombstoneCnt/inValCnt >= logtailreplay.MuchGreaterThanFactor {
+		return ls.pState.NewPrimaryKeyDelIter(
+			&ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+	}
+
+	return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+}
+
 func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
-	var delIter logtailreplay.RowsIter
-
-	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
-		delIter = ls.pState.NewRowsIter(ls.snapshotTS, bid, true)
-	} else {
-		delIter = ls.pState.NewPrimaryKeyDelIter(
-			&ls.memPKFilter.TS,
-			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid)
-	}
 
 	leftRows = offsets
+
+	delIter, fastReturn := ls.getInMemDelIter(bid)
+	if fastReturn {
+		return leftRows
+	}
 
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
@@ -1041,6 +1072,8 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	cacheVectors := containers.NewVectors(len(attrs))
 
+	checkedObjCnt := 0
+
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
@@ -1060,6 +1093,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 		}
 
+		sameObj := false
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
@@ -1085,6 +1119,12 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
+
+						if !sameObj {
+							checkedObjCnt++
+						}
+						sameObj = true
+
 						break
 					}
 				}
@@ -1092,6 +1132,12 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 
 			release()
 		}
+	}
+
+	// if more than one tombstone have applied any delete,
+	// the unsorted input rowIds slice may lead the deleted slice unsorted as well.
+	if checkedObjCnt >= 2 {
+		slices.Sort(deleted)
 	}
 
 	return deleted, nil

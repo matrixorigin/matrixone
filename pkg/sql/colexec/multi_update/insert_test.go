@@ -115,6 +115,24 @@ func TestInsertS3PartitionTable(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestInsertHaveNull(t *testing.T) {
+	hasUniqueKey := false
+	hasSecondaryKey := false
+	isPartition := true
+
+	_, ctrl, proc := prepareTestCtx(t, true)
+	eng := prepareTestEng(ctrl)
+
+	batchs, _ := prepareTestInsertBatchs(proc.Mp(), 40, hasUniqueKey, hasSecondaryKey, isPartition)
+	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
+	pkNull := batchs[0].Vecs[0].GetNulls()
+	pkNull.Set(0)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+
+	runTestCases(t, proc, []*testCase{retCase})
+}
+
 func TestFlushS3Info(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
@@ -148,7 +166,7 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 220, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
@@ -207,9 +225,11 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ObjRef:     objRef,
-		TableDef:   tableDef,
-		InsertCols: []int{0, 1, 2, 3},
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		InsertCols:      []int{0, 1, 2, 3},
+		OldPartitionIdx: -1,
+		NewPartitionIdx: -1,
 	}
 	colCount := 4
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
@@ -230,9 +250,11 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     uniqueObjRef,
-			TableDef:   uniqueTableDef,
-			InsertCols: []int{4, 0},
+			ObjRef:          uniqueObjRef,
+			TableDef:        uniqueTableDef,
+			InsertCols:      []int{4, 0},
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 1
 	}
@@ -256,9 +278,11 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 			secondaryPkPos += 1
 		}
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     secondaryIdxObjRef,
-			TableDef:   secondaryIdxTableDef,
-			InsertCols: []int{secondaryPkPos, 0},
+			ObjRef:          secondaryIdxObjRef,
+			TableDef:        secondaryIdxTableDef,
+			InsertCols:      []int{secondaryPkPos, 0},
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 1
 	}

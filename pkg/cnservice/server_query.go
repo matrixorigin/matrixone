@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -24,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -91,6 +91,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
@@ -512,7 +513,7 @@ func (s *service) handleResetSession(
 func (s *service) handleGoMaxProcs(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
-	resp.GoMaxProcsResponse.MaxProcs = int32(runtime.GOMAXPROCS(int(req.GoMaxProcsRequest.MaxProcs)))
+	resp.GoMaxProcsResponse.MaxProcs = int32(system.SetGoMaxProcs(int(req.GoMaxProcsRequest.MaxProcs)))
 	logutil.Info("QueryService::GoMaxProcs",
 		zap.String("op", "set"),
 		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),
@@ -529,6 +530,17 @@ func (s *service) handleGoMemLimit(
 		zap.String("op", "set"),
 		zap.Int64("in", req.GoMemLimitRequest.MemLimitBytes),
 		zap.Int64("out", resp.GoMemLimitResponse.MemLimitBytes),
+	)
+	return nil
+}
+
+func (s *service) handleGoGCPercent(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	resp.GoGCPercentResponse.Percent = int32(debug.SetGCPercent(int(req.GoGCPercentRequest.Percent)))
+	logutil.Info("QueryService::GOGCPercent",
+		zap.Int32("in", req.GoGCPercentRequest.Percent),
+		zap.Int32("out", resp.GoGCPercentResponse.Percent),
 	)
 	return nil
 }
@@ -557,15 +569,23 @@ func (s *service) handleFileServiceCacheEvictRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("file service cache evict",
+		zap.String("type", req.FileServiceCacheEvictRequest.Type.String()))
+
 	var ret map[string]int64
 	switch req.FileServiceCacheEvictRequest.Type {
 	case query.FileServiceCacheType_Disk:
-		ret = fileservice.EvictDiskCaches()
+		ret = fileservice.EvictDiskCaches(ctx)
 	case query.FileServiceCacheType_Memory:
-		ret = fileservice.EvictMemoryCaches()
+		ret = fileservice.EvictMemoryCaches(ctx)
 	}
 
-	for _, target := range ret {
+	for name, target := range ret {
+		logutil.Info("file service cache evict",
+			zap.String("type", req.FileServiceCacheEvictRequest.Type.String()),
+			zap.Int64("size", target),
+			zap.String("name", name),
+		)
 		resp.FileServiceCacheEvictResponse.CacheSize = target
 		resp.FileServiceCacheEvictResponse.CacheCapacity = target
 		// usually one instance
@@ -579,10 +599,12 @@ func (s *service) handleMetadataCacheRequest(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 
+	logutil.Info("metadata cache", zap.Int64("size", req.MetadataCacheRequest.CacheSize))
+
 	// set capacity hint
 	objectio.GlobalCacheCapacityHint.Store(req.MetadataCacheRequest.CacheSize)
 	// evict
-	target := objectio.EvictCache()
+	target := objectio.EvictCache(ctx)
 	// response
 	resp.MetadataCacheResponse.CacheCapacity = target
 

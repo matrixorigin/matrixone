@@ -137,7 +137,9 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, interval time.Duration) err
 
 func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
 	prevGlobalEnd := types.TS{}
+	r.storage.RLock()
 	global, _ := r.storage.globals.Max()
+	r.storage.RUnlock()
 	if global != nil {
 		prevGlobalEnd = global.end
 	}
@@ -314,6 +316,10 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	prev := r.MaxIncrementalCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return "", moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
+	}
+	// ut causes all Ickp to be gc too fast, leaving a Gckp
+	if prev == nil {
+		prev = r.MaxGlobalCheckpoint()
 	}
 	start := types.TS{}
 	if prev != nil {

@@ -208,9 +208,9 @@ Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 commit;
 select * from test_11;
 c    d
@@ -250,9 +250,9 @@ c    d
 50    50
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 select * from test_11;
 c    d
 1    1
@@ -304,9 +304,9 @@ c    d
 50    50
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 select * from test_11;
 c    d
 1    1
@@ -364,9 +364,9 @@ c    d
 50    50
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 select * from test_11;
 c    d
 1    1
@@ -423,9 +423,9 @@ c    d
 50    50
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 select * from test_11;
 c    d
 1    1
@@ -573,3 +573,27 @@ newcccc    d
 2    2
 5    7
 drop table rename01;
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+delete from t1 where a = 1;
+use isolation;
+delete from t1 where a = 1;
+commit;
+begin;
+delete from t1 where a in (1,2,3);
+use isolation;
+delete from t1 where a = 3;
+commit;
+begin;
+update t1 set b = 10 where a = 1;
+use isolation;
+delete from t1 where a = 1;
+commit;
+begin;
+select * from t1 where a = 1 for update;
+a    b
+use isolation;
+delete from t1 where a = 1;
+commit;
+drop table if exists t1;

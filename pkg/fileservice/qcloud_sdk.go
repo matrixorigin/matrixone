@@ -327,9 +327,6 @@ func (a *QCloudSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker string) (*cos.BucketGetResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 
 	opts := &cos.BucketGetOptions{
 		Delimiter: "/",
@@ -347,6 +344,9 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 	return DoWithRetry(
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			result, _, err := a.client.Bucket.Get(ctx, opts)
 			if err != nil {
 				return nil, err
@@ -361,13 +361,13 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 
 	return DoWithRetry(
 		"s3 head object",
 		func() (http.Header, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			resp, err := a.client.Object.Head(ctx, key, &cos.ObjectHeadOptions{})
 			if err != nil {
 				return nil, err
@@ -388,6 +388,7 @@ func (a *QCloudSDK) putObject(
 ) (err error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.putObject")
 	defer task.End()
+
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -403,9 +404,6 @@ func (a *QCloudSDK) putObject(
 func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
 
 	if min == nil {
 		min = ptrTo[int64](0)
@@ -426,6 +424,9 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 			return DoWithRetry(
 				"s3 get object",
 				func() (io.ReadCloser, error) {
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					resp, err := a.client.Object.Get(ctx, key, opts)
 					if err != nil {
 						return nil, err
@@ -445,12 +446,12 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete object",
 		func() (bool, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			if _, err := a.client.Object.Delete(ctx, key); err != nil {
 				return false, err
 			}
@@ -464,9 +465,6 @@ func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete objects",
 		func() (bool, error) {
@@ -476,6 +474,9 @@ func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, er
 					Key: key,
 				})
 			}
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			_, _, err := a.client.Object.DeleteMulti(ctx, &cos.ObjectDeleteMultiOptions{
 				Quiet:   true,
 				Objects: objects,
