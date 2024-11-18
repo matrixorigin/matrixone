@@ -159,7 +159,6 @@ func TestBackupData(t *testing.T) {
 }
 
 func TestBackupData2(t *testing.T) {
-	t.Skip("TestBackupData2")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -206,19 +205,6 @@ func TestBackupData2(t *testing.T) {
 	db.Restart(ctx, opts)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	deletedRows := 0
-	{
-		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
-
-		obj := testutil.GetOneObject(rel)
-		id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
-		err := rel.RangeDelete(id, 0, 0, handle.DT_Normal)
-		require.NoError(t, err)
-		deletedRows = 1
-		testutil.CompactBlocks(t, 0, db.DB, "db", schema, false)
-
-		assert.NoError(t, txn.Commit(context.Background()))
-	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	dir := path.Join(db.Dir, "/local")

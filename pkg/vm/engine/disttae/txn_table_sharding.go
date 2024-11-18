@@ -272,6 +272,7 @@ func (tbl *txnTableDelegate) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
@@ -283,11 +284,15 @@ func (tbl *txnTableDelegate) Ranges(
 			exprs,
 			preAllocSize,
 			txnOffset,
+			policy,
 		)
 	}
 
 	var blocks objectio.BlockInfoSlice
-	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	var uncommitted []objectio.ObjectStats
+	if policy != engine.Policy_CheckCommittedOnly {
+		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
 		nil,
@@ -456,7 +461,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	num int,
 	txnOffset int,
 	orderBy bool,
-	policy engine.TombstoneApplyPolicy) ([]engine.Reader, error) {
+	policy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint) ([]engine.Reader, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
 		return nil, err
@@ -471,6 +477,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			txnOffset,
 			orderBy,
 			engine.Policy_CheckAll,
+			filterHint,
 		)
 	}
 	return tbl.BuildShardingReaders(
@@ -729,6 +736,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				expr,
 				ds,
 				engine_util.GetThresholdForReader(newNum),
+				engine.FilterHint{},
 			)
 			if err != nil {
 				return nil, err

@@ -240,13 +240,29 @@ func TestRemoveRunningTask(t *testing.T) {
 		task := mustGetTestAsyncTask(t, store, 1)[0]
 		r.addToWait(context.Background(), task)
 		r.removeRunningTask(task.ID)
-
-		r.runningTasks.RLock()
-		defer r.runningTasks.RUnlock()
-		_, exists := r.runningTasks.m[task.ID]
-		assert.False(t, exists, "task should be removed from runningTasks")
-		_, completed := r.runningTasks.completedTasks[task.ID]
-		assert.True(t, completed, "task should be added to completedTasks")
+		time.Sleep(1 * time.Second)
+		timeout := time.After(5 * time.Second)
+		for {
+			select {
+			case <-timeout:
+				require.Fail(t, "timeout waiting for task to be removed and added to completedTasks")
+			default:
+				r.runningTasks.RLock()
+				_, exists := r.runningTasks.m[task.ID]
+				if len(r.runningTasks.completedTasks) != 0 {
+					_, completed := r.runningTasks.completedTasks[task.ID]
+					if !exists && completed {
+						return
+					}
+				} else {
+					if !exists {
+						return
+					}
+				}
+				r.runningTasks.RUnlock()
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }

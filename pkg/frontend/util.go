@@ -1669,7 +1669,7 @@ func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, 
 }
 
 func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	bh := NewShareTxnBackgroundExec(ctx, ses, false)
 	defer bh.Close()
 	var (
 		sql     string
@@ -1823,8 +1823,4 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 	lca.Lock()
 	defer lca.Unlock()
 	return lca.allocated == lca.freed && len(lca.records) == 0
-}
-
-func Slice(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

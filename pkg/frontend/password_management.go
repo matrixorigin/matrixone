@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -121,9 +122,9 @@ func validateCheckUserNameInPassword(ctx context.Context, pwd, authUserName, cur
 		return nil
 	}
 
-	pwdBytes := Slice(pwd)
+	pwdBytes := util.UnsafeStringToBytes(pwd)
 	for _, userName := range []string{authUserName, curUserName} {
-		userNameBytes := Slice(userName)
+		userNameBytes := util.UnsafeStringToBytes(userName)
 		if bytes.Equal(pwdBytes, userNameBytes) {
 			return moerr.NewInvalidInputf(ctx, "Password '%s' euqals the user name '%s'", pwd, userName)
 		} else if bytes.Equal(pwdBytes, reverseBytes(userNameBytes)) {
@@ -522,6 +523,7 @@ func checkPasswordReusePolicy(ctx context.Context, ses *Session, bh BackgroundEx
 
 	// delete the password records that exceed the password history
 	deleteNum := 0
+	canDeleteNum = min(canDeleteNum, int64(len(userPasswords)))
 	if canDeleteNum > 0 {
 		for i := 0; i < int(canDeleteNum); i++ {
 			// if password time exceeds the password history, delete the password record

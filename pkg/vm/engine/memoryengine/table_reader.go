@@ -62,7 +62,8 @@ func (t *Table) BuildReaders(
 	parallel int,
 	_ int,
 	_ bool,
-	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+	_ engine.TombstoneApplyPolicy,
+	_ engine.FilterHint) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs = relData.GetShardIDList()
@@ -246,7 +247,7 @@ func (t *Table) GetProcess() any {
 	panic("Not Support")
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _int, _ int) (engine.RelData, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _int, _ int, _ engine.DataCollectPolicy) (engine.RelData, error) {
 	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)

@@ -85,13 +85,13 @@ func TestCacheEvict3(t *testing.T) {
 	var nEvict, nGet, nSet int
 	cache := New(fscache.ConstCapacity(1024),
 		ShardInt[int],
-		func(_ context.Context, _ int, _ bool) {
+		func(_ context.Context, _ int, _ bool, _ int64) {
 			nSet++
 		},
-		func(_ context.Context, _ int, _ bool) {
+		func(_ context.Context, _ int, _ bool, _ int64) {
 			nGet++
 		},
-		func(_ context.Context, _ int, _ bool) {
+		func(_ context.Context, _ int, _ bool, _ int64) {
 			nEvict++
 		},
 	)
