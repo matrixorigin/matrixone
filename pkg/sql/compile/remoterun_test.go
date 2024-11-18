@@ -534,7 +534,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: dispatch.NewArgument(),
 	}
-	s2.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s2.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
@@ -543,9 +543,9 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	// this should return withoutOut == true.
 	s3 := &Scope{
 		Proc:   proc,
-		RootOp: value_scan.NewValueScanFromItSelf(),
+		RootOp: value_scan.NewArgument(),
 	}
-	s3.RootOp.AppendChild(value_scan.NewValueScanFromItSelf())
+	s3.RootOp.AppendChild(value_scan.NewArgument())
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
@@ -636,7 +636,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if others.
 		s3 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)
@@ -650,7 +650,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		// if not withoutOutput and no connector / dispatch, it's an unexpected case, should throw error.
 		s4 := &Scope{
 			Proc:   proc,
-			RootOp: value_scan.NewValueScanFromItSelf(),
+			RootOp: value_scan.NewArgument(),
 		}
 		ch, err1 := sender.streamSender.Receive()
 		require.Nil(t, err1)

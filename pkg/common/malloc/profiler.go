@@ -21,9 +21,9 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/google/pprof/profile"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 type Profiler[T any, P interface {
@@ -268,12 +268,7 @@ func hashLocations(locations []*profile.Location) uint64 {
 	}()
 
 	for _, location := range locations {
-		hasher.Write(
-			unsafe.Slice(
-				(*byte)(unsafe.Pointer(&location.ID)),
-				unsafe.Sizeof(location.ID),
-			),
-		)
+		hasher.Write(util.UnsafeToBytes(&location.ID))
 	}
 
 	return hasher.Sum64()

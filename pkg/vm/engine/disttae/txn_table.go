@@ -461,6 +461,14 @@ func (tbl *txnTable) GetProcess() any {
 }
 
 func (tbl *txnTable) resetSnapshot() {
+	//TODO::Remove the debug info for issue-19867
+	if tbl.db.op.IsSnapOp() {
+		logutil.Infof("reset partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
+			tbl._partState.Load(),
+			tbl,
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
+	}
 	tbl._partState.Store(nil)
 }
 
@@ -563,8 +571,12 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
+	var unCommittedObjs []objectio.ObjectStats
+	if policy == engine.Policy_CollectAllData {
+		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
 	return tbl.doRanges(
 		ctx,
 		exprs,
@@ -675,6 +687,15 @@ func (tbl *txnTable) doRanges(
 	// get the table's snapshot
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
+	}
+
+	//TODO::Remove the debug info for issue-19867
+	if tbl.tableName == "mo_database" && tbl.db.op.IsSnapOp() {
+		logutil.Infof("doRanges:get partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
+			part,
+			tbl,
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
 	}
 
 	if err = tbl.rangesOnePart(
@@ -1519,7 +1540,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		tbl.getTxn().StashFlushedTombstones(stats)
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1763,6 +1787,7 @@ func (tbl *txnTable) BuildReaders(
 	txnOffset int,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
@@ -1815,6 +1840,7 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			filterHint,
 		)
 		if err != nil {
 			return nil, err
@@ -1864,7 +1890,8 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+			tbl,
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),
@@ -1899,8 +1926,14 @@ func (tbl *txnTable) PKPersistedBetween(
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
-) (bool, error) {
+) (changed bool, err error) {
 
+	v2.TxnPKChangeCheckTotalCounter.Inc()
+	defer func() {
+		if err != nil && changed {
+			v2.TxnPKChangeCheckChangedCounter.Inc()
+		}
+	}()
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2023,6 +2056,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	if len(candidateBlks) > 0 {
+		v2.TxnPKChangeCheckIOCounter.Inc()
+	}
 	for _, blk := range candidateBlks {
 		release, err := blockio.LoadColumns(
 			ctx,
@@ -2140,7 +2176,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

@@ -200,6 +200,8 @@ message LockTarget {
   bool lock_table               = 6;
   bool ChangeDef               = 7;
   lock.LockMode Mode         = 8;
+  plan.Expr lock_rows = 9;
+  bool lock_table_at_the_end = 10;
 }
 
 message LockOp {
@@ -552,10 +554,11 @@ message Source {
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
   plan.Expr  expr = 7;
-  plan.TableDef tableDef = 8;
-  timestamp.Timestamp timestamp = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
-  bool is_const = 11;
+  plan.Node node = 8;
+  plan.TableDef tableDef = 9;
+  timestamp.Timestamp timestamp = 10;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
+  bool is_const = 12;
 }
 
 message NodeInfo {
@@ -563,6 +566,9 @@ message NodeInfo {
   string id = 2;
   string addr = 3;
   string payload = 4;
+  bool need_expand_ranges = 5;
+  int32 cn_cnt = 6;
+  int32 cn_idx = 7;
 }
 
 message ProcessLimitation {

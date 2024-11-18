@@ -123,22 +123,6 @@ func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
 	proc.Base.prepareParams = prepareParams
 }
 
-func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
-	proc.Base.prepareBatch = bat
-}
-
-func (proc *Process) GetPrepareBatch() *batch.Batch {
-	return proc.Base.prepareBatch
-}
-
-func (proc *Process) SetPrepareExprList(exprList any) {
-	proc.Base.prepareExprList = exprList
-}
-
-func (proc *Process) GetPrepareExprList() any {
-	return proc.Base.prepareExprList
-}
-
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
@@ -154,10 +138,6 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 		nulls.Set(vec.GetNulls(), nsp)
 	}
 	return vec, nil
-}
-
-func (proc *Process) CopyValueScanBatch(src *Process) {
-	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {

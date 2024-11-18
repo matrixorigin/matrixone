@@ -17,8 +17,11 @@ package objectio
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"go.uber.org/zap"
 
 	"github.com/cespare/xxhash/v2"
@@ -96,14 +99,52 @@ func shardMetaCacheKey(key mataCacheKey) uint64 {
 	return xxhash.Sum64(key[:])
 }
 
+var GlobalCacheCapacityHint atomic.Int64
+
+func cacheCapacityFunc(size int64) fscache.CapacityFunc {
+	return func() int64 {
+		if n := GlobalCacheCapacityHint.Load(); n > 0 {
+			return n
+		}
+		return size
+	}
+}
+
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(metaCacheSize()), shardMetaCacheKey, nil, nil, nil)
+	metaCache = newMetaCache(cacheCapacityFunc(metaCacheSize()))
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](fscache.ConstCapacity(size), shardMetaCacheKey, nil, nil, nil)
+		metaCache = newMetaCache(cacheCapacityFunc(size))
 	})
+}
+
+func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
+	capacityBytes.Set(float64(capacity()))
+	return fifocache.New[mataCacheKey, []byte](
+		capacity,
+		shardMetaCacheKey,
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postSet
+			inuseBytes.Add(float64(size))
+			capacityBytes.Set(float64(capacity()))
+		},
+		nil,
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
+			inuseBytes.Add(float64(-size))
+			capacityBytes.Set(float64(capacity()))
+		})
+}
+
+func EvictCache(ctx context.Context) (target int64) {
+	ch := make(chan int64, 1)
+	metaCache.Evict(ctx, ch)
+	target = <-ch
+	logutil.Info("metadata cache forced evicted",
+		zap.Any("target", target),
+	)
+	return
 }
 
 func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
@@ -121,9 +162,11 @@ func LoadObjectMetaByExtent(
 	policy fileservice.Policy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return MustObjectMeta(v), nil
 	}
 	if extent.Length() == 0 {
@@ -135,7 +178,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(key, v[:], int64(len(v)))
+	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -145,9 +188,11 @@ func FastLoadBF(
 	isPrefetch bool,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
 	}
 	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
@@ -163,9 +208,11 @@ func LoadBFWithMeta(
 	location Location,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-	v, ok := metaCache.Get(key)
+	v, ok := metaCache.Get(ctx, key)
 	if ok {
+		metric.FSReadHitMetaCounter.Add(1)
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
@@ -173,7 +220,7 @@ func LoadBFWithMeta(
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(key, bf, int64(len(bf)))
+	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
 }
 

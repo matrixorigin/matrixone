@@ -53,9 +53,9 @@ func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
-func (f *FileServices) Close() {
+func (f *FileServices) Close(ctx context.Context) {
 	for _, fs := range f.mappings {
-		fs.Close()
+		fs.Close(ctx)
 	}
 }
 

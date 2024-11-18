@@ -1368,7 +1368,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1394,7 +1394,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1420,7 +1420,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
@@ -3774,7 +3774,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date_sub`
 	{
 		functionId: DATE_SUB,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -6355,38 +6355,6 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return Version
-				},
-			},
-		},
-	},
-
-	// function `mo_check_level`
-	{
-		functionId: MO_CHECH_LEVEL,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_bool},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						vs := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-						res := vector.MustFunctionResult[bool](result)
-						for i := uint64(0); i < uint64(length); i++ {
-							flag, isNull := vs.GetValue(i)
-							if isNull || !flag {
-								return moerr.NewCheckRecursiveLevel(proc.Ctx)
-							}
-							res.AppendMustValue(true)
-						}
-						return nil
-					}
 				},
 			},
 		},

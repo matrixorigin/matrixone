@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -40,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -254,15 +254,19 @@ type Session struct {
 
 	// create version
 	createVersion string
+
+	//reused backExec
+	backExecReused         *backExec
+	shareTxnBackExecReused *backExec
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 	return &ses.mysqlParser
 }
 
-func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
+func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) (err error) {
 	var sv *SystemVariables
-	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
 	ses.mu.Lock()
@@ -658,6 +662,12 @@ func (ses *Session) Close() {
 		ses.buf = nil
 	}
 
+	//clean reused backExec
+	ses.backExecReused.Close()
+	ses.backExecReused = nil
+	ses.shareTxnBackExecReused.Close()
+	ses.shareTxnBackExecReused = nil
+
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
 	pool := ses.GetMemPool()
@@ -796,28 +806,40 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	backSes := newBackSession(ses, txnOp, ses.respr.GetStr(DBNAME), callback)
-	bh := &backExec{
-		backSes: backSes,
-	}
+	ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
-	bh.backSes.ReplaceDerivedStmt(true)
-	return bh
+	ses.shareTxnBackExecReused.backSes.ReplaceDerivedStmt(true)
+	return ses.shareTxnBackExecReused
 }
 
-var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) BackgroundExec {
-	return ses.GetRawBatchBackgroundExec(ctx)
+func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+	if txnOp != nil {
+		if ses.shareTxnBackExecReused == nil {
+			ses.shareTxnBackExecReused = &backExec{}
+		} else if ses.shareTxnBackExecReused.inUse {
+			panic("Session.ShareBackExec already in use")
+		}
+		ses.shareTxnBackExecReused.init(ses, txnOp, db, callBack)
+		ses.shareTxnBackExecReused.backSes.upstream = ses
+		ses.shareTxnBackExecReused.inUse = true
+		return ses.shareTxnBackExecReused
+	} else {
+		if ses.backExecReused == nil {
+			ses.backExecReused = &backExec{}
+		} else if ses.backExecReused.inUse {
+			panic("Session.BackExec already in use")
+		}
+		ses.backExecReused.init(ses, txnOp, db, callBack)
+		ses.backExecReused.backSes.upstream = ses
+		ses.backExecReused.inUse = true
+		return ses.backExecReused
+	}
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
 	ses.EnterFPrint(FPGetRawBatchBackgroundExec)
 	defer ses.ExitFPrint(FPGetRawBatchBackgroundExec)
-
-	backSes := newBackSession(ses, nil, "", batchFetcher2)
-	bh := &backExec{
-		backSes: backSes,
-	}
-	return bh
+	return ses.InitBackExec(nil, "", batchFetcher2)
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -956,14 +978,7 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	} else {
 		stmt.Close()
 	}
-	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
-		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-		if isInsertValues {
-			prepareStmt.proc = ses.proc
-			prepareStmt.exprList = exprList
-		}
-	}
+
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil
@@ -1128,6 +1143,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		lockTimeExpired      bool
 		needCheckLock        bool
 		maxLoginAttempts     int64
+		needCheckHost        bool
 	)
 
 	//Get tenant info
@@ -1149,15 +1165,27 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
 	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+
+	err = bh.Exec(sysTenantCtx, "begin;")
+	defer func() {
+		err = finishTxn(sysTenantCtx, bh, err)
+	}()
+	if err != nil {
+		return nil, err
+	}
+
 	sqlForCheckTenant, err = getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
 	}
 	ses.Debugf(ctx, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1216,7 +1244,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
+	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1265,7 +1293,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -1280,7 +1308,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1301,7 +1329,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1324,8 +1352,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	// TO Check password
-	if err = ses.InitSystemVariables(tenantCtx); err != nil {
+	if err = ses.InitSystemVariables(tenantCtx, bh); err != nil {
 		return nil, err
+	}
+
+	// check if the host is allowed to connect
+	needCheckHost, err = whetherNeedToCheckIp(ses)
+	if err != nil {
+		return nil, err
+	}
+
+	if needCheckHost {
+		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
@@ -1335,7 +1377,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if needCheckLock {
 		// get user status, login_attempts, lock_time
 		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
-		userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userLockInfoSql)
+		userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 		if err != nil {
 			return nil, err
 		}
@@ -1370,16 +1412,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	// make update user login info in one transaction
-	bh := ses.GetBackgroundExec(tenantCtx)
-	defer bh.Close()
-
-	err = bh.Exec(tenantCtx, "begin;")
-	defer func() {
-		err = finishTxn(tenantCtx, bh, err)
-	}()
-	if err != nil {
-		return nil, err
-	}
 
 	if checkPassword(psw, salt, authResponse) {
 		ses.Debug(tenantCtx, "check password succeeded")
@@ -1394,7 +1426,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 			if defPwdLife > 0 {
 				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
-				userRsset, err = executeSQLInBackgroundSession(tenantCtx, ses, userExpiredSql)
+				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
 				if err != nil {
 					return nil, err
 				}
@@ -1452,7 +1484,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use `"+dbName+"`")
+		_, err = executeSQLInBackgroundSession(tenantCtx, bh, "use `"+dbName+"`")
 		if err != nil {
 			return nil, err
 		}
@@ -1483,7 +1515,7 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
-func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]interface{}, err error) {
+func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
@@ -1491,7 +1523,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]i
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-	if execResults, err = ExeSqlInBgSes(tenantCtx, ses, sqlForGetVariables); err != nil {
+	if execResults, err = ExeSqlInBgSes(tenantCtx, bh, sqlForGetVariables); err != nil {
 		return
 	}
 
@@ -1634,7 +1666,7 @@ func (ses *Session) StatusSession() *status.Session {
 // getStatusAfterTxnIsEnded
 // !!! only used after the txn is ended.
 // it may be called in the active txn. so, we
-func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
+func (ses *Session) getStatusAfterTxnIsEnded() uint16 {
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
@@ -1704,33 +1736,6 @@ func (ses *Session) reset(prev *Session) error {
 	// close the previous session.
 	prev.ReserveConnAndClose()
 	return nil
-}
-
-func checkPlanIsInsertValues(proc *process.Process,
-	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
-	qry := p.GetQuery()
-	if qry != nil {
-		for _, node := range qry.Nodes {
-			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))
-				for i, col := range node.RowsetData.Cols {
-					exprList[i] = make([]colexec.ExpressionExecutor, 0, len(col.Data))
-					for _, data := range col.Data {
-						if data.Pos >= 0 {
-							continue
-						}
-						expr, err := colexec.NewExpressionExecutor(proc, data.Expr)
-						if err != nil {
-							return false, nil
-						}
-						exprList[i] = append(exprList[i], expr)
-					}
-				}
-				return true, exprList
-			}
-		}
-	}
-	return false, nil
 }
 
 func commitAfterMigrate(ses *Session, err error) error {
@@ -2059,7 +2064,7 @@ func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (b
 
 	// get the current time as utc time
 	now := time.Now().UTC()
-	if lt.Add(time.Duration(maxDelay) * time.Microsecond).After(now) {
+	if lt.Add(time.Duration(maxDelay) * time.Millisecond).After(now) {
 		return false, nil
 	}
 
@@ -2162,4 +2167,47 @@ func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error 
 		return err
 	}
 	return nil
+}
+
+func whetherNeedToCheckIp(ses *Session) (bool, error) {
+	var (
+		ValidnodeVal interface{}
+		err          error
+	)
+	ValidnodeVal, err = ses.GetGlobalSysVar(ValidnodeChecking)
+	if err != nil {
+		return false, err
+	}
+
+	validatePasswordConfig, ok := ValidnodeVal.(int8)
+	if !ok || validatePasswordConfig != 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, clientAddr string) error {
+	var (
+		invitedNodesVal interface{}
+		err             error
+		ip              string
+	)
+
+	invitedNodesVal, err = ses.GetGlobalSysVar(InvitedNodes)
+	if err != nil {
+		return err
+	}
+	invitedNodes, ok := invitedNodesVal.(string)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
+	}
+
+	// get the ip address of the client
+	ip, _, err = net.SplitHostPort(clientAddr)
+	if err != nil {
+		return err
+	}
+
+	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
 }

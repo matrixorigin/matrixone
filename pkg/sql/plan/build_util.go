@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,10 +60,8 @@ func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
 			if reCheckIfNeed {
 				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
-				n.LockTargets[0].LockTable = reCheckIfNeed
-
-				if len(n.LockTargets) > 1 && n.LockTargets[1].IsPartitionTable {
-					n.LockTargets[1].LockTable = true
+				for _, target := range n.LockTargets {
+					target.LockTable = reCheckIfNeed
 				}
 			}
 		}
@@ -744,4 +743,10 @@ func getPartColsFromExpr(expr *Expr, colNameMap map[string]bool) {
 			getPartColsFromExpr(order.Expr, colNameMap)
 		}
 	}
+}
+
+func cleanHint(originSql string) string {
+	re := regexp.MustCompile(`/\*[^!].*?\*/`)
+	cleanSQL := re.ReplaceAllString(originSql, "")
+	return cleanSQL
 }
