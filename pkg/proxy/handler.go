@@ -205,12 +205,12 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}
 	h.logger.Debug("server conn created")
 	defer func() {
-		// This Close() function just disconnect from connManager,
-		// but do not close the real raw connection. The raw connection
-		// is closed if the server connection could not be pushed into
-		// the connection cache, which is in (*clientConn).handleQuitEvent()
-		// function.
-		_ = sc.Close()
+		// If the connCache is nil, means the connection cached feature is not
+		// enabled. Do close the server connection if the connection cache
+		// feature is not enabled.
+		if h.connCache == nil {
+			_ = sc.Close()
+		}
 	}()
 
 	h.logger.Info("build connection",

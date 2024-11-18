@@ -53,6 +53,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
 			c.initTombstoneTransferRow(),
+			c.initTxnCheckPKChangedRow(),
 		)...)
 	if err != nil {
 		return err
@@ -171,6 +172,25 @@ func (c *DashboardCreator) initTxnCheckPKDupRow() dashboard.Option {
 			12,
 			axis.Unit("s"),
 			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTxnCheckPKChangedRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn check pk changed",
+		c.withMultiGraph(
+			"Check Persisted PK",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_change_check_total", `type="total"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_change_check_total", `type="changed"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_change_check_total", `type="io"`) + `[$interval]))`,
+			},
+			[]string{
+				"total",
+				"changed",
+				"io",
+			}),
 	)
 }
 

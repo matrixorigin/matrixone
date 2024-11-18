@@ -101,4 +101,15 @@ ALTER USER 'test_user'@'localhost' IDENTIFIED BY 'password1';
 select password_history from mo_catalog.mo_user where user_name  = 'test_user';
 ALTER USER 'test_user'@'localhost' IDENTIFIED BY 'password1';
 DROP USER 'test_user'@'localhost';
+
+drop user if exists uarontestuser1;
+create user uarontestuser4 identified by 'M@PasswordTestInTheFutur_129';
+alter user uarontestuser4 identified by 'M@PasswordTestInTheFutur_130';
+alter user uarontestuser4 identified by 'M@PasswordTestInTheFutur_131';
+alter user uarontestuser4 identified by 'M@PasswordTestInTheFutur_129';
+alter user uarontestuser4 identified by 'M@PasswordTestInTheFutur_130';
+alter user uarontestuser4 identified by 'M@PasswordTestInTheFutur_131';
+drop user uarontestuser4;
+
 SET GLOBAL password_reuse_interval = default;
+

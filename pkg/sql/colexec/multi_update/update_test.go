@@ -191,10 +191,12 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 
 	// if only update main table, attrs = ["a","b","new_c","d","row_id"]
 	updateCtx := &MultiUpdateCtx{
-		ObjRef:     objRef,
-		TableDef:   tableDef,
-		InsertCols: []int{0, 1, 2, 3}, //a, b, new_c, d
-		DeleteCols: []int{4, 0},       //row_id, a
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		InsertCols:      []int{0, 1, 2, 3}, //a, b, new_c, d
+		DeleteCols:      []int{4, 0},       //row_id, a
+		OldPartitionIdx: -1,
+		NewPartitionIdx: -1,
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 	colCount := 5
@@ -216,10 +218,12 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 
 		// if update main table with uk, attrs = ["a","b","new_c","d","row_id","uk_del_rowid","uk_del_pk","uk_new_pk"]
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     uniqueObjRef,
-			TableDef:   uniqueTableDef,
-			InsertCols: []int{7, 0}, //uk_pk & main_tbl_pk
-			DeleteCols: []int{5, 6}, //del_row_id & del_pk
+			ObjRef:          uniqueObjRef,
+			TableDef:        uniqueTableDef,
+			InsertCols:      []int{7, 0}, //uk_pk & main_tbl_pk
+			DeleteCols:      []int{5, 6}, //del_row_id & del_pk
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 3
 	}
@@ -248,10 +252,12 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		}
 		colCount += 3
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ObjRef:     secondaryIdxObjRef,
-			TableDef:   secondaryIdxTableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:          secondaryIdxObjRef,
+			TableDef:        secondaryIdxTableDef,
+			InsertCols:      insertCols,
+			DeleteCols:      deleteCols,
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 	}
 

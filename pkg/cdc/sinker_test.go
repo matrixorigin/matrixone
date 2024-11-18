@@ -268,7 +268,7 @@ func Test_mysqlSink_Close(t *testing.T) {
 func Test_mysqlSink_Send(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectExec("sql").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -280,11 +280,11 @@ func Test_mysqlSink_Send(t *testing.T) {
 		conn:          db,
 	}
 	ar := NewCdcActiveRoutine()
-	err = sink.Send(context.Background(), ar, "sql")
+	err = sink.Send(context.Background(), ar, []byte("sql"))
 	assert.NoError(t, err)
 
 	close(ar.Pause)
-	err = sink.Send(context.Background(), ar, "sql")
+	err = sink.Send(context.Background(), ar, []byte("sql"))
 	assert.NoError(t, err)
 }
 
@@ -352,8 +352,8 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		ar:             ar,
 		sqlBufSendCh:   make(chan []byte),
 	}
-	s.sqlBufs[0] = make([]byte, 0, len(tsDeletePrefix)+len("delete")+SqlBufReserved)
-	s.sqlBufs[1] = make([]byte, 0, len(tsDeletePrefix)+len("delete")+SqlBufReserved)
+	s.sqlBufs[0] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
+	s.sqlBufs[1] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	go s.Run(ctx, ar)
@@ -363,29 +363,31 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		s.Close()
 	}()
 
+	prefix := "\000\000\000\000\000"
+
 	// test insert
-	s.sqlBuf = append(s.sqlBuf[:0], s.tsInsertPrefix...)
+	s.sqlBuf = append(s.sqlBuf[:sqlBufReserved], s.tsInsertPrefix...)
 	s.rowBuf = []byte("insert")
 	// not exceed cap
 	err = s.appendSqlBuf(ctx, InsertRow)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte(tsInsertPrefix+"insert"), s.sqlBuf)
+	assert.Equal(t, []byte(prefix+tsInsertPrefix+"insert"), s.sqlBuf)
 	// exceed cap
 	err = s.appendSqlBuf(ctx, InsertRow)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte(tsInsertPrefix+"insert"), s.sqlBuf)
+	assert.Equal(t, []byte(prefix+tsInsertPrefix+"insert"), s.sqlBuf)
 
 	// test delete
-	s.sqlBuf = append(s.sqlBuf[:0], s.tsDeletePrefix...)
+	s.sqlBuf = append(s.sqlBuf[:sqlBufReserved], s.tsDeletePrefix...)
 	s.rowBuf = []byte("delete")
 	// not exceed cap
 	err = s.appendSqlBuf(ctx, DeleteRow)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte(tsDeletePrefix+"delete"), s.sqlBuf)
+	assert.Equal(t, []byte(prefix+tsDeletePrefix+"delete"), s.sqlBuf)
 	// exceed cap
 	err = s.appendSqlBuf(ctx, DeleteRow)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte(tsDeletePrefix+"delete"), s.sqlBuf)
+	assert.Equal(t, []byte(prefix+tsDeletePrefix+"delete"), s.sqlBuf)
 }
 
 func Test_mysqlSinker_getDeleteRowBuf(t *testing.T) {
