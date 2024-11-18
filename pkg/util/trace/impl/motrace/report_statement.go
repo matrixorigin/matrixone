@@ -178,7 +178,7 @@ type StatementInfo struct {
 	Host                 string   `json:"host"`
 	RoleId               uint32   `json:"role_id"`
 	Database             string   `json:"database"`
-	Statement            string   `json:"statement"`
+	Statement            []byte   `json:"statement"`
 	StmtBuilder          strings.Builder
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
@@ -266,6 +266,9 @@ func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
 	s.statsArray.Reset()
 	s.stated = false
+	if s.Statement == nil {
+		s.Statement = make([]byte, 0, GetTracerProvider().labels)
+	}
 	return s
 }
 
@@ -690,6 +693,14 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.exported = false
 			s.Report(ctx)
 		}
+	}
+}
+
+// RecordStatementSql mainly to fill into StatementInfo.Statement.
+func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
+	s.Statement = truncatedSql
+	if s.IsMoLogger() && s.StatementType == "Load" && len(rawSql) > 128 {
+		s.Statement = rawSql[:40] + "..." + rawSql[len(rawSql)-70:]
 	}
 }
 
