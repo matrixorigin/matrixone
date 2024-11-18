@@ -35,7 +35,12 @@ jobs:
       S3APIKEY: ${{ secrets.S3APIKEY }}
       S3APISECRET: ${{ secrets.S3APISECRET }}
       S3BUCKET: ${{ secrets.S3BUCKET }}
-  
+      EE_DB_ADDR: ${{ secrets.EE_DB_ADDR }}
+      EE_DB_PORT: ${{ secrets.EE_DB_PORT }}
+      EE_DB_USER: ${{ secrets.EE_DB_USER }}
+      EE_DB_PASSWORD: ${{ secrets.EE_DB_PASSWORD }}
+      EE_DB_DB: ${{ secrets.EE_DB_DB }}
+
   matrixone-upgrade-ci:
     name: Matrixone Upgrade CI
     needs: 
