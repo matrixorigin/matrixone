@@ -2890,3 +2890,46 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestCheckDbIsSubDb(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		createDbsql string
+		want        bool
+		wantErr     bool
+	}{
+		{
+			name:        "SubscriptionOption exists",
+			createDbsql: "create database sub01 from acc01 publication pub01;",
+			want:        true,
+			wantErr:     false,
+		},
+		{
+			name:        "SubscriptionOption does not exist",
+			createDbsql: "CREATE DATABASE test",
+			want:        false,
+			wantErr:     false,
+		},
+		{
+			name:        "Invalid SQL",
+			createDbsql: "INVALID SQL",
+			want:        false,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := checkDbIsSubDb(ctx, tt.createDbsql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkDbIsSubDb() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("checkDbIsSubDb() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

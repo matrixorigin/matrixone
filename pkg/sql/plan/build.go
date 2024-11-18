@@ -65,6 +65,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
