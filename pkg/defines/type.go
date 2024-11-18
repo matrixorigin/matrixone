@@ -247,6 +247,8 @@ type StartTS struct{}
 // DisableFkCheck is used to disable foreign key check.
 type DisableFkCheck struct{}
 
+type ReaderSummaryKey struct{}
+
 /*
 The autoIncrCacheManager is initialized with a starting CN.
 The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.
