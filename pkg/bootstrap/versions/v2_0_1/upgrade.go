@@ -84,7 +84,30 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	// TODO: Implement this function
+	for _, upgEntry := range clusterUpgEntries {
+		start := time.Now()
+
+		err := upgEntry.Upgrade(txn, catalog.System_Account)
+		if err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+
+		duration := time.Since(start)
+		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+			zap.String("upgrade entry", upgEntry.String()),
+			zap.Int64("time cost(ms)", duration.Milliseconds()),
+			zap.String("toVersion", v.Metadata().Version))
+	}
+
+	if needMigrateMoPubs {
+		if err := migrateMoPubs(txn); err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster migrateMoPubs error",
+				zap.Error(err),
+				zap.String("version", v.Metadata().Version))
+			return err
+		}
+	}
 	return nil
 }
 

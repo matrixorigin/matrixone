@@ -69,7 +69,6 @@ Database
 db2
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    sys        2024-08-17 16:11:58    null    publish db2 database
 drop snapshot if exists snap1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -150,7 +149,6 @@ Database
 db2
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    sys        2024-08-17 16:12:00    null    publish db2 database
 drop publication if exists pubname2;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
