@@ -725,10 +725,6 @@ func (ses *feSessionImpl) Close() {
 	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
-	if ses.txnHandler != nil {
-		ses.txnHandler.Close()
-		ses.txnHandler = nil
-	}
 	ses.Reset()
 }
 
@@ -743,8 +739,10 @@ func (ses *feSessionImpl) Reset() {
 	ses.Clear()
 
 	ses.mrs = nil
-	//release refer but not close it
-	ses.txnHandler = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.Close()
+		ses.txnHandler = nil
+	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
