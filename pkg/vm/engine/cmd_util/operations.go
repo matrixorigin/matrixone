@@ -384,9 +384,11 @@ func (s *SnapshotReadResp) UnmarshalBinary(data []byte) error {
 }
 
 type GetChangedTableListReq struct {
-	Limit int32
-	From  *timestamp.Timestamp
-	Extra []byte
+	From        []*timestamp.Timestamp
+	AccIds      []uint64
+	DatabaseIds []uint64
+	TableIds    []uint64
+	Extra       []byte
 }
 
 type GetChangedTableListResp struct {

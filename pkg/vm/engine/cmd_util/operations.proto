@@ -172,9 +172,11 @@ message CheckpointEntryResp {
 
 message GetChangedTableListReq {
     option (gogoproto.typedecl)     = false;
-    int32 Limit = 1;
-    timestamp.Timestamp From = 2;
-    bytes Extra = 3;
+    repeated timestamp.Timestamp From = 2;
+    repeated uint64 AccIds = 3;
+    repeated uint64 DatabaseIds = 4;
+    repeated uint64 TableIds = 5;
+    bytes Extra = 6;
 }
 
 message GetChangedTableListResp {
