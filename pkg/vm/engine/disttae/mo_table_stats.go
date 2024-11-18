@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,14 +128,18 @@ const (
 				where
 					created_time >= '%s'
 				group by
-				    account_id, reldatabase, relname;`
+				    account_id, reldatabase, reldatabase_id, relname, rel_id;`
 
 	insertNewTablesSQL = `
-				insert into 
+				insert ignore into 
 				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
-					values(%d, %d, %d, '%s', '%s', '{}', '1970-01-01 23:59:59.999999', 0)
-				on duplicate key update
-					0=1;`
+					values %s;`
+
+	getMinTSSQL = `
+				select
+					min(update_time) 
+				from
+					%s.%s;`
 )
 
 const (
@@ -618,6 +623,12 @@ func tableStatsExecutor(
 	eng engine.Engine,
 ) (err error) {
 
+	defer func() {
+		if err != nil {
+			//fmt.Println(err)
+		}
+	}()
+
 	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
@@ -646,12 +657,6 @@ func tableStatsExecutor(
 				break
 			}
 
-			//if err = updateLastUpdateTS(
-			//	ctx, dynamicConfig.tableStock.newest,
-			//	service); err != nil {
-			//	break
-			//}
-
 			dynamicConfig.tableStock.tbls = dynamicConfig.tableStock.tbls[:0]
 			executeTicker.Reset(dynamicConfig.alphaCycleDur)
 		}
@@ -662,6 +667,100 @@ func tableStatsExecutor(
 	}
 
 	return err
+}
+
+func insertNewTables(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+) (err error) {
+
+	var (
+		val    any
+		tm     time.Time
+		sql    string
+		sqlRet ie.InternalExecResult
+
+		values []string
+
+		dbName, tblName    string
+		accId, dbId, tblId uint64
+	)
+
+	//if dynamicConfig.lastCheckNewTables.IsEmpty() {
+	sql = fmt.Sprintf(getMinTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS)
+	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	if err = sqlRet.Error(); err != nil {
+		return err
+	}
+
+	if val, err = sqlRet.Value(ctx, 0, 0); err != nil {
+		return err
+	}
+
+	if val != nil {
+		if tm, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
+			return
+		}
+
+		dynamicConfig.lastCheckNewTables = types.BuildTS(tm.UnixNano(), 0)
+	}
+
+	//}
+
+	sql = fmt.Sprintf(getNewTablesSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLES,
+		dynamicConfig.lastCheckNewTables.
+			ToTimestamp().
+			ToStdTime().
+			Format("2006-01-02 15:04:05"),
+	)
+
+	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	if err = sqlRet.Error(); err != nil {
+		return err
+	}
+
+	valFmt := "(%d,%d,%d,'%s','%s','{}','%s',0)"
+
+	for i := range sqlRet.RowCount() {
+		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+			return err
+		}
+		accId = uint64(val.(uint32))
+
+		if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+			return err
+		}
+		dbName = string(val.([]uint8))
+
+		if val, err = sqlRet.Value(ctx, i, 2); err != nil {
+			return err
+		}
+		dbId = val.(uint64)
+
+		if val, err = sqlRet.Value(ctx, i, 3); err != nil {
+			return err
+		}
+		tblName = string(val.([]uint8))
+
+		if val, err = sqlRet.Value(ctx, i, 4); err != nil {
+			return err
+		}
+		tblId = val.(uint64)
+
+		values = append(values, fmt.Sprintf(valFmt,
+			accId, dbId, tblId, dbName, tblName,
+			timestamp.Timestamp{}.ToStdTime().
+				Format("2006-01-02 15:04:05.000000")))
+	}
+
+	sql = fmt.Sprintf(insertNewTablesSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		strings.Join(values, ","))
+
+	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	return sqlRet.Error()
 }
 
 func prepare(
@@ -680,6 +779,10 @@ func prepare(
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel = context.WithTimeout(ctx, time.Minute)
 		defer cancel()
+	}
+
+	if err = insertNewTables(ctx, service, eng); err != nil {
+		return
 	}
 
 	accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng)
@@ -825,7 +928,9 @@ func betaTask(
 
 		case tbl := <-dynamicConfig.tblQueue:
 			if tbl == nil || tbl.pState == nil {
-				tbl.Done(nil)
+				// view
+				err = updateTableOnlyTS(ctx, service, tbl)
+				tbl.Done(err)
 				continue
 			}
 
@@ -1067,68 +1172,6 @@ func subscribeTable(
 
 	return pState, nil
 }
-
-//func getLastUpdateTS(
-//	ctx context.Context,
-//) (types.TS, error) {
-//
-//	// force update logic may distribute the continuity of the update time,
-//	// so a special record needed to remember which step the normal routine arrived.
-//
-//	sqlRet := dynamicConfig.sqlExecFunc(
-//		ctx,
-//		fmt.Sprintf(lastUpdateTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS),
-//		dynamicConfig.sqlOpts,
-//	)
-//
-//	ret := sqlRet.(ie.InternalExecResult)
-//
-//	if ret.Error() != nil {
-//		return types.TS{}, ret.Error()
-//	}
-//
-//	if ret.RowCount() == 0 {
-//		return types.TS{}, nil
-//	}
-//
-//	val, err := ret.Value(ctx, 0, 0)
-//	if err != nil {
-//		return types.TS{}, err
-//	}
-//
-//	if val == nil {
-//		return types.TS{}, nil
-//	}
-//
-//	tt, err := time.Parse("2006-01-02 15:04:05.000000", val.(string))
-//	if err != nil {
-//		return types.TS{}, err
-//	}
-//
-//	lastUpdateTS := types.BuildTS(tt.UnixNano(), 0)
-//	return lastUpdateTS, nil
-//}
-//
-//func updateLastUpdateTS(
-//	ctx context.Context,
-//	snapshot types.TS,
-//	service string,
-//) (err error) {
-//	tbl := tablePair{
-//		tbl:      updateTSTableId,
-//		db:       updateTSDatabaseId,
-//		acc:      updateTSAccountId,
-//		snapshot: snapshot,
-//	}
-//
-//	if err = updateTableByStats(
-//		ctx, service, &tbl, statsList{}); err != nil {
-//
-//		return err
-//	}
-//
-//	return nil
-//}
 
 // O(m+n)
 func getDeletedRows(
