@@ -569,7 +569,7 @@ func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbNam
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s.%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -938,7 +938,7 @@ func dropClusterTable(
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
 			getLogger(sid).Info(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", moCatalog, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s.%s`", moCatalog, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1069,7 +1069,7 @@ func recreateTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: %v,", snapshotName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1784,7 +1784,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 	}
 
 	// drop db
-	return bh.Exec(ctx, fmt.Sprintf("drop database if exists %s", dbName))
+	return bh.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName))
 }
 
 // checkTableIsMaster check if the table is master table
