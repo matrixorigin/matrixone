@@ -96,15 +96,15 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 }
 
 func (d *DataCache) EnsureNBytes(ctx context.Context, want int) {
-	d.fifo.evict(ctx, nil, int64(want))
+	d.fifo.Evict(ctx, nil, int64(want))
 }
 
 func (d *DataCache) Evict(ctx context.Context, ch chan int64) {
-	d.fifo.Evict(ctx, ch)
+	d.fifo.Evict(ctx, ch, 0)
 }
 
 func (d *DataCache) Flush(ctx context.Context) {
-	d.fifo.evict(ctx, nil, math.MaxInt64)
+	d.fifo.Evict(ctx, nil, math.MaxInt64)
 }
 
 func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, bool) {

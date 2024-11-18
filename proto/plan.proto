@@ -672,7 +672,10 @@ message AnalyzeInfo {
 	int64 s3_get = 20;
 	int64 s3_delete = 21;
 	int64 s3_delete_mul = 22;
+	// written_rows used to estimate S3input
 	int64 written_rows = 23;
+	// deleted_rows used to estimate S3input
+	int64 deleted_rows = 24;
 }
 
 message PartitionPrune {
