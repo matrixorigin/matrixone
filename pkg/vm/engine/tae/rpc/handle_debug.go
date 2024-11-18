@@ -18,8 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,7 +39,9 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -215,14 +216,38 @@ func (h *Handle) HandleGetChangedTableList(
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error) {
 
-	from := types.TimestampToTS(*req.From)
+	isTheTblIWant := func(tblId uint64, commit types.TS) bool {
+		if slices.Index(resp.TableIds, tblId) != -1 {
+			// already exist
+			return false
+		}
+
+		if idx := slices.Index(req.TableIds, tblId); idx == -1 {
+			// not the tbl I want to check
+			return false
+		} else {
+			ts := types.TimestampToTS(*req.From[idx])
+			if commit.LT(&ts) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	minFrom := slices.MinFunc(req.From, func(a, b *timestamp.Timestamp) int {
+		return a.Compare(*b)
+	})
+	from := types.TimestampToTS(*minFrom)
 	now := types.BuildTS(time.Now().UnixNano(), 0)
 
 	//fmt.Println("handleGetChangedTableList", from.ToString(), req.Limit)
 	var (
-		err     error
-		dbEntry *catalog2.DBEntry
-		data    = &logtail.CheckpointData{}
+		err      error
+		dbEntry  *catalog2.DBEntry
+		tblEntry *catalog2.TableEntry
+		objEntry *catalog2.ObjectEntry
+		data     = &logtail.CheckpointData{}
 	)
 
 	logErr := func(e error, hint string) {
@@ -274,12 +299,19 @@ func (h *Handle) HandleGetChangedTableList(
 				dbId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_DBID).Get(k).(uint64)
 				tblId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_TID).Get(k).(uint64)
 				commit := dataObjBat.GetVectorByName(objectio.DefaultCommitTS_Attr).Get(k).(types.TS)
+				stats := objectio.ObjectStats(dataObjBat.GetVectorByName(catalog.ObjectMeta_ObjectStats).Get(k).([]uint8))
 
 				if commit.GT(&newFrom) {
 					newFrom = commit
 				}
 
-				if slices.Index(resp.TableIds, tblId) != -1 {
+				if !(stats.GetCNCreated() || stats.GetAppendable()) {
+					// only the cn created and appendable objects have contributes to
+					// the size and rows change.
+					continue
+				}
+
+				if !isTheTblIWant(tblId, commit) {
 					continue
 				}
 
@@ -293,21 +325,10 @@ func (h *Handle) HandleGetChangedTableList(
 				resp.DatabaseIds = append(resp.DatabaseIds, dbId)
 				resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
 			}
-
-			// to avoid load too much data, apply LIMIT here
-			if len(resp.TableIds) >= int(req.Limit) {
-				break
-			}
 		}
 	}
 
 	//fmt.Println("handleGetChangedTableList-ckps-done", len(resp.TableIds), newFrom.ToString())
-
-	if len(resp.TableIds) >= int(req.Limit) {
-		tt := newFrom.ToTimestamp()
-		resp.Newest = &tt
-		return nil, nil
-	}
 
 	// TODO(ghs) apply LIMIT on this
 	rr := h.db.LogtailMgr.GetReader(newFrom, now)
@@ -319,16 +340,64 @@ func (h *Handle) HandleGetChangedTableList(
 		dbId := val.DbID
 		tblId := val.ID
 
-		if slices.Index(resp.TableIds, tblId) != -1 {
+		if !isTheTblIWant(tblId, types.MaxTs()) {
 			continue
 		}
 
-		dbEntry, err = cc.GetDatabaseByID(dbId)
-		if err != nil {
-			return nil, err
+		if dbEntry, err = cc.GetDatabaseByID(dbId); err != nil {
+			logErr(err, fmt.Sprintf("get DBEntry failed dbId=%d", dbId))
+			continue
 		}
 
 		if dbEntry == nil {
+			continue
+		}
+
+		if tblEntry, err = dbEntry.GetTableEntryByID(tblId); err != nil {
+			logErr(err, fmt.Sprintf("get TableEntry failed dbId=%d, tblId=%d", dbId, tblId))
+			continue
+		}
+
+		if tblEntry == nil {
+			continue
+		}
+
+		hasChange := false
+		for k := range val.Objs {
+			if hasChange {
+				break
+			}
+
+			if objEntry, err = tblEntry.GetObjectByID(&k, false); err != nil {
+				logErr(err, fmt.Sprintf("get ObjEntry failed dbId=%d, tblId=%d", dbId, tblId))
+				continue
+			}
+			if objEntry == nil || !(objEntry.GetCNCreated() || objEntry.GetAppendable()) {
+				continue
+			}
+
+			hasChange = true
+		}
+
+		if !hasChange {
+			for k := range val.Tombstones {
+				if hasChange {
+					break
+				}
+
+				if objEntry, err = tblEntry.GetObjectByID(&k, true); err != nil {
+					logErr(err, fmt.Sprintf("get ObjEntry failed dbId=%d, tblId=%d", dbId, tblId))
+					continue
+				}
+				if objEntry == nil || !(objEntry.GetCNCreated() || objEntry.GetAppendable()) {
+					continue
+				}
+
+				hasChange = true
+			}
+		}
+
+		if !hasChange {
 			continue
 		}
 
