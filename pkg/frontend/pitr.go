@@ -1775,7 +1775,7 @@ func restoreSystemDatabaseWithPitr(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", pitrName, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSql(ctx, bh, pitrName, dbName, tblInfo.tblName)
+		tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName)
 		if err != nil {
 			return err
 		}
