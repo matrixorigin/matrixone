@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -144,6 +145,9 @@ type tunnel struct {
 		// scp is a pipe from server to client.
 		scp *pipe
 	}
+
+	//id of the goroutine that runs tunnel
+	goId int64
 }
 
 // newTunnel creates a tunnel.
@@ -161,6 +165,7 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet, opts .
 		respC: make(chan []byte, 10),
 		// set the counter set.
 		counterSet: cs,
+		goId:       goid.Get(),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -179,7 +184,7 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.mu.sc = sc
-		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
+		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()), zap.Int64("tunnel goId", t.goId))
 		t.mu.clientConn = newMySQLConn(
 			connClientName,
 			cc.RawConn(),
@@ -552,6 +557,8 @@ type pipe struct {
 	testHelper struct {
 		beforeSend func()
 	}
+	//id of goroutine that runs the pipe
+	goId int64
 }
 
 // newPipe creates a pipe.
@@ -570,6 +577,8 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 // kickoff starts up the pipe and the data would flow in it.
 func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	start := func() (bool, error) {
+		p.goId = goid.Get()
+		p.logger = p.logger.With(zap.Int64("pipe goId", p.goId))
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if p.mu.closed {
