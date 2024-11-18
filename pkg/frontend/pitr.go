@@ -1753,9 +1753,14 @@ func restoreSystemDatabaseWithPitr(
 	accountId uint32,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system database: %s", pitrName, moCatalog))
-	tableInfos, err := getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, moCatalog, "")
+	var (
+		dbName     = moCatalog
+		tableInfos []*tableInfo
+	)
+
+	tableInfos, err = showFullTables(ctx, sid, bh, pitrName, dbName, "")
 	if err != nil {
-		return
+		return err
 	}
 
 	for _, tblInfo := range tableInfos {
@@ -1766,6 +1771,10 @@ func restoreSystemDatabaseWithPitr(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", pitrName, moCatalog, tblInfo.tblName))
+		tblInfo.createSql, err = getCreateTableSql(ctx, bh, pitrName, dbName, tblInfo.tblName)
+		if err != nil {
+			return err
+		}
 
 		// checks if the given context has been canceled.
 		if err = CancelCheck(ctx); err != nil {
