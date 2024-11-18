@@ -130,6 +130,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCommitCounter)
 	registry.MustRegister(TxnRollbackCounter)
 	registry.MustRegister(txnLockCounter)
+	registry.MustRegister(txnPKChangeCheckCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
 
