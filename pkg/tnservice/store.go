@@ -80,13 +80,6 @@ func WithLogServiceClientFactory(factory func(metadata.TNShard) (logservice.Clie
 	}
 }
 
-// WithTaskStorageFactory setup the special task strorage factory
-func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
-	return func(s *store) {
-		s.task.storageFactory = factory
-	}
-}
-
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *store) {
@@ -127,9 +120,8 @@ type store struct {
 
 	task struct {
 		sync.RWMutex
-		serviceCreated bool
-		serviceHolder  taskservice.TaskServiceHolder
-		storageFactory taskservice.TaskStorageFactory
+		created bool
+		holder  taskservice.TaskServiceHolder
 	}
 
 	addressMgr address.AddressManager
@@ -254,7 +246,7 @@ func (s *store) Close() error {
 		return true
 	})
 	s.task.RLock()
-	ts := s.task.serviceHolder
+	ts := s.task.holder
 	s.task.RUnlock()
 	if ts != nil {
 		err = errors.Join(err, ts.Close())

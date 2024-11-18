@@ -44,63 +44,49 @@ func (s *store) createSQLLogger(command *logservicepb.CreateTaskService) {
 func (s *store) initTaskHolder() {
 	s.task.Lock()
 	defer s.task.Unlock()
-	if s.task.serviceHolder != nil {
+	if s.task.holder != nil {
 		return
 	}
 
-	getClient := func() util.HAKeeperClient {
-		return s.hakeeperClient
-	}
-	if s.task.storageFactory != nil {
-		s.task.serviceHolder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			s.rt,
-			util.AddressFunc(
-				s.cfg.UUID,
-				getClient,
-			),
-			func(_, _, _ string) taskservice.TaskStorageFactory {
-				return s.task.storageFactory
-			})
-		return
-	}
-
-	s.task.serviceHolder = taskservice.NewTaskServiceHolder(
+	s.task.holder = taskservice.NewTaskServiceHolder(
 		s.rt,
 		util.AddressFunc(
 			s.cfg.UUID,
-			getClient,
+			func() util.HAKeeperClient {
+				return s.hakeeperClient
+			},
 		))
 }
 
 func (s *store) createTaskService(command *logservicepb.CreateTaskService) {
 	s.task.Lock()
 	defer s.task.Unlock()
-	if s.task.serviceCreated {
+	if s.task.created {
 		return
 	}
 
 	// Notify frontend to set up the special account used to task framework create and query async tasks.
 	// The account is always in the memory.
 	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
-	if err := s.task.serviceHolder.Create(*command); err != nil {
+	if err := s.task.holder.Create(*command); err != nil {
 		s.rt.Logger().Error("create task service failed",
 			zap.Error(err))
 		return
 	}
-	s.task.serviceCreated = true
+	s.task.created = true
 }
 
 func (s *store) taskServiceCreated() bool {
 	s.task.RLock()
 	defer s.task.RUnlock()
-	return s.task.serviceCreated
+	return s.task.created
 }
 
 func (s *store) GetTaskService() (taskservice.TaskService, bool) {
 	s.task.RLock()
 	defer s.task.RUnlock()
-	if s.task.serviceHolder == nil {
+	if s.task.holder == nil {
 		return nil, false
 	}
-	return s.task.serviceHolder.Get()
+	return s.task.holder.Get()
 }

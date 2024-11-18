@@ -455,6 +455,13 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		buf = writer.insertBuf[idx]
 	}
 	sinker := func(bat *batch.Batch) error {
+		if writer.updateCtxs[idx].TableDef.Name == "lineitem" {
+			orderKey := vector.MustFixedColNoTypeCheck[int64](bat.GetVector(0))
+			lineN0 := vector.MustFixedColNoTypeCheck[int32](bat.GetVector(3))
+			if len(orderKey) > 2 {
+				fmt.Printf("----writer=%p top2 %d-%d，%d-%d ; bottom %d-%d\n", blockWriter, orderKey[0], lineN0[0], orderKey[1], lineN0[1], orderKey[len(orderKey)-1], lineN0[len(lineN0)-1])
+			}
+		}
 		_, err := blockWriter.WriteBatch(bat)
 		return err
 	}

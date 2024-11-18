@@ -231,7 +231,7 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 
 	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Status = task.TaskStatus_Created
-	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+	mustUpdateTestAsyncTask(t, store, []task.AsyncTask{v})
 
 	err := s.Complete(ctx, "r1", v,
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
@@ -254,7 +254,7 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 
 	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+	mustUpdateTestAsyncTask(t, store, []task.AsyncTask{v})
 
 	v.Epoch = 1
 	err := s.Complete(ctx, "r1", v,
@@ -321,7 +321,7 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 
 	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+	mustUpdateTestAsyncTask(t, store, []task.AsyncTask{v})
 
 	v.Epoch = 1
 	err := s.Heartbeat(ctx, v)
@@ -344,7 +344,7 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 
 	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+	mustUpdateTestAsyncTask(t, store, []task.AsyncTask{v})
 
 	v.Epoch = 3
 	assert.NoError(t, s.Heartbeat(ctx, v))
@@ -394,7 +394,7 @@ func TestQueryAsyncTask(t *testing.T) {
 
 	v1 := newTestAsyncTask("t1")
 	v2 := newTestAsyncTask("t2")
-	mustAddTestAsyncTask(t, store, 2, v1, v2)
+	mustAddTestAsyncTask(t, store, v1, v2)
 
 	v, err := s.QueryAsyncTask(ctx)
 	assert.NoError(t, err)

@@ -38,7 +38,7 @@ func TestRunTask(t *testing.T) {
 			defer close(c)
 			return nil
 		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t1"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 	}, WithRunnerParallelism(1),
@@ -54,8 +54,8 @@ func TestRunTasksInParallel(t *testing.T) {
 			time.Sleep(time.Millisecond * 200)
 			return nil
 		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		wg.Wait()
 	}, WithRunnerParallelism(2),
@@ -80,8 +80,8 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 
 			return nil
 		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		select {
 		case <-c:
@@ -108,8 +108,8 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 			<-completeC
 			return nil
 		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		<-c
 		mustWaitTestTaskHasHeartbeat(t, store, 2)
@@ -132,7 +132,7 @@ func TestRunTaskWithRetry(t *testing.T) {
 		})
 		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 1
-		mustAddTestAsyncTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 		assert.Equal(t, uint32(2), n.Load())
@@ -154,7 +154,7 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 		})
 		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 0
-		mustAddTestAsyncTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 		mustWaitTestTaskHasExecuteResult(t, store, 1)
@@ -177,11 +177,11 @@ func TestCancelRunningTask(t *testing.T) {
 		})
 		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 0
-		mustAddTestAsyncTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		v = mustGetTestAsyncTask(t, store, 1)[0]
 		v.Epoch++
-		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
+		mustUpdateTestAsyncTask(t, store, []task.AsyncTask{v})
 		<-cancelC
 		for v := mustGetTestAsyncTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestAsyncTask(t, store, 1)[0] {
 			time.Sleep(10 * time.Millisecond)
@@ -234,7 +234,7 @@ func TestRemoveRunningTask(t *testing.T) {
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			return nil
 		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, newTestAsyncTask("t1"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 
 		task := mustGetTestAsyncTask(t, store, 1)[0]

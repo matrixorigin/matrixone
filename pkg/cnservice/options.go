@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -40,13 +39,6 @@ type Option func(*service)
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *service) {
 		s.logger = logger
-	}
-}
-
-// WithTaskStorageFactory setup the special task storage factory
-func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
-	return func(s *service) {
-		s.task.storageFactory = factory
 	}
 }
 

@@ -207,7 +207,7 @@ func newMockStorage(t *testing.T) (*mysqlTaskStorage, sqlmock.Sqlmock) {
 	}, mock
 }
 
-func newCdcInfo(t *testing.T) task.DaemonTask {
+func newCdcInfo() task.DaemonTask {
 	details := &task.Details{
 		AccountID: catalog.System_Account,
 		Account:   "sys",
@@ -282,7 +282,7 @@ func newInsertDaemonTaskExpect(t *testing.T, mock sqlmock.Sqlmock) {
 func TestAddCdcTask(t *testing.T) {
 	storage, mock := newMockStorage(t)
 
-	dt := newCdcInfo(t)
+	dt := newCdcInfo()
 
 	mock.ExpectBegin()
 	newInsertDaemonTaskExpect(t, mock)
@@ -435,7 +435,7 @@ func Test_AddDaemonTask(t *testing.T) {
 func Test_labels(t *testing.T) {
 	storage, mock := newMockStorage(t)
 
-	dt := newCdcInfo(t)
+	dt := newCdcInfo()
 
 	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, dt))
 

@@ -65,26 +65,13 @@ func (s *service) initTaskServiceHolder() {
 	}
 	s.task.Lock()
 	defer s.task.Unlock()
-	if s.task.storageFactory == nil {
-		s.task.holder = taskservice.NewTaskServiceHolder(
-			runtime.ServiceRuntime(s.cfg.UUID),
-			util.AddressFunc(
-				s.cfg.UUID,
-				getClient,
-			),
-		)
-	} else {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ServiceRuntime(s.cfg.UUID),
-			util.AddressFunc(
-				s.cfg.UUID,
-				getClient,
-			),
-			func(_, _, _ string) taskservice.TaskStorageFactory {
-				return s.task.storageFactory
-			},
-		)
-	}
+
+	s.task.holder = taskservice.NewTaskServiceHolder(
+		runtime.ServiceRuntime(s.cfg.UUID),
+		util.AddressFunc(
+			s.cfg.UUID,
+			getClient,
+		))
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {

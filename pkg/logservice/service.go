@@ -83,9 +83,8 @@ type Service struct {
 
 	task struct {
 		sync.RWMutex
-		created        bool
-		holder         taskservice.TaskServiceHolder
-		storageFactory taskservice.TaskStorageFactory
+		created bool
+		holder  taskservice.TaskServiceHolder
 	}
 
 	config *util.ConfigData

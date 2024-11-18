@@ -16,166 +16,133 @@ package taskservice
 
 import (
 	"context"
+	"database/sql"
+	"github.com/DATA-DOG/go-sqlmock"
 	"testing"
 
-	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func TestTaskHolderCanCreateTaskService(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
-		runtime.DefaultRuntime(),
-		func(ctx context.Context, random bool) (string, error) { return "", nil },
-		func(s1, s2, s3 string) TaskStorageFactory {
-			return NewFixedTaskStorageFactory(store)
-		})
-	require.NoError(t, h.Create(logservicepb.CreateTaskService{
-		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
-		TaskDatabase: "d",
-	}))
-	defer func() {
-		require.NoError(t, h.Close())
-	}()
-	s, ok := h.Get()
-	assert.True(t, ok)
-	assert.NotNil(t, s)
-	assert.Equal(t, store, s.GetStorage().(*refreshableTaskStorage).mu.store)
+type testClient struct {
+	db *sql.DB
+
+	addressFunc func() string
+
+	stores map[string]TaskStorage
+}
+
+func newTestClient(t *testing.T) (*testClient, sqlmock.Sqlmock, sqlmock.Sqlmock) {
+	db1, mock1, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	storage1, err := newMysqlTaskStorage(db1)
+	require.NoError(t, err)
+
+	db2, mock2, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	storage2, err := newMysqlTaskStorage(db2)
+	require.NoError(t, err)
+
+	return &testClient{
+		stores: map[string]TaskStorage{"s1": storage1, "s2": storage2},
+	}, mock1, mock2
+}
+
+func (t testClient) GetOrConnect(ctx context.Context, reuse bool) (*sql.DB, error) {
+	if reuse && t.db != nil {
+		return t.db, nil
+	}
+
+	return t.stores[t.addressFunc()].(*mysqlTaskStorage).db, nil
+}
+
+func (t testClient) Close() error {
+	if t.db != nil {
+		return t.db.Close()
+	}
+	return nil
 }
 
 func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
-	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return "", nil },
-		func(s1, s2, s3 string) TaskStorageFactory {
-			return NewFixedTaskStorageFactory(store)
-		})
-	assert.Error(t, h.Create(logservicepb.CreateTaskService{}))
+	h := NewTaskServiceHolder(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) { return "", nil })
+	require.Error(t, h.Create(logservicepb.CreateTaskService{}))
 }
 
 func TestTaskHolderNotCreatedCanClose(t *testing.T) {
-	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return "", nil },
-		func(s1, s2, s3 string) TaskStorageFactory {
-			return NewFixedTaskStorageFactory(store)
-		})
-	assert.NoError(t, h.Close())
+	h := NewTaskServiceHolder(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) { return "", nil })
+	require.NoError(t, h.Close())
 }
 
 func TestTaskHolderCanClose(t *testing.T) {
-	store := NewMemTaskStorage()
-	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return "", nil },
-		func(s1, s2, s3 string) TaskStorageFactory {
-			return NewFixedTaskStorageFactory(store)
-		})
+	h := NewTaskServiceHolder(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) { return "", nil })
 	require.NoError(t, h.Create(logservicepb.CreateTaskService{
 		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
 		TaskDatabase: "d",
 	}))
-	assert.NoError(t, h.Close())
+	require.NoError(t, h.Close())
 }
 
 func TestRefreshTaskStorageCanRefresh(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	ctx := context.TODO()
+	ctx := context.Background()
 
-	stores := map[string]TaskStorage{
-		"s1": NewMemTaskStorage(),
-		"s2": NewMemTaskStorage(),
-	}
-	address := "s1"
-	s := newRefreshableTaskStorage(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return address, nil },
-		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
+	client, mock1, mock2 := newTestClient(t)
+	client.addressFunc = func() string { return "s1" }
+	mock1.ExpectClose()
+	mock2.ExpectClose()
+
+	s := newRefreshableTaskStorage(runtime.DefaultRuntime(), client).(*refreshableTaskStorage)
 	defer func() {
 		require.NoError(t, s.Close())
 	}()
 
+	s.maybeRefresh(ctx)
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
-	assert.Equal(t, "s1", s.mu.lastAddress)
+	require.Equal(t, client.stores["s1"], s.mu.store)
 	s.mu.RUnlock()
 
-	s.refresh(ctx, "s2")
+	s.maybeRefresh(ctx)
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
-	assert.Equal(t, "s1", s.mu.lastAddress)
+	require.Equal(t, client.stores["s1"], s.mu.store)
 	s.mu.RUnlock()
 
-	address = "s2"
-	s.refresh(ctx, "s1")
-	s.mu.RLock()
-	assert.Equal(t, stores["s2"], s.mu.store)
-	assert.Equal(t, "s2", s.mu.lastAddress)
-	s.mu.RUnlock()
-}
+	require.NoError(t, client.stores["s1"].Close())
 
-func TestRefreshTaskStorageCanClose(t *testing.T) {
-	stores := map[string]TaskStorage{
-		"s1": NewMemTaskStorage(),
-		"s2": NewMemTaskStorage(),
-	}
-	address := "s1"
-	s := newRefreshableTaskStorage(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return address, nil },
-		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
-	address = "s2"
-	require.True(t, s.maybeRefresh("s1"))
-	require.NoError(t, s.Close())
-	<-s.refreshC
+	client.addressFunc = func() string { return "s2" }
+	s.maybeRefresh(ctx)
+	s.mu.RLock()
+	require.Equal(t, client.stores["s2"], s.mu.store)
+	s.mu.RUnlock()
 }
 
 func Test_refreshAddCdcTask(t *testing.T) {
-	storage, mock := newMockStorage(t)
+	client, mock1, mock2 := newTestClient(t)
 
-	stores := map[string]TaskStorage{
-		"s1": storage,
-		"s2": NewMemTaskStorage(),
-	}
-	address := "s1"
+	mock1.ExpectBegin()
+	newInsertDaemonTaskExpect(t, mock1)
+	mock1.ExpectClose()
+	mock2.ExpectClose()
+
+	client.addressFunc = func() string { return "s1" }
 	s := newRefreshableTaskStorage(
-		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return address, nil },
-		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
-	dt := newCdcInfo(t)
-
-	mock.ExpectBegin()
-	newInsertDaemonTaskExpect(t, mock)
+		runtime.DefaultRuntime(), client).(*refreshableTaskStorage)
+	dt := newCdcInfo()
 
 	callback := func(context.Context, SqlExecutor) (int, error) {
 		return 1, nil
 	}
-
+	s.maybeRefresh(context.Background())
 	cnt, err := s.AddCdcTask(context.Background(), dt, callback)
-	assert.NoError(t, err)
-	assert.Greater(t, cnt, 0)
+	require.NoError(t, err)
+	require.Greater(t, cnt, 0)
 
-	mock.ExpectClose()
+	require.NoError(t, client.stores["s1"].Close())
 
-	address = "s2"
-	require.True(t, s.maybeRefresh("s1"))
+	client.addressFunc = func() string { return "s2" }
+	require.True(t, s.maybeRefresh(context.Background()))
 	require.NoError(t, s.Close())
 	<-s.refreshC
 
-	_ = storage.Close()
-}
-
-type testStorageFactory struct {
-	stores map[string]TaskStorage
-}
-
-func (f *testStorageFactory) Create(address string) (TaskStorage, error) {
-	return f.stores[address], nil
+	_ = client.Close()
 }

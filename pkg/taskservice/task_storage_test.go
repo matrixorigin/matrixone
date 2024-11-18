@@ -16,31 +16,35 @@ package taskservice
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	storages = map[string]func(*testing.T) TaskStorage{
+	storages = map[string]func(*testing.T) (TaskStorage, sqlmock.Sqlmock){
 		"mem":     createMem,
 		"refresh": createRefresh,
 	}
 )
 
-func createMem(t *testing.T) TaskStorage {
-	return NewMemTaskStorage()
+func createMem(t *testing.T) (TaskStorage, sqlmock.Sqlmock) {
+	return NewMemTaskStorage(), nil
 }
 
-func createRefresh(t *testing.T) TaskStorage {
-	return newRefreshableTaskStorage(
+func createRefresh(t *testing.T) (TaskStorage, sqlmock.Sqlmock) {
+	client, mock1, _ := newTestClient(t)
+	client.addressFunc = func() string { return "s1" }
+	s := newRefreshableTaskStorage(
 		runtime.DefaultRuntime(),
-		func(context.Context, bool) (string, error) { return "", nil },
-		NewFixedTaskStorageFactory(NewMemTaskStorage()))
+		client)
+	s.(*refreshableTaskStorage).maybeRefresh(context.Background())
+	return s, mock1
 }
 
 // TODO: move to cluster testing.
@@ -53,15 +57,36 @@ func createRefresh(t *testing.T) TaskStorage {
 func TestAddAsyncTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			v := newTestAsyncTask("t1")
-			mustAddTestAsyncTask(t, s, 1, v)
-			mustAddTestAsyncTask(t, s, 0, v)
-			assert.Equal(t, 1, len(mustGetTestAsyncTask(t, s, 1)))
+
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, v.CreateAt, v.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, v.CreateAt, v.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 0))
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt),
+					)
+				mock.ExpectClose()
+			}
+
+			mustAddTestAsyncTask(t, s, v)
+			mustAddTestAsyncTask(t, s, v)
+			require.Equal(t, 1, len(mustGetTestAsyncTask(t, s, 1)))
 		})
 	}
 }
@@ -69,17 +94,39 @@ func TestAddAsyncTask(t *testing.T) {
 func TestUpdateAsyncTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			v := newTestAsyncTask("t1")
-			mustAddTestAsyncTask(t, s, 1, v)
+
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, v.CreateAt, v.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt),
+					)
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=?").
+					WithArgs(1, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+				mock.ExpectClose()
+			}
+
+			mustAddTestAsyncTask(t, s, v)
 
 			tasks := mustGetTestAsyncTask(t, s, 1)
 			tasks[0].Metadata.Executor = 1
-			mustUpdateTestAsyncTask(t, s, 1, tasks)
+			mustUpdateTestAsyncTask(t, s, tasks)
 		})
 	}
 }
@@ -87,22 +134,72 @@ func TestUpdateAsyncTask(t *testing.T) {
 func TestUpdateAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
+			v := newTestAsyncTask("t1")
+
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, v.CreateAt, v.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt),
+					)
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=? AND task_runner='t2'").
+					WithArgs(0, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=? AND task_runner='t1'").
+					WithArgs(0, v.Metadata.Context, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=? AND task_id=2").
+					WithArgs(0, []byte{1}, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=? AND task_id=1").
+					WithArgs(0, []byte{1}, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectBegin()
+				mock.ExpectExec("update sys_async_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,task_parent_id=?,task_status=?,task_runner=?,task_epoch=?,last_heartbeat=?,result_code=?,error_msg=?,create_at=?,end_at=? where task_id=? AND task_id>0").
+					WithArgs(0, []byte{1, 2}, string(b), v.ParentTaskID, v.Status, v.TaskRunner, v.Epoch, v.LastHeartbeat, 0, "", v.CreateAt, v.CompletedAt, 1).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+
+				mock.ExpectClose()
+			}
+
+			mustAddTestAsyncTask(t, s, v)
 			tasks := mustGetTestAsyncTask(t, s, 1)
 
-			mustUpdateTestAsyncTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
-			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
+			mustUpdateTestAsyncTask(t, s, tasks, WithTaskRunnerCond(EQ, "t2"))
+			mustUpdateTestAsyncTask(t, s, tasks, WithTaskRunnerCond(EQ, "t1"))
 
 			tasks[0].Metadata.Context = []byte{1}
-			mustUpdateTestAsyncTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
-			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
+			mustUpdateTestAsyncTask(t, s, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
+			mustUpdateTestAsyncTask(t, s, tasks, WithTaskIDCond(EQ, tasks[0].ID))
 			tasks[0].Metadata.Context = []byte{1, 2}
-			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
+			mustUpdateTestAsyncTask(t, s, tasks, WithTaskIDCond(GT, 0))
 		})
 	}
 }
@@ -110,21 +207,70 @@ func TestUpdateAsyncTaskWithConditions(t *testing.T) {
 func TestDeleteAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t2"))
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t3"))
+			v1 := newTestAsyncTask("t1")
+			v2 := newTestAsyncTask("t2")
+			v3 := newTestAsyncTask("t3")
+
+			if mock != nil {
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, v1.CreateAt, v1.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				b2, err := json.Marshal(v2.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.ParentTaskID, v2.Status, v2.TaskRunner, v2.Epoch, v2.LastHeartbeat, v2.CreateAt, v2.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				b3, err := json.Marshal(v3.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.ParentTaskID, v3.Status, v3.TaskRunner, v3.Epoch, v3.LastHeartbeat, v3.CreateAt, v3.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(3, 1))
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.ParentTaskID, v2.Status, v2.TaskRunner, v2.Epoch, v2.LastHeartbeat, 0, "", v2.CreateAt, v2.CompletedAt).
+							AddRow(1, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.ParentTaskID, v3.Status, v3.TaskRunner, v3.Epoch, v3.LastHeartbeat, 0, "", v3.CreateAt, v3.CompletedAt),
+					)
+
+				mock.ExpectExec("delete from sys_async_task where 1=1 AND task_runner='t4'").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectExec("delete from sys_async_task where 1=1 AND task_runner='t1'").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectExec("delete from sys_async_task where 1=1 AND task_id=2").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectExec("delete from sys_async_task where 1=1 AND task_id>1").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}),
+					)
+
+				mock.ExpectClose()
+			}
+
+			mustAddTestAsyncTask(t, s, v1)
+			mustAddTestAsyncTask(t, s, v2)
+			mustAddTestAsyncTask(t, s, v3)
 			tasks := mustGetTestAsyncTask(t, s, 3)
 
-			mustDeleteTestAsyncTask(t, s, 0, WithTaskRunnerCond(EQ, "t4"))
-			mustDeleteTestAsyncTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
+			mustDeleteTestAsyncTask(t, s, WithTaskRunnerCond(EQ, "t4"))
+			mustDeleteTestAsyncTask(t, s, WithTaskRunnerCond(EQ, "t1"))
 
-			mustDeleteTestAsyncTask(t, s, 0, WithTaskIDCond(EQ, tasks[len(tasks)-1].ID+1))
-			mustDeleteTestAsyncTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
+			mustDeleteTestAsyncTask(t, s, WithTaskIDCond(EQ, tasks[len(tasks)-1].ID+1))
+			mustDeleteTestAsyncTask(t, s, WithTaskIDCond(GT, tasks[0].ID))
 
 			mustGetTestAsyncTask(t, s, 0)
 		})
@@ -134,14 +280,114 @@ func TestDeleteAsyncTaskWithConditions(t *testing.T) {
 func TestQueryAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t2"))
-			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t3"))
+			v1 := newTestAsyncTask("t1")
+			v2 := newTestAsyncTask("t2")
+			v3 := newTestAsyncTask("t3")
+
+			if mock != nil {
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, v1.CreateAt, v1.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				b2, err := json.Marshal(v2.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.ParentTaskID, v2.Status, v2.TaskRunner, v2.Epoch, v2.LastHeartbeat, v2.CreateAt, v2.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				b3, err := json.Marshal(v3.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.ParentTaskID, v3.Status, v3.TaskRunner, v3.Epoch, v3.LastHeartbeat, v3.CreateAt, v3.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(3, 1))
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.ParentTaskID, v2.Status, v2.TaskRunner, v2.Epoch, v2.LastHeartbeat, 0, "", v2.CreateAt, v2.CompletedAt).
+							AddRow(1, v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.ParentTaskID, v3.Status, v3.TaskRunner, v3.Epoch, v3.LastHeartbeat, 0, "", v3.CreateAt, v3.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 order by task_id limit 1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_runner='t1' order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id>1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id>=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id<=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id<1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id>1 order by task_id limit 1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectQuery(
+					"select task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,result_code,error_msg,create_at,end_at from sys_async_task where 1=1 AND task_id=1 order by task_id").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "task_parent_id", "task_status", "task_runner", "task_epoch", "last_heartbeat", "result_code", "error_msg", "create_at", "end_at"}).
+							AddRow(1, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.ParentTaskID, v1.Status, v1.TaskRunner, v1.Epoch, v1.LastHeartbeat, 0, "", v1.CreateAt, v1.CompletedAt),
+					)
+
+				mock.ExpectClose()
+			}
+
+			mustAddTestAsyncTask(t, s, v1)
+			mustAddTestAsyncTask(t, s, v2)
+			mustAddTestAsyncTask(t, s, v3)
 			tasks := mustGetTestAsyncTask(t, s, 3)
 
 			mustGetTestAsyncTask(t, s, 1, WithLimitCond(1))
@@ -159,15 +405,56 @@ func TestQueryAsyncTaskWithConditions(t *testing.T) {
 func TestAddAndQueryCronTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
-
-			mustQueryTestCronTask(t, s, 0)
 
 			v1 := newTestCronTask("t1", "cron1")
 			v2 := newTestCronTask("t2", "cron2")
+
+			if mock != nil {
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+
+				mock.ExpectQuery(
+					"select cron_task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at from sys_cron_task where 1=1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"cron_task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "cron_expr", "next_time", "trigger_times", "create_at", "update_at"}),
+						//AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt),
+					)
+
+				mock.ExpectExec("insert into sys_cron_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt,
+						v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b1), v2.CronExpr, v2.NextTime, v2.TriggerTimes, v2.CreateAt, v2.UpdateAt).
+					WillReturnResult(sqlmock.NewResult(2, 2))
+
+				mock.ExpectQuery(
+					"select cron_task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at from sys_cron_task where 1=1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"cron_task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "cron_expr", "next_time", "trigger_times", "create_at", "update_at"}).
+							AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt).
+							AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b1), v2.CronExpr, v2.NextTime, v2.TriggerTimes, v2.CreateAt, v2.UpdateAt),
+					)
+
+				mock.ExpectExec("insert into sys_cron_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt,
+						v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b1), v2.CronExpr, v2.NextTime, v2.TriggerTimes, v2.CreateAt, v2.UpdateAt).
+					WillReturnResult(sqlmock.NewResult(2, 0))
+
+				mock.ExpectQuery(
+					"select cron_task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at from sys_cron_task where 1=1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"cron_task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "cron_expr", "next_time", "trigger_times", "create_at", "update_at"}).
+							AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt).
+							AddRow(v2.ID, v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b1), v2.CronExpr, v2.NextTime, v2.TriggerTimes, v2.CreateAt, v2.UpdateAt),
+					)
+
+				mock.ExpectClose()
+			}
+
+			mustQueryTestCronTask(t, s, 0)
+
 			mustAddTestCronTask(t, s, 2, v1, v2)
 			mustQueryTestCronTask(t, s, 2)
 
@@ -180,39 +467,104 @@ func TestAddAndQueryCronTask(t *testing.T) {
 func TestUpdateCronTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			v1 := newTestCronTask("t1", "cron1")
 			v2 := newTestAsyncTask("t1-cron-1")
 			v3 := newTestAsyncTask("t1-cron-2")
 
-			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
-			defer cancel()
+			if mock != nil {
+				mock.ExpectQuery(
+					"select count(task_metadata_id) from sys_async_task where task_metadata_id=?").
+					WithArgs(v2.Metadata.ID).
+					WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(1))
 
+				b1, err := json.Marshal(v1.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec("insert into sys_cron_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				b2, err := json.Marshal(v2.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v2.Metadata.ID, v2.Metadata.Executor, v2.Metadata.Context, string(b2), v2.ParentTaskID, v2.Status, v2.TaskRunner, v2.Epoch, v2.LastHeartbeat, v2.CreateAt, v2.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				mock.ExpectQuery(
+					"select cron_task_id,task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,cron_expr,next_time,trigger_times,create_at,update_at from sys_cron_task where 1=1").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"cron_task_id", "task_metadata_id", "task_metadata_executor", "task_metadata_context", "task_metadata_option", "cron_expr", "next_time", "trigger_times", "create_at", "update_at"}).
+							AddRow(v1.ID, v1.Metadata.ID, v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, v1.TriggerTimes, v1.CreateAt, v1.UpdateAt),
+					)
+
+				mock.ExpectQuery(
+					"select count(task_metadata_id) from sys_async_task where task_metadata_id=?").
+					WithArgs(v2.Metadata.ID).
+					WillReturnRows(
+						sqlmock.NewRows([]string{"count(task_metadata_id)"}).
+							AddRow(1),
+					)
+
+				mock.ExpectQuery(
+					"select count(task_metadata_id) from sys_async_task where task_metadata_id=?").
+					WithArgs(v3.Metadata.ID).
+					WillReturnRows(
+						sqlmock.NewRows([]string{"count(task_metadata_id)"}).
+							AddRow(1),
+					)
+
+				mock.ExpectQuery(
+					"select count(task_metadata_id) from sys_async_task where task_metadata_id=?").
+					WithArgs(v3.Metadata.ID).
+					WillReturnRows(
+						sqlmock.NewRows([]string{"count(task_metadata_id)"}).
+							AddRow(0),
+					)
+
+				mock.ExpectBegin()
+				b3, err := json.Marshal(v3.Metadata.Options)
+				require.NoError(t, err)
+				mock.ExpectExec(
+					"insert into sys_async_task(task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,task_parent_id,task_status,task_runner,task_epoch,last_heartbeat,create_at,end_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(v3.Metadata.ID, v3.Metadata.Executor, v3.Metadata.Context, string(b3), v3.ParentTaskID, v3.Status, v3.TaskRunner, v3.Epoch, v3.LastHeartbeat, v3.CreateAt, v3.CompletedAt).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				mock.ExpectExec(
+					"update sys_cron_task set task_metadata_executor=?,task_metadata_context=?,task_metadata_option=?,cron_expr=?,next_time=?,trigger_times=?,create_at=?,update_at=? where cron_task_id=?").
+					WithArgs(v1.Metadata.Executor, v1.Metadata.Context, string(b1), v1.CronExpr, v1.NextTime, 1, v1.CreateAt, v1.UpdateAt, v1.ID).
+					WillReturnResult(sqlmock.NewResult(2, 1))
+
+				mock.ExpectCommit()
+				mock.ExpectClose()
+			}
+
+			ctx := context.Background()
 			n, err := s.UpdateCronTask(ctx, v1, v2)
-			assert.NoError(t, err)
-			assert.Equal(t, 0, n)
+			require.NoError(t, err)
+			require.Equal(t, 0, n)
 
 			mustAddTestCronTask(t, s, 1, v1)
-			mustAddTestAsyncTask(t, s, 1, v2)
+			mustAddTestAsyncTask(t, s, v2)
 
 			v1 = mustQueryTestCronTask(t, s, 1)[0]
 
 			n, err = s.UpdateCronTask(ctx, v1, v2)
-			assert.NoError(t, err)
-			assert.Equal(t, 0, n)
+			require.NoError(t, err)
+			require.Equal(t, 0, n)
 
 			n, err = s.UpdateCronTask(ctx, v1, v3)
-			assert.NoError(t, err)
-			assert.Equal(t, 0, n)
+			require.NoError(t, err)
+			require.Equal(t, 0, n)
 
 			v1.TriggerTimes++
 			n, err = s.UpdateCronTask(ctx, v1, v3)
-			assert.NoError(t, err)
-			assert.Equal(t, 2, n)
+			require.NoError(t, err)
+			require.Equal(t, 2, n)
 		})
 	}
 }
@@ -220,15 +572,35 @@ func TestUpdateCronTask(t *testing.T) {
 func TestAddDaemonTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, mock := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			v := newTestDaemonTask(1, "t1")
+
+			if mock != nil {
+				b, err := json.Marshal(v.Metadata.Options)
+				require.NoError(t, err)
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectExec("insert into sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_status,create_at,update_at,details) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+					WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+					WillReturnResult(sqlmock.NewResult(1, 0))
+
+				mock.ExpectQuery("select task_id, task_metadata_id, task_metadata_executor, task_metadata_context, task_metadata_option, account_id, account, task_type, task_runner, task_status, last_heartbeat, create_at, update_at, end_at, last_run, details from sys_daemon_task where 1=1 order by task_id").
+					WillReturnRows(sqlmock.NewRows([]string{"task_id", " task_metadata_id", " task_metadata_executor", " task_metadata_context", " task_metadata_option", " account_id", " account", " task_type", " task_runner", " task_status", " last_heartbeat", " create_at", " update_at", " end_at", " last_run", " details"}).
+						AddRow(v.ID, v.Metadata.ID, v.Metadata.Executor, v.Metadata.Context, string(b), v.AccountID, v.Account, v.TaskType, v.TaskRunner, v.TaskStatus, v.LastHeartbeat, v.CreateAt, v.UpdateAt, v.EndAt, v.LastRun, v.Details))
+
+				mock.ExpectClose()
+			}
+
 			mustAddTestDaemonTask(t, s, 1, v)
 			mustAddTestDaemonTask(t, s, 0, v)
-			assert.Equal(t, 1, len(mustGetTestDaemonTask(t, s, 1)))
+			require.Equal(t, 1, len(mustGetTestDaemonTask(t, s, 1)))
 		})
 	}
 }
@@ -236,9 +608,9 @@ func TestAddDaemonTask(t *testing.T) {
 func TestUpdateDaemonTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, _ := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			v := newTestDaemonTask(1, "t1")
@@ -254,9 +626,9 @@ func TestUpdateDaemonTask(t *testing.T) {
 func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, _ := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
@@ -277,9 +649,9 @@ func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, _ := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
@@ -301,9 +673,9 @@ func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 func TestQueryDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
-			s := factory(t)
+			s, _ := factory(t)
 			defer func() {
-				assert.NoError(t, s.Close())
+				require.NoError(t, s.Close())
 			}()
 
 			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
@@ -324,39 +696,25 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 }
 
 func mustGetTestAsyncTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.AsyncTask {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	tasks, err := s.QueryAsyncTask(ctx, conds...)
+	tasks, err := s.QueryAsyncTask(context.Background(), conds...)
 	require.NoError(t, err)
 	require.Equal(t, expectCount, len(tasks))
 	return tasks
 }
 
-func mustAddTestAsyncTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.AsyncTask) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	n, err := s.AddAsyncTask(ctx, tasks...)
+func mustAddTestAsyncTask(t *testing.T, s TaskStorage, tasks ...task.AsyncTask) {
+	_, err := s.AddAsyncTask(context.Background(), tasks...)
 	require.NoError(t, err)
-	require.Equal(t, expectAdded, n)
 }
 
-func mustUpdateTestAsyncTask(t *testing.T, s TaskStorage, expectUpdated int, tasks []task.AsyncTask, conds ...Condition) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	n, err := s.UpdateAsyncTask(ctx, tasks, conds...)
+func mustUpdateTestAsyncTask(t *testing.T, s TaskStorage, tasks []task.AsyncTask, conds ...Condition) {
+	_, err := s.UpdateAsyncTask(context.Background(), tasks, conds...)
 	require.NoError(t, err)
-	require.Equal(t, expectUpdated, n)
 }
 
-func mustDeleteTestAsyncTask(t *testing.T, s TaskStorage, expectUpdated int, conds ...Condition) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	n, err := s.DeleteAsyncTask(ctx, conds...)
+func mustDeleteTestAsyncTask(t *testing.T, s TaskStorage, conds ...Condition) {
+	_, err := s.DeleteAsyncTask(context.Background(), conds...)
 	require.NoError(t, err)
-	require.Equal(t, expectUpdated, n)
 }
 
 func mustAddTestCronTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.CronTask) {
@@ -379,10 +737,7 @@ func mustQueryTestCronTask(t *testing.T, s TaskStorage, expectQueryCount int) []
 }
 
 func mustAddTestDaemonTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.DaemonTask) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	n, err := s.AddDaemonTask(ctx, tasks...)
+	n, err := s.AddDaemonTask(context.Background(), tasks...)
 	require.NoError(t, err)
 	require.Equal(t, expectAdded, n)
 }
@@ -429,7 +784,7 @@ func newTestCronTask(id, cron string) task.CronTask {
 }
 
 func newTestDaemonTask(id uint64, mid string) task.DaemonTask {
-	v := task.DaemonTask{}
+	v := task.DaemonTask{Details: new(task.Details)}
 	v.ID = id
 	v.Metadata.ID = mid
 	v.TaskRunner = mid

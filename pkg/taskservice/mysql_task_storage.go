@@ -166,18 +166,8 @@ type mysqlTaskStorage struct {
 	db *sql.DB
 }
 
-func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(3)
-
-	return &mysqlTaskStorage{
-		db: db,
-	}, nil
+func newMysqlTaskStorage(db *sql.DB) (TaskStorage, error) {
+	return &mysqlTaskStorage{db: db}, nil
 }
 
 func (m *mysqlTaskStorage) Close() error {

@@ -45,16 +45,6 @@ func (s *Service) initTaskHolder() {
 		return s.haClient
 	}
 
-	if s.task.storageFactory != nil {
-		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
-			runtime.ServiceRuntime(s.cfg.UUID),
-			util.AddressFunc(s.cfg.UUID, getClient),
-			func(_, _, _ string) taskservice.TaskStorageFactory {
-				return s.task.storageFactory
-			},
-		)
-		return
-	}
 	s.task.holder = taskservice.NewTaskServiceHolder(
 		runtime.ServiceRuntime(s.cfg.UUID),
 		util.AddressFunc(s.cfg.UUID, getClient),

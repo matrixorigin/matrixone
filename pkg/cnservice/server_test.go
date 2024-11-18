@@ -63,7 +63,6 @@ func Test_InitServer(t *testing.T) {
 	}
 	srv.addressMgr.Register(0)
 
-	WithTaskStorageFactory(nil)(srv)
 	handler := func(
 		ctx context.Context,
 		cnAddr string,

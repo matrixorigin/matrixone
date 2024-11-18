@@ -654,9 +654,8 @@ type service struct {
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		storageFactory taskservice.TaskStorageFactory
+		holder taskservice.TaskServiceHolder
+		runner taskservice.TaskRunner
 	}
 
 	addressMgr address.AddressManager

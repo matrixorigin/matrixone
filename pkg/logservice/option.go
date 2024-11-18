@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 // Option is utility that sets callback for Service.
@@ -38,13 +37,6 @@ func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 func WithRuntime(runtime runtime.Runtime) Option {
 	return func(s *Service) {
 		s.runtime = runtime
-	}
-}
-
-// WithTaskStorageFactory set up the special task storage factory
-func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
-	return func(s *Service) {
-		s.task.storageFactory = factory
 	}
 }
 

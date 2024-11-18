@@ -643,10 +643,6 @@ type TaskServiceHolder interface {
 	Create(command logservicepb.CreateTaskService) error
 }
 
-type TaskStorageFactory interface {
-	Create(address string) (TaskStorage, error)
-}
-
 type Getter func() (TaskService, bool)
 
 type CnLabels struct {
