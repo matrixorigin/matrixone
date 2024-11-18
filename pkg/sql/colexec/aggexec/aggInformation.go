@@ -54,8 +54,8 @@ func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
-func (info singleAggInfo) getEncoded() *EncodedBasicInfo {
-	return &EncodedBasicInfo{
+func (info singleAggInfo) getEncoded() EncodedBasicInfo {
+	return EncodedBasicInfo{
 		Id:         info.aggID,
 		IsDistinct: info.distinct,
 		Args:       []types.Type{info.argType},
@@ -107,8 +107,8 @@ func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
-func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
-	return &EncodedBasicInfo{
+func (info multiAggInfo) getEncoded() EncodedBasicInfo {
+	return EncodedBasicInfo{
 		Id:         info.aggID,
 		IsDistinct: info.distinct,
 		Args:       info.argTypes,

@@ -67,7 +67,7 @@ func (expr AggFuncExecExpression) GetExtraConfig() []byte {
 // AggFuncExec is an interface to do execution for aggregation.
 type AggFuncExec interface {
 	marshal() ([]byte, error)
-	unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error
+	unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error
 
 	AggID() int64
 	IsDistinct() bool
@@ -115,9 +115,6 @@ var (
 	_ AggFuncExec = (*singleAggFuncExecNew2[int32])(nil)
 	_ AggFuncExec = (*singleAggFuncExecNew3[int64])(nil)
 	_ AggFuncExec = (*singleAggFuncExecNew4)(nil)
-
-	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
-	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 	_ AggFuncExec = &groupConcatExec{}
 )
 
@@ -162,7 +159,7 @@ func MakeAgg(
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
 	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
-		return makeMultiAgg(mg, aggID, isDistinct, param)
+		panic("do not support multi-column aggregation now.")
 	}
 	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
 }
@@ -199,35 +196,6 @@ func makeSingleAgg(
 		return newSingleAggFuncExec3NewVersion(mg, info, agg)
 	}
 	return newSingleAggFuncExec1NewVersion(mg, info, agg)
-}
-
-// makeMultiAgg supports creating an aggregation function executor for multiple columns.
-func makeMultiAgg(
-	mg AggMemoryManager,
-	aggID int64, isDistinct bool,
-	param []types.Type) AggFuncExec {
-	if isDistinct {
-		panic("multi-column agg do not support `distinct`")
-	}
-
-	agg, err := getMultiArgAggImplByInfo(aggID, param)
-	if err != nil {
-		panic(err)
-	}
-	result := agg.ret(param)
-
-	info := multiAggInfo{
-		aggID:     aggID,
-		distinct:  false,
-		argTypes:  param,
-		retType:   result,
-		emptyNull: agg.setNullForEmptyGroup,
-	}
-
-	if info.retType.IsVarlen() {
-		return newMultiAggFuncExecRetVar(mg, info, agg)
-	}
-	return newMultiAggFuncExecRetFixed(mg, info, agg)
 }
 
 func makeSpecialAggExec(

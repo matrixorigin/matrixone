@@ -115,44 +115,6 @@ type (
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 )
 
-// the function definitions of multi-column aggregation.
-// about the aggregation of multi-column, the result type can be fixed-length or variable-length.
-// multiAgg1 for the fixed-length result type, multiAgg2 for the variable-length result type.
-//
-// todo: should refactor these functions to be like the single aggregation functions.
-//
-//	I kept them because there has no multi-column aggregation implemented yet.
-//	and I don't want to make a big change in one PR.
-type (
-	MultiAggRetFixed[to types.FixedSizeTExceptStrType] interface{ AggCanMarshal }
-	MultiAggInit1[to types.FixedSizeTExceptStrType]    func(
-		exec MultiAggRetFixed[to], setter AggSetter[to], args []types.Type, ret types.Type)
-	MultiAggFillNull1[to types.FixedSizeTExceptStrType] func(
-		exec MultiAggRetFixed[to]) error
-	rowValidForMultiAgg1[to types.FixedSizeTExceptStrType] func(
-		exec MultiAggRetFixed[to]) bool
-	MultiAggEval1[to types.FixedSizeTExceptStrType] func(
-		exec MultiAggRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
-	MultiAggMerge1[to types.FixedSizeTExceptStrType] func(
-		exec1, exec2 MultiAggRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
-	MultiAggFlush1[to types.FixedSizeTExceptStrType] func(
-		exec MultiAggRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
-
-	MultiAggRetVar interface{ AggCanMarshal }
-	MultiAggInit2  func(
-		exec MultiAggRetVar, setter AggBytesSetter, args []types.Type, ret types.Type)
-	MultiAggFillNull2 func(
-		exec MultiAggRetVar) error
-	rowValidForMultiAgg2 func(
-		exec MultiAggRetVar) bool
-	MultiAggEval2 func(
-		exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
-	MultiAggMerge2 func(
-		exec1, exec2 MultiAggRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
-	MultiAggFlush2 func(
-		exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
-)
-
 // AggCanMarshal interface is used for agg structures' multi-node communication.
 // each context of aggregation should implement the AggCanMarshal interface.
 //

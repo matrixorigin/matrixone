@@ -257,9 +257,8 @@ type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggExecExtraInformation
 	distinctHash
 
-	arg  sFixedArg[from]
-	ret  aggFuncResult[to]
-	ret2 aggResultWithFixedType[to]
+	arg sFixedArg[from]
+	ret aggResultWithFixedType[to]
 
 	execContext *AggContext
 
@@ -271,21 +270,23 @@ type singleAggFuncExecNew1[from, to types.FixedSizeTExceptStrType] struct {
 
 func (exec *singleAggFuncExecNew1[from, to]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
+	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
+
 	encoded := &EncodedAgg{
-		Info:   d,
-		Result: r,
-		Groups: exec.execContext.getGroupContextEncodings(),
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  exec.execContext.getGroupContextEncodings(),
 	}
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExecNew1[from, to]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExecNew1[from, to]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshal(result)
+	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) init(
@@ -301,7 +302,7 @@ func (exec *singleAggFuncExecNew1[from, to]) init(
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = resultInitMethod.(SingleAggInitResultFixed[to])(info.retType, info.argType)
 	}
-	exec.ret2 = initAggResultWithFixedTypeResult[to](mg, info.retType, info.emptyNull, v)
+	exec.ret = initAggResultWithFixedTypeResult[to](mg, info.retType, info.emptyNull, v)
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo
@@ -317,7 +318,7 @@ func (exec *singleAggFuncExecNew1[from, to]) init(
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) GroupGrow(more int) error {
-	if err := exec.ret2.grows(more); err != nil {
+	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
 	// deal with distinct hash.
@@ -333,7 +334,7 @@ func (exec *singleAggFuncExecNew1[from, to]) GroupGrow(more int) error {
 
 func (exec *singleAggFuncExecNew1[from, to]) PreAllocateGroups(more int) error {
 	exec.execContext.preAllocate(more)
-	return exec.ret2.preExtend(more)
+	return exec.ret.preExtend(more)
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) Fill(
@@ -352,14 +353,14 @@ func (exec *singleAggFuncExecNew1[from, to]) Fill(
 		}
 	}
 
-	x, y := exec.ret2.updateNextAccessIdx(group)
+	x, y := exec.ret.updateNextAccessIdx(group)
 	err := exec.fill(
 		exec.execContext.getGroupContext(group),
 		exec.execContext.getCommonContext(),
 		vector.MustFixedColWithTypeCheck[from](vectors[0])[row],
-		exec.ret2.isGroupEmpty(x, y),
-		exec.ret2.get, exec.ret2.set)
-	exec.ret2.setGroupNotEmpty(x, y)
+		exec.ret.isGroupEmpty(x, y),
+		exec.ret.get, exec.ret.set)
+	exec.ret.setGroupNotEmpty(x, y)
 	return err
 }
 
@@ -374,9 +375,9 @@ func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
 		return exec.distinctBulkFill(group, vectors, length)
 	}
 
-	x, y := exec.ret2.updateNextAccessIdx(group)
-	getter := exec.ret2.get
-	setter := exec.ret2.set
+	x, y := exec.ret.updateNextAccessIdx(group)
+	getter := exec.ret.get
+	setter := exec.ret.set
 	groupContext := exec.execContext.getGroupContext(group)
 	commonContext := exec.execContext.getCommonContext()
 
@@ -385,14 +386,14 @@ func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
 			groupContext,
 			commonContext,
 			vector.MustFixedColWithTypeCheck[from](vectors[0])[0],
-			length, exec.ret2.isGroupEmpty(x, y),
+			length, exec.ret.isGroupEmpty(x, y),
 			getter, setter)
-		exec.ret2.setGroupNotEmpty(x, y)
+		exec.ret.setGroupNotEmpty(x, y)
 		return err
 	}
 
 	exec.arg.prepare(vectors[0])
-	bs := exec.ret2.getEmptyListOnX(x)
+	bs := exec.ret.getEmptyListOnX(x)
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			v, null := exec.arg.w.GetValue(i)
@@ -400,7 +401,7 @@ func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
 				if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
 					return err
 				}
-				exec.ret2.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(x, y)
 			}
 		}
 		return nil
@@ -411,16 +412,16 @@ func (exec *singleAggFuncExecNew1[from, to]) BulkFill(
 		if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
 			return err
 		}
-		exec.ret2.setGroupNotEmpty(x, y)
+		exec.ret.setGroupNotEmpty(x, y)
 	}
 	return nil
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 	group int, vectors []*vector.Vector, length int) error {
-	x, y := exec.ret2.updateNextAccessIdx(group)
-	getter := exec.ret2.get
-	setter := exec.ret2.set
+	x, y := exec.ret.updateNextAccessIdx(group)
+	getter := exec.ret.get
+	setter := exec.ret.set
 	groupContext := exec.execContext.getGroupContext(group)
 	commonContext := exec.execContext.getCommonContext()
 
@@ -428,8 +429,8 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 		if need, err := exec.distinctHash.fill(group, vectors, 0); !need || err != nil {
 			return err
 		}
-		err := exec.fill(groupContext, commonContext, vector.MustFixedColWithTypeCheck[from](vectors[0])[0], exec.ret2.isGroupEmpty(x, y), getter, setter)
-		exec.ret2.setGroupNotEmpty(x, y)
+		err := exec.fill(groupContext, commonContext, vector.MustFixedColWithTypeCheck[from](vectors[0])[0], exec.ret.isGroupEmpty(x, y), getter, setter)
+		exec.ret.setGroupNotEmpty(x, y)
 		return err
 	}
 
@@ -439,7 +440,7 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 		return err
 	}
 
-	bs := exec.ret2.getEmptyListOnX(x)
+	bs := exec.ret.getEmptyListOnX(x)
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			if needs[i] {
@@ -448,7 +449,7 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 					if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
 						return err
 					}
-					exec.ret2.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(x, y)
 				}
 			}
 		}
@@ -461,7 +462,7 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBulkFill(
 			if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
 				return err
 			}
-			exec.ret2.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(x, y)
 		}
 	}
 	return nil
@@ -477,22 +478,22 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
 		return exec.distinctBatchFill(offset, groups, vectors)
 	}
 
-	getter := exec.ret2.get
-	setter := exec.ret2.set
+	getter := exec.ret.get
+	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret2.getEmptyList()
+	bs := exec.ret.getEmptyList()
 
 	if vectors[0].IsConst() {
 		value := vector.MustFixedColWithTypeCheck[from](vectors[0])[0]
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				idx := int(group - 1)
-				x, y := exec.ret2.updateNextAccessIdx(idx)
+				x, y := exec.ret.updateNextAccessIdx(idx)
 				if err := exec.fill(
 					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
 					return err
 				}
-				exec.ret2.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(x, y)
 			}
 		}
 		return nil
@@ -505,12 +506,12 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
 				v, null := exec.arg.w.GetValue(i)
 				if !null {
 					groupIdx := int(groups[idx] - 1)
-					x, y := exec.ret2.updateNextAccessIdx(groupIdx)
+					x, y := exec.ret.updateNextAccessIdx(groupIdx)
 					if err := exec.fill(
 						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
 						return err
 					}
-					exec.ret2.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(x, y)
 				}
 			}
 			idx++
@@ -522,12 +523,12 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			groupIdx := int(groups[idx] - 1)
-			x, y := exec.ret2.updateNextAccessIdx(groupIdx)
+			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err := exec.fill(
 				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], bs[x][y], getter, setter); err != nil {
 				return err
 			}
-			exec.ret2.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(x, y)
 		}
 		idx++
 	}
@@ -536,10 +537,10 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchFill(
 
 func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
-	getter := exec.ret2.get
-	setter := exec.ret2.set
+	getter := exec.ret.get
+	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret2.getEmptyList()
+	bs := exec.ret.getEmptyList()
 
 	needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
 	if err != nil {
@@ -551,12 +552,12 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 		for i, group := range groups {
 			if needs[i] && group != GroupNotMatched {
 				idx := int(group - 1)
-				x, y := exec.ret2.updateNextAccessIdx(idx)
+				x, y := exec.ret.updateNextAccessIdx(idx)
 				if err = exec.fill(
 					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
 					return err
 				}
-				exec.ret2.setGroupNotEmpty(x, y)
+				exec.ret.setGroupNotEmpty(x, y)
 			}
 		}
 		return nil
@@ -569,12 +570,12 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 				v, null := exec.arg.w.GetValue(i)
 				if !null {
 					groupIdx := int(groups[idx] - 1)
-					x, y := exec.ret2.updateNextAccessIdx(groupIdx)
+					x, y := exec.ret.updateNextAccessIdx(groupIdx)
 					if err = exec.fill(
 						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
 						return err
 					}
-					exec.ret2.setGroupNotEmpty(x, y)
+					exec.ret.setGroupNotEmpty(x, y)
 				}
 			}
 			idx++
@@ -586,12 +587,12 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if needs[idx] && groups[idx] != GroupNotMatched {
 			groupIdx := int(groups[idx] - 1)
-			x, y := exec.ret2.updateNextAccessIdx(groupIdx)
+			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err = exec.fill(
 				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], bs[x][y], getter, setter); err != nil {
 				return err
 			}
-			exec.ret2.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(x, y)
 		}
 		idx++
 	}
@@ -599,26 +600,26 @@ func (exec *singleAggFuncExecNew1[from, to]) distinctBatchFill(
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
-	getter := exec.ret2.get
-	setter := exec.ret2.set
+	getter := exec.ret.get
+	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
 
 	if exec.partialResult != nil {
 		if value, ok := exec.partialResult.(from); ok {
-			x, y := exec.ret2.updateNextAccessIdx(exec.partialGroup)
+			x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
 			if err := exec.fill(
-				exec.execContext.getGroupContext(exec.partialGroup), commonContext, value, exec.ret2.isGroupEmpty(x, y), getter, setter); err != nil {
+				exec.execContext.getGroupContext(exec.partialGroup), commonContext, value, exec.ret.isGroupEmpty(x, y), getter, setter); err != nil {
 				return nil, err
 			}
-			exec.ret2.setGroupNotEmpty(x, y)
+			exec.ret.setGroupNotEmpty(x, y)
 		}
 	}
 
 	if exec.flush != nil {
-		lim := exec.ret2.getEachBlockLimitation()
-		groups := exec.ret2.totalGroupCount()
-		if exec.ret2.optInformation.shouldSetNullToEmptyGroup {
+		lim := exec.ret.getEachBlockLimitation()
+		groups := exec.ret.totalGroupCount()
 
+		if exec.ret.optInformation.shouldSetNullToEmptyGroup {
 			for i, x := 0, 0; i < groups; i += lim {
 				n := groups - i
 				if n > lim {
@@ -626,10 +627,10 @@ func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
 				}
 
 				for j := 0; j < n; j++ {
-					if exec.ret2.isGroupEmpty(x, j) {
+					if exec.ret.isGroupEmpty(x, j) {
 						continue
 					}
-					exec.ret2.setGroupNotEmpty(x, j)
+					exec.ret.setNextAccessDirectly(x, j)
 
 					if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
 						return nil, err
@@ -646,7 +647,7 @@ func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
 				}
 
 				for j := 0; j < n; j++ {
-					exec.ret2.setGroupNotEmpty(x, j)
+					exec.ret.setNextAccessDirectly(x, j)
 
 					if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
 						return nil, err
@@ -658,35 +659,35 @@ func (exec *singleAggFuncExecNew1[from, to]) Flush() (*vector.Vector, error) {
 	}
 
 	// todo: 等全部代码改完后修改接口。
-	return exec.ret2.flushAll()[0], nil
+	return exec.ret.flushAll()[0], nil
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	other := next.(*singleAggFuncExecNew1[from, to])
 
-	x1, y1 := exec.ret2.updateNextAccessIdx(groupIdx1)
-	x2, y2 := other.ret2.updateNextAccessIdx(groupIdx2)
-	isNextEmpty := other.ret2.isGroupEmpty(x2, y2)
+	x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
+	x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
+	isNextEmpty := other.ret.isGroupEmpty(x2, y2)
 
 	if err := exec.merge(
 		exec.execContext.getGroupContext(groupIdx1),
 		other.execContext.getGroupContext(groupIdx2),
 		exec.execContext.getCommonContext(),
-		exec.ret2.isGroupEmpty(x1, y1),
+		exec.ret.isGroupEmpty(x1, y1),
 		isNextEmpty,
-		exec.ret2.get, other.ret2.get, exec.ret2.set); err != nil {
+		exec.ret.get, other.ret.get, exec.ret.set); err != nil {
 		return err
 	}
-	exec.ret2.MergeAnotherEmpty(x1, x2, isNextEmpty)
+	exec.ret.MergeAnotherEmpty(x1, x2, isNextEmpty)
 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*singleAggFuncExecNew1[from, to])
-	getter1 := exec.ret2.get
-	getter2 := other.ret2.get
-	setter := exec.ret2.set
+	getter1 := exec.ret.get
+	getter2 := other.ret.get
+	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
 
 	for i := range groups {
@@ -695,27 +696,27 @@ func (exec *singleAggFuncExecNew1[from, to]) BatchMerge(next AggFuncExec, offset
 		}
 		groupIdx1, groupIdx2 := int(groups[i]-1), i+offset
 
-		x1, y1 := exec.ret2.updateNextAccessIdx(groupIdx1)
-		x2, y2 := other.ret2.updateNextAccessIdx(groupIdx2)
-		isNextEmpty := other.ret2.isGroupEmpty(x2, y2)
+		x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
+		x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
+		isNextEmpty := other.ret.isGroupEmpty(x2, y2)
 
 		if err := exec.merge(
 			exec.execContext.getGroupContext(groupIdx1),
 			other.execContext.getGroupContext(groupIdx2),
 			commonContext,
-			exec.ret2.isGroupEmpty(x1, y1),
+			exec.ret.isGroupEmpty(x1, y1),
 			isNextEmpty,
 			getter1, getter2,
 			setter); err != nil {
 			return err
 		}
-		exec.ret2.MergeAnotherEmpty(x1, y1, isNextEmpty)
+		exec.ret.MergeAnotherEmpty(x1, y1, isNextEmpty)
 	}
 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExecNew1[from, to]) Free() {
-	exec.ret2.free()
+	exec.ret.free()
 	exec.distinctHash.free()
 }
