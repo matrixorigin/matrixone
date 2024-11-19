@@ -196,6 +196,34 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			joffset += int32(len(c))
 		}
+	case "json_value":
+		joffset := int32(0)
+		for i := 1; i < vlen; i++ {
+			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
+
+			var bj bytejson.ByteJson
+			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
+			if types.T(tf.Args[i].Typ.Id) == types.T_json {
+				if err := bj.Unmarshal(c); err != nil {
+					return err
+				}
+			} else {
+
+				if err := json.Unmarshal(c, &bj); err != nil {
+					return err
+				}
+			}
+
+			voffset := int32(0)
+			for t := range bj.TokenizeValue(false) {
+				jslen := t.TokenBytes[0]
+				value := string(t.TokenBytes[1 : jslen+1])
+				doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				voffset += int32(jslen)
+			}
+
+			joffset += int32(len(c))
+		}
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
 	}
