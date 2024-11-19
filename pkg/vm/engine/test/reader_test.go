@@ -788,7 +788,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 2, 0, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -1053,7 +1053,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 2, 0, 0)
+	relData, err := delegate.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
@@ -1218,7 +1218,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 2, 0, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()
