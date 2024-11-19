@@ -146,7 +146,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -185,7 +185,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -226,7 +226,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -2447,6 +2447,24 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
+
+		sql = fmt.Sprintf("show full tables from `mo_catalog` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{"mo_user", "BASE TABLE"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{"mo_user", "BASE TABLE"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = restoreSystemDatabase(ctx, "", bh, "pitr01", 0, resovleTs)
+		assert.Error(t, err)
 	})
 }
 
@@ -2889,4 +2907,47 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		_, err := doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
+}
+
+func TestCheckDbIsSubDb(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		createDbsql string
+		want        bool
+		wantErr     bool
+	}{
+		{
+			name:        "SubscriptionOption exists",
+			createDbsql: "create database sub01 from acc01 publication pub01;",
+			want:        true,
+			wantErr:     false,
+		},
+		{
+			name:        "SubscriptionOption does not exist",
+			createDbsql: "CREATE DATABASE test",
+			want:        false,
+			wantErr:     false,
+		},
+		{
+			name:        "Invalid SQL",
+			createDbsql: "INVALID SQL",
+			want:        false,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := checkDbIsSubDb(ctx, tt.createDbsql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkDbIsSubDb() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("checkDbIsSubDb() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

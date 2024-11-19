@@ -1368,7 +1368,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1394,7 +1394,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1420,7 +1420,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
@@ -2754,6 +2754,32 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInCot
+				},
+			},
+		},
+	},
+
+	// function `crc32`
+	{
+		functionId: CRC32,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newCrc32ExecContext().builtInCrc32
 				},
 			},
 		},

@@ -1079,6 +1079,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
+	case "skipDedup":
+		builder.optimizerHints.skipDedup = value
 	}
 }
 
