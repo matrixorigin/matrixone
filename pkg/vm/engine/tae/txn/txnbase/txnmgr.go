@@ -106,6 +106,10 @@ type TxnManager struct {
 	prevPrepareTS             types.TS
 	prevPrepareTSInPreparing  types.TS
 	prevPrepareTSInPrepareWAL types.TS
+
+	doneCond       sync.Cond
+	freeze         atomic.Bool
+	activeTxnCount atomic.Int32
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -132,7 +136,34 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
 }
-
+func (mgr *TxnManager) Freeze() {
+	if mgr.freeze.Load() && mgr.getActiveTxnCount() == 0 {
+		return
+	}
+	mgr.freeze.Store(true)
+	mgr.waitAllTxnCommit()
+}
+func (mgr *TxnManager) waitAllTxnCommit() {
+	mgr.doneCond.L.Lock()
+	defer mgr.doneCond.L.Unlock()
+	for {
+		if mgr.getActiveTxnCount() == 0 {
+			return
+		}
+		mgr.doneCond.Wait()
+	}
+}
+func (mgr *TxnManager) getActiveTxnCount() int32 {
+	return mgr.activeTxnCount.Load()
+}
+func (mgr *TxnManager) addTxn(txnID string, txn txnif.TxnAsyncer) error {
+	if mgr.freeze.Load() {
+		return moerr.NewInternalErrorNoCtx("txn mananger is frozen")
+	}
+	mgr.IDMap.Store(txnID, txn)
+	mgr.activeTxnCount.Add(1)
+	return nil
+}
 func (mgr *TxnManager) initMaxCommittedTS() {
 	now := mgr.Now()
 	mgr.MaxCommittedTS.Store(&now)
@@ -156,7 +187,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.IDMap.Store(txn.GetID(), txn)
+	mgr.addTxn(txn.GetID(), txn)
 	return
 }
 
@@ -173,7 +204,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -190,7 +221,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -210,7 +241,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
-		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
+		mgr.addTxn(util.UnsafeBytesToString(id), txn)
 	}
 	return
 }
@@ -221,6 +252,10 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 		logutil.Warnf("Txn %s not found", id)
 		return
 	}
+	mgr.doneCond.L.Lock()
+	mgr.activeTxnCount.Add(-1)
+	mgr.doneCond.L.Unlock()
+	mgr.doneCond.Broadcast()
 	return
 }
 
