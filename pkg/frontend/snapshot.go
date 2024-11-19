@@ -744,7 +744,7 @@ func restoreToDatabaseOrTable(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
-	isSubDb, err = checkDbIsSubDb(toCtx, createDbSql)
+	isSubDb, err = checkDbWhetherSub(toCtx, createDbSql)
 	if err != nil {
 		return
 	}
@@ -2026,7 +2026,7 @@ func checkSubscriptionExist(
 	return true, nil
 }
 
-func checkDbIsSubDb(ctx context.Context, createDbsql string) (bool, error) {
+func checkDbWhetherSub(ctx context.Context, createDbsql string) (bool, error) {
 	var (
 		err error
 		ast []tree.Statement

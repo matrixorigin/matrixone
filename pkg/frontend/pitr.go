@@ -1314,7 +1314,7 @@ func restoreToDatabaseOrTableWithPitr(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
-	isSubDb, err = checkDbIsSubDb(ctx, createDbSql)
+	isSubDb, err = checkDbWhetherSub(ctx, createDbSql)
 	if err != nil {
 		return
 	}
