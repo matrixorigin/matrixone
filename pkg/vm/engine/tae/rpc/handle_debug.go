@@ -241,13 +241,10 @@ func (h *Handle) HandleGetChangedTableList(
 	from := types.TimestampToTS(*minFrom)
 	now := types.BuildTS(time.Now().UnixNano(), 0)
 
-	//fmt.Println("handleGetChangedTableList", from.ToString(), req.Limit)
 	var (
-		err      error
-		dbEntry  *catalog2.DBEntry
-		tblEntry *catalog2.TableEntry
-		objEntry *catalog2.ObjectEntry
-		data     = &logtail.CheckpointData{}
+		err     error
+		dbEntry *catalog2.DBEntry
+		data    = &logtail.CheckpointData{}
 	)
 
 	logErr := func(e error, hint string) {
@@ -257,8 +254,6 @@ func (h *Handle) HandleGetChangedTableList(
 	}
 
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
-	//fmt.Println("handleGetChangedTableList-ckps", len(ckps))
-	var newFrom = from
 	for i := 0; i < len(ckps); i++ {
 		if ckps[i] == nil {
 			continue
@@ -296,20 +291,28 @@ func (h *Handle) HandleGetChangedTableList(
 
 		for j := range bats {
 			for k := range bats[j].Length() {
-				dbId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_DBID).Get(k).(uint64)
-				tblId := dataObjBat.GetVectorByName(logtail.SnapshotAttr_TID).Get(k).(uint64)
-				commit := dataObjBat.GetVectorByName(objectio.DefaultCommitTS_Attr).Get(k).(types.TS)
-				stats := objectio.ObjectStats(dataObjBat.GetVectorByName(catalog.ObjectMeta_ObjectStats).Get(k).([]uint8))
+				dbIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_DBID)
+				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
+				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
+				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
+					logutil.Error("dbId/tblId/commit vector length not match",
+						zap.String("dbId vector", dbIdVec.String()),
+						zap.String("tblId vector", tblIdVec.String()),
+						zap.String("commit vector", commitVec.String()))
 
-				if commit.GT(&newFrom) {
-					newFrom = commit
+					// some wrong, return quickly?
+					//resp.AccIds = req.AccIds
+					//resp.TableIds = req.TableIds
+					//resp.DatabaseIds = req.DatabaseIds
+					//tt := now.ToTimestamp()
+					//resp.Newest = &tt
+
+					return nil, nil
 				}
 
-				if !(stats.GetCNCreated() || stats.GetAppendable()) {
-					// only the cn created and appendable objects have contributes to
-					// the size and rows change.
-					continue
-				}
+				dbId := dbIdVec.Get(k).(uint64)
+				tblId := tblIdVec.Get(k).(uint64)
+				commit := commitVec.Get(k).(types.TS)
 
 				if !isTheTblIWant(tblId, commit) {
 					continue
@@ -328,10 +331,7 @@ func (h *Handle) HandleGetChangedTableList(
 		}
 	}
 
-	//fmt.Println("handleGetChangedTableList-ckps-done", len(resp.TableIds), newFrom.ToString())
-
-	// TODO(ghs) apply LIMIT on this
-	rr := h.db.LogtailMgr.GetReader(newFrom, now)
+	rr := h.db.LogtailMgr.GetReader(from, now)
 
 	cc := h.GetDB().Catalog
 
@@ -353,54 +353,6 @@ func (h *Handle) HandleGetChangedTableList(
 			continue
 		}
 
-		if tblEntry, err = dbEntry.GetTableEntryByID(tblId); err != nil {
-			logErr(err, fmt.Sprintf("get TableEntry failed dbId=%d, tblId=%d", dbId, tblId))
-			continue
-		}
-
-		if tblEntry == nil {
-			continue
-		}
-
-		hasChange := false
-		for k := range val.Objs {
-			if hasChange {
-				break
-			}
-
-			if objEntry, err = tblEntry.GetObjectByID(&k, false); err != nil {
-				logErr(err, fmt.Sprintf("get ObjEntry failed dbId=%d, tblId=%d", dbId, tblId))
-				continue
-			}
-			if objEntry == nil || !(objEntry.GetCNCreated() || objEntry.GetAppendable()) {
-				continue
-			}
-
-			hasChange = true
-		}
-
-		if !hasChange {
-			for k := range val.Tombstones {
-				if hasChange {
-					break
-				}
-
-				if objEntry, err = tblEntry.GetObjectByID(&k, true); err != nil {
-					logErr(err, fmt.Sprintf("get ObjEntry failed dbId=%d, tblId=%d", dbId, tblId))
-					continue
-				}
-				if objEntry == nil || !(objEntry.GetCNCreated() || objEntry.GetAppendable()) {
-					continue
-				}
-
-				hasChange = true
-			}
-		}
-
-		if !hasChange {
-			continue
-		}
-
 		resp.TableIds = append(resp.TableIds, tblId)
 		resp.DatabaseIds = append(resp.DatabaseIds, dbId)
 		resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
@@ -409,7 +361,6 @@ func (h *Handle) HandleGetChangedTableList(
 	tt := now.ToTimestamp()
 	resp.Newest = &tt
 
-	//fmt.Println("handleGetChangedTableList-done", len(resp.TableIds), now.ToString())
 	return nil, nil
 }
 
