@@ -964,10 +964,10 @@ func (c *PolicyStatus) String() string {
 
 func (c *PolicyStatus) Run() (err error) {
 	if c.pruneAgo == 0 && c.pruneId == 0 {
-		c.ctx.resp.Payload = []byte(merge.ActiveCNObj.String())
+		c.ctx.resp.Payload = []byte(c.ctx.db.MergeScheduler.CNActiveObjectsString())
 		return nil
 	} else {
-		merge.ActiveCNObj.Prune(c.pruneId, c.pruneAgo)
+		c.ctx.db.MergeScheduler.PruneCNActiveObjects(c.pruneId, c.pruneAgo)
 		return nil
 	}
 }

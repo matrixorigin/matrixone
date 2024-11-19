@@ -334,6 +334,7 @@ col3 VARCHAR(30) NOT NULL,
 col4 BIGINT default 30
 );
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_07;
 col1    col2    col3    col4
 23    22    55    2

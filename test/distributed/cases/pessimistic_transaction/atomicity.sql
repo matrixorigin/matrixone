@@ -261,6 +261,7 @@ CREATE TABLE IF NOT EXISTS indup_07(
     col4 BIGINT default 30
 );
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+-- @bvt:issue#4423
 select * from indup_07;
 
 --update out of date range
@@ -277,3 +278,4 @@ insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) o
 select * from indup_07;
 commit;
 select * from indup_07;
+-- @bvt:issue

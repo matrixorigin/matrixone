@@ -377,7 +377,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
-	if bat == EmptyBatch || bat == CteEndBatch {
+	if bat == EmptyBatch || bat == CteEndBatch || bat == EmptyForConstFoldBatch {
 		return
 	}
 
