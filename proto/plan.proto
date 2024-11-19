@@ -612,6 +612,12 @@ message OnDuplicateKeyCtx {
 	uint32 table_version			= 10;
 }
 
+message DedupJoinCtx {
+	repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
+	repeated int32 update_col_idx_list = 2;
+	repeated Expr update_col_expr_list = 3;
+}
+
 message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
@@ -826,8 +832,6 @@ message Node {
 	ObjectRef parent_obj_ref = 19;
 	RowsetData rowset_data = 20;
 
-	repeated Expr insert_delete_cols = 21;
-
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
 
@@ -884,6 +888,8 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 58;
 	repeated msgHeader recv_msg_list = 59;
+
+	DedupJoinCtx dedup_join_ctx = 60;
 	
 	repeated UpdateCtx update_ctx_list = 61;
 	Snapshot scan_snapshot = 62;

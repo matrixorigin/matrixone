@@ -274,10 +274,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			return err
 		}
 		for k, v := range vals[:n] {
+			if hb.OnDuplicateAction == plan.Node_UPDATE {
+				hb.MultiSels.InsertSel(int32(v), int32(i+k))
+				continue
+			}
+
 			if zvals[k] == 0 || v == 0 {
 				continue
 			}
-			ai := int64(v) - 1
 
 			if hb.IsDedup {
 				if v <= vOld {
@@ -307,13 +311,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
 						hb.IgnoreRows.Add(uint64(i + k))
-					case plan.Node_UPDATE:
 					}
 				} else {
 					vOld = v
 				}
 			} else if !hashOnPK && needAllocateSels {
-				hb.MultiSels.InsertSel(int32(ai), int32(i+k))
+				hb.MultiSels.InsertSel(int32(v-1), int32(i+k))
 			}
 		}
 
@@ -358,7 +361,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
-	if hb.IsDedup {
+	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE {
 		err := hb.Batches.Shrink(hb.IgnoreRows, proc)
 		if err != nil {
 			return err
