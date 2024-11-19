@@ -95,6 +95,7 @@ func (r *aggResultWithBytesType) grows(more int) error {
 			if err = vector.SetBytesAt(r.resultList[x1], y1, r.InitialValue, r.mp); err != nil {
 				return err
 			}
+			y1++
 		}
 		return nil
 	}

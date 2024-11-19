@@ -23,21 +23,41 @@ import (
 	"testing"
 )
 
-func fromValueListToVector[T types.FixedSizeTExceptStrType](
+func fromValueListToVector(
 	mp *mpool.MPool,
-	typ types.Type, values []T, isNull []bool) *vector.Vector {
+	typ types.Type, values any, isNull []bool) *vector.Vector {
+	var err error
 
 	v := vector.NewVec(typ)
-	var err error
-	switch typ.Oid {
-	case types.T_int64:
-		err = vector.AppendFixedList[int64](v, any(values).([]int64), isNull, mp)
 
-	case types.T_bool:
-		err = vector.AppendFixedList[bool](v, any(values).([]bool), isNull, mp)
+	if typ.IsVarlen() {
+		sts := values.([]string)
 
-	default:
-		panic(fmt.Sprintf("test util do not support the type %s now", typ))
+		if len(isNull) > 0 {
+			for i, value := range sts {
+				if err = vector.AppendBytes(v, []byte(value), isNull[i], mp); err != nil {
+					break
+				}
+			}
+		} else {
+			for _, value := range sts {
+				if err = vector.AppendBytes(v, []byte(value), false, mp); err != nil {
+					break
+				}
+			}
+		}
+
+	} else {
+		switch typ.Oid {
+		case types.T_int64:
+			err = vector.AppendFixedList[int64](v, values.([]int64), isNull, mp)
+
+		case types.T_bool:
+			err = vector.AppendFixedList[bool](v, values.([]bool), isNull, mp)
+
+		default:
+			panic(fmt.Sprintf("test util do not support the type %s now", typ))
+		}
 	}
 
 	if err != nil {
@@ -53,14 +73,14 @@ func fromIdxListToNullList(start, end int, idxList []int) []bool {
 
 	bs := make([]bool, end-start+1)
 	for _, idx := range idxList {
-		if idx >= start && idx <= end {
-			bs[idx] = true
+		if realIndex := idx - start; realIndex >= 0 && idx <= end {
+			bs[realIndex] = true
 		}
 	}
 	return bs
 }
 
-func doAggTest[input types.FixedSizeTExceptStrType, output types.FixedSizeTExceptStrType](
+func doAggTest[input, output types.FixedSizeTExceptStrType | string](
 	t *testing.T,
 	agg AggFuncExec,
 	mp *mpool.MPool, paramType types.Type,
@@ -81,18 +101,18 @@ func doAggTest[input types.FixedSizeTExceptStrType, output types.FixedSizeTExcep
 		case 0:
 			v1, v2, v3 = nil, nil, nil
 		case 1:
-			v1 = fromValueListToVector[input](mp, typ, group, fromIdxListToNullList(0, 0, nullList))
+			v1 = fromValueListToVector(mp, typ, group, fromIdxListToNullList(0, 0, nullList))
 			v2 = nil
 			v3 = nil
 		case 2:
-			v1 = fromValueListToVector[input](mp, typ, group[:1], fromIdxListToNullList(0, 0, nullList))
-			v2 = fromValueListToVector[input](mp, typ, group[1:], fromIdxListToNullList(1, 1, nullList))
+			v1 = fromValueListToVector(mp, typ, group[:1], fromIdxListToNullList(0, 0, nullList))
+			v2 = fromValueListToVector(mp, typ, group[1:], fromIdxListToNullList(1, 1, nullList))
 			v3 = nil
 		default:
 			gap := len(group) / 3
-			v1 = fromValueListToVector[input](mp, typ, group[:gap], fromIdxListToNullList(0, gap-1, nullList))
-			v2 = fromValueListToVector[input](mp, typ, group[gap:2*gap], fromIdxListToNullList(gap, 2*gap-1, nullList))
-			v3 = fromValueListToVector[input](mp, typ, group[2*gap:], fromIdxListToNullList(2*gap, len(group)-1, nullList))
+			v1 = fromValueListToVector(mp, typ, group[:gap], fromIdxListToNullList(0, gap-1, nullList))
+			v2 = fromValueListToVector(mp, typ, group[gap:2*gap], fromIdxListToNullList(gap, 2*gap-1, nullList))
+			v3 = fromValueListToVector(mp, typ, group[2*gap:], fromIdxListToNullList(2*gap, len(group)-1, nullList))
 		}
 
 		return v1, v2, v3
@@ -129,10 +149,15 @@ func doAggTest[input types.FixedSizeTExceptStrType, output types.FixedSizeTExcep
 
 	checkResult := func(
 		expectedNull bool, expectedResult output, resultV *vector.Vector, row uint64) {
+
 		if expectedNull {
 			require.True(t, resultV.IsNull(row))
 		} else {
-			require.Equal(t, expectedResult, vector.GetFixedAtNoTypeCheck[output](resultV, int(row)))
+			if resultV.GetType().IsVarlen() {
+				require.Equal(t, expectedResult, string(resultV.GetBytesAt(int(row))))
+			} else {
+				require.Equal(t, expectedResult, vector.GetFixedAtNoTypeCheck[output](resultV, int(row)))
+			}
 		}
 	}
 
@@ -183,4 +208,108 @@ func TestCount(t *testing.T) {
 		m.Mp(), types.T_int64.ToType(),
 		[]int64{1, 2, 3}, []int{0}, 2, false,
 		[]int64{1, 2, 3}, nil, 3, false)
+}
+
+func TestBytesToBytesFrameWork(t *testing.T) {
+	m := hackAggMemoryManager()
+	info := singleAggInfo{
+		distinct:  false,
+		argType:   types.T_varchar.ToType(),
+		retType:   types.T_varchar.ToType(),
+		emptyNull: true,
+	}
+	implement := aggImplementation{
+		ret: func(i []types.Type) types.Type {
+			return types.T_varchar.ToType()
+		},
+		ctx: aggContextImplementation{
+			hasCommonContext: false,
+			hasGroupContext:  false,
+		},
+		logic: aggLogicImplementation{
+			init: SingleAggInitResultVar(
+				func(resultType types.Type, parameters ...types.Type) []byte {
+					return []byte("")
+				}),
+
+			fill: SingleAggFill4NewVersion(
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value []byte, aggIsEmpty bool, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
+					if len(resultGetter()) < len(value) {
+						return resultSetter(value)
+					}
+					return nil
+				}),
+
+			fills: SingleAggFills4NewVersion(
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value []byte, count int, aggIsEmpty bool, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
+					if len(resultGetter()) < len(value) {
+						return resultSetter(value)
+					}
+					return nil
+				}),
+
+			merge: SingleAggMerge4NewVersion(
+				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggBytesGetter, resultSetter AggBytesSetter) error {
+					panic("not implement now.")
+				}),
+
+			flush: SingleAggFlush4NewVersion(
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
+					return nil
+				}),
+		},
+	}
+
+	a := newSingleAggFuncExec4NewVersion(
+		m, info, implement)
+
+	doAggTest[string, string](
+		t, a,
+		m.Mp(), types.T_varchar.ToType(),
+		[]string{"a", "bb", "c", "ddd"}, []int{3}, "bb", false,
+		[]string{"a", "bb", "c", "ddd"}, nil, "ddd", false)
+}
+
+func TestFixedToFixedFrameWork(t *testing.T) {
+	m := hackAggMemoryManager()
+	info := singleAggInfo{
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_int64.ToType(),
+		emptyNull: true,
+	}
+
+	// count the odd number.
+	implement := aggImplementation{
+		ret: func(i []types.Type) types.Type {
+			return types.T_int64.ToType()
+		},
+		ctx: aggContextImplementation{
+			hasCommonContext: false,
+			hasGroupContext:  false,
+		},
+		logic: aggLogicImplementation{
+			init: SingleAggInitResultFixed[int64](
+				func(resultType types.Type, parameters ...types.Type) int64 {
+					return 0
+				}),
+
+			fill: SingleAggFill1NewVersion[int64, int64](nil),
+
+			fills: SingleAggFills1NewVersion[int64, int64](nil),
+
+			merge: SingleAggMerge1NewVersion[int64, int64](nil),
+
+			flush: SingleAggFlush1NewVersion[int64, int64](nil),
+		},
+	}
+
+	a := newSingleAggFuncExec1NewVersion(
+		m, info, implement)
+
+	doAggTest[int64, int64](
+		t, a,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3, 4, 5}, nil, int64(3), false,
+		[]int64{2, 3, 4, 5, 6}, nil, int64(2), false)
 }
