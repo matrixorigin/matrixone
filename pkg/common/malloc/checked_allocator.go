@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/petermattis/goid"
 )
 
 type CheckedAllocator[U Allocator] struct {
@@ -32,6 +34,7 @@ type checkedAllocatorArgs struct {
 	allocatePCs []uintptr
 	size        uint64
 	ptr         unsafe.Pointer
+	goid        int64
 }
 
 func (checkedAllocatorArgs) As(Trait) bool {
@@ -77,6 +80,7 @@ func (c *CheckedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 
 	deallocated := new(atomic.Bool) // this will not be GC until deallocator is called
 	var pcs []uintptr
+	goId := goid.Get()
 	dec = c.deallocatorPool.Get2(func(args *checkedAllocatorArgs) checkedAllocatorArgs {
 		pcs = args.allocatePCs
 		if cap(pcs) < 32 {
@@ -92,16 +96,18 @@ func (c *CheckedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 			allocatePCs: pcs,
 			size:        size,
 			ptr:         unsafe.Pointer(unsafe.SliceData(ptr)),
+			goid:        goId,
 		}
 	})
 
 	runtime.SetFinalizer(deallocated, func(deallocated *atomic.Bool) {
 		if !deallocated.Load() {
 			panic(fmt.Sprintf(
-				"missing free: address %p, size %v, allocated at %s",
+				"missing free: address %p, size %v, allocated at %s goId %d",
 				ptr,
 				size,
 				pcsToString(pcs),
+				goId,
 			))
 		}
 	})

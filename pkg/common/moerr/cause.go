@@ -82,6 +82,8 @@ var (
 	CauseMigrate               = NewInternalError(context.Background(), "migrate")
 	CauseCommitUnsafe          = NewInternalError(context.Background(), "commitUnsafe")
 	CauseRollbackUnsafe        = NewInternalError(context.Background(), "rollbackUnsafe")
+	CauseCreateTxnOpUnsafe     = NewInternalError(context.Background(), "createTxnOpUnsafe")
+	CauseCreateUnsafe          = NewInternalError(context.Background(), "createUnsafe")
 	//pkg/hakeeper/task
 	CauseQueryTasks    = NewInternalError(context.Background(), "queryTasks")
 	CauseAllocateTasks = NewInternalError(context.Background(), "allocateTask")
