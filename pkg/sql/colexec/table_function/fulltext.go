@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,15 +35,98 @@ const (
 )
 
 type fulltextState struct {
-	simpleOneBatchState
+	inited   bool
+	scoremap map[any]float32
+
+	// holding output batch
+	batch *batch.Batch
+}
+
+func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
+	if u.batch != nil {
+		u.batch.CleanOnlyData()
+	}
+}
+
+func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	if u.batch != nil {
+		u.batch.Clean(proc.Mp())
+	}
+}
+
+func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+
+	u.batch.CleanOnlyData()
+
+	max_batch_size := 8192
+	keys := make([]any, 0, max_batch_size)
+	n := 0
+	// return result
+	if u.batch.VectorCount() == 1 {
+		// only doc_id returned
+
+		// write the batch
+		for key := range u.scoremap {
+			if n >= max_batch_size {
+				break
+			}
+			doc_id := key
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+
+			keys = append(keys, key)
+			n++
+		}
+	} else {
+		// doc_id and score returned
+		for key := range u.scoremap {
+			if n >= max_batch_size {
+				break
+			}
+			doc_id := key
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+
+			// score
+			vector.AppendFixed[float32](u.batch.Vecs[1], u.scoremap[key], false, proc.Mp())
+
+			keys = append(keys, key)
+			n++
+		}
+	}
+
+	for _, k := range keys {
+		delete(u.scoremap, k)
+	}
+
+	u.batch.SetRowCount(n)
+
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
 // always return one batch per nthRow.
 func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
-	u.startPreamble(tf, proc, nthRow)
+
+	if !u.inited {
+		u.batch = tf.createResultBatch()
+		u.inited = true
+	}
 
 	var err error
+	u.scoremap = nil
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
@@ -68,9 +152,12 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	err = fulltextIndexMatch(proc, tf, source_table, index_table, pattern, mode, u.batch)
+	u.scoremap, err = fulltextIndexMatch(proc, tf, source_table, index_table, pattern, mode, u.batch)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return nil
 }
 
 // prepare
@@ -214,63 +301,27 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 	return nrow, nil
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
+func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (map[any]float32, error) {
 
 	// parse the search string to []Pattern and create SearchAccum
 	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// count(*) to get number of records in source table
 	nrow, err := runCountStar(proc, s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.Nrow = nrow
 
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
 	err = runWordStats(proc, s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// compute the ranking
-	scoremap, err := s.Eval()
-	if err != nil {
-		return err
-	}
-
-	// return result
-	if bat.VectorCount() == 1 {
-		// only doc_id returned
-
-		// write the batch
-		for key := range scoremap {
-			doc_id := key
-			if str, ok := doc_id.(string); ok {
-				bytes := []byte(str)
-				doc_id = bytes
-			}
-			// type of id follow primary key column
-			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
-		}
-	} else {
-		// doc_id and score returned
-		for key := range scoremap {
-			doc_id := key
-			if str, ok := doc_id.(string); ok {
-				bytes := []byte(str)
-				doc_id = bytes
-			}
-			// type of id follow primary key column
-			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
-
-			// score
-			vector.AppendFixed[float32](bat.Vecs[1], scoremap[key], false, proc.Mp())
-		}
-	}
-
-	bat.SetRowCount(len(scoremap))
-	return nil
+	return s.Eval()
 }

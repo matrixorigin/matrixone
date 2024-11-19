@@ -43,8 +43,9 @@ type Document struct {
 
 type tokenizeState struct {
 	inited bool
-	called bool
 	param  fulltext.FullTextParserParam
+	doc    Document
+	offset int
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -53,17 +54,33 @@ func (u *tokenizeState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
-	u.called = false
 }
 
 func (u *tokenizeState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-	var res vm.CallResult
-	if u.called {
-		return res, nil
+
+	u.batch.CleanOnlyData()
+
+	// write the batch
+	n := 0
+	for i := u.offset; i < len(u.doc.Words) && n < 8192; i++ {
+		// type of id follow primary key column
+		vector.AppendAny(u.batch.Vecs[0], u.doc.Words[i].DocId, false, proc.Mp())
+		// pos
+		vector.AppendFixed[int32](u.batch.Vecs[1], u.doc.Words[i].Pos, false, proc.Mp())
+		// word
+		vector.AppendBytes(u.batch.Vecs[2], []byte(u.doc.Words[i].Word), false, proc.Mp())
+
+		n++
 	}
-	res.Batch = u.batch
-	u.called = true
-	return res, nil
+
+	u.offset += n
+	u.batch.SetRowCount(n)
+
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
 func (u *tokenizeState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -102,7 +119,9 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.inited = true
 	}
 
-	u.called = false
+	u.doc = Document{}
+	u.offset = 0
+
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
@@ -118,11 +137,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	if isnull {
-		u.batch.SetRowCount(0)
 		return nil
 	}
-
-	var doc Document
 
 	switch u.param.Parser {
 	case "", "ngram", "default":
@@ -160,7 +176,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
 
-			doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
+			u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
 	case "json":
 		joffset := int32(0)
@@ -189,7 +205,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				for tt := range tok.Tokenize() {
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
-					doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
+					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
 				}
 				voffset += int32(jslen)
 			}
@@ -218,7 +234,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
 				value := string(t.TokenBytes[1 : jslen+1])
-				doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
 				voffset += int32(jslen)
 			}
 
@@ -228,16 +244,5 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
 	}
 
-	// write the batch
-	for i := range doc.Words {
-		// type of id follow primary key column
-		vector.AppendAny(u.batch.Vecs[0], doc.Words[i].DocId, false, proc.Mp())
-		// pos
-		vector.AppendFixed[int32](u.batch.Vecs[1], doc.Words[i].Pos, false, proc.Mp())
-		// word
-		vector.AppendBytes(u.batch.Vecs[2], []byte(doc.Words[i].Word), false, proc.Mp())
-	}
-
-	u.batch.SetRowCount(len(doc.Words))
 	return nil
 }
