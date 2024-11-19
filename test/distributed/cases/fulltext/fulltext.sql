@@ -354,3 +354,12 @@ insert into t1 select result, "test create big fulltext index" from generate_ser
 create fulltext index ftidx on t1 (b);
 
 
+drop database if exists db1;
+create database db1;
+use db1;
+
+set experimental_fulltext_index=1;
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(30000000) g;
+create fulltext index ftidx on t1 (b);
