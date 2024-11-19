@@ -24,6 +24,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"hash/crc32"
 	"io"
 	"math"
 	"runtime"
@@ -1054,6 +1056,29 @@ func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)
 
+}
+
+type crc32ExecContext struct {
+	hah hash.Hash32
+}
+
+func newCrc32ExecContext() *crc32ExecContext {
+	return &crc32ExecContext{
+		hah: crc32.NewIEEE(),
+	}
+}
+
+func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[uint32](
+		parameters,
+		result, proc, length, func(v []byte) (uint32, error) {
+			content.hah.Reset()
+			_, err := content.hah.Write(v)
+			if err != nil {
+				return 0, err
+			}
+			return content.hah.Sum32(), nil
+		}, selectList)
 }
 
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

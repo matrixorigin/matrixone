@@ -33,4 +33,8 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a,b));
 insert into t1 select result,result,result from generate_series(200000) g;
 update t1 set c =10;
+drop table t1;
+create table t1(a int, b int, c int) cluster by(b,c);
+insert into t1 select result,result,null from generate_series(200000) g;
+select count(*) from t1;
 drop database if exists test;

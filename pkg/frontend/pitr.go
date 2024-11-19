@@ -70,7 +70,7 @@ var (
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
-	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
+	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set obj_id = %d, modified_time = '%s' where account_name = '%s';`
@@ -152,8 +152,8 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 	return fmt.Sprintf(checkDupPitrFormat, accountId, objId)
 }
 
-func getPubInfoWithPitr(ts int64, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, dbName)
+func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, modifiedTime string) string {
@@ -1314,7 +1314,7 @@ func restoreToDatabaseOrTableWithPitr(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
-	isSubDb, err = checkDbIsSubDb(ctx, createDbSql)
+	isSubDb, err = checkDbWhetherSub(ctx, createDbSql)
 	if err != nil {
 		return
 	}
@@ -1446,7 +1446,7 @@ func reCreateTableWithPitr(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1548,7 +1548,7 @@ func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, d
 	// cols: table_name, create_sql
 	colsList, err := getStringColsList(ctx, bh, sql, 1)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
@@ -1618,7 +1618,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1757,9 +1757,14 @@ func restoreSystemDatabaseWithPitr(
 	accountId uint32,
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system database: %s", pitrName, moCatalog))
-	tableInfos, err := getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, moCatalog, "")
+	var (
+		dbName     = moCatalog
+		tableInfos []*tableInfo
+	)
+
+	tableInfos, err = showFullTablesWitsTs(ctx, sid, bh, pitrName, ts, dbName, "")
 	if err != nil {
-		return
+		return err
 	}
 
 	for _, tblInfo := range tableInfos {
@@ -1770,6 +1775,10 @@ func restoreSystemDatabaseWithPitr(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", pitrName, moCatalog, tblInfo.tblName))
+		tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName)
+		if err != nil {
+			return err
+		}
 
 		// checks if the given context has been canceled.
 		if err = CancelCheck(ctx); err != nil {
@@ -2297,11 +2306,11 @@ func createPubByPitr(
 	toAccountId uint32,
 	ts int64) (err error) {
 	// read pub info from mo_pubs
-	sql := getPubInfoWithPitr(ts, dbName)
-	bh.ClearExecResultSet()
+	sql := getPubInfoWithPitr(ts, toAccountId, dbName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
 
-	if err = bh.Exec(ctx, sql); err != nil {
+	bh.ClearExecResultSet()
+	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
 		return
 	}
 

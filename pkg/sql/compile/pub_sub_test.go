@@ -1,10 +1,10 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package objectio
+package compile
 
-// Each 8192 rows of data corresponds to an S3 input unit
-const rowsPerS3Input int64 = 8192
+import (
+	"context"
+	"testing"
 
-// Estimating S3input using the number of written lines, Maintained by @LeftHandCold
-func EstimateS3Input(writtenRows int64) float64 {
-	return float64(writtenRows) / float64(rowsPerS3Input)
-}
+	"github.com/stretchr/testify/assert"
+)
 
-func EstimateS3InputForDeleteRows(deletedRows int64) float64 {
-	return float64(deletedRows) / float64(rowsPerS3Input)
+func Test_updatePubTableList(t *testing.T) {
+	err := updatePubTableList(context.Background(), nil, "information_schema", "t1")
+	assert.NoError(t, err)
 }

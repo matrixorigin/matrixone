@@ -6359,9 +6359,8 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	common.RuntimeMaxMergeObjN.Store(0)
-	common.RuntimeOsizeRowsQualified.Store(0)
-	common.RuntimeMaxObjOsize.Store(0)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
