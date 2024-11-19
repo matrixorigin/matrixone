@@ -275,6 +275,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err != nil {
 				return input, err
 			}
+			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 
