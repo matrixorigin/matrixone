@@ -354,3 +354,24 @@ insert into t1 select result, "test create big fulltext index" from generate_ser
 create fulltext index ftidx on t1 (b);
 
 
+-- #20149
+CREATE TABLE IF NOT EXISTS nation (
+  `n_nationkey`  INT,
+  `n_name`       CHAR(25),
+  `n_regionkey`  INT,
+  `n_comment`    VARCHAR(152),
+  `n_dummy`      VARCHAR(10),
+  PRIMARY KEY (`n_nationkey`));
+
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+
+create fulltext index ftidx on nation(n_comment);
+
+select * from nation where match(n_comment) against('china');
+
+delete from nation where n_nationkey = 0;
+
+select * from nation where match(n_comment) against('china');
+
+drop table nation;
+

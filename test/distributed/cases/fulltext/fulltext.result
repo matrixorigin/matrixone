@@ -446,3 +446,19 @@ drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
 insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
 create fulltext index ftidx on t1 (b);
+CREATE TABLE IF NOT EXISTS nation (
+`n_nationkey`  INT,
+`n_name`       CHAR(25),
+`n_regionkey`  INT,
+`n_comment`    VARCHAR(152),
+`n_dummy`      VARCHAR(10),
+PRIMARY KEY (`n_nationkey`));
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+create fulltext index ftidx on nation(n_comment);
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+0    china    1    china beijing    dummy
+delete from nation where n_nationkey = 0;
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+drop table nation;
