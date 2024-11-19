@@ -58,14 +58,8 @@ func (s *service) initDistributedTAE(
 	// start I/O pipeline
 	blockio.Start(s.cfg.UUID)
 
-	sqlExecFunc := func(
-		ctx context.Context,
-		sql string,
-		opts ie.SessionOverrideOptions) ie.InternalExecResult {
-
-		exec := frontend.NewInternalExecutor(s.cfg.UUID)
-		ret := exec.Query(ctx, sql, opts)
-		return ret
+	internalExecutorFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
 
 	// engine
@@ -87,7 +81,7 @@ func (s *service) initDistributedTAE(
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
 		disttae.WithMoTableStats(s.cfg.Engine.Stats),
-		disttae.WithSQLExecFunc(sqlExecFunc),
+		disttae.WithSQLExecFunc(internalExecutorFactory),
 	)
 	pu.StorageEngine = s.storeEngine
 
