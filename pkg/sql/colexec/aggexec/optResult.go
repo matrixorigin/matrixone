@@ -407,7 +407,7 @@ func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, er
 	}
 
 	endX = r.nowIdx1
-	endY = r.resultList[startY].Length()
+	endY = r.resultList[endX].Length()
 
 	if r.optInformation.doesThisNeedEmptyList {
 		r.bsFromEmptyList[startX] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[startX])
