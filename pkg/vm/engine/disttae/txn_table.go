@@ -461,14 +461,6 @@ func (tbl *txnTable) GetProcess() any {
 }
 
 func (tbl *txnTable) resetSnapshot() {
-	//TODO::Remove the debug info for issue-19867
-	if tbl.db.op.IsSnapOp() {
-		logutil.Infof("reset partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
-			tbl._partState.Load(),
-			tbl,
-			tbl.tableName,
-			tbl.db.op.Txn().DebugString())
-	}
 	tbl._partState.Store(nil)
 }
 
@@ -687,15 +679,6 @@ func (tbl *txnTable) doRanges(
 	// get the table's snapshot
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
-	}
-
-	//TODO::Remove the debug info for issue-19867
-	if tbl.tableName == "mo_database" && tbl.db.op.IsSnapOp() {
-		logutil.Infof("doRanges:get partition state: %p, tbl:%p, table name:%s, snapshot txn op:%s",
-			part,
-			tbl,
-			tbl.tableName,
-			tbl.db.op.Txn().DebugString())
 	}
 
 	if err = tbl.rangesOnePart(
