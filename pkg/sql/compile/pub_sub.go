@@ -17,8 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +28,15 @@ import (
 )
 
 const sysAccountId = 0
+
+var sysDatabases = []string{
+	"mo_catalog",
+	"information_schema",
+	"system",
+	"system_metrics",
+	"mysql",
+	"mo_task",
+}
 
 func createSubscription(ctx context.Context, c *Compile, dbName string, subOption *plan.SubscriptionOption) error {
 	accountId, err := defines.GetAccountId(ctx)
@@ -74,8 +83,8 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 }
 
 func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName string) error {
-	// mo_catalog can't be published, skip
-	if dbName == catalog.MO_CATALOG {
+	// skip system databases
+	if slices.Contains(sysDatabases, dbName) {
 		return nil
 	}
 
