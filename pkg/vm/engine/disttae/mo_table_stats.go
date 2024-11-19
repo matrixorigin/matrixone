@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"math"
 	"runtime"
 	"slices"
@@ -43,7 +42,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	//"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -82,15 +81,19 @@ const (
 				on duplicate key update
 					table_stats = '%s', update_time = '%s', takes = %d;`
 
-	UpdateOnlyTSSQL = `
-                update 
-					%s.%s
-				set 
-				    update_time = '%s'
-				where
-				    account_id = %d and 
-				    database_id = %d and 
-				    table_id = %d;`
+	bulkInsertOrUpdateStatsListSQL = `
+				insert into 
+				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
+					values %s 
+				on duplicate key update
+					table_stats = values(table_stats), update_time = values(update_time), takes = values(takes);`
+
+	bulkInsertOrUpdateOnlyTSSQL = `
+				insert into 
+				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
+					values %s 
+				on duplicate key update
+					update_time = values(update_time);`
 
 	getTableStatsSQL = `
 				select 
@@ -145,7 +148,7 @@ const (
 const (
 	defaultAlphaCycleDur = time.Minute
 
-	defaultGetTableListLimit = 1000
+	defaultGetTableListLimit = 5000
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -192,7 +195,13 @@ func initMoTableStatsConfig(
 
 	statsConf := eng.config.statsConf
 
-	dynamicConfig.sqlExecFunc = eng.config.sqlExecFunc
+	dynamicConfig.executorPool = sync.Pool{
+		New: func() interface{} {
+			return eng.config.ieFactory()
+		},
+	}
+
+	//dynamicConfig.db, err = sql.Open("mo_table_stats")
 	dynamicConfig.sqlOpts = ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 
 	if statsConf.GetTableListLimit <= 0 {
@@ -241,10 +250,10 @@ func initMoTableStatsConfig(
 }
 
 type MoTableStatsConfig struct {
-	UpdateDuration    time.Duration `toml:"update-duration"`
-	GetTableListLimit int           `toml:"get-table-list-limit"`
-	ForceUpdateGap    time.Duration `toml:"force-update-gap"`
-	StatsUsingOldImpl bool          `toml:"stats-using-old-impl"`
+	UpdateDuration          time.Duration `toml:"update-duration"`
+	GetTableListLimit       int           `toml:"get-table-list-limit"`
+	StatsUsingOldImpl       bool          `toml:"stats-using-old-impl"`
+	DisableMoTableStatsTask bool          `toml:"disable-mo-table-stats-task"`
 }
 
 var dynamicConfig struct {
@@ -267,11 +276,20 @@ var dynamicConfig struct {
 	betaTaskPool  *ants.Pool
 	alphaTaskPool *ants.Pool
 
-	sqlOpts     ie.SessionOverrideOptions
-	sqlExecFunc func(context.Context, string, ie.SessionOverrideOptions) ie.InternalExecResult
+	executorPool      sync.Pool
+	mysqlExecutorPool sync.Pool
+
+	sqlOpts ie.SessionOverrideOptions
 }
 
 ////////////////// MoTableStats Interface //////////////////
+
+func executeSQL(ctx context.Context, sql string) ie.InternalExecResult {
+	exec := dynamicConfig.executorPool.Get()
+	defer dynamicConfig.executorPool.Put(exec)
+
+	return exec.(ie.InternalExecutor).Query(ctx, sql, dynamicConfig.sqlOpts)
+}
 
 func intsJoin(items []uint64, delimiter string) string {
 	str := ""
@@ -306,7 +324,7 @@ func forceUpdateQuery(
 		intsJoin(dbs, ","),
 		intsJoin(tbls, ","))
 
-	sqlRet := dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet := executeSQL(ctx, sql)
 	if sqlRet.Error() != nil {
 		return nil, sqlRet.Error()
 	}
@@ -362,7 +380,7 @@ func normalQuery(
 		intsJoin(dbs, ","),
 		intsJoin(tbls, ","))
 
-	sqlRet := dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet := executeSQL(ctx, sql)
 	if sqlRet.Error() != nil {
 		return nil, sqlRet.Error()
 	}
@@ -410,7 +428,11 @@ func normalQuery(
 			return
 		}
 
-		statsVals = append(statsVals, stats[TableStatsName[statsIdx]])
+		ss := stats[TableStatsName[statsIdx]]
+		if ss == nil {
+			ss = defaultVal
+		}
+		statsVals = append(statsVals, ss)
 
 		if val, err = sqlRet.Value(ctx, uint64(idxes[idx]), updateColIdx); err != nil {
 			return nil, err
@@ -633,7 +655,7 @@ func tableStatsExecutor(
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
-	tickerDur := time.Second
+	tickerDur := time.Second * 60 * 30
 	executeTicker := time.NewTicker(tickerDur)
 
 	for {
@@ -689,7 +711,7 @@ func insertNewTables(
 
 	//if dynamicConfig.lastCheckNewTables.IsEmpty() {
 	sql = fmt.Sprintf(getMinTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS)
-	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet = executeSQL(ctx, sql)
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -716,7 +738,7 @@ func insertNewTables(
 			Format("2006-01-02 15:04:05"),
 	)
 
-	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet = executeSQL(ctx, sql)
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -759,7 +781,7 @@ func insertNewTables(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
 
-	sqlRet = dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet = executeSQL(ctx, sql)
 	return sqlRet.Error()
 }
 
@@ -835,7 +857,7 @@ func alphaTask(
 
 	wg := sync.WaitGroup{}
 
-	batCnt := max(len(tbls)/100, 100)
+	batCnt := max(len(tbls)/10, dynamicConfig.changeTableListLimit/10)
 
 	errQueue := make(chan error, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
@@ -861,7 +883,7 @@ func alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				//fmt.Println("all submitted, waiting err")
+				dynamicConfig.tblQueue <- nil
 				ticker.Reset(time.Second)
 				continue
 			}
@@ -869,6 +891,9 @@ func alphaTask(
 			start := time.Now()
 			submitted := 0
 			for i := 0; i < batCnt && i < len(tbls); i++ {
+				if tbls[i] == nil {
+					panic("table pair expected not nil")
+				}
 
 				submitted++
 				wg.Add(1)
@@ -877,8 +902,10 @@ func alphaTask(
 					defer wg.Done()
 
 					var pState *logtailreplay.PartitionState
-					if pState, err = subscribeTable(ctx, service, eng, tbls[i]); err != nil {
-						return
+					if !tbls[i].onlyUpdateTS {
+						if pState, err = subscribeTable(ctx, service, eng, tbls[i]); err != nil {
+							return
+						}
 					}
 
 					tbls[i].pState = pState
@@ -893,6 +920,9 @@ func alphaTask(
 			}
 
 			wg.Wait()
+
+			// let beta know that a batch done
+			dynamicConfig.tblQueue <- nil
 
 			dur := time.Since(start)
 			// the longer the update takes, the longer we would pause,
@@ -918,7 +948,10 @@ func betaTask(
 ) (err error) {
 
 	var (
-		de = eng.(*Engine)
+		sl        statsList
+		de        = eng.(*Engine)
+		slBat     sync.Map
+		onlyTSBat []*tablePair
 	)
 
 	for {
@@ -927,28 +960,38 @@ func betaTask(
 			return
 
 		case tbl := <-dynamicConfig.tblQueue:
-			if tbl == nil || tbl.pState == nil {
-				// view
-				err = updateTableOnlyTS(ctx, service, tbl)
-				tbl.Done(err)
+			if tbl == nil {
+				// an alpha batch transmit done
+				if len(onlyTSBat) > 0 {
+					bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
+					onlyTSBat = onlyTSBat[:0]
+				}
+
+				_ = bulkUpdateTableStatsList(ctx, service, &slBat)
+				slBat.Clear()
+
+				continue
+			}
+
+			if tbl.pState == nil {
+				// 1. view
+				// 2. no update
+				//err = updateTableOnlyTS(ctx, service, tbl)
+				onlyTSBat = append(onlyTSBat, tbl)
 				continue
 			}
 
 			if err = dynamicConfig.betaTaskPool.Submit(func() {
-				if tbl.onlyUpdateTS {
-					err = updateTableOnlyTS(ctx, service, tbl)
-				} else {
-					_, err = statsCalculateOp(ctx, service, de.fs, tbl)
-				}
-
+				sl, err = statsCalculateOp(ctx, service, de.fs, tbl)
+				slBat.Store(tbl, sl)
 				tbl.Done(err)
+
 			}); err != nil {
 				tbl.Done(err)
 				logutil.Info("stats beta task exist", zap.Error(err))
 				return
 			}
 		}
-
 	}
 }
 
@@ -979,10 +1022,6 @@ func statsCalculateOp(
 	}
 
 	sl = stashToStats(bcs)
-	if err = updateTableStatsList(ctx, service, tbl, sl); err != nil {
-		return
-	}
-
 	return sl, nil
 }
 
@@ -993,7 +1032,7 @@ func getCandidates(
 ) (accs, dbs, tbls []uint64, ts []*timestamp.Timestamp, err error) {
 
 	sql := fmt.Sprintf(getCandidatesSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, dynamicConfig.changeTableListLimit)
-	sqlRet := dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	sqlRet := executeSQL(ctx, sql)
 	if err = sqlRet.Error(); err != nil {
 		return
 	}
@@ -1080,6 +1119,10 @@ func getChangedTableList(
 		return
 	}
 
+	defer func() {
+		err = txnOperator.Commit(ctx)
+	}()
+
 	proc := process.NewTopProcess(ctx,
 		de.mp, de.cli, txnOperator,
 		de.fs, de.ls,
@@ -1097,10 +1140,6 @@ func getChangedTableList(
 	cc := de.GetLatestCatalogCache()
 
 	resp := ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
-
-	if len(resp.AccIds) == 0 {
-		return
-	}
 
 	getTablePair := func(item *cache.TableItem) *tablePair {
 		tp := allocateTablePair()
@@ -1389,28 +1428,95 @@ func updateTableStatsList(
 		string(val), utcTime, sl.took.Microseconds(),
 		string(val), utcTime, sl.took.Microseconds())
 
-	ret := dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	ret := executeSQL(ctx, sql)
 
 	return ret.Error()
 }
 
-func updateTableOnlyTS(
+func bulkUpdateTableStatsList(
 	ctx context.Context,
 	service string,
-	tbl *tablePair,
+	bat *sync.Map,
 ) (err error) {
-
-	utcTime := tbl.snapshot.
-		ToTimestamp().
-		ToStdTime().
-		Format("2006-01-02 15:04:05.000000")
-
-	sql := fmt.Sprintf(UpdateOnlyTSSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-		utcTime,
-		tbl.acc, tbl.db, tbl.tbl,
+	var (
+		val  []byte
+		vals []string
+		tbls []*tablePair
 	)
 
-	ret := dynamicConfig.sqlExecFunc(ctx, sql, dynamicConfig.sqlOpts)
+	defer func() {
+		if len(tbls) > 0 {
+			fmt.Println("bulk update stats list", len(tbls), err)
+		}
+
+		for i := range tbls {
+			tbls[i].Done(err)
+		}
+	}()
+
+	bat.Range(func(key, value any) bool {
+		tbl := key.(*tablePair)
+		sl := value.(statsList)
+
+		tbls = append(tbls, tbl)
+
+		if val, err = json.Marshal(sl.stats); err != nil {
+			return false
+		}
+
+		vals = append(vals, fmt.Sprintf("(%d,%d,%d,'%s','%s','%s','%s',%d)",
+			tbl.acc, tbl.db, tbl.tbl,
+			tbl.dbName, tbl.tblName,
+			string(val),
+			tbl.snapshot.ToTimestamp().
+				ToStdTime().
+				Format("2006-01-02 15:04:05.000000"),
+			sl.took))
+
+		return true
+	})
+
+	if len(vals) == 0 {
+		return
+	}
+
+	sql := fmt.Sprintf(bulkInsertOrUpdateStatsListSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		strings.Join(vals, ","))
+
+	ret := executeSQL(ctx, sql)
 	return ret.Error()
+}
+
+func bulkUpdateTableOnlyTS(
+	ctx context.Context,
+	service string,
+	tbls []*tablePair,
+) {
+
+	var (
+		vals []string
+	)
+
+	for i := range tbls {
+		vals = append(vals, fmt.Sprintf("(%d,%d,%d,'%s','%s','{}','%s',0)",
+			tbls[i].acc, tbls[i].db, tbls[i].tbl,
+			tbls[i].dbName, tbls[i].tblName,
+			tbls[i].snapshot.ToTimestamp().
+				ToStdTime().
+				Format("2006-01-02 15:04:05.000000")))
+	}
+
+	sql := fmt.Sprintf(bulkInsertOrUpdateOnlyTSSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		strings.Join(vals, ","))
+
+	ret := executeSQL(ctx, sql)
+
+	for i := range tbls {
+		tbls[i].Done(ret.Error())
+	}
+
+	fmt.Println("bulk only update TS", len(tbls))
+	return
 }

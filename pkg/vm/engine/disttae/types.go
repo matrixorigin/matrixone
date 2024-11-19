@@ -180,13 +180,9 @@ func WithMoTableStats(conf MoTableStatsConfig) EngineOptions {
 	}
 }
 
-func WithSQLExecFunc(
-	f func(
-		ctx context.Context, sql string,
-		opts ie.SessionOverrideOptions) ie.InternalExecResult) EngineOptions {
-
+func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	return func(e *Engine) {
-		e.config.sqlExecFunc = f
+		e.config.ieFactory = f
 	}
 }
 
@@ -209,8 +205,8 @@ type Engine struct {
 
 		cnTransferTxnLifespanThreshold time.Duration
 
-		sqlExecFunc func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult
-		statsConf   MoTableStatsConfig
+		ieFactory func() ie.InternalExecutor
+		statsConf MoTableStatsConfig
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
