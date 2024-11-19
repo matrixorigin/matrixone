@@ -13,6 +13,7 @@ id    act_name    spu_id    uv    update_time
 3    guangzhou    003    3    2022-09-23
 2    shanghai    002    2    2022-09-23
 insert into indup_00 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_00;
 id    act_name    spu_id    uv    update_time
 1    beijing    001    1    2021-01-03
@@ -75,6 +76,7 @@ id    act_name    spu_id    uv    update_time
 2    shanghai    002    2    2022-09-23
 3    guangzhou    003    3    2022-09-23
 insert into indup_01 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_01;
 id    act_name    spu_id    uv    update_time
 1    beijing    001    1    2021-01-03
@@ -133,6 +135,7 @@ col1    col2    col3    col4
 1    apple    left    null
 2    bear    right    1000
 insert into indup_02 select 1,'banana','lower',NULL on duplicate key update col1=col1*10;
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_02;
 col1    col2    col3    col4
 2    bear    right    1000
@@ -200,7 +203,7 @@ col1    col2    col3    col4
 1    apple    left    null
 2    bear    right    1000
 insert into indup_03(col1,col2,col3) values(2,'bear','left') on duplicate key update col1=1;
-Duplicate entry '1' for key 'col1'
+internal error: do not support update primary key/unique key for on duplicate key update
 insert into indup_03(col1,col2,col3) values(1,'apple','') on duplicate key update col3='constant';
 select * from indup_03;
 col1    col2    col3    col4
@@ -236,6 +239,7 @@ id    act_name    spu_id    uv    update_time
 2    shanghai    002    2    2022-09-23
 3    guangzhou    003    3    2022-09-23
 insert into indup_04 values (4,'shenzheng','004',4,'2021-05-28'),(1,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_04;
 id    act_name    spu_id    uv    update_time
 2    shanghai    002    2    2022-09-23
@@ -316,7 +320,7 @@ col1    col2    col3    col4
 create table indup_06(col1 int primary key,col2 int);
 insert into indup_06 values(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
-constraint violation: Duplicate entry for key 'col1'
+internal error: do not support update primary key/unique key for on duplicate key update
 truncate table  indup_06;
 insert into indup_06 values(1,1);
 insert into indup_06 values(1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80),(9,90),(10,100),(11,110),(12,120),(13,130),(14,140),(15,150),(16,160),(17,170),(18,180),(19,190),(20,200)on duplicate key update col1=col1+1;
@@ -330,6 +334,7 @@ col3 VARCHAR(30) NOT NULL,
 col4 BIGINT default 30
 );
 insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+internal error: do not support update primary key/unique key for on duplicate key update
 select * from indup_07;
 col1    col2    col3    col4
 23    22    55    2

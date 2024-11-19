@@ -65,6 +65,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -360,8 +361,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildLockTables(stmt, ctx)
 	case *tree.UnLockTableStmt:
 		return buildUnLockTables(stmt, ctx)
-	case *tree.ShowPublications:
-		return buildShowPublication(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
 	case *tree.ShowStages:

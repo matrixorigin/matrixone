@@ -573,15 +573,12 @@ func (tbl *txnTable) Ranges(
 	txnOffset int,
 	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	var unCommittedObjs []objectio.ObjectStats
-	if policy == engine.Policy_CollectAllData {
-		unCommittedObjs, _ = tbl.collectUnCommittedDataObjs(txnOffset)
-	}
 	return tbl.doRanges(
 		ctx,
 		exprs,
 		preAllocSize,
-		unCommittedObjs,
+		policy,
+		txnOffset,
 	)
 }
 
@@ -589,13 +586,15 @@ func (tbl *txnTable) doRanges(
 	ctx context.Context,
 	exprs []*plan.Expr,
 	preAllocSize int,
-	uncommittedObjects []objectio.ObjectStats,
+	policy engine.DataCollectPolicy,
+	txnOffset int,
 ) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
+	var uncommittedObjects []objectio.ObjectStats
 	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
@@ -684,9 +683,15 @@ func (tbl *txnTable) doRanges(
 		}
 	}()
 
+	if policy&engine.Policy_CollectUncommittedData != 0 {
+		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
+
 	// get the table's snapshot
-	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return
+	if policy&engine.Policy_CollectCommittedData != 0 {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
 	}
 
 	//TODO::Remove the debug info for issue-19867
@@ -1877,6 +1882,12 @@ func (tbl *txnTable) getPartitionState(
 				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 			}
 			tbl._partState.Store(ps)
+			if tbl.tableId == catalog.MO_COLUMNS_ID {
+				logutil.Info("open partition state for mo_columns",
+					zap.String("txn", tbl.db.op.Txn().DebugString()),
+					zap.String("desc", ps.Desc()),
+					zap.String("pointer", fmt.Sprintf("%p", ps)))
+			}
 		}
 		return tbl._partState.Load(), nil
 	}

@@ -30,6 +30,7 @@ const (
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 
 	FJ_Debug19524 = "fj/debug/19524"
+	FJ_Debug19787 = "fj/debug/19787"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -115,6 +116,11 @@ func InjectLog1(
 
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
+	return injected
+}
+
+func Debug19787Injected() bool {
+	_, _, injected := fault.TriggerFault(FJ_Debug19787)
 	return injected
 }
 
