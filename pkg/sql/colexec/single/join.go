@@ -83,7 +83,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	ctr := &singleJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
@@ -134,15 +133,10 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if ctr.mp == nil {
-				err = ctr.emptyProbe(bat, singleJoin, &probeResult)
+				err = ctr.emptyProbe(bat, singleJoin, &result)
 			} else {
-				err = ctr.probe(bat, singleJoin, proc, &probeResult)
+				err = ctr.probe(bat, singleJoin, proc, &result)
 			}
-			if err != nil {
-				return result, err
-			}
-
-			result.Batch, err = singleJoin.EvalProjection(probeResult.Batch, proc)
 			if err != nil {
 				return result, err
 			}

@@ -93,13 +93,6 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			result.Batch = indexJoin.ctr.buf
-			if indexJoin.ProjectList != nil {
-				var err error
-				result.Batch, err = indexJoin.EvalProjection(result.Batch, proc)
-				if err != nil {
-					return result, err
-				}
-			}
 
 			analyzer.Output(result.Batch)
 			return result, nil

@@ -105,7 +105,7 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return lockOp.GetChildren(0).Call(proc)
+		return vm.OpCallWithProjection(lockOp.GetChildren(0), proc)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -930,6 +930,10 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
+}
+
+func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (lockOp *LockOp) resetParker() {

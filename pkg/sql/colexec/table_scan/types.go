@@ -116,3 +116,13 @@ func (tableScan *TableScan) closeReader() {
 		tableScan.Reader = nil
 	}
 }
+
+func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if tableScan.ProjectList != nil {
+		batch, err = tableScan.EvalProjection(input, proc)
+	}
+
+	return batch, err
+}

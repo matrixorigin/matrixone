@@ -82,7 +82,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := &semiJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
@@ -147,13 +146,12 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 				ctr.rbat.SetRowCount(rowCount)
-				result.Batch, err = semiJoin.EvalProjection(ctr.rbat, proc)
+				result.Batch = ctr.rbat
 			} else {
-				if err := ctr.probe(bat, semiJoin, proc, &probeResult); err != nil {
+				if err := ctr.probe(bat, semiJoin, proc, &result); err != nil {
 					return result, err
 				}
 
-				result.Batch, err = semiJoin.EvalProjection(probeResult.Batch, proc)
 			}
 
 			if err != nil {

@@ -175,13 +175,6 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if group.ProjectList != nil {
-		result.Batch, err = group.EvalProjection(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-	}
-
 	analyzer.Output(result.Batch)
 	return result, nil
 }

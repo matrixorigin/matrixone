@@ -77,7 +77,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := antiJoin
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	ctr := &ap.ctr
 	for {
@@ -123,15 +122,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil {
-				err = ctr.emptyProbe(ap, inbat, proc, &probeResult)
+				err = ctr.emptyProbe(ap, inbat, proc, &result)
 			} else {
-				err = ctr.probe(ap, inbat, proc, &probeResult)
+				err = ctr.probe(ap, inbat, proc, &result)
 			}
-			if err != nil {
-				return result, err
-			}
-
-			result.Batch, err = ap.EvalProjection(probeResult.Batch, proc)
 			if err != nil {
 				return result, err
 			}

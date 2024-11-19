@@ -124,13 +124,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.probe(ap, proc, &result); err != nil {
 				return result, err
 			}
-			if product.ProjectList != nil {
-				var err error
-				result.Batch, err = product.EvalProjection(result.Batch, proc)
-				if err != nil {
-					return result, err
-				}
-			}
+
 			analyzer.Output(result.Batch)
 			return result, nil
 

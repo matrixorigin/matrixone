@@ -958,10 +958,8 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 		child := op.GetOperatorBase().GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
 			child = child.GetOperatorBase().GetChildren(0)
-			//if _, ok = child.(*projection.Projection); ok {
 			if _, ok = child.(*table_scan.TableScan); ok {
 				return mergeGroup
-				//	}
 			}
 		}
 	}

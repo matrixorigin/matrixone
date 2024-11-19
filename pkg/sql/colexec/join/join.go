@@ -78,7 +78,6 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := &innerJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
@@ -122,18 +121,13 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			startrow := innerJoin.ctr.lastRow
-			if err := ctr.probe(innerJoin, proc, &probeResult); err != nil {
+			if err := ctr.probe(innerJoin, proc, &result); err != nil {
 				return result, err
 			}
 			if innerJoin.ctr.lastRow == 0 {
 				innerJoin.ctr.inbat = nil
 			} else if innerJoin.ctr.lastRow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
-			}
-
-			result.Batch, err = innerJoin.EvalProjection(probeResult.Batch, proc)
-			if err != nil {
-				return result, err
 			}
 
 			analyzer.Output(result.Batch)

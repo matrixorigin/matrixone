@@ -214,12 +214,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
-	if external.ProjectList != nil {
-		result.Batch, err = external.EvalProjection(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-	}
 	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -113,13 +113,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if productl2.ProjectList != nil {
-				var err error
-				result.Batch, err = productl2.EvalProjection(result.Batch, proc)
-				if err != nil {
-					return result, err
-				}
-			}
 			analyzer.Output(result.Batch)
 			return result, nil
 

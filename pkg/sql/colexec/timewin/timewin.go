@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -129,7 +130,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case interval:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -150,7 +151,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			analyzer.Output(result.Batch)
 			return result, nil
 		case receive:
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -213,7 +214,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			result, err := timeWin.GetChildren(0).Call(proc)
+			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}

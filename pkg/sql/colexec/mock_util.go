@@ -79,6 +79,10 @@ func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err err
 	op.current = 0
 }
 
+func (op *MockOperator) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (op *MockOperator) String(buf *bytes.Buffer) {
 	buf.WriteString(": mock")
 }

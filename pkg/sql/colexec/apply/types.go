@@ -117,7 +117,15 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if apply.ProjectList != nil {
 		apply.FreeProjection(proc)
 	}
+}
 
+func (apply *Apply) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if apply.ProjectList != nil {
+		batch, err = apply.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

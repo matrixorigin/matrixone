@@ -119,10 +119,6 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
-	if fill.ProjectList != nil {
-		result.Batch, err = fill.EvalProjection(result.Batch, proc)
-	}
-
 	return result, err
 }
 

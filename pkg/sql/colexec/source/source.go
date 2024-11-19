@@ -108,9 +108,6 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 
-	if source.ProjectList != nil {
-		result.Batch, err = source.EvalProjection(result.Batch, proc)
-	}
 	analyzer.Output(result.Batch)
 	return result, err
 }

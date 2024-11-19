@@ -139,7 +139,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	result.Batch, err = valueScan.EvalProjection(result.Batch, proc)
 	analyzer.Input(result.Batch)
 	analyzer.Output(result.Batch)
 

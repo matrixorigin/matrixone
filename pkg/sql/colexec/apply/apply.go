@@ -70,7 +70,6 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	ctr := &apply.ctr
 	for {
@@ -111,12 +110,7 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.rbat.CleanOnlyData()
 		}
 
-		err = ctr.probe(apply, proc, &probeResult, analyzer)
-		if err != nil {
-			return result, err
-		}
-
-		result.Batch, err = apply.EvalProjection(probeResult.Batch, proc)
+		err = ctr.probe(apply, proc, &result, analyzer)
 		if err != nil {
 			return result, err
 		}
