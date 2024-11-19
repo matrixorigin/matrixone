@@ -1,0 +1,16 @@
+SELECT crc32('123');
+crc32(123)
+2286445522
+SELECT crc32(null);
+crc32(null)
+null
+SELECT crc32('123456');
+crc32(123456)
+158520161
+CREATE TABLE crc32test(col1 varchar(100));
+INSERT INTO crc32test VALUES ('123'),(NULL),('123456');
+SELECT crc32(col1) FROM crc32test;
+crc32(col1)
+2286445522
+null
+158520161

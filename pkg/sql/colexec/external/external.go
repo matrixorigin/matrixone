@@ -885,6 +885,9 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	}
 	param.reader, err = getUnCompressReader(param.Extern, param.Fileparam.Filepath, param.reader)
 	if err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
 		return nil, err
 	}
 

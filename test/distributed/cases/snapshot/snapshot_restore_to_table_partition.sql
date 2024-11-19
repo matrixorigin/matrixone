@@ -1,3 +1,5 @@
+select enable_fault_injection();
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -202,3 +204,4 @@ drop database acc_test03;
 drop snapshot sp04;
 drop account acc01;
 drop account acc02;
+select disable_fault_injection();
