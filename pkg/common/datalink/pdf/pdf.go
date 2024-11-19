@@ -17,10 +17,53 @@ import (
 	"bytes"
 	"strings"
 
+	pdftotext "github.com/cpegeric/pdftotext-go"
 	gopdf "github.com/dslipak/pdf"
 )
 
+var PDFTOTEXT_EXISTS bool = false
+
+// stub function for UT
+var pdftotext_extract = pdftotext.Extract
+var pdftotext_check_version = pdftotext.CheckPopplerVersion
+
+func init() {
+	PDFTOTEXT_EXISTS = check_pdftotext()
+}
+
+func check_pdftotext() bool {
+	_, err := pdftotext_check_version()
+	return err == nil
+}
+
+func GetPlainTextFromPdfToText(data []byte) ([]byte, error) {
+
+	pages, err := pdftotext_extract(data)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	for i, p := range pages {
+		if i > 0 {
+			buf.WriteString("\n")
+		}
+		buf.WriteString(p.Content)
+	}
+
+	return []byte(strings.TrimSpace(buf.String())), nil
+}
+
 func GetPlainText(data []byte) ([]byte, error) {
+
+	if PDFTOTEXT_EXISTS {
+		return GetPlainTextFromPdfToText(data)
+	} else {
+		return GetPlainTextFromDslipakPdf(data)
+	}
+}
+
+func GetPlainTextFromDslipakPdf(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	pdfr, err := gopdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {

@@ -799,13 +799,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-	s3FlushedDeletes.RWMutex.Lock()
-	defer s3FlushedDeletes.RWMutex.Unlock()
-
-	if len(s3FlushedDeletes.data) == 0 {
-		return
-	}
+	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
 
 	release := func() {}
 	if deletedRows == nil {
@@ -815,14 +809,21 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	}
 	defer release()
 
-	var curr int
+	var tombstones []objectio.ObjectStats
+	s3FlushedDeletes.Range(func(key, value any) bool {
+		tombstones = append(tombstones, key.(objectio.ObjectStats))
+		return true
+	})
+
+	curr := 0
 	getTombstone := func() (*objectio.ObjectStats, error) {
-		if curr >= len(s3FlushedDeletes.data) {
+		if curr >= len(tombstones) {
 			return nil, nil
 		}
+
 		i := curr
 		curr++
-		return &s3FlushedDeletes.data[i], nil
+		return &tombstones[i], nil
 	}
 
 	if err = blockio.GetTombstonesByBlockId(
@@ -865,22 +866,52 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	return leftRows
 }
 
+func (ls *LocalDisttaeDataSource) getInMemDelIter(
+	bid *types.Blockid,
+) (logtailreplay.RowsIter, bool) {
+
+	inMemTombstoneCnt := ls.pState.ApproxInMemTombstones()
+	if inMemTombstoneCnt == logtailreplay.IndexScaleZero {
+		return nil, true
+	}
+
+	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
+		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+	}
+
+	inValCnt, ok := ls.memPKFilter.InKind()
+	if !ok {
+		return ls.pState.NewPrimaryKeyDelIter(
+			&ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+	}
+
+	if inValCnt == 0 {
+		return nil, true
+	}
+
+	// special logic for in kind filter
+	if ls.memPKFilter.Must() || inMemTombstoneCnt/inValCnt >= logtailreplay.MuchGreaterThanFactor {
+		return ls.pState.NewPrimaryKeyDelIter(
+			&ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid), false
+	}
+
+	return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+}
+
 func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
 ) (leftRows []int64) {
-	var delIter logtailreplay.RowsIter
-
-	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
-		delIter = ls.pState.NewRowsIter(ls.snapshotTS, bid, true)
-	} else {
-		delIter = ls.pState.NewPrimaryKeyDelIter(
-			&ls.memPKFilter.TS,
-			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid)
-	}
 
 	leftRows = offsets
+
+	delIter, fastReturn := ls.getInMemDelIter(bid)
+	if fastReturn {
+		return leftRows
+	}
 
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID

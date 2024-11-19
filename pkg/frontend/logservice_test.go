@@ -222,7 +222,7 @@ func Test_HandleShowLogserviceReplicas(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := execInFrontend(tt.args.ses, tt.args.execCtx)
+			_, err := execInFrontend(tt.args.ses, tt.args.execCtx)
 			assert.NoError(t, err)
 			rs := tt.args.ses.GetMysqlResultSet()
 			assert.Equal(t, uint64(1), rs.GetRowCount())
@@ -297,7 +297,7 @@ func Test_HandleShowLogserviceStores(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := execInFrontend(tt.args.ses, tt.args.execCtx)
+			_, err := execInFrontend(tt.args.ses, tt.args.execCtx)
 			assert.NoError(t, err)
 			rs := tt.args.ses.GetMysqlResultSet()
 			assert.Equal(t, uint64(1), rs.GetRowCount())
@@ -341,14 +341,14 @@ func Test_HandleLogserviceSettings(t *testing.T) {
 	stmts, err := mysql.Parse(ctx, sql, 0)
 	assert.NoError(t, err)
 	execCtx.stmt = stmts[0]
-	err = execInFrontend(ses, execCtx)
+	_, err = execInFrontend(ses, execCtx)
 	assert.NoError(t, err)
 
 	sql = "set logservice settings non_voting_replica_num=1"
 	stmts, err = mysql.Parse(ctx, sql, 0)
 	assert.NoError(t, err)
 	execCtx.stmt = stmts[0]
-	err = execInFrontend(ses, execCtx)
+	_, err = execInFrontend(ses, execCtx)
 	assert.NoError(t, err)
 
 	ses.SetMysqlResultSet(&MysqlResultSet{})
@@ -357,7 +357,7 @@ func Test_HandleLogserviceSettings(t *testing.T) {
 	assert.NoError(t, err)
 	execCtx.stmt = stmts[0]
 
-	err = execInFrontend(ses, execCtx)
+	_, err = execInFrontend(ses, execCtx)
 	assert.NoError(t, err)
 
 	rs := ses.GetMysqlResultSet()

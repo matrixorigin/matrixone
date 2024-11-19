@@ -1519,7 +1519,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		tbl.getTxn().StashFlushedTombstones(stats)
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1763,6 +1766,7 @@ func (tbl *txnTable) BuildReaders(
 	txnOffset int,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
@@ -1815,6 +1819,7 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			filterHint,
 		)
 		if err != nil {
 			return nil, err

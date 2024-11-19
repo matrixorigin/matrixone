@@ -62,7 +62,8 @@ func (t *Table) BuildReaders(
 	parallel int,
 	_ int,
 	_ bool,
-	_ engine.TombstoneApplyPolicy) (readers []engine.Reader, err error) {
+	_ engine.TombstoneApplyPolicy,
+	_ engine.FilterHint) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs = relData.GetShardIDList()

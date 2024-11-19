@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -46,9 +46,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
-var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+func BlockThresholdForOneCN(ncpu int) int {
+	if ncpu == 0 {
+		ncpu = system.GoMaxProcs()
+	}
+	return ncpu * blockThresholdForTpQuery
+}
+func costThresholdForOneCN() int {
+	return system.GoMaxProcs() * costThresholdForTpQuery
+}
 
 type ExecType int
 
@@ -718,6 +724,12 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
+	if expr == nil || expr.GetF() == nil {
+		return 0 //something error
+	}
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+		return 0 //make prefix_in and prefix_eq always the first filter
+	}
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 8
@@ -786,11 +798,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	return 1
 }
 
-func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			rewriteFilterListByStats(ctx, child, builder)
+			sortFilterListByStats(ctx, child, builder)
 		}
 	}
 	switch node.NodeType {
@@ -800,11 +812,6 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
 				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
-			})
-			sort.Slice(node.BlockFilterList, func(i, j int) bool {
-				blockSel1 := node.BlockFilterList[i].Selectivity
-				blockSel2 := node.BlockFilterList[j].Selectivity
-				return blockSel1 <= blockSel2
 			})
 		}
 	}
@@ -1311,16 +1318,20 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				node.BlockFilterList = nil
 			} else {
 				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
+					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+						copyOfExpr := DeepCopyExpr(node.FilterList[i])
+						copyOfExpr.Selectivity = currentBlockSel
+						blockExprList = append(blockExprList, copyOfExpr)
+					}
 				}
 			}
 		} else {
 			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				copyOfExpr := DeepCopyExpr(node.FilterList[i])
-				copyOfExpr.Selectivity = currentBlockSel
-				blockExprList = append(blockExprList, copyOfExpr)
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
@@ -1367,10 +1378,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Cost = float64(costThresholdForOneCN())
+	stats.Outcnt = float64(costThresholdForOneCN())
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN(0))
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1526,7 +1537,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1534,7 +1545,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1558,7 +1569,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1570,7 +1582,8 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL, false) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:

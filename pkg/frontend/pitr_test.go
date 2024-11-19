@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,10 +26,13 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func Test_checkPitrInValidDurtion(t *testing.T) {
@@ -142,7 +146,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -181,7 +185,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -222,7 +226,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -306,7 +310,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{}})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -387,7 +391,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -468,7 +472,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -550,7 +554,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -646,7 +650,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -743,7 +747,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -839,7 +843,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -936,7 +940,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1018,7 +1022,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 	convey.Convey("doRestorePitr fail", t, func() {
@@ -1098,7 +1102,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1181,7 +1185,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1261,7 +1265,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1469,14 +1473,14 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
 		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1")
 		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1594,7 +1598,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1716,7 +1720,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -1832,7 +1836,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -1955,7 +1959,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2072,7 +2076,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 }
@@ -2199,7 +2203,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2320,7 +2324,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 	})
 
@@ -2441,7 +2445,25 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err = doRestorePitr(ctx, ses, stmt)
+		_, err = doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf("show full tables from `mo_catalog` {MO_TS = %d}", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{"mo_user", "BASE TABLE"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
+		assert.Error(t, err)
+
+		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
+		mrs = newMrsForPitrRecord([][]interface{}{
+			{"mo_user", "BASE TABLE"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err = restoreSystemDatabase(ctx, "", bh, "pitr01", 0, resovleTs)
 		assert.Error(t, err)
 	})
 }
@@ -2575,4 +2597,357 @@ func Test_doCreatePitr(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+}
+
+func Test_RestorePitrBadTimeStamp(t *testing.T) {
+	convey.Convey("doRestorePitr fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-32 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func Test_RestorePitrFaultTolerance(t *testing.T) {
+	convey.Convey("doRestorePitr BackgroundExec.Exec('begin')", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
+			if query == "begin;" {
+				return moerr.NewInternalErrorNoCtx("exec begin; failed")
+			}
+			return nil
+		}).AnyTimes()
+
+		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-21 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr check Pitr", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
+			if strings.HasPrefix(query, "select pitr_id from mo_catalog.mo_pitr") {
+				return moerr.NewInternalErrorNoCtx("check Pitr failed")
+			}
+			return nil
+		}).AnyTimes()
+
+		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-21 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr check Pitr exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{}).AnyTimes()
+
+		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-21 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr check Pitr database name", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		mrs1 := mock_frontend.NewMockExecResult(ctrl)
+		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
+
+		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		stmt := &tree.RestorePitr{
+			Level:        tree.RESTORELEVELACCOUNT,
+			Name:         "pitr01",
+			DatabaseName: "system",
+			TimeStamp:    "2024-05-21 00:00:00",
+		}
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("doRestorePitr check Pitr is legal", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		pitrName := "pitr01"
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      tree.Identifier(pitrName),
+			TimeStamp: "2024-05-21 00:00:00",
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		//bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		// fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, accountId)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
+			if strings.Contains(query, fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, sysAccountID)) {
+				return moerr.NewInternalErrorNoCtx("get Pitr record failed")
+			}
+			return nil
+		}).AnyTimes()
+
+		mrs1 := mock_frontend.NewMockExecResult(ctrl)
+		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
+
+		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		_, err := doRestorePitr(ctx, ses, stmt)
+		assert.Error(t, err)
+	})
+}
+
+func TestCheckDbIsSubDb(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		createDbsql string
+		want        bool
+		wantErr     bool
+	}{
+		{
+			name:        "SubscriptionOption exists",
+			createDbsql: "create database sub01 from acc01 publication pub01;",
+			want:        true,
+			wantErr:     false,
+		},
+		{
+			name:        "SubscriptionOption does not exist",
+			createDbsql: "CREATE DATABASE test",
+			want:        false,
+			wantErr:     false,
+		},
+		{
+			name:        "Invalid SQL",
+			createDbsql: "INVALID SQL",
+			want:        false,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := checkDbIsSubDb(ctx, tt.createDbsql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkDbIsSubDb() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("checkDbIsSubDb() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

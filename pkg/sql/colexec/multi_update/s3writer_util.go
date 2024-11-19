@@ -15,9 +15,14 @@
 package multi_update
 
 import (
+	"context"
+
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -30,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func generateBlockWriter(writer *s3Writer,
@@ -119,7 +123,8 @@ func appendCfgToWriter(writer *s3Writer, tableDef *plan.TableDef) {
 	}
 }
 
-// cloneSomeVecFromCompactBatchs  copy vec to new batch
+// cloneSomeVecFromCompactBatchs  copy some vectors to new batch
+// clean these batchs after used
 func cloneSomeVecFromCompactBatchs(
 	proc *process.Process,
 	src *batch.CompactBatchs,
@@ -132,6 +137,7 @@ func cloneSomeVecFromCompactBatchs(
 	var err error
 	var newBat *batch.Batch
 	bats := make([]*batch.Batch, 0, src.Length())
+	var sortNulls *nulls.Nulls
 
 	defer func() {
 		if err != nil {
@@ -154,7 +160,9 @@ func cloneSomeVecFromCompactBatchs(
 			oldBat := src.Get(i)
 			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
 			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
-			sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls = oldBat.Vecs[cols[sortIdx]].GetNulls()
+			}
 
 			for newColIdx, oldColIdx := range cols {
 				typ := oldBat.Vecs[oldColIdx].GetType()
@@ -166,7 +174,11 @@ func cloneSomeVecFromCompactBatchs(
 			}
 
 			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(rowIdx)) && !sortNulls.Contains(uint64(rowIdx)) {
+				if !nulls.Contains(uint64(rowIdx)) {
+					if sortNulls != nil && sortNulls.Contains(uint64(rowIdx)) {
+						continue
+					}
+
 					if partition == -1 {
 						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 					} else if partition == expect {
@@ -192,9 +204,8 @@ func cloneSomeVecFromCompactBatchs(
 			newBat.Attrs = attrs
 			oldBat := src.Get(i)
 
-			sortVec := oldBat.Vecs[cols[sortIdx]]
-			if sortVec.HasNull() {
-				sortNulls := sortVec.GetNulls()
+			if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
+				sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
 				for newColIdx, oldColIdx := range cols {
 					typ := oldBat.Vecs[oldColIdx].GetType()
 					newBat.Vecs[newColIdx] = vector.NewVec(*typ)
@@ -231,109 +242,43 @@ func cloneSomeVecFromCompactBatchs(
 	return bats, nil
 }
 
-// fetchMainTableBatchs for main table. move vec to new batch
-func fetchMainTableBatchs(
+// fetchSomeVecFromCompactBatchs fetch some vectors from CompactBatchs
+// do not clean these batchs
+func fetchSomeVecFromCompactBatchs(
 	proc *process.Process,
 	src *batch.CompactBatchs,
-	partitionIdxInBatch int,
-	getPartitionIdx int,
 	cols []int,
 	attrs []string) ([]*batch.Batch, error) {
-	var err error
-	var newBat *batch.Batch
 	mp := proc.GetMPool()
+	var newBat *batch.Batch
 	retBats := make([]*batch.Batch, src.Length())
-	srcBats := src.TakeBatchs()
-
-	defer func() {
-		for i, bat := range srcBats {
-			for _, vec := range bat.Vecs {
-				if vec != nil {
-					vec.Free(mp)
+	for i := 0; i < src.Length(); i++ {
+		oldBat := src.Get(i)
+		newBat = batch.NewWithSize(len(cols))
+		newBat.Attrs = attrs
+		for j, idx := range cols {
+			oldVec := oldBat.Vecs[idx]
+			//expand constant vector
+			if oldVec.IsConst() {
+				newVec := vector.NewVec(*oldVec.GetType())
+				err := vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
+				if err != nil {
+					return nil, err
 				}
+				oldBat.ReplaceVector(oldVec, newVec, 0)
+				newBat.Vecs[j] = newVec
+			} else {
+				newBat.Vecs[j] = oldVec
 			}
-			srcBats[i] = nil
 		}
-		srcBats = nil
-
-		if err != nil {
-			for _, bat := range retBats {
-				bat.Clean(mp)
-			}
-			retBats = nil
-
-			if newBat != nil {
-				newBat.Clean(mp)
-			}
-			newBat = nil
-		}
-	}()
-
-	if partitionIdxInBatch > -1 {
-		expect := int32(getPartitionIdx)
-		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
-			newBat.Attrs = attrs
-			rid2pid := vector.MustFixedColWithTypeCheck[int32](oldBat.Vecs[partitionIdxInBatch])
-			nulls := oldBat.Vecs[partitionIdxInBatch].GetNulls()
-
-			for newColIdx, oldColIdx := range cols {
-				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
-			}
-			err = newBat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
-			if err != nil {
-				return nil, err
-			}
-
-			for rowIdx, partition := range rid2pid {
-				if !nulls.Contains(uint64(i)) {
-					if partition == -1 {
-						return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-					} else if partition == expect {
-						for newColIdx, oldColIdx := range cols {
-							if err = newBat.Vecs[newColIdx].UnionOne(oldBat.Vecs[oldColIdx], int64(rowIdx), proc.GetMPool()); err != nil {
-								return nil, err
-							}
-						}
-					}
-				}
-			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			retBats[i] = newBat
-			newBat = nil
-		}
-	} else {
-		for i, oldBat := range srcBats {
-			newBat = batch.NewWithSize(len(cols))
-			newBat.Attrs = attrs
-			for j, idx := range cols {
-				oldVec := oldBat.Vecs[idx]
-				srcBats[i].ReplaceVector(oldVec, nil, 0)
-
-				//expand constant vector
-				if oldVec.IsConst() {
-					newVec := vector.NewVec(*oldVec.GetType())
-					err = vector.GetUnionAllFunction(*oldVec.GetType(), mp)(newVec, oldVec)
-					if err != nil {
-						return nil, err
-					}
-					oldVec.Free(mp)
-					newBat.Vecs[j] = newVec
-				} else {
-					newBat.Vecs[j] = oldVec
-				}
-			}
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			retBats[i] = newBat
-		}
+		newBat.SetRowCount(newBat.Vecs[0].Length())
+		retBats[i] = newBat
 	}
-
 	return retBats, nil
 }
 
-func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := blockWriter.Sync(proc.Ctx)
+func syncThenGetBlockInfoAndStats(ctx context.Context, blockWriter *blockio.BlockWriter, sortIdx int) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+	blocks, _, err := blockWriter.Sync(ctx)
 	if err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}
@@ -350,7 +295,6 @@ func syncThenGetBlockInfoAndStats(proc *process.Process, blockWriter *blockio.Bl
 	} else {
 		stats = blockWriter.GetObjectStats(objectio.WithCNCreated())
 	}
-
 	return blkInfos, stats, err
 }
 

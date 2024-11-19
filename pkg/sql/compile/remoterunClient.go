@@ -278,7 +278,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	var err error
 
 	arg := s.RootOp.(*dispatch.Dispatch)
-	fakeValueScanOperator := value_scan.NewValueScanFromItSelf()
+	fakeValueScanOperator := value_scan.NewArgument()
 	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
@@ -288,6 +288,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	arg.AppendChild(fakeValueScanOperator)
 	defer func() {
 		arg.Children = oldChildren
+		fakeValueScanOperator.Batchs = nil
 		fakeValueScanOperator.Release()
 	}()
 
