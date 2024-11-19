@@ -267,7 +267,7 @@ func NewStatementInfo() *StatementInfo {
 	s.statsArray.Reset()
 	s.stated = false
 	if s.Statement == nil {
-		s.Statement = make([]byte, 0, GetTracerProvider().labels)
+		s.Statement = make([]byte, 0, GetTracerProvider().MaxStatementSize)
 	}
 	return s
 }
@@ -696,11 +696,17 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 	}
 }
 
+var sqlConnector = []byte("...")
+
 // RecordStatementSql mainly to fill into StatementInfo.Statement.
 func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
-	s.Statement = truncatedSql
 	if s.IsMoLogger() && s.StatementType == "Load" && len(rawSql) > 128 {
-		s.Statement = rawSql[:40] + "..." + rawSql[len(rawSql)-70:]
+		s.Statement = append(s.Statement, rawSql[:40]...)
+		s.Statement = append(s.Statement, sqlConnector...)
+		s.Statement = append(s.Statement, rawSql[len(rawSql)-70:]...)
+	} else {
+		// TODO
+		//copy(s.Statement, truncatedSql)
 	}
 }
 
@@ -755,7 +761,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	//}
 
 	// Filter out the statement is empty
-	if s.Statement == "" {
+	if len(s.Statement) == 0 {
 		goto DiscardAndFreeL
 	}
 
@@ -773,8 +779,8 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	// logging the statement that should not be here anymore
-	if s.exported || s.reported || s.Statement == "" {
-		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
+	if s.exported || s.reported || len(s.Statement) == 0 {
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", string(s.Statement[:])), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 
 	s.reported = true
