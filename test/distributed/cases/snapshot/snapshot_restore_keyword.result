@@ -1,0 +1,20 @@
+drop account if exists `01929da4-89af-7ed8-8f32-8df9ed5ddd71`;
+create account `01929da4-89af-7ed8-8f32-8df9ed5ddd71` admin_name = 'test_account' identified by '111';
+drop account if exists `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
+create account `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14` admin_name = 'test_account' identified by '111';
+create database if not exists `mocloud_meta`;
+use `mocloud_meta`;
+create table if not exists `lock` (id int, name varchar(100));
+insert into `lock` values(1, 'test');
+select * from `mocloud_meta`.`lock`;
+id    name
+1    test
+create snapshot metadb202411181350 for account `01929da4-89af-7ed8-8f32-8df9ed5ddd71`;
+restore account `01929da4-89af-7ed8-8f32-8df9ed5ddd71` from snapshot metadb202411181350 to account `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
+use `mocloud_meta`;
+select * from `mocloud_meta`.`lock`;
+id    name
+1    test
+drop snapshot if exists metadb202411181350;
+drop account if exists `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
+drop account if exists `01929da4-89af-7ed8-8f32-8df9ed5ddd71`;
