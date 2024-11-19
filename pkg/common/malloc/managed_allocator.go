@@ -17,6 +17,7 @@ package malloc
 import (
 	"sync"
 	"unsafe"
+	"weak"
 
 	"golang.org/x/sys/cpu"
 )
@@ -28,7 +29,7 @@ type ManagedAllocator[U Allocator] struct {
 
 type managedAllocatorShard struct {
 	sync.Mutex
-	items map[unsafe.Pointer]Deallocator //TODO use weak pointer if possible
+	items map[unsafe.Pointer]weak.Pointer[Deallocator]
 	_     cpu.CacheLinePad
 }
 
@@ -39,7 +40,7 @@ func NewManagedAllocator[U Allocator](
 		upstream: upstream,
 	}
 	for i := range len(ret.inUse) {
-		ret.inUse[i].items = make(map[unsafe.Pointer]Deallocator)
+		ret.inUse[i].items = make(map[unsafe.Pointer]weak.Pointer[Deallocator])
 	}
 	return ret
 }
@@ -64,7 +65,7 @@ func (m *ManagedAllocator[U]) Deallocate(slice []byte, hints Hints) {
 func (m *managedAllocatorShard) allocate(ptr unsafe.Pointer, deallocator Deallocator) {
 	m.Lock()
 	defer m.Unlock()
-	m.items[ptr] = deallocator
+	m.items[ptr] = weak.Make(&deallocator)
 }
 
 func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer, hints Hints) {
@@ -74,8 +75,12 @@ func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer, hints Hints) {
 	if !ok {
 		panic("bad pointer")
 	} else {
-		deallocator.Deallocate(hints)
-		delete(m.items, ptr)
+		if v := deallocator.Value(); v == nil {
+			panic("deallocator already reclaimed by the garbage collector")
+		} else {
+			(*v).Deallocate(hints)
+			delete(m.items, ptr)
+		}
 	}
 }
 
