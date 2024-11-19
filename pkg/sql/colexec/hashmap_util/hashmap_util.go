@@ -215,13 +215,13 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				return err
 			}
 		}
-	} else {
-		if needAllocateSels {
-			hb.MultiSels.InitSel(hb.InputBatchRowCount)
-		}
 	}
 
-	if hb.IsDedup && hb.InputBatchRowCount > 0 {
+	if needAllocateSels {
+		hb.MultiSels.InitSel(hb.InputBatchRowCount)
+	}
+
+	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.InputBatchRowCount > 0 {
 		hb.IgnoreRows = &bitmap.Bitmap{}
 		hb.IgnoreRows.InitWithSize(int64(hb.InputBatchRowCount))
 	}
@@ -274,15 +274,19 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			return err
 		}
 		for k, v := range vals[:n] {
+			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
+				hb.MultiSels.InsertSel(int32(v), int32(i+k))
+				continue
+			}
+
 			if zvals[k] == 0 || v == 0 {
 				continue
 			}
-			ai := int64(v) - 1
 
 			if hb.IsDedup {
 				if v <= vOld {
 					switch hb.OnDuplicateAction {
-					case plan.Node_ERROR:
+					case plan.Node_FAIL:
 						var rowStr string
 						if len(hb.DedupColTypes) == 1 {
 							if hb.DedupColName == catalog.IndexTableIndexColName {
@@ -307,13 +311,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
 						hb.IgnoreRows.Add(uint64(i + k))
-					case plan.Node_UPDATE:
 					}
 				} else {
 					vOld = v
 				}
 			} else if !hashOnPK && needAllocateSels {
-				hb.MultiSels.InsertSel(int32(ai), int32(i+k))
+				hb.MultiSels.InsertSel(int32(v-1), int32(i+k))
 			}
 		}
 
@@ -325,7 +328,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				}
 			}
 
-			if hashOnPK || hb.IsDedup {
+			if hashOnPK {
 				for j, vec := range hb.vecs[vecIdx1] {
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if err != nil {
@@ -358,7 +361,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 	}
 
-	if hb.IsDedup {
+	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE {
 		err := hb.Batches.Shrink(hb.IgnoreRows, proc)
 		if err != nil {
 			return err
@@ -367,13 +370,15 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	// if groupcount == inputrowcount, it means building hashmap on unique rows
 	// we can free sels now
-	if hb.keyWidth <= 8 {
-		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
-			hb.MultiSels.Free()
-		}
-	} else {
-		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
-			hb.MultiSels.Free()
+	if !hb.IsDedup {
+		if hb.keyWidth <= 8 {
+			if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
+				hb.MultiSels.Free()
+			}
+		} else {
+			if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
+				hb.MultiSels.Free()
+			}
 		}
 	}
 	return nil
