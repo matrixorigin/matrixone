@@ -17,8 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +28,15 @@ import (
 )
 
 const sysAccountId = 0
+
+var sysDatabases = []string{
+	"mo_catalog",
+	"information_schema",
+	"system",
+	"system_metrics",
+	"mysql",
+	"mo_task",
+}
 
 func createSubscription(ctx context.Context, c *Compile, dbName string, subOption *plan.SubscriptionOption) error {
 	accountId, err := defines.GetAccountId(ctx)
@@ -74,17 +83,17 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 }
 
 func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName string) error {
-	// mo_catalog can't be published, skip
-	if dbName == catalog.MO_CATALOG {
+	// skip system databases
+	if slices.Contains(sysDatabases, dbName) {
 		return nil
 	}
 
-	accountName, err := func() (string, error) {
-		accountId, err := defines.GetAccountId(ctx)
-		if err != nil {
-			return "", err
-		}
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 
+	accountName, err := func() (string, error) {
 		sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", accountId)
 		rs, err := c.runSqlWithResult(sql, sysAccountId)
 		if err != nil {
@@ -107,8 +116,8 @@ func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName str
 	}
 
 	// get pub
-	sql := fmt.Sprintf("select pub_name, table_list from mo_catalog.mo_pubs where database_name = '%s'", dbName)
-	rs, err := c.runSqlWithResult(sql, NoAccountId)
+	sql := fmt.Sprintf("select pub_name, table_list from mo_catalog.mo_pubs where account_id = %d and database_name = '%s'", accountId, dbName)
+	rs, err := c.runSqlWithResult(sql, sysAccountId)
 	if err != nil {
 		return err
 	}
@@ -129,8 +138,8 @@ func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName str
 
 		newTableListStr := pubsub.RemoveTable(tableListStr, dropTblName)
 		// update pub
-		sql = fmt.Sprintf("update mo_catalog.mo_pubs set table_list='%s' where pub_name = '%s'", newTableListStr, pubName)
-		if err = c.runSqlWithAccountId(sql, NoAccountId); err != nil {
+		sql = fmt.Sprintf("update mo_catalog.mo_pubs set table_list='%s' where account_id = %d and pub_name = '%s'", newTableListStr, accountId, pubName)
+		if err = c.runSqlWithAccountId(sql, sysAccountId); err != nil {
 			return err
 		}
 
