@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,7 +22,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +31,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -103,20 +102,16 @@ func Max(a int, b int) int {
 }
 
 const (
-	invalidGoroutineId = math.MaxUint64
+	invalidGoroutineId = math.MaxInt64
 )
 
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	data := make([]byte, 64)
-	data = data[:runtime.Stack(data, false)]
-	data = bytes.TrimPrefix(data, []byte("goroutine "))
-	data = data[:bytes.IndexByte(data, ' ')]
-	id, _ := strconv.ParseUint(string(data), 10, 64)
+	id := goid.Get()
 	if id == 0 {
 		id = invalidGoroutineId
 	}
-	return id
+	return uint64(id)
 }
 
 type Timeout struct {
