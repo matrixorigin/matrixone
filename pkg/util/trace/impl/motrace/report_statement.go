@@ -81,7 +81,7 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 		stmt.AggrCount = 0
 		// fixme: StmtBuilder maybe not best choose
 		stmt.StmtBuilder.Reset()
-		stmt.StmtBuilder.WriteString(s.Statement)
+		stmt.StmtBuilder.Write(s.Statement)
 
 		return stmt
 	}
@@ -112,7 +112,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
-		e.StmtBuilder.WriteString(n.Statement)
+		e.StmtBuilder.Write(n.Statement)
 	}
 	e.AggrCount += 1
 	e.Duration += n.Duration
@@ -358,7 +358,7 @@ func (s *StatementInfo) free() {
 	s.Host = ""
 	s.RoleId = 0
 	s.Database = ""
-	s.Statement = ""
+	s.Statement = s.Statement[:0]
 	s.StmtBuilder.Reset()
 	s.StatementFingerprint = ""
 	s.StatementTag = ""
@@ -454,13 +454,19 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
 	if s.AggrCount > 1 {
 		if GetTracerProvider().enableStmtMerge {
-			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
+			Statement := "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
 			s.StmtBuilder.Reset()
+			row.SetColumnVal(stmtCol, table.StringField(Statement))
 		} else {
-			s.Statement = "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.Statement
+			s.StmtBuilder.Grow(len(s.Statement) + 32)
+			s.StmtBuilder.WriteString("/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n")
+			s.StmtBuilder.Write(s.Statement)
+			row.SetColumnVal(stmtCol, table.StringField(s.StmtBuilder.String()))
+			s.StmtBuilder.Reset()
 		}
+	} else {
+		row.SetColumnVal(stmtCol, table.StringField(util.UnsafeBytesToString(s.Statement)))
 	}
-	row.SetColumnVal(stmtCol, table.StringField(s.Statement))
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
 	row.SetColumnVal(sqlTypeCol, table.StringField(s.SqlSourceType))
 	row.SetColumnVal(stmtFgCol, table.StringField(s.StatementFingerprint))
@@ -706,8 +712,15 @@ func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
 		s.Statement = append(s.Statement, rawSql[len(rawSql)-70:]...)
 	} else {
 		// TODO
-		//copy(s.Statement, truncatedSql)
+		copy(s.Statement, truncatedSql)
 	}
+}
+
+func (s *StatementInfo) CopyStatementInfo() string {
+	builder := strings.Builder{}
+	builder.Grow(len(s.Statement))
+	builder.Write(s.Statement)
+	return builder.String()
 }
 
 func addStatementDurationCounter(tenant, queryType string, duration time.Duration) {
@@ -780,7 +793,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// logging the statement that should not be here anymore
 	if s.exported || s.reported || len(s.Statement) == 0 {
-		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", string(s.Statement[:])), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
+		logutil.Error("StatementInfo should not be here anymore",
+			zap.String("StatementInfo", s.CopyStatementInfo()),
+			zap.String("statement_id", uuid.UUID(s.StatementID).String()),
+			zap.String("user", s.User),
+			zap.Bool("exported", s.exported),
+			zap.Bool("reported", s.reported))
 	}
 
 	s.reported = true
