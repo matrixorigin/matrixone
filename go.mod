@@ -54,6 +54,7 @@ require (
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
 	github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78
+	github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.78
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
@@ -124,6 +125,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
+	github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
