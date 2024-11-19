@@ -18,8 +18,8 @@ import (
 	"context"
 	"hash/maphash"
 	"math"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -30,9 +30,9 @@ type DataCache struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data),
-	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 ) *DataCache {
 	return &DataCache{
 		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
@@ -44,10 +44,7 @@ var seed = maphash.MakeSeed()
 func shardCacheKey(key fscache.CacheKey) uint64 {
 	hasher := new(maphash.Hash)
 	hasher.SetSeed(seed)
-	hasher.Write(unsafe.Slice(
-		(*byte)(unsafe.Pointer(&key.Offset)),
-		unsafe.Sizeof(key.Offset),
-	))
+	hasher.Write(util.UnsafeToBytes(&key.Offset))
 	hasher.WriteString(key.Path)
 	return hasher.Sum64()
 }
@@ -84,7 +81,7 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 		if key.Path == path {
 			delete(shard.values, key)
 			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(ctx, item.key, item.value)
+				d.fifo.postEvict(ctx, item.key, item.value, item.size)
 			}
 		}
 	}

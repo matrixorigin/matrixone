@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -33,6 +34,7 @@ type MemPKFilter struct {
 	isValid bool
 	TS      types.TS
 
+	filterHint  engine.FilterHint
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
@@ -41,17 +43,8 @@ func NewMemPKFilter(
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter BasePKFilter,
+	filterHint engine.FilterHint,
 ) (filter MemPKFilter, err error) {
-	//defer func() {
-	//	if filter.iter == nil {
-	//		filter.isValid = true
-	//		filter.iter = state.NewRowsIter(
-	//			types.TimestampToTS(ts),
-	//			nil,
-	//			false,
-	//		)
-	//	}
-	//}()
 
 	filter.TS = types.TimestampToTS(ts)
 
@@ -208,15 +201,27 @@ func NewMemPKFilter(
 	}
 
 	filter.tryConstructPrimaryKeyIndexIter(ts, tableDef.Name)
+
+	filter.filterHint = filterHint
+
 	return
+}
+
+func (f *MemPKFilter) InKind() (int, bool) {
+	return len(f.packed), f.op == function.IN || f.op == function.PREFIX_IN
+}
+
+func (f *MemPKFilter) Must() bool {
+	return f.filterHint.Must
 }
 
 func (f *MemPKFilter) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(
-		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.isValid, f.packed, len(f.packed),
-		))
+	buf.WriteString(fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v vals: [", f.op, f.isVec, f.isValid))
+	for x := range f.packed {
+		buf.WriteString(fmt.Sprintf("%x, ", f.packed[x]))
+	}
+	buf.WriteString(fmt.Sprintf("][%d]}", len(f.packed)))
 	return buf.String()
 }
 
@@ -233,7 +238,8 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 
 func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
 	ts timestamp.Timestamp,
-	tableName string) {
+	tableName string,
+) {
 	if !f.isValid {
 		return
 	}

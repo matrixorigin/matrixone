@@ -179,6 +179,8 @@ github.com/coreos/go-etcd v2.0.0+incompatible/go.mod h1:Jez6KQU2B/sWsbdaef3ED8Nz
 github.com/coreos/go-semver v0.2.0/go.mod h1:nnelYz7RCh+5ahJtPPxZlU+153eP4D4r3EedlOD2RNk=
 github.com/coreos/go-systemd/v22 v22.3.2 h1:D9/bQk5vlXQFZ6Kwuu6zaiXJ9oTPe68++AzAJc1DzSI=
 github.com/coreos/go-systemd/v22 v22.3.2/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
+github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e h1:tQSCiEjYPRU+AuuVR+zd+xYVOsEqX1clPhmIAM6FCHU=
+github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e/go.mod h1:zt7uTOYu0EEeKatGaTi9JiP0I9ePHpDvjAwpfPXh/N0=
 github.com/cpuguy83/dockercfg v0.3.1 h1:/FpZ+JaygUR/lZP2NlFI2DVfrOEMAIKP5wWEJdoYe9E=
 github.com/cpuguy83/dockercfg v0.3.1/go.mod h1:sugsbF4//dDlL/i+S+rtpIWp+5h0BHJHfjj5/jFyUJc=
 github.com/cpuguy83/go-md2man v1.0.10/go.mod h1:SmD6nW6nTyfqj6ABTjUi3V3JVMnlJmwcJI5acqYI6dE=
@@ -503,6 +505,8 @@ github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqM
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
 github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78 h1:1NvZ4SBw0lH7h38VhCVxYEa61K8N+0DBv9JQhAwU48Q=
 github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78/go.mod h1:RQQhaM4xSocKuNi0ZvKZZAiErpINJgZrPB+vZDvBkeU=
+github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d h1:27vD3JGbrFmaQtDYQT/W1jFFr0xvipdwH5R4bZPGQdE=
+github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d/go.mod h1:RJNMd/LBgWRCpGanqXvqjVaoYXeYBS+i0MSeoN3hBMo=
 github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd h1:DvqhuH3kOpsE6vXZA5WEaRNAUUUcf44S1p5VInbjdfU=
 github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376 h1:1XpEh8nPx1yFTeTFMj/aMipEiilDhQToQS8gjEU2HxM=
@@ -632,6 +636,8 @@ github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58/go.mod h1:DXv8WO4yhM
 github.com/pelletier/go-toml v1.2.0/go.mod h1:5z9KED0ma1S8pY6P1sdut58dfprrGBbd/94hg7ilaic=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
 github.com/pelletier/go-toml v1.9.5/go.mod h1:u1nR/EPcESfeI/szUZKdtJ0xRNbUoANCkoOuaOx1Y+c=
+github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274 h1:qli3BGQK0tYDkSEvZ/FzZTi9ZrOX86Q6CIhKLGc489A=
+github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274/go.mod h1:pxMtw7cyUw6B2bRH0ZBANSPg+AoSud1I1iyJHI69jH4=
 github.com/pierrec/lz4/v4 v4.1.21 h1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=
 github.com/pierrec/lz4/v4 v4.1.21/go.mod h1:gZWDp/Ze/IJXGXf23ltt2EXimqmTUXEy0GFuRQyBid4=
 github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8/go.mod h1:B1+S9LNcuMyLH/4HMTViQOJevkGiik3wW2AN9zb2fNQ=

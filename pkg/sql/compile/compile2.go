@@ -180,9 +180,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
 	}()
 
 	// update the top context with some trace information and values.
@@ -200,6 +197,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if !isInExecutor {
 		stats.ExecutionStart()
 	}
+
 	crs := new(perfcounter.CounterSet)
 	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)

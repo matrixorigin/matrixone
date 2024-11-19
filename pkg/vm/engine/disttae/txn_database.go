@@ -15,9 +15,9 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -248,7 +248,12 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
+	var readerSummary *bytes.Buffer
+	if objectio.Debug19787Injected() && !forAlter {
+		readerSummary = new(bytes.Buffer)
+		ctx = context.WithValue(ctx, defines.ReaderSummaryKey{}, readerSummary)
+	}
+	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), false)
 	if err != nil {
 		return nil, err
 	}
@@ -259,6 +264,20 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	if len(rowids) != len(colPKs) {
+		var summary string
+		if readerSummary != nil {
+			summary = readerSummary.String()
+		}
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
+			zap.String("bat", stringifySlice(rowids, func(a any) string {
+				r := a.(types.Rowid)
+				return r.ShortStringEx()
+			})),
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.Uint64("did", db.databaseId),
+			zap.Uint64("tid", rel.GetTableID(ctx)),
+			zap.String("readerSummary", summary))
 		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 
@@ -605,11 +624,6 @@ func (db *txnDatabase) getTableItem(
 			}
 		}
 		if tableitem == nil {
-			if strings.Contains(name, "_copy_") {
-				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(),
-					zap.String("Stack Trace", string(stackInfo)))
-			}
 			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 		}
 		return *tableitem, nil

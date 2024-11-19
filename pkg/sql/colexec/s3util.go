@@ -368,6 +368,7 @@ func (w *S3Writer) SortAndSync(ctx context.Context, proc *process.Process) ([]ob
 		w.buffer,
 		sinker,
 		proc.GetMPool(),
+		true,
 	); err != nil {
 		return nil, objectio.ObjectStats{}, err
 	}

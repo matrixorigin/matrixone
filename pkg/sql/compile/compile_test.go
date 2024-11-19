@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -161,6 +162,13 @@ func (w *Ws) PPString() string {
 	return ""
 }
 
+func NewMockCompile() *Compile {
+	return &Compile{
+		proc: testutil.NewProcess(),
+		ncpu: system.GoMaxProcs(),
+	}
+}
+
 func TestCompile(t *testing.T) {
 	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
@@ -266,9 +274,7 @@ func GetFilePath() string {
 }
 
 func TestShuffleBlocksByHash(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -283,9 +289,7 @@ func TestShuffleBlocksByHash(t *testing.T) {
 }
 
 func TestShuffleBlocksByMoCtl(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -300,9 +304,7 @@ func TestShuffleBlocksByMoCtl(t *testing.T) {
 }
 
 func TestPutBlocksInCurrentCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -317,9 +319,7 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 }
 
 func TestShuffleBlocksToMultiCN(t *testing.T) {
-	testCompile := &Compile{
-		proc: testutil.NewProcess(),
-	}
+	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
 	s := objectio.BlockInfoSlice{}
 	stats := objectio.NewObjectStats()
@@ -369,4 +369,42 @@ func Test_isAvailable(t *testing.T) {
 	rpcClient := &testRpcClient{}
 	ret := isAvailable(rpcClient, "127.0.0.1:6001")
 	assert.False(t, ret)
+}
+
+func TestDebugLogFor19288(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		bsql      string
+		originSQL string
+	}{
+		{
+			name:      "Retry Error",
+			err:       moerr.NewTxnNeedRetryNoCtx(),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+		{
+			name:      "Non-Retry Error",
+			err:       moerr.NewInternalErrorNoCtx("internal error"),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			c := NewMockCompile()
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOperator
+			c.originSQL = tt.originSQL
+			c.debugLogFor19288(tt.err, tt.bsql)
+		})
+	}
 }

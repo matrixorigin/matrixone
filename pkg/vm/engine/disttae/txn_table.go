@@ -571,13 +571,14 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
 	return tbl.doRanges(
 		ctx,
 		exprs,
 		preAllocSize,
-		unCommittedObjs,
+		policy,
+		txnOffset,
 	)
 }
 
@@ -585,13 +586,15 @@ func (tbl *txnTable) doRanges(
 	ctx context.Context,
 	exprs []*plan.Expr,
 	preAllocSize int,
-	uncommittedObjects []objectio.ObjectStats,
+	policy engine.DataCollectPolicy,
+	txnOffset int,
 ) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
+	var uncommittedObjects []objectio.ObjectStats
 	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
@@ -680,9 +683,15 @@ func (tbl *txnTable) doRanges(
 		}
 	}()
 
+	if policy&engine.Policy_CollectUncommittedData != 0 {
+		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
+
 	// get the table's snapshot
-	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return
+	if policy&engine.Policy_CollectCommittedData != 0 {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
 	}
 
 	//TODO::Remove the debug info for issue-19867
@@ -1536,7 +1545,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 
-		tbl.getTxn().StashFlushedTombstones(stats)
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
@@ -1780,6 +1792,7 @@ func (tbl *txnTable) BuildReaders(
 	txnOffset int,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
@@ -1832,6 +1845,7 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 			engine_util.GetThresholdForReader(newNum),
+			filterHint,
 		)
 		if err != nil {
 			return nil, err
@@ -1868,6 +1882,12 @@ func (tbl *txnTable) getPartitionState(
 				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 			}
 			tbl._partState.Store(ps)
+			if tbl.tableId == catalog.MO_COLUMNS_ID {
+				logutil.Info("open partition state for mo_columns",
+					zap.String("txn", tbl.db.op.Txn().DebugString()),
+					zap.String("desc", ps.Desc()),
+					zap.String("pointer", fmt.Sprintf("%p", ps)))
+			}
 		}
 		return tbl._partState.Load(), nil
 	}
@@ -1917,8 +1937,14 @@ func (tbl *txnTable) PKPersistedBetween(
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
-) (bool, error) {
+) (changed bool, err error) {
 
+	v2.TxnPKChangeCheckTotalCounter.Inc()
+	defer func() {
+		if err != nil && changed {
+			v2.TxnPKChangeCheckChangedCounter.Inc()
+		}
+	}()
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2041,6 +2067,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	if len(candidateBlks) > 0 {
+		v2.TxnPKChangeCheckIOCounter.Inc()
+	}
 	for _, blk := range candidateBlks {
 		release, err := blockio.LoadColumns(
 			ctx,

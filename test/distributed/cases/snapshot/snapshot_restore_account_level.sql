@@ -1,3 +1,5 @@
+select enable_fault_injection();
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
 -- account level
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -614,3 +616,22 @@ drop account test_account_01;
 drop snapshot snapshot_01;
 -- @ignore:1
 show snapshots;
+
+drop snapshot if exists snapshot_01;
+create snapshot snapshot_01 for account sys;
+restore account sys database mo_catalog from snapshot snapshot_01;
+drop snapshot if exists snapshot_01;
+
+drop snapshot if exists snapshot_01;
+drop account if exists test_account_01;
+create account test_account_01 admin_name = 'test_user' identified by '111';
+drop account if exists test_account_02;
+create account test_account_02 admin_name = 'test_user' identified by '111';
+create snapshot snapshot_01 for account test_account_01;
+restore account test_account_02 from snapshot snapshot_01;
+drop snapshot if exists snapshot_01;
+drop account if exists test_account_01;
+drop account if exists test_account_02;
+-- @ignore:1
+show snapshots;
+select disable_fault_injection();

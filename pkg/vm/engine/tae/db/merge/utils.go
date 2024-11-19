@@ -15,11 +15,8 @@
 package merge
 
 import (
-	"bufio"
-	"fmt"
 	"math"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
@@ -32,15 +29,20 @@ import (
 
 const estimateMemUsagePerRow = 30
 
-func estimateMergeConsume(objs []*catalog.ObjectEntry) (origSize, estSize int) {
+func originalSize(objs []*catalog.ObjectEntry) int {
+	size := 0
 	for _, o := range objs {
-		origSize += int(o.OriginSize())
-
-		// the main memory consumption is transfer table.
-		// each row uses ~20B, so estimate size is 20 * rows.
-		estSize += int(o.Rows()) * estimateMemUsagePerRow
+		size += int(o.OriginSize())
 	}
-	return
+	return size
+}
+
+func estimateMergeSize(objs []*catalog.ObjectEntry) int {
+	size := 0
+	for _, o := range objs {
+		size += int(o.Rows() * estimateMemUsagePerRow)
+	}
+	return size
 }
 
 func entryOutdated(entry *catalog.ObjectEntry, lifetime time.Duration) bool {
@@ -61,12 +63,14 @@ type resourceController struct {
 	cpuPercent float64
 }
 
-func (c *resourceController) setMemLimit(total int64) {
+func (c *resourceController) setMemLimit(total uint64) {
 	cgroup, err := memlimit.FromCgroup()
-	if cgroup != 0 && int64(cgroup) < total {
+	if cgroup != 0 && cgroup < total {
 		c.limit = int64(cgroup / 4 * 3)
+	} else if total != 0 {
+		c.limit = int64(total / 4 * 3)
 	} else {
-		c.limit = total / 4 * 3
+		panic("failed to get system total memory")
 	}
 
 	if c.limit > 200*common.Const1GBytes {
@@ -91,7 +95,7 @@ func (c *resourceController) setMemLimit(total int64) {
 
 func (c *resourceController) refresh() {
 	if c.limit == 0 {
-		c.setMemLimit(memInfo("MemTotal"))
+		c.setMemLimit(totalMem())
 	}
 
 	if c.proc == nil {
@@ -145,32 +149,7 @@ func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	_, eSize := estimateMergeConsume(objs)
-	return eSize <= int(2*mem/3)
-}
-
-func memInfo(info string) int64 {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-
-	s := bufio.NewScanner(f)
-	available := int64(0)
-	for s.Scan() {
-		if strings.HasPrefix(s.Text(), info) {
-			_, err = fmt.Sscanf(s.Text(), info+": %d", &available)
-			if err != nil {
-				return 0
-			}
-			return available << 10
-		}
-	}
-	if err = s.Err(); err != nil {
-		panic(err)
-	}
-	return 0
+	return estimateMergeSize(objs) <= int(2*mem/3)
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {

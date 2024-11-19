@@ -1025,7 +1025,6 @@ var (
 		`drop table if exists mo_catalog.mo_snapshots;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
-	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
@@ -1504,7 +1503,6 @@ const (
 	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
-	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
@@ -1878,14 +1876,6 @@ func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType
 
 func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
 	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
-}
-
-func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -3593,10 +3583,7 @@ type dropAccount struct {
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3624,13 +3611,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
-		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
 		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
 		if rtnErr != nil {
@@ -3758,13 +3738,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoPubsSql)
-		// drop table mo_pubs
-		rtnErr = bh.Exec(deleteCtx, dropMoPubsSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7267,7 +7240,7 @@ type createAccount struct {
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca *createAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -7313,18 +7286,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	st.End()
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
 	createNewAccount := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
-		}
-
 		start1 := time.Now()
 		//USE the mo_catalog
 		// MOVE into txn, make sure only create ONE txn.
@@ -7525,6 +7487,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	isSysOnlyDb := func(sql string) bool {
 		// only the SYS tenant has the table mo_account/mo_subs
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {

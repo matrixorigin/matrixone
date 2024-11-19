@@ -229,6 +229,7 @@ func NewDefaultTableReader(
 		expr,
 		source,
 		engine_util.GetThresholdForReader(1),
+		engine.FilterHint{Must: true},
 	)
 }
 
@@ -342,7 +343,7 @@ func TxnRanges(
 	relation engine.Relation,
 	exprs []*plan.Expr,
 ) (engine.RelData, error) {
-	return relation.Ranges(ctx, exprs, 2, txn.GetWorkspace().GetSnapshotWriteOffset())
+	return relation.Ranges(ctx, exprs, 2, txn.GetWorkspace().GetSnapshotWriteOffset(), engine.Policy_CollectAllData)
 }
 
 func GetRelationReader(

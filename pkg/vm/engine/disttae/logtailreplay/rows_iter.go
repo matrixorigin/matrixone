@@ -98,12 +98,13 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts           types.TS
-	spec         PrimaryKeyMatchSpec
-	iter         btree.IterG[*PrimaryIndexEntry]
-	rows         *btree.BTreeG[RowEntry]
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	curRow       RowEntry
+	ts                types.TS
+	spec              PrimaryKeyMatchSpec
+	iter              btree.IterG[*PrimaryIndexEntry]
+	rows              *btree.BTreeG[RowEntry]
+	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
+	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
+	curRow            RowEntry
 
 	specHint struct {
 		isDelIter bool
@@ -120,6 +121,11 @@ type PrimaryKeyMatchSpec struct {
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
 	cnt := 3
 	spec := PrimaryKeyMatchSpec{
@@ -128,12 +134,11 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				if ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: key,
-					Time:  p.ts,
-					// if bytes and time matched, we hope scan from the first
-					RowEntryID: math.MaxInt64,
-				}); !ok {
+
+				pivot.Bytes = key
+				pivot.Time = p.ts
+
+				if ok = p.iter.Seek(&pivot); !ok {
 					return false
 				}
 
@@ -188,6 +193,12 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 }
 
 func Prefix(prefix []byte) PrimaryKeyMatchSpec {
+
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
 	spec := PrimaryKeyMatchSpec{
 		Name: "Prefix",
@@ -195,12 +206,11 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: prefix,
-					Time:  p.ts,
-					// if bytes and time matched, we hope scan from the first
-					RowEntryID: math.MaxInt64,
-				})
+
+				pivot.Bytes = prefix
+				pivot.Time = p.ts
+
+				ok = p.iter.Seek(&pivot)
 			} else {
 				ok = p.iter.Next()
 			}
@@ -282,6 +292,11 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	}
 
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
 	spec := PrimaryKeyMatchSpec{
 		Name: "Between Kind",
@@ -289,12 +304,11 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				if ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: lb,
-					Time:  p.ts,
-					// if bytes and time matched, we hope scan from the first
-					RowEntryID: math.MaxInt64,
-				}); ok {
+
+				pivot.Bytes = lb
+				pivot.Time = p.ts
+
+				if ok = p.iter.Seek(&pivot); ok {
 					ok = seek2First(&p.iter)
 				}
 			} else {
@@ -331,9 +345,8 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 type phase int
 
 const (
-	scan  phase = 0
-	seek  phase = 1
-	judge phase = 2
+	scan phase = 0
+	seek phase = 1
 )
 
 func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
@@ -426,6 +439,11 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 		return true
 	}
 
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	spec := PrimaryKeyMatchSpec{
 		Name: "InKind",
 		moveInner: func(p *primaryKeyIter) (ret bool) {
@@ -437,12 +455,11 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 						// out of vec
 						return false
 					}
-					if !p.iter.Seek(&PrimaryIndexEntry{
-						Bytes: encoded,
-						Time:  p.ts,
-						// if bytes and time matched, we hope scan from the first
-						RowEntryID: math.MaxInt64,
-					}) {
+
+					pivot.Bytes = encoded
+					pivot.Time = p.ts
+
+					if !p.iter.Seek(&pivot) {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -607,11 +624,12 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	index := p.rowPrimaryKeyIndex.Copy()
 	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:           *ts,
-			spec:         spec,
-			primaryIndex: index,
-			iter:         index.Iter(),
-			rows:         p.rows.Copy(),
+			ts:                *ts,
+			spec:              spec,
+			primaryIndex:      index,
+			iter:              index.Iter(),
+			rows:              p.rows.Copy(),
+			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex.Copy(),
 		},
 		bid: *bid,
 	}

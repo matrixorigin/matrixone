@@ -35,35 +35,8 @@ func NewMemCache(
 	name string,
 ) *MemCache {
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data) {
-		value.Retain()
-
-		if callbacks != nil {
-			for _, fn := range callbacks.PostSet {
-				fn(key, value)
-			}
-		}
-	}
-
-	postGetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data) {
-		value.Retain()
-
-		if callbacks != nil {
-			for _, fn := range callbacks.PostGet {
-				fn(key, value)
-			}
-		}
-	}
-
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data) {
-		value.Release()
-
-		if callbacks != nil {
-			for _, fn := range callbacks.PostEvict {
-				fn(key, value)
-			}
-		}
-	}
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
+	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {
 		// read from global hint
@@ -73,12 +46,53 @@ func NewMemCache(
 		// fallback
 		return capacity()
 	}
+
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+		inuseBytes.Add(float64(size))
+		capacityBytes.Set(float64(capacityFunc()))
+		value.Retain()
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostSet {
+				fn(key, value)
+			}
+		}
+	}
+
+	postGetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+		value.Retain()
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostGet {
+				fn(key, value)
+			}
+		}
+	}
+
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+		inuseBytes.Add(float64(-size))
+		capacityBytes.Set(float64(capacityFunc()))
+		value.Release()
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostEvict {
+				fn(key, value)
+			}
+		}
+	}
+
 	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
-	return &MemCache{
+	ret := &MemCache{
 		cache:       dataCache,
 		counterSets: counterSets,
 	}
+
+	if name != "" {
+		allMemoryCaches.Store(ret, name)
+	}
+
+	return ret
 }
 
 var _ IOVectorCache = new(MemCache)
@@ -97,6 +111,7 @@ func (m *MemCache) Read(
 	var numHit, numRead int64
 	defer func() {
 		metric.FSReadHitMemCounter.Add(float64(numHit))
+		metric.FSReadReadMemCounter.Add(float64(numRead))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)

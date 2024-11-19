@@ -1079,6 +1079,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
+	case "skipDedup":
+		builder.optimizerHints.skipDedup = value
 	}
 }
 
@@ -1105,7 +1107,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
 	ReCalcNodeStats(rootID, builder, false, true, true)
-	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+	sortFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }
 

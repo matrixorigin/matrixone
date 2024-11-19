@@ -15,7 +15,6 @@
 package merge
 
 import (
-	"cmp"
 	"context"
 	"go.uber.org/zap"
 	"slices"
@@ -32,7 +31,7 @@ import (
 
 type reviseResult struct {
 	objs []*catalog.ObjectEntry
-	kind TaskHostKind
+	kind taskHostKind
 }
 
 type policyGroup struct {
@@ -213,14 +212,14 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 			return false
 		}
 		if osize < int(config.ObjectMinOsize) {
-			if o.objectsSize > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+			if o.objectsSize > 8*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 				return false
 			}
 			o.objectsSize += osize
 			return true
 		}
 		// skip big object as an insurance
-		if osize > 110*common.Const1MBytes {
+		if osize > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			return false
 		}
 
@@ -236,7 +235,12 @@ func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bo
 
 func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.Rows(), b.Rows())
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+		if c := zmA.CompareMin(zmB); c != 0 {
+			return c
+		}
+		return zmA.CompareMax(zmB)
 	})
 	objs := o.objects
 
@@ -250,7 +254,7 @@ func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []revi
 		return nil
 	}
 
-	dnosize, _ := estimateMergeConsume(dnobjs)
+	dnosize := originalSize(dnobjs)
 
 	schedDN := func() []reviseResult {
 		if rc.cpuPercent > 85 {
@@ -261,7 +265,7 @@ func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []revi
 		}
 		if len(dnobjs) > 1 {
 			rc.reserveResources(dnobjs)
-			return []reviseResult{{dnobjs, TaskHostDN}}
+			return []reviseResult{{dnobjs, taskHostDN}}
 		}
 		return nil
 	}
