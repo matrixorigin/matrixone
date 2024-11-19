@@ -444,13 +444,8 @@ src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NUL
 drop table src;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
-insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
 create fulltext index ftidx on t1 (b);
-drop database if exists db1;
-create database db1;
-use db1;
-set experimental_fulltext_index=1;
-drop table if exists t1;
-create table t1(a int primary key, b varchar(200));
-insert into t1 select result, "test create big fulltext index" from generate_series(30000000) g;
-create fulltext index ftidx on t1 (b);
+select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
+b
+test create big fulltext index
