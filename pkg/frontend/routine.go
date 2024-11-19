@@ -439,15 +439,15 @@ func (rt *Routine) cleanup() {
 			}
 			defer tempExecCtx.Close()
 			txnHandler := ses.GetTxnHandler()
-			if txnHandler != nil && txnHandler.GetTxn() != nil {
-				txnOp := txnHandler.GetTxn()
-				txnMeta = txnOp.Txn().DebugString()
-			}
 			err := txnHandler.Rollback(&tempExecCtx)
 			if err != nil {
 				ses.Error(tempExecCtx.reqCtx,
 					"Failed to rollback txn",
 					zap.Error(err))
+			}
+			if txnHandler != nil && txnHandler.GetTxn() != nil {
+				txnOp := txnHandler.GetTxn()
+				txnMeta = txnOp.Txn().DebugString()
 			}
 			ses.Info(tempExecCtx.reqCtx, "routine cleanup", zap.Uint64("current go id", curRtId), zap.Uint64("record go id", rt.goroutineID), zap.String("last txnMeta", txnMeta))
 		} else {
