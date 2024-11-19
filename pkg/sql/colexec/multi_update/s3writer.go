@@ -394,9 +394,6 @@ func (writer *s3Writer) sortAndSyncOneTable(
 
 	sortIndex := writer.sortIdxs[idx]
 	rowCount := 0
-	for _, bat := range bats {
-		rowCount += bat.RowCount()
-	}
 	if isDelete {
 		sortIndex = 0
 	}
@@ -407,6 +404,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		}
 
 		for i := range bats {
+			rowCount += bats[i].RowCount()
 			_, err = blockWriter.WriteBatch(bats[i])
 			if err != nil {
 				return
@@ -435,6 +433,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 	nulls := make([]*nulls.Nulls, len(bats))
 	if needSortBatch {
 		for i := range bats {
+			rowCount += bats[i].RowCount()
 			err = colexec.SortByKey(proc, bats[i], sortIndex, isClusterBy, proc.GetMPool())
 			if err != nil {
 				return
@@ -443,6 +442,7 @@ func (writer *s3Writer) sortAndSyncOneTable(
 		}
 	} else {
 		for i := range bats {
+			rowCount += bats[i].RowCount()
 			nulls[i] = bats[i].Vecs[sortIndex].GetNulls()
 		}
 	}
