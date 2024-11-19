@@ -312,6 +312,10 @@ func (tbl *txnTableDelegate) Ranges(
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
+			param.RangesParam.PreAllocSize = 2
+			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
+			param.RangesParam.TxnOffset = 0
+
 		},
 		func(resp []byte) {
 			data, err := engine_util.UnmarshalRelationData(resp)

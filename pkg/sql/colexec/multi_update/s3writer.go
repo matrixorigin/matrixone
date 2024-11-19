@@ -120,12 +120,16 @@ func newS3Writer(update *MultiUpdate) (*s3Writer, error) {
 		deleteBlockMap:      make([][]map[types.Blockid]*deleteBlockData, tableCount),
 	}
 
-	for _, updateCtx := range update.MultiUpdateCtx {
+	mainIdx := 0
+	for i, updateCtx := range update.MultiUpdateCtx {
+		if update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
+			mainIdx = i
+		}
 		appendCfgToWriter(writer, updateCtx.TableDef)
 	}
 	writer.updateCtxs = update.MultiUpdateCtx
 
-	upCtx := writer.updateCtxs[len(writer.updateCtxs)-1]
+	upCtx := writer.updateCtxs[mainIdx]
 	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
 		//update
 		writer.action = actionUpdate
