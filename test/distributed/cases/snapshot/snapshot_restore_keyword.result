@@ -10,6 +10,7 @@ select * from `mocloud_meta`.`lock`;
 id    name
 1    test
 create snapshot metadb202411181350 for account `01929da4-89af-7ed8-8f32-8df9ed5ddd71`;
+drop database if exists `mocloud_meta`;
 restore account `01929da4-89af-7ed8-8f32-8df9ed5ddd71` from snapshot metadb202411181350 to account `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
 use `mocloud_meta`;
 select * from `mocloud_meta`.`lock`;
@@ -70,3 +71,47 @@ show create table `current_date`;
 no such table column.current_date
 drop database `column`;
 drop snapshot `div`;
+drop account if exists `01929da4-89af-7ed8-8f32-8d123d5ddd71`;
+create account `01929da4-89af-7ed8-8f32-8d123d5ddd71` admin_name = 'test_account' identified by '111';
+drop account if exists `1234567-89af-7ed8-8f32-8d123d5ddd71`;
+create account `1234567-89af-7ed8-8f32-8d123d5ddd71` admin_name = 'test_account' identified by '111';
+drop database if exists `explain`;
+create database `explain`;
+use `explain`;
+drop table if exists `groups`;
+create table `groups`(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into `groups` values (10,'ACCOUNTING','NEW YORK');
+insert into `groups` values (20,'RESEARCH','DALLAS');
+insert into `groups` values (30,'SALES','CHICAGO');
+insert into `groups` values (40,'OPERATIONS','BOSTON');
+drop snapshot if exists `ilike`;
+create snapshot `ilike` for account `01929da4-89af-7ed8-8f32-8d123d5ddd71`;
+restore account `01929da4-89af-7ed8-8f32-8d123d5ddd71` from snapshot `ilike` to account `1234567-89af-7ed8-8f32-8d123d5ddd71`;
+show databases;
+Database
+explain
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use `explain`;
+select * from `groups`;
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
+show create table `groups`;
+Table    Create Table
+groups    CREATE TABLE `groups` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+drop database `explain`;
+drop database `explain`;
+drop snapshot `ilike`;
+drop account `01929da4-89af-7ed8-8f32-8d123d5ddd71`;
+drop account `1234567-89af-7ed8-8f32-8d123d5ddd71`;
