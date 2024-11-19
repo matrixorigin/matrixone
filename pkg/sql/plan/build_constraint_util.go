@@ -641,7 +641,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		rightTableDef := DeepCopyTableDef(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
-		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
+		uniqueCols, uniqueColNames := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.Pkey.CompPkeyCol)
@@ -675,6 +675,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			for _, updateExpr := range stmt.OnDuplicateUpdate {
 				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
+				if _, ok := uniqueColNames[col]; ok {
+					return false, nil, nil, moerr.NewInternalError(builder.GetContext(), "do not support update primary key/unique key for on duplicate key update")
+				}
 			}
 
 			var defExpr *Expr
