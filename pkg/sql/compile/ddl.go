@@ -1783,11 +1783,6 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 	exeCols := planColsToExeCols(planCols)
 	exeDefs, err := planDefsToExeDefs(def)
 	if err != nil {
-		c.proc.Error(c.proc.Ctx, "create index table",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", def.GetName()),
-			zap.Error(err),
-		)
 		return err
 	}
 	if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
