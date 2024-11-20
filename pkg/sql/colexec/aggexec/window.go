@@ -136,7 +136,7 @@ func (exec *singleWindowExec) Free() {
 	exec.ret.free()
 }
 
-func (exec *singleWindowExec) flushRank() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
@@ -160,7 +160,7 @@ func (exec *singleWindowExec) flushRank() (*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
-func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
@@ -184,7 +184,7 @@ func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
-func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
+func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	values := exec.ret.values
 
 	idx := 0
