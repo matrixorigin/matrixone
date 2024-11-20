@@ -279,7 +279,7 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 		emptyNull: true,
 	}
 
-	// count the odd number.
+	// a demo agg to count the odd number.
 	implement := aggImplementation{
 		ret: func(i []types.Type) types.Type {
 			return types.T_int64.ToType()
@@ -294,13 +294,32 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 					return 0
 				}),
 
-			fill: SingleAggFill1NewVersion[int64, int64](nil),
+			fill: SingleAggFill1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					if value%2 == 1 {
+						resultSetter(resultGetter() + 1)
+					}
+					return nil
+				}),
 
-			fills: SingleAggFills1NewVersion[int64, int64](nil),
+			fills: SingleAggFills1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, count int, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					if value%2 == 1 {
+						resultSetter(resultGetter() + int64(count))
+					}
+					return nil
+				}),
 
-			merge: SingleAggMerge1NewVersion[int64, int64](nil),
+			merge: SingleAggMerge1NewVersion[int64, int64](
+				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggGetter[int64], resultSetter AggSetter[int64]) error {
+					resultSetter(resultGetter1() + resultGetter2())
+					return nil
+				}),
 
-			flush: SingleAggFlush1NewVersion[int64, int64](nil),
+			flush: SingleAggFlush1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					return nil
+				}),
 		},
 	}
 
@@ -312,4 +331,76 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 		m.Mp(), types.T_int64.ToType(),
 		[]int64{1, 2, 3, 4, 5}, nil, int64(3), false,
 		[]int64{2, 3, 4, 5, 6}, nil, int64(2), false)
+}
+
+func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
+	m := hackAggMemoryManager()
+	info := singleAggInfo{
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_int64.ToType(),
+		emptyNull: true,
+	}
+
+	// a demo agg to calculate the AVG but only keep the integer part.
+	type demoCtx struct {
+		AggCanMarshal
+		count int
+	}
+
+	implement := aggImplementation{
+		ret: func(i []types.Type) types.Type {
+			return types.T_int64.ToType()
+		},
+		ctx: aggContextImplementation{
+			hasCommonContext: false,
+			hasGroupContext:  true,
+			generateGroupContext: func(resultType types.Type, parameters ...types.Type) AggGroupExecContext {
+				return &demoCtx{count: 0}
+			},
+		},
+		logic: aggLogicImplementation{
+			init: SingleAggInitResultFixed[int64](
+				func(resultType types.Type, parameters ...types.Type) int64 {
+					return 0
+				}),
+
+			fill: SingleAggFill1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					execContext.(*demoCtx).count++
+					resultSetter(resultGetter() + value)
+					return nil
+				}),
+
+			fills: SingleAggFills1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, count int, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					execContext.(*demoCtx).count += count
+					resultSetter(resultGetter() + value*int64(count))
+					return nil
+				}),
+
+			merge: SingleAggMerge1NewVersion[int64, int64](
+				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggGetter[int64], resultSetter AggSetter[int64]) error {
+					ctx1.(*demoCtx).count += ctx2.(*demoCtx).count
+					resultSetter(resultGetter1() + resultGetter2())
+					return nil
+				}),
+
+			flush: SingleAggFlush1NewVersion[int64, int64](
+				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
+					count := execContext.(*demoCtx).count
+					resultSetter(resultGetter() / int64(count))
+					return nil
+				}),
+		},
+	}
+
+	a := newSingleAggFuncExec1NewVersion(
+		m, info, implement)
+
+	doAggTest[int64, int64](
+		t, a,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3, 4, 5}, nil, int64(15/5), false,
+		[]int64{2, 3, 4, 5, 6}, []int{3}, int64(15/4), false)
 }
