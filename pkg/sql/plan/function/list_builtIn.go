@@ -1368,7 +1368,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1394,7 +1394,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1420,7 +1420,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
