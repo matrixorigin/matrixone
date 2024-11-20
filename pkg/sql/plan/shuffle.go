@@ -19,8 +19,6 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -655,7 +653,6 @@ func shouldUseShuffleRanges(s *pb.ShuffleRange, colname string) []float64 {
 		return nil
 	}
 	if s.Uniform < uniformThreshold {
-		logutil.Infof("col %v data distribution is not uniformed, use shuffle range to avoid shuffle imbalance", colname)
 		return s.Result
 	}
 	return nil
