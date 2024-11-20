@@ -60,10 +60,6 @@ func (opts *Options[T, P]) WithEnableChecker() *Options[T, P] {
 	return opts
 }
 
-func (opts *Options[T, P]) EnableChecker() bool {
-	return opts.enableChecker
-}
-
 func (opts *Options[T, P]) withGCRecover(fn func()) *Options[T, P] {
 	opts.gcRecover = fn
 	return opts
