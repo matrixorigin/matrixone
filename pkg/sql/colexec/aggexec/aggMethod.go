@@ -25,92 +25,95 @@ type (
 	AggBytesGetter                             func() []byte
 )
 
-// the function definitions of single-column aggregation.
-// singleAgg1 for the fixed-length input type and fixed-length result type.
-// singleAgg2 for the fixed-length input type and variable-length result type.
-// singleAgg3 for the variable-length input type and fixed-length result type.
-// singleAgg4 for the variable-length input type and variable-length result type.
 type (
-	// SingleAggInitResultFixed and SingleAggInitResultVar
-	// return the original result of a new aggregation group.
-	SingleAggInitResultFixed[to types.FixedSizeTExceptStrType] func(
+	// InitFixedResultOfAgg and InitBytesResultOfAgg were methods to
+	// return the initial value for the aggregator before any action.
+	InitFixedResultOfAgg[to types.FixedSizeTExceptStrType] func(
 		resultType types.Type, parameters ...types.Type) to
-	SingleAggInitResultVar func(
+	InitBytesResultOfAgg func(
 		resultType types.Type, parameters ...types.Type) []byte
+)
 
-	// SingleAggFill1NewVersion ...  SingleAggFlush1NewVersion : singleAgg1's function definitions.
-	SingleAggFill1NewVersion[from, to types.FixedSizeTExceptStrType] func(
+type (
+	// fixedFixedFill ...  fixedFixedFlush : aggregatorFromFixedToFixed required function definitions.
+	fixedFixedFill[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
-	SingleAggFills1NewVersion[from, to types.FixedSizeTExceptStrType] func(
+	fixedFixedFills[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from, count int, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
-	SingleAggMerge1NewVersion[from, to types.FixedSizeTExceptStrType] func(
+	fixedFixedMerge[from, to types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
 		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggGetter[to],
 		resultSetter AggSetter[to]) error
-	SingleAggFlush1NewVersion[from, to types.FixedSizeTExceptStrType] func(
+	fixedFixedFlush[from, to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+)
 
-	// SingleAggFill2NewVersion ... SingleAggFlush2NewVersion : singleAgg2's function definitions.
-	SingleAggFill2NewVersion[from types.FixedSizeTExceptStrType] func(
+type (
+	// fixedBytesFill ... fixedBytesFlush : aggregatorFromFixedToBytes required function definitions.
+	fixedBytesFill[from types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
-	SingleAggFills2NewVersion[from types.FixedSizeTExceptStrType] func(
+	fixedBytesFills[from types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value from, count int, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
-	SingleAggMerge2NewVersion[from types.FixedSizeTExceptStrType] func(
+	fixedBytesMerge[from types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
 		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggBytesGetter,
 		resultSetter AggBytesSetter) error
-	SingleAggFlush2NewVersion[from types.FixedSizeTExceptStrType] func(
+	fixedBytesFlush[from types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
+)
 
-	// SingleAggFill3NewVersion ... SingleAggFlush3NewVersion : singleAgg3's function definitions.
-	SingleAggFill3NewVersion[to types.FixedSizeTExceptStrType] func(
+type (
+	// bytesFixedFill ... bytesFixedFlush : aggregatorFromBytesToFixed required function definitions.
+	bytesFixedFill[to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value []byte, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
-	SingleAggFills3NewVersion[to types.FixedSizeTExceptStrType] func(
+	bytesFixedFills[to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value []byte, count int, aggIsEmpty bool,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
-	SingleAggMerge3NewVersion[to types.FixedSizeTExceptStrType] func(
+	bytesFixedMerge[to types.FixedSizeTExceptStrType] func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
 		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggGetter[to],
 		resultSetter AggSetter[to]) error
-	SingleAggFlush3NewVersion[to types.FixedSizeTExceptStrType] func(
+	bytesFixedFlush[to types.FixedSizeTExceptStrType] func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggGetter[to], resultSetter AggSetter[to]) error
+)
 
-	// SingleAggFill4NewVersion ... SingleAggFlush4NewVersion : singleAgg4's function definitions.
-	SingleAggFill4NewVersion func(
+type (
+	// bytesBytesFill ... bytesBytesFlush : aggregatorFromBytesToBytes required function definitions.
+	bytesBytesFill func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value []byte, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
-	SingleAggFills4NewVersion func(
+	bytesBytesFills func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		value []byte, count int, aggIsEmpty bool,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
-	SingleAggMerge4NewVersion func(
+	bytesBytesMerge func(
 		ctx1, ctx2 AggGroupExecContext,
 		commonContext AggCommonExecContext,
 		aggIsEmpty1, aggIsEmpty2 bool,
 		resultGetter1, resultGetter2 AggBytesGetter,
 		resultSetter AggBytesSetter) error
-	SingleAggFlush4NewVersion func(
+	bytesBytesFlush func(
 		execContext AggGroupExecContext, commonContext AggCommonExecContext,
 		resultGetter AggBytesGetter, resultSetter AggBytesSetter) error
 )

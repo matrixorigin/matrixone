@@ -28,11 +28,11 @@ func RegisterAggFromFixedRetBytes[from types.FixedSizeTExceptStrType](
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
 	initGroupContext AggGroupContextInit,
-	initResult SingleAggInitResultVar,
-	fill SingleAggFill2NewVersion[from],
-	fills SingleAggFills2NewVersion[from],
-	merge SingleAggMerge2NewVersion[from],
-	flush SingleAggFlush2NewVersion[from]) {
+	initResult InitBytesResultOfAgg,
+	fill fixedBytesFill[from],
+	fills fixedBytesFills[from],
+	merge fixedBytesMerge[from],
+	flush fixedBytesFlush[from]) {
 
 	key := generateKeyOfSingleColumnAgg(
 		basicInformation.id, basicInformation.arg)
@@ -207,10 +207,10 @@ type aggregatorFromFixedToBytes[from types.FixedSizeTExceptStrType] struct {
 
 	execContext *AggContext
 
-	fill  SingleAggFill2NewVersion[from]
-	fills SingleAggFills2NewVersion[from]
-	merge SingleAggMerge2NewVersion[from]
-	flush SingleAggFlush2NewVersion[from]
+	fill  fixedBytesFill[from]
+	fills fixedBytesFills[from]
+	merge fixedBytesMerge[from]
+	flush fixedBytesFlush[from]
 }
 
 func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
@@ -244,7 +244,7 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 
 	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
-		v = string(resultInitMethod.(SingleAggInitResultVar)(info.retType, info.argType))
+		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
 	}
 	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
 
@@ -253,12 +253,12 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 	exec.execContext = newAggContextFromImpl(impl.ctx, info.retType, info.argType)
 
 	if flushMethod := impl.logic.flush; flushMethod != nil {
-		exec.flush = flushMethod.(SingleAggFlush2NewVersion[from])
+		exec.flush = flushMethod.(fixedBytesFlush[from])
 	}
 
-	exec.fill = impl.logic.fill.(SingleAggFill2NewVersion[from])
-	exec.fills = impl.logic.fills.(SingleAggFills2NewVersion[from])
-	exec.merge = impl.logic.merge.(SingleAggMerge2NewVersion[from])
+	exec.fill = impl.logic.fill.(fixedBytesFill[from])
+	exec.fills = impl.logic.fills.(fixedBytesFills[from])
+	exec.merge = impl.logic.merge.(fixedBytesMerge[from])
 }
 
 func (exec *aggregatorFromFixedToBytes[from]) GroupGrow(more int) error {

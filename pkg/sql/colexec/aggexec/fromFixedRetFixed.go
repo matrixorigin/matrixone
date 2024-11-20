@@ -28,11 +28,11 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
 	initGroupContext AggGroupContextInit,
-	initResult SingleAggInitResultFixed[to],
-	fill SingleAggFill1NewVersion[from, to],
-	fills SingleAggFills1NewVersion[from, to],
-	merge SingleAggMerge1NewVersion[from, to],
-	flush SingleAggFlush1NewVersion[from, to]) {
+	initResult InitFixedResultOfAgg[to],
+	fill fixedFixedFill[from, to],
+	fills fixedFixedFills[from, to],
+	merge fixedFixedMerge[from, to],
+	flush fixedFixedFlush[from, to]) {
 
 	key := generateKeyOfSingleColumnAgg(
 		basicInformation.id, basicInformation.arg)
@@ -261,10 +261,10 @@ type aggregatorFromFixedToFixed[from, to types.FixedSizeTExceptStrType] struct {
 
 	execContext *AggContext
 
-	fill  SingleAggFill1NewVersion[from, to]
-	fills SingleAggFills1NewVersion[from, to]
-	merge SingleAggMerge1NewVersion[from, to]
-	flush SingleAggFlush1NewVersion[from, to]
+	fill  fixedFixedFill[from, to]
+	fills fixedFixedFills[from, to]
+	merge fixedFixedMerge[from, to]
+	flush fixedFixedFlush[from, to]
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) marshal() ([]byte, error) {
@@ -299,7 +299,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) init(
 
 	var v to
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
-		v = resultInitMethod.(SingleAggInitResultFixed[to])(info.retType, info.argType)
+		v = resultInitMethod.(InitFixedResultOfAgg[to])(info.retType, info.argType)
 	}
 	exec.ret = initAggResultWithFixedTypeResult[to](mg, info.retType, info.emptyNull, v)
 
@@ -308,12 +308,12 @@ func (exec *aggregatorFromFixedToFixed[from, to]) init(
 	exec.execContext = newAggContextFromImpl(impl.ctx, info.retType, info.argType)
 
 	if flushMethod := impl.logic.flush; flushMethod != nil {
-		exec.flush = flushMethod.(SingleAggFlush1NewVersion[from, to])
+		exec.flush = flushMethod.(fixedFixedFlush[from, to])
 	}
 
-	exec.fill = impl.logic.fill.(SingleAggFill1NewVersion[from, to])
-	exec.fills = impl.logic.fills.(SingleAggFills1NewVersion[from, to])
-	exec.merge = impl.logic.merge.(SingleAggMerge1NewVersion[from, to])
+	exec.fill = impl.logic.fill.(fixedFixedFill[from, to])
+	exec.fills = impl.logic.fills.(fixedFixedFills[from, to])
+	exec.merge = impl.logic.merge.(fixedFixedMerge[from, to])
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) GroupGrow(more int) error {

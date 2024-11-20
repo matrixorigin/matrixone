@@ -227,12 +227,12 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 			hasGroupContext:  false,
 		},
 		logic: aggLogicImplementation{
-			init: SingleAggInitResultVar(
+			init: InitBytesResultOfAgg(
 				func(resultType types.Type, parameters ...types.Type) []byte {
 					return []byte("")
 				}),
 
-			fill: SingleAggFill4NewVersion(
+			fill: bytesBytesFill(
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value []byte, aggIsEmpty bool, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
 					if len(resultGetter()) < len(value) {
 						return resultSetter(value)
@@ -240,7 +240,7 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 					return nil
 				}),
 
-			fills: SingleAggFills4NewVersion(
+			fills: bytesBytesFills(
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value []byte, count int, aggIsEmpty bool, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
 					if len(resultGetter()) < len(value) {
 						return resultSetter(value)
@@ -248,12 +248,12 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 					return nil
 				}),
 
-			merge: SingleAggMerge4NewVersion(
+			merge: bytesBytesMerge(
 				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggBytesGetter, resultSetter AggBytesSetter) error {
 					panic("not implement now.")
 				}),
 
-			flush: SingleAggFlush4NewVersion(
+			flush: bytesBytesFlush(
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggBytesGetter, resultSetter AggBytesSetter) error {
 					return nil
 				}),
@@ -289,12 +289,12 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 			hasGroupContext:  false,
 		},
 		logic: aggLogicImplementation{
-			init: SingleAggInitResultFixed[int64](
+			init: InitFixedResultOfAgg[int64](
 				func(resultType types.Type, parameters ...types.Type) int64 {
 					return 0
 				}),
 
-			fill: SingleAggFill1NewVersion[int64, int64](
+			fill: fixedFixedFill[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					if value%2 == 1 {
 						resultSetter(resultGetter() + 1)
@@ -302,7 +302,7 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 					return nil
 				}),
 
-			fills: SingleAggFills1NewVersion[int64, int64](
+			fills: fixedFixedFills[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, count int, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					if value%2 == 1 {
 						resultSetter(resultGetter() + int64(count))
@@ -310,13 +310,13 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 					return nil
 				}),
 
-			merge: SingleAggMerge1NewVersion[int64, int64](
+			merge: fixedFixedMerge[int64, int64](
 				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggGetter[int64], resultSetter AggSetter[int64]) error {
 					resultSetter(resultGetter1() + resultGetter2())
 					return nil
 				}),
 
-			flush: SingleAggFlush1NewVersion[int64, int64](
+			flush: fixedFixedFlush[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					return nil
 				}),
@@ -360,33 +360,33 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 			},
 		},
 		logic: aggLogicImplementation{
-			init: SingleAggInitResultFixed[int64](
+			init: InitFixedResultOfAgg[int64](
 				func(resultType types.Type, parameters ...types.Type) int64 {
 					return 0
 				}),
 
-			fill: SingleAggFill1NewVersion[int64, int64](
+			fill: fixedFixedFill[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					execContext.(*demoCtx).count++
 					resultSetter(resultGetter() + value)
 					return nil
 				}),
 
-			fills: SingleAggFills1NewVersion[int64, int64](
+			fills: fixedFixedFills[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, count int, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					execContext.(*demoCtx).count += count
 					resultSetter(resultGetter() + value*int64(count))
 					return nil
 				}),
 
-			merge: SingleAggMerge1NewVersion[int64, int64](
+			merge: fixedFixedMerge[int64, int64](
 				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggGetter[int64], resultSetter AggSetter[int64]) error {
 					ctx1.(*demoCtx).count += ctx2.(*demoCtx).count
 					resultSetter(resultGetter1() + resultGetter2())
 					return nil
 				}),
 
-			flush: SingleAggFlush1NewVersion[int64, int64](
+			flush: fixedFixedFlush[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
 					count := execContext.(*demoCtx).count
 					resultSetter(resultGetter() / int64(count))

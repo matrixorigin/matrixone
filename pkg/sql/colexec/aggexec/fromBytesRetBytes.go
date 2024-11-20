@@ -26,11 +26,11 @@ func RegisterAggFromBytesRetBytes(
 	basicInformation SingleColumnAggInformation,
 	initCommonContext AggCommonContextInit,
 	initGroupContext AggGroupContextInit,
-	initResult SingleAggInitResultVar,
-	fill SingleAggFill4NewVersion,
-	fills SingleAggFills4NewVersion,
-	merge SingleAggMerge4NewVersion,
-	flush SingleAggFlush4NewVersion) {
+	initResult InitBytesResultOfAgg,
+	fill bytesBytesFill,
+	fills bytesBytesFills,
+	merge bytesBytesMerge,
+	flush bytesBytesFlush) {
 
 	key := generateKeyOfSingleColumnAgg(basicInformation.id, basicInformation.arg)
 	if _, ok := registeredAggFunctions[key]; ok {
@@ -90,10 +90,10 @@ type aggregatorFromBytesToBytes struct {
 
 	execContext *AggContext
 
-	fill  SingleAggFill4NewVersion
-	fills SingleAggFills4NewVersion
-	merge SingleAggMerge4NewVersion
-	flush SingleAggFlush4NewVersion
+	fill  bytesBytesFill
+	fills bytesBytesFills
+	merge bytesBytesMerge
+	flush bytesBytesFlush
 }
 
 func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
@@ -127,7 +127,7 @@ func (exec *aggregatorFromBytesToBytes) init(
 
 	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
-		v = string(resultInitMethod.(SingleAggInitResultVar)(info.retType, info.argType))
+		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
 	}
 	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
 
@@ -136,12 +136,12 @@ func (exec *aggregatorFromBytesToBytes) init(
 	exec.execContext = newAggContextFromImpl(impl.ctx, info.retType, info.argType)
 
 	if flushMethod := impl.logic.flush; flushMethod != nil {
-		exec.flush = flushMethod.(SingleAggFlush4NewVersion)
+		exec.flush = flushMethod.(bytesBytesFlush)
 	}
 
-	exec.fill = impl.logic.fill.(SingleAggFill4NewVersion)
-	exec.fills = impl.logic.fills.(SingleAggFills4NewVersion)
-	exec.merge = impl.logic.merge.(SingleAggMerge4NewVersion)
+	exec.fill = impl.logic.fill.(bytesBytesFill)
+	exec.fills = impl.logic.fills.(bytesBytesFills)
+	exec.merge = impl.logic.merge.(bytesBytesMerge)
 }
 
 func (exec *aggregatorFromBytesToBytes) GroupGrow(more int) error {
