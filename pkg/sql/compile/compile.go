@@ -4013,6 +4013,10 @@ func (c *Compile) expandRanges(
 		return nil, err
 	}
 
+	begin := 0
+	if policy&engine.Policy_CollectUncommittedData != 0 {
+		begin = 1 //skip empty block info
+	}
 	if node.TableDef.Partition != nil {
 		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
 			for i, partitionItem := range node.PartitionPrune.SelectedPartitions {
@@ -4026,7 +4030,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(0, subRelData.DataCnt(), subRelData,
+				engine.ForRangeBlockInfo(begin, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
@@ -4048,7 +4052,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(0, subRelData.DataCnt(), subRelData,
+				engine.ForRangeBlockInfo(begin, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
