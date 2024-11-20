@@ -1093,6 +1093,10 @@ func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap
 	backSes.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
+func (backSes *backSession) LogDebug() bool {
+	return backSes.getMOLogger().Enabled(zap.DebugLevel)
+}
+
 func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {
 	backSes.logf(ctx, zap.InfoLevel, msg, args...)
 }

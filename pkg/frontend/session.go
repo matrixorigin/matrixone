@@ -1966,6 +1966,14 @@ func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) 
 	ses.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
+func (ses *Session) LogDebug() bool {
+	if ses == nil {
+		return false
+	}
+	ses.initLogger()
+	return ses.logLevel.Enabled(zap.DebugLevel)
+}
+
 func (ses *Session) Infof(ctx context.Context, format string, args ...any) {
 	ses.logf(ctx, zap.InfoLevel, format, args...)
 }
