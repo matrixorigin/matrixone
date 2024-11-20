@@ -73,6 +73,8 @@ type PartitionState struct {
 	// for primary key dedup, reading data is not required
 	noData bool
 
+	lastFlushTimestamp types.TS
+
 	// some data need to be shared between all states
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
@@ -170,11 +172,9 @@ func (p *PartitionState) HandleDataObjectList(
 	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
-		p.shared.Lock()
-		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
-			p.shared.lastFlushTimestamp = t
+		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
+			p.lastFlushTimestamp = t
 		}
-		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -323,11 +323,9 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	defer tbIter.Release()
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
-		p.shared.Lock()
-		if t := commitTSCol[idx]; t.GT(&p.shared.lastFlushTimestamp) {
-			p.shared.lastFlushTimestamp = t
+		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
+			p.lastFlushTimestamp = t
 		}
-		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -595,6 +593,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		dataObjectTSIndex:       p.dataObjectTSIndex.Copy(),
 		tombstoneObjectDTSIndex: p.tombstoneObjectDTSIndex.Copy(),
 		shared:                  p.shared,
+		lastFlushTimestamp:      p.lastFlushTimestamp,
 		start:                   p.start,
 		end:                     p.end,
 	}
@@ -853,10 +852,7 @@ func (p *PartitionState) PKExistInMemBetween(
 		iter.First()
 	}
 
-	p.shared.Lock()
-	lastFlushTimestamp := p.shared.lastFlushTimestamp
-	p.shared.Unlock()
-	if lastFlushTimestamp.LE(&from) {
+	if p.lastFlushTimestamp.LE(&from) {
 		return false, false
 	}
 	return false, true

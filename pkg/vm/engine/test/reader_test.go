@@ -385,7 +385,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(
 			t,
 			testutil.WriteToRelation(
-				ctx, txn, relation, containers.ToCNBatch(bat), true,
+				ctx, txn, relation, containers.ToCNBatch(bat), false, true,
 			),
 		)
 
@@ -1059,6 +1059,9 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
 	require.NoError(t, err)
 	require.True(t, tomb.HasAnyInMemoryTombstone())
+
+	_, err = delegate.PrimaryKeysMayBeUpserted(ctx, types.TS{}, types.MaxTs(), vector.NewVec(types.T_int64.ToType()))
+	require.NoError(t, err)
 
 	_, err = delegate.BuildReaders(
 		ctx,

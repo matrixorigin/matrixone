@@ -174,6 +174,7 @@ const (
 	ReadNext                     = 11
 	ReadClose                    = 12
 	ReadCollectTombstones        = 13
+	ReadPrimaryKeysMayBeUpserted = 14
 )
 
 type ReadRequest struct {
