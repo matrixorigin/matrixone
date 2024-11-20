@@ -1060,6 +1060,9 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, tomb.HasAnyInMemoryTombstone())
 
+	_, err = delegate.PrimaryKeysMayBeUpserted(ctx, types.TS{}, types.MaxTs(), vector.NewVec(types.T_int64.ToType()))
+	require.NoError(t, err)
+
 	_, err = delegate.BuildReaders(
 		ctx,
 		rel.GetProcess(),
