@@ -73,7 +73,7 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
 	for _, w := range ws {
-		w.ref()
+		w.ref("sliceBasedWaiterQueue put", q.logger)
 	}
 	q.waiters = append(q.waiters, ws...)
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
@@ -100,7 +100,7 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 
 	for _, w := range q.waiters {
 		w.notify(value, q.logger)
-		w.close()
+		w.close("sliceBasedWaiterQueue notifyAll", q.logger)
 	}
 	q.resetWaitersLocked()
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
@@ -131,7 +131,7 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 			break
 		}
 		// already completed
-		w.close()
+		w.close("sliceBasedWaiterQueue notify", q.logger)
 		skipAt = i
 		q.waiters[i] = nil
 	}
@@ -157,7 +157,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 	for _, w := range q.waiters {
 		if w.isTxn(txnID) {
 			w.notify(notifyValue{}, q.logger)
-			w.close()
+			w.close("sliceBasedWaiterQueue removeByTxnID", q.logger)
 			continue
 		}
 		newWaiters = append(newWaiters, w)
@@ -208,7 +208,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 
 	n := len(q.waiters)
 	for i := q.beginChangeIdx; i < n; i++ {
-		q.waiters[i].close()
+		q.waiters[i].close("sliceBasedWaiterQueue rollbackChange", q.logger)
 		q.waiters[i] = nil
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]
@@ -255,7 +255,7 @@ func (q *sliceBasedWaiterQueue) close(value notifyValue) {
 	for i := 0; i < idx; i++ {
 		w := q.waiters[i]
 		w.notify(value, q.logger)
-		w.close()
+		w.close("sliceBasedWaiterQueue close", q.logger)
 	}
 	q.doResetLocked()
 }

@@ -29,8 +29,8 @@ func TestPut(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		q := newWaiterQueue()
 		defer q.close(notifyValue{})
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
 		q.put(w)
 		assert.Equal(t, 1, q.size())
 	})
@@ -41,18 +41,18 @@ func TestReset(t *testing.T) {
 		q := newWaiterQueue()
 		defer q.close(notifyValue{})
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-		defer w2.close()
-		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-		defer w3.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
+		defer w2.close("", nil)
+		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")}, "", nil)
+		defer w3.close("", nil)
 
 		q.put(w1, w2, w3)
 		assert.Equal(t, 3, q.size())
 
 		q.iter(func(w *waiter) bool {
-			w.close()
+			w.close("", nil)
 			return true
 		})
 
@@ -66,12 +66,12 @@ func TestIterTxns(t *testing.T) {
 		q := newWaiterQueue()
 		defer q.close(notifyValue{})
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-		defer w2.close()
-		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-		defer w3.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
+		defer w2.close("", nil)
+		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")}, "", nil)
+		defer w3.close("", nil)
 
 		q.put(w1, w2, w3)
 
@@ -91,13 +91,13 @@ func TestIterTxnsCannotReadUncommitted(t *testing.T) {
 		q := newWaiterQueue()
 		defer q.close(notifyValue{})
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
 
 		q.put(w1)
 
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-		defer w2.close()
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
+		defer w2.close("", nil)
 		q.beginChange()
 		q.put(w2)
 
@@ -116,18 +116,18 @@ func TestChange(t *testing.T) {
 		q := newWaiterQueue().(*sliceBasedWaiterQueue)
 		defer q.close(notifyValue{})
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
 
 		q.put(w1)
 
 		q.beginChange()
 		assert.Equal(t, 1, q.beginChangeIdx)
 
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-		defer w2.close()
-		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-		defer w3.close()
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
+		defer w2.close("", nil)
+		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")}, "", nil)
+		defer w3.close("", nil)
 
 		q.put(w2, w3)
 		assert.Equal(t, 3, len(q.waiters))
@@ -139,10 +139,10 @@ func TestChange(t *testing.T) {
 		q.beginChange()
 		assert.Equal(t, 1, q.beginChangeIdx)
 
-		w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")})
-		defer w4.close()
-		w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")})
-		defer w5.close()
+		w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")}, "", nil)
+		defer w4.close("", nil)
+		w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")}, "", nil)
+		defer w5.close("", nil)
 
 		q.put(w4, w5)
 		assert.Equal(t, 3, len(q.waiters))
@@ -158,8 +158,8 @@ func TestChangeRef(t *testing.T) {
 		q := newWaiterQueue().(*sliceBasedWaiterQueue)
 		defer q.close(notifyValue{})
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
 
 		q.beginChange()
 		q.put(w1)
@@ -180,24 +180,24 @@ func TestSkipCompletedWaiters(t *testing.T) {
 		q := newWaiterQueue()
 
 		// w1 will skipped
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
 		w1.setStatus(completed)
-		defer w1.close()
+		defer w1.close("", nil)
 
 		// w2 get the notify
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
 		w2.setStatus(blocking)
 		defer func() {
 			w2.wait(context.Background(), getLogger(""))
-			w2.close()
+			w2.close("", nil)
 		}()
 
 		// w3 get notify when queue closed
-		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
+		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")}, "", nil)
 		w3.setStatus(blocking)
 		defer func() {
 			w3.wait(context.Background(), getLogger(""))
-			w3.close()
+			w3.close("", nil)
 		}()
 
 		q.put(w1, w2, w3)
@@ -221,23 +221,23 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 		q := newWaiterQueue()
 		defer q.close(notifyValue{})
 
-		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
+		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")}, "", nil)
 		w2.setStatus(blocking)
-		defer w2.close()
+		defer w2.close("", nil)
 
-		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
+		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")}, "", nil)
 		w3.setStatus(blocking)
-		defer w3.close()
+		defer w3.close("", nil)
 
-		w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")})
+		w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")}, "", nil)
 		w4.setStatus(blocking)
 		defer func() {
-			w4.close()
+			w4.close("", nil)
 		}()
 
-		w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")})
+		w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")}, "", nil)
 		w5.setStatus(blocking)
-		defer w5.close()
+		defer w5.close("", nil)
 
 		q.put(w2, w3, w4, w5)
 
@@ -273,8 +273,8 @@ func TestMoveToCannotCloseWaiter(t *testing.T) {
 
 		to := newWaiterQueue()
 
-		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-		defer w1.close()
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
+		defer w1.close("", nil)
 
 		from.put(w1)
 		require.Equal(t, int32(2), w1.refCount.Load())
