@@ -119,7 +119,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.inited = true
 	}
 
-	u.doc = Document{}
+	u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
 	u.offset = 0
 
 	// cleanup the batch
