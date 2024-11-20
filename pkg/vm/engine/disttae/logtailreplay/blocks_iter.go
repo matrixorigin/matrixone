@@ -149,6 +149,40 @@ func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	return nil
 }
 
+// In concurrent delete scenario, the following case may happen:
+//
+// / txn1   cn: write s3 tombstone      dn: commit s3 tombstone
+// /	    |                              |
+// /	----+---------------------+--------+-----------+---------->
+// /	                          |                    |
+// / txn2           cn: delete mem row(blocked)        cn: query PrimaryKeysMayBeModified and it returns false, which is wrong
+//
+// what PrimaryKeysMayBeModified does:
+//  1. no mem rows in partition state
+//  2. lastFlushTimestamp > from
+//  3. it boils down to PKPersistedBetween, where dataobjects are empty and tombstones are ignored
+func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
+	if p.tombstoneObjectDTSIndex.Len() == 0 {
+		return false
+	}
+	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	defer iter.Release()
+
+	// Created after from
+	if iter.Seek(ObjectEntry{ObjectInfo{CreateTime: from}}) {
+		return true
+	}
+
+	iter.First()
+	// Deleted after from
+	ok := iter.Seek(ObjectEntry{ObjectInfo{DeleteTime: from}})
+	if ok {
+		item := iter.Item()
+		return !item.DeleteTime.IsEmpty()
+	}
+	return false
+}
+
 // GetChangedObjsBetween get changed objects between [begin, end],
 // notice that if an object is created after begin and deleted before end, it will be ignored.
 func (p *PartitionState) GetChangedObjsBetween(
