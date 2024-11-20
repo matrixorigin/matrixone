@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"runtime"
 	"slices"
@@ -157,8 +158,8 @@ const (
 
 const (
 	defaultAlphaCycleDur     = time.Minute
-	defaultGamaCycleDur      = time.Minute * 15
-	defaultGetTableListLimit = 5000
+	defaultGamaCycleDur      = time.Minute * 30
+	defaultGetTableListLimit = 1000
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -616,6 +617,20 @@ func queryStats(
 	eng engine.Engine,
 ) (statsVals []any, err error) {
 
+	var now = time.Now()
+	defer func() {
+		if resetUpdateTime {
+			v2.MoTableSizeRowsResetUpdateTimeCountingHistogram.Observe(float64(len(tbls)))
+			v2.MoTableSizeRowsResetUpdateTimeDurationHistogram.Observe(time.Since(now).Seconds())
+		} else if forceUpdate {
+			v2.MoTableSizeRowsForceUpdateCountingHistogram.Observe(float64(len(tbls)))
+			v2.MoTableSizeRowsForceUpdateDurationHistogram.Observe(time.Since(now).Seconds())
+		} else {
+			v2.MoTableSizeRowsNormalDurationHistogram.Observe(time.Since(now).Seconds())
+			v2.MoTableSizeRowsNormalCountingHistogram.Observe(float64(len(tbls)))
+		}
+	}()
+
 	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
@@ -1002,16 +1017,15 @@ func alphaTask(
 		processed        int
 	)
 
-	//fmt.Println("alpha received", len(tbls))
-
 	now := time.Now()
 	defer func() {
 		if len(tbls) == 0 {
+			dur := time.Since(now)
 			logutil.Info("alpha processed",
-				zap.Int("processed", processed),
-				zap.Duration("takes", time.Since(now)))
-			//fmt.Printf("procced: %d/%d, left: %d, spent: %v\n",
-			//	processed, dynamicCtx.changeTableListLimit, len(dynamicCtx.tableStock.tbls), time.Since(now))
+				zap.Int("processed", processed), zap.Duration("takes", dur))
+
+			v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
+			v2.AlphaTaskCountingHistogram.Observe(float64(processed))
 		}
 	}()
 
@@ -1025,7 +1039,7 @@ func alphaTask(
 	limit := dynamicCtx.mu.conf.GetTableListLimit
 	dynamicCtx.mu.Unlock()
 
-	batCnt := max(len(tbls)/5, limit/5)
+	batCnt := max(max(len(tbls)/5, limit/5), 200)
 
 	errQueue := make(chan error, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
@@ -1097,17 +1111,11 @@ func alphaTask(
 
 			dur := time.Since(start)
 			// the longer the update takes, the longer we would pause,
-			// but waiting for 50ms at most, 5ms at least.
-			ticker.Reset(max(min(dur, time.Millisecond*50), time.Millisecond*5))
+			// but waiting for 1s at most, 50ms at least.
+			ticker.Reset(max(min(dur, time.Second), time.Millisecond*50))
 
 			processed += submitted
 			tbls = tbls[submitted:]
-
-			//fmt.Printf("wait done, processed: %d/%d, left: %d, spent: %v\n",
-			//	processed,
-			//	dynamicCtx.changeTableListLimit,
-			//	len(tbls),
-			//	dur)
 		}
 	}
 }
@@ -1133,13 +1141,11 @@ func betaTask(
 		case tbl := <-dynamicCtx.tblQueue:
 			if tbl == nil {
 				// an alpha batch transmit done
-				if len(onlyTSBat) > 0 {
-					bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
-					onlyTSBat = onlyTSBat[:0]
-				}
-
+				bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
 				_ = bulkUpdateTableStatsList(ctx, service, &slBat)
+
 				slBat.Clear()
+				onlyTSBat = onlyTSBat[:0]
 
 				continue
 			}
@@ -1185,70 +1191,88 @@ func gamaTask(
 	gamaLimit := max(dynamicCtx.mu.conf.GetTableListLimit/100, 100)
 	dynamicCtx.mu.Unlock()
 
-	ticker := time.NewTicker(gamaDur)
+	opA := func() {
+		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
+		sqlRet := executeSQL(ctx, sql)
+		if sqlRet.Error() != nil {
+			logutil.Info("correction task get null stats failed",
+				zap.String("sql", sql),
+				zap.Error(sqlRet.Error()))
+			return
+		}
+
+		now = time.Now()
+		tbls = tbls[:0]
+		cc = de.GetLatestCatalogCache()
+
+		for i := range sqlRet.RowCount() {
+			tbl := allocateTablePair()
+
+			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+			tbl.acc = val.(int64)
+
+			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+			tbl.db = val.(int64)
+
+			if val, err = sqlRet.Value(ctx, i, 2); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+
+			tbl.tbl = val.(int64)
+
+			item := cc.GetTableById(uint32(tbl.acc), uint64(tbl.db), uint64(tbl.tbl))
+			if item == nil {
+				continue
+			}
+
+			tbl.tblName = item.Name
+			tbl.dbName = item.DatabaseName
+			tbl.relKind = item.Kind
+			tbl.pkSequence = item.PrimarySeqnum
+			tbl.onlyUpdateTS = false
+
+			tbls = append(tbls, tbl)
+		}
+
+		if err = alphaTask(
+			ctx, service, eng, tbls, types.BuildTS(now.UnixNano(), 0)); err != nil {
+			logutil.Info("correction task failed", zap.Error(err))
+		}
+
+		logutil.Info("correction task force update",
+			zap.Int("tbl cnt", len(tbls)), zap.Duration("takes", time.Since(now)))
+
+		v2.GamaTaskCountingHistogram.Observe(float64(len(tbls)))
+		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
+	}
+
+	opB := func() {
+		// TODO
+		// clear deleted tbl, db, account
+	}
+
+	tickerA := time.NewTicker(gamaDur)
+	tickerB := time.NewTicker(gamaDur * 2)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-ticker.C:
-			sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
-			sqlRet := executeSQL(ctx, sql)
-			if sqlRet.Error() != nil {
-				logutil.Info("correction task get null stats failed",
-					zap.String("sql", sql),
-					zap.Error(sqlRet.Error()))
-				continue
-			}
+		case <-tickerA.C:
+			opA()
+			tickerA.Reset(gamaDur)
 
-			now = time.Now()
-			tbls = tbls[:0]
-			cc = de.GetLatestCatalogCache()
-
-			for i := range sqlRet.RowCount() {
-				tbl := allocateTablePair()
-
-				if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-					logutil.Info("correction task failed", zap.Error(err))
-					continue
-				}
-				tbl.acc = val.(int64)
-
-				if val, err = sqlRet.Value(ctx, i, 1); err != nil {
-					logutil.Info("correction task failed", zap.Error(err))
-					continue
-				}
-				tbl.db = val.(int64)
-
-				if val, err = sqlRet.Value(ctx, i, 2); err != nil {
-					logutil.Info("correction task failed", zap.Error(err))
-					continue
-				}
-
-				tbl.tbl = val.(int64)
-
-				item := cc.GetTableById(uint32(tbl.acc), uint64(tbl.db), uint64(tbl.tbl))
-				if item == nil {
-					continue
-				}
-
-				tbl.tblName = item.Name
-				tbl.dbName = item.DatabaseName
-				tbl.relKind = item.Kind
-				tbl.pkSequence = item.PrimarySeqnum
-				tbl.onlyUpdateTS = false
-
-				tbls = append(tbls, tbl)
-			}
-
-			if err = alphaTask(
-				ctx, service, eng, tbls, types.BuildTS(now.UnixNano(), 0)); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
-			}
-
-			logutil.Info("correction task force update", zap.Int("tbl cnt", len(tbls)))
-			ticker.Reset(gamaDur)
+		case <-tickerB.C:
+			opB()
+			tickerB.Reset(gamaDur * 2)
 		}
 	}
 }
@@ -1280,6 +1304,9 @@ func statsCalculateOp(
 	}
 
 	sl = stashToStats(bcs)
+
+	v2.CalculateStatsDurationHistogram.Observe(time.Since(bcs.born).Seconds())
+
 	return sl, nil
 }
 
@@ -1666,11 +1693,18 @@ func bulkUpdateTableStatsList(
 		val  []byte
 		vals []string
 		tbls []*tablePair
+
+		now = time.Now()
 	)
 
 	defer func() {
 		for i := range tbls {
 			tbls[i].Done(err)
+		}
+
+		if len(tbls) > 0 {
+			v2.BulkUpdateStatsCountingHistogram.Observe(float64(len(tbls)))
+			v2.BulkUpdateStatsDurationHistogram.Observe(time.Since(now).Seconds())
 		}
 	}()
 
@@ -1714,9 +1748,19 @@ func bulkUpdateTableOnlyTS(
 	tbls []*tablePair,
 ) {
 
+	if len(tbls) == 0 {
+		return
+	}
+
 	var (
 		vals []string
+		now  = time.Now()
 	)
+
+	defer func() {
+		v2.BulkUpdateOnlyTSCountingHistogram.Observe(float64(len(tbls)))
+		v2.BulkUpdateOnlyTSDurationHistogram.Observe(time.Since(now).Seconds())
+	}()
 
 	for i := range tbls {
 		vals = append(vals, fmt.Sprintf("(%d,%d,%d,'%s','%s','{}','%s',0)",
