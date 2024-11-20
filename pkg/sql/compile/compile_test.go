@@ -302,29 +302,6 @@ func TestPutBlocksInCurrentCN(t *testing.T) {
 	putBlocksInCurrentCN(testCompile, reldata, true)
 }
 
-<<<<<<< HEAD
-=======
-func TestShuffleBlocksToMultiCN(t *testing.T) {
-	testCompile := NewMockCompile()
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
-	s := objectio.BlockInfoSlice{}
-	stats := objectio.NewObjectStats()
-	for i := 0; i < 100; i++ {
-		var blk objectio.BlockInfo
-		stats.ConstructBlockInfoTo(uint16(0), &blk)
-		s.AppendBlockInfo(&blk)
-	}
-	reldata := &engine_util.BlockListRelData{}
-	reldata.SetBlockList(s)
-	n := &plan.Node{
-		Stats:    plan2.DefaultStats(),
-		TableDef: &plan.TableDef{Name: "test"},
-	}
-	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
-	require.NoError(t, err)
-}
-
->>>>>>> d06cd7e7a52a508fc33053882a09c0fce3b8efad
 var _ morpc.RPCClient = new(testRpcClient)
 
 type testRpcClient struct {

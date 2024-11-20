@@ -4521,139 +4521,14 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-<<<<<<< HEAD
 func shuffleBlocksByHash(relData engine.RelData, newRelData engine.RelData, cncnt int32, cnidx int32) {
 	engine.ForRangeBlockInfo(0, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
-			location := blk.MetaLocation()
-			objTimeStamp := location.Name()[:7]
-			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(cncnt))
+			objID := blk.MetaLocation().ObjectId()
+			index := plan2.SimpleCharHashToRange(objID[:], uint64(cncnt))
 			if cnidx == int32(index) {
 				newRelData.AppendBlockInfo(blk)
 			}
-=======
-func removeEmtpyNodes(
-	c *Compile,
-	n *plan.Node,
-	rel engine.Relation,
-	relData engine.RelData,
-	nodes engine.Nodes) (engine.Nodes, error) {
-	minCnt := math.MaxInt32
-	maxCnt := 0
-	// remove empty node from nodes
-	var newnodes engine.Nodes
-	for i := range nodes {
-		if nodes[i].Data.DataCnt() > maxCnt {
-			maxCnt = nodes[i].Data.DataCnt()
-		}
-		if nodes[i].Data.DataCnt() < minCnt {
-			minCnt = nodes[i].Data.DataCnt()
-		}
-		if nodes[i].Data.DataCnt() > 0 {
-			if nodes[i].Addr != c.addr {
-				tombstone, err := collectTombstones(c, n, rel)
-				if err != nil {
-					return nil, err
-				}
-				nodes[i].Data.AttachTombstones(tombstone)
-			}
-			newnodes = append(newnodes, nodes[i])
-		}
-	}
-	if minCnt*2 < maxCnt {
-		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
-			n.TableDef.Name,
-			relData.DataCnt(),
-			len(newnodes),
-			maxCnt,
-			minCnt)
-		logstring = logstring + " cnlist: "
-		for i := range c.cnList {
-			logstring = logstring + c.cnList[i].Addr + " "
-		}
-		c.proc.Warn(c.proc.Ctx, logstring)
-	}
-	return newnodes, nil
-}
-
-func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
-	var nodes engine.Nodes
-	// add current CN
-	nodes = append(nodes, engine.Node{
-		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(c.ncpu, relData.DataCnt()),
-	})
-	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList))
-	nodes[0].Data.AppendBlockInfo(&objectio.EmptyBlockInfo)
-
-	// add the rest of CNs in list
-	for i := range c.cnList {
-		if c.cnList[i].Addr != c.addr {
-			nodes = append(nodes, engine.Node{
-				Id:   c.cnList[i].Id,
-				Addr: c.cnList[i].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, relData.DataCnt()),
-				Data: relData.BuildEmptyRelData(relData.DataCnt() / len(c.cnList)),
-			})
-		}
-	}
-
-	if force, tids, cnt := engine.GetForceShuffleReader(); force {
-		for _, tid := range tids {
-			if tid == n.TableDef.TblId {
-				shuffleBlocksByMoCtl(relData, cnt, nodes)
-				return removeEmtpyNodes(c, n, rel, relData, nodes)
-			}
-		}
-	}
-
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-
-	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, relData, n, nodes)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		shuffleBlocksByHash(c, relData, nodes)
-	}
-
-	return removeEmtpyNodes(c, n, rel, relData, nodes)
-}
-
-func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
-	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk *objectio.BlockInfo) (bool, error) {
-			location := blk.MetaLocation()
-			objID := location.ObjectId()
-
-			index := plan2.SimpleCharHashToRange(objID[:], uint64(len(c.cnList)))
-			nodes[index].Data.AppendBlockInfo(blk)
-			return true, nil
-		})
-}
-
-// Just for test
-func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) error {
-	if cnt > relData.DataCnt()-1 {
-		return moerr.NewInternalErrorNoCtxf(
-			"Invalid Parameter, distribute count:%d, block count:%d",
-			cnt,
-			relData.DataCnt()-1)
-	}
-
-	if len(nodes) < 2 {
-		return moerr.NewInternalErrorNoCtx("Invalid count of nodes")
-	}
-
-	engine.ForRangeBlockInfo(
-		1,
-		cnt,
-		relData,
-		func(blk *objectio.BlockInfo) (bool, error) {
-			nodes[1].Data.AppendBlockInfo(blk)
->>>>>>> d06cd7e7a52a508fc33053882a09c0fce3b8efad
 			return true, nil
 		})
 }
