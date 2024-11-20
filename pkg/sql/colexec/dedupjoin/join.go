@@ -204,23 +204,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 
 	if ap.OnDuplicateAction != plan.Node_UPDATE {
 		if ctr.matched.Count() == 0 {
-			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
-			for i := range ap.ctr.buf {
-				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
-				batSize := ctr.batches[i].RowCount()
-				for j, rp := range ap.Result {
-					if rp.Rel == 1 {
-						ap.ctr.buf[i].Vecs[j] = ctr.batches[i].Vecs[rp.Pos]
-						ctr.batches[i].Vecs[rp.Pos] = nil
-					} else {
-						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
-						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
-							return err
-						}
-					}
-				}
-				ap.ctr.buf[i].SetRowCount(batSize)
-			}
+			ap.ctr.buf = ctr.batches
+			ctr.batches = nil
 
 			return nil
 		}
