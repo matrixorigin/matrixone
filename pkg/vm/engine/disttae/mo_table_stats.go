@@ -552,9 +552,9 @@ func normalQuery(
 
 		stats map[string]any
 
-		tblIdColIdx  = uint64(0)
-		updateColIdx = uint64(1)
-		statsColIdx  = uint64(2)
+		tblIdColIdx = uint64(0)
+		//updateColIdx = uint64(1)
+		statsColIdx = uint64(2)
 
 		//now     = time.Now()
 		//updates []time.Time
@@ -594,9 +594,9 @@ func normalQuery(
 		}
 		statsVals = append(statsVals, ss)
 
-		if val, err = sqlRet.Value(ctx, uint64(idxes[idx]), updateColIdx); err != nil {
-			return nil, err
-		}
+		//if val, err = sqlRet.Value(ctx, uint64(idxes[idx]), updateColIdx); err != nil {
+		//	return nil, err
+		//}
 
 		//var ud time.Time
 		//if ud, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
@@ -856,13 +856,7 @@ func tableStatsExecutor(
 			executeTicker.Reset(dynamicCtx.mu.conf.UpdateDuration)
 			dynamicCtx.mu.Unlock()
 		}
-
-		if err != nil {
-			break
-		}
 	}
-
-	return err
 }
 
 func insertNewTables(
@@ -876,8 +870,6 @@ func insertNewTables(
 		tm     time.Time
 		sql    string
 		sqlRet ie.InternalExecResult
-
-		values []string
 
 		dbName, tblName    string
 		accId, dbId, tblId uint64
@@ -919,7 +911,7 @@ func insertNewTables(
 
 	valFmt := "(%d,%d,%d,'%s','%s','{}','%s',0)"
 
-	values = make([]string, 0, sqlRet.RowCount())
+	values := make([]string, 0, sqlRet.RowCount())
 	for i := range sqlRet.RowCount() {
 		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 			return err
@@ -1749,7 +1741,7 @@ func bulkUpdateTableOnlyTS(
 	}
 
 	var (
-		vals []string
+		vals = make([]string, 0, len(tbls))
 		now  = time.Now()
 	)
 
