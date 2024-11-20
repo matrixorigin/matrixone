@@ -269,6 +269,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
+				analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
 				analyzer.AddS3RequestCount(crs)
 				analyzer.AddDiskIO(crs)
 			}
@@ -287,6 +288,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 			if err != nil {
 				return result, err
 			}
+			analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 		}

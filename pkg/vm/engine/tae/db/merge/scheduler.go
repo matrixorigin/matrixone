@@ -17,6 +17,7 @@ package merge
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
+	"time"
 )
 
 type Scheduler struct {
@@ -38,7 +40,7 @@ type Scheduler struct {
 	rc *resourceController
 }
 
-func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
+func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 	policySlice := make([]policy, 0, 4)
 	policySlice = append(policySlice, newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service))
 	if !common.RuntimeDisableZMBasedMerge.Load() {
@@ -194,4 +196,16 @@ func (s *Scheduler) StopMerge(tblEntry *catalog.TableEntry, reentrant bool) erro
 
 func (s *Scheduler) StartMerge(tblID uint64, reentrant bool) error {
 	return s.executor.rt.LockMergeService.UnlockFromUser(tblID, reentrant)
+}
+
+func (s *Scheduler) CNActiveObjectsString() string {
+	return s.executor.cnSched.activeObjsString()
+}
+
+func (s *Scheduler) RemoveCNActiveObjects(ids []objectio.ObjectId) {
+	s.executor.cnSched.removeActiveObject(ids)
+}
+
+func (s *Scheduler) PruneCNActiveObjects(id uint64, ago time.Duration) {
+	s.executor.cnSched.prune(id, ago)
 }

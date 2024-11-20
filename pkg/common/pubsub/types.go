@@ -19,11 +19,15 @@ import (
 )
 
 const (
-	AccountAll       = "all"
+	// AccountAll is the value of account_list column in table mo_pubs
+	AccountAll = "all"
+	// AccountAllOutput is the value of sub_account column of command `show publication`
 	AccountAllOutput = "*"
-	TableAll         = "*"
-	Sep              = ","
-	PubAllAccounts   = "*"
+	// TableAll is the value of table_list column in table mo_pubs
+	TableAll = "*"
+	Sep      = ","
+	// PubAllAccounts is the accounts which have privilege to publish to-all publications, separated by comma
+	PubAllAccounts = "*"
 )
 
 type SubStatus int
@@ -43,6 +47,8 @@ type AccountInfo struct {
 }
 
 type PubInfo struct {
+	PubAccountId   uint32
+	PubAccountName string
 	PubName        string
 	DbName         string
 	DbId           uint64
