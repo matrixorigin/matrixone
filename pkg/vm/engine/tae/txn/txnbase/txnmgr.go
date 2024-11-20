@@ -142,7 +142,11 @@ func (mgr *TxnManager) Freeze() {
 		return
 	}
 	mgr.freeze.Store(true)
+	count := mgr.getActiveTxnCount()
+	logutil.Infof("TXN Mananger Freeze Start, active TXN count %d", count)
+	t0 := time.Now()
 	mgr.waitAllTxnCommit()
+	logutil.Infof("TXN Mananger Freeze End, active TXN count %d, takes %v", count, time.Since(t0))
 }
 func (mgr *TxnManager) waitAllTxnCommit() {
 	mgr.doneCond.L.Lock()
@@ -188,7 +192,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.addTxn(txn.GetID(), txn)
+	err = mgr.addTxn(txn.GetID(), txn)
 	return
 }
 
@@ -205,7 +209,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
+	err = mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -222,7 +226,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
+	err = mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -242,7 +246,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
-		mgr.addTxn(util.UnsafeBytesToString(id), txn)
+		err = mgr.addTxn(util.UnsafeBytesToString(id), txn)
 	}
 	return
 }

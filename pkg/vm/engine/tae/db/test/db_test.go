@@ -10315,3 +10315,57 @@ func TestFreezeTxnManganger(t *testing.T) {
 	_, err := tae.StartTxn(nil)
 	assert.Error(t, err)
 }
+
+func TestFreezeTxnManganger2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	totalRows := 100
+	bat := catalog.MockBatch(schema, totalRows)
+	bats := bat.Split(totalRows)
+	defer bat.Close()
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	var wg sync.WaitGroup
+	var success atomic.Int32
+	pool, _ := ants.NewPool(5)
+	defer pool.Release()
+
+	appendFn := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			txn, err := tae.StartTxn(nil)
+			if err != nil {
+				return
+			}
+			success.Add(1)
+			err = tae.DoAppendWithTxn(bats[i], txn, false)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit(ctx))
+		}
+	}
+
+	for i := 0; i < totalRows; i++ {
+		wg.Add(1)
+		err := pool.Submit(appendFn(i))
+		assert.Nil(t, err)
+	}
+
+	tae.TxnMgr.Freeze()
+	wg.Wait()
+
+	_, err := tae.StartTxn(nil)
+	assert.Error(t, err)
+
+	tae.Restart(ctx)
+
+	tae.CheckRowsByScan(int(success.Load()), false)
+
+	t.Log(success.Load())
+}
