@@ -175,11 +175,13 @@ func doAggTest[input, output types.FixedSizeTExceptStrType | string](
 	p1, p2, p3 := cutGroup(paramType, group2, nullList2)
 	fillToGroup(1, p1, p2, p3)
 
-	r, err := agg.Flush()
+	rs, err := agg.Flush()
 	require.NoError(t, err)
 
-	checkResult(isResult1Null, result1, r, 0)
-	checkResult(isResult2Null, result2, r, 1)
+	require.Equal(t, 1, len(rs), "doAggTest() only support test with small amount of data.")
+
+	checkResult(isResult1Null, result1, rs[0], 0)
+	checkResult(isResult2Null, result2, rs[0], 1)
 }
 
 type hackManager struct {

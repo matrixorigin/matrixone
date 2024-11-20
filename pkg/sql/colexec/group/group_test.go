@@ -154,8 +154,8 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 					// just do a flush to check the result.
 					aggResult, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](aggResult)[0])
-					aggResult.Free(proc.Mp())
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](aggResult[0])[0])
+					aggResult[0].Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}
@@ -305,12 +305,12 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 					// do a flush to check the result.
 					aggResult, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					vs1 := vector.MustFixedColWithTypeCheck[int64](aggResult)
+					vs1 := vector.MustFixedColWithTypeCheck[int64](aggResult[0])
 					require.Equal(t, int64(1), vs0[0])
 					require.Equal(t, int64(1), vs1[0])
 					require.Equal(t, int64(2), vs0[1])
 					require.Equal(t, int64(3), vs1[1])
-					aggResult.Free(proc.Mp())
+					aggResult[0].Free(proc.Mp())
 
 				} else {
 					require.Fail(t, "output batch should not be nil.")

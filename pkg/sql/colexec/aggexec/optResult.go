@@ -231,27 +231,7 @@ func (r *optSplitResult) getEmptyListOnX(x int) []bool {
 	return r.bsFromEmptyList[x]
 }
 
-// flushOneVector return the agg result one by one.
-//
-// for the better performance, I will not update the result status.
-// so, once flush starts, do not call other methods except the free function.
-func (r *optSplitResult) flushOneVector() *vector.Vector {
-	if len(r.resultList) > 0 {
-		ret := r.resultList[0]
-		r.resultList = r.resultList[1:]
-
-		if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
-			ret.SetNulls(getNspFromBoolVector(r.emptyList[0]))
-			r.emptyList = r.emptyList[1:]
-		}
-		return ret
-	}
-	return nil
-}
-
 // flushAll return all the result.
-//
-// todo: for easy refactor without changing too much, I remain this function.
 func (r *optSplitResult) flushAll() []*vector.Vector {
 	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
 		for i := range r.emptyList {

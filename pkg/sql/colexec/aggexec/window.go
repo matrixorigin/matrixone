@@ -120,7 +120,7 @@ func (exec *singleWindowExec) SetExtraInformation(partialResult any, groupIndex 
 	panic("window function do not support the extra information")
 }
 
-func (exec *singleWindowExec) Flush() (*vector.Vector, error) {
+func (exec *singleWindowExec) Flush() ([]*vector.Vector, error) {
 	switch exec.singleAggInfo.aggID {
 	case winIdOfRank:
 		return exec.flushRank()
@@ -157,7 +157,7 @@ func (exec *singleWindowExec) flushRank() (*vector.Vector, error) {
 			sn += int64(m)
 		}
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
@@ -181,7 +181,7 @@ func (exec *singleWindowExec) flushDenseRank() (*vector.Vector, error) {
 			sn++
 		}
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
@@ -201,5 +201,5 @@ func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
 			idx++
 		}
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }

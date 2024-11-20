@@ -598,7 +598,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) distinctBatchFill(
 	return nil
 }
 
-func (exec *aggregatorFromFixedToFixed[from, to]) Flush() (*vector.Vector, error) {
+func (exec *aggregatorFromFixedToFixed[from, to]) Flush() ([]*vector.Vector, error) {
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
@@ -661,7 +661,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) Flush() (*vector.Vector, error
 	}
 
 	// todo: 等全部代码改完后修改接口。
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {

@@ -299,7 +299,7 @@ func (exec *approxCountFixedExec[T]) BatchMerge(next AggFuncExec, offset int, gr
 	return nil
 }
 
-func (exec *approxCountFixedExec[T]) Flush() (*vector.Vector, error) {
+func (exec *approxCountFixedExec[T]) Flush() ([]*vector.Vector, error) {
 	setter := exec.ret.set
 	for i, group := range exec.groups {
 		exec.ret.updateNextAccessIdx(i)
@@ -311,7 +311,7 @@ func (exec *approxCountFixedExec[T]) Flush() (*vector.Vector, error) {
 		exec.ret.updateNextAccessIdx(exec.partialGroup)
 		setter(getter() + exec.partialResult.(uint64))
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *approxCountFixedExec[T]) Free() {
@@ -438,7 +438,7 @@ func (exec *approxCountVarExec) BatchMerge(next AggFuncExec, offset int, groups 
 	return nil
 }
 
-func (exec *approxCountVarExec) Flush() (*vector.Vector, error) {
+func (exec *approxCountVarExec) Flush() ([]*vector.Vector, error) {
 	setter := exec.ret.set
 	for i, group := range exec.groups {
 		exec.ret.updateNextAccessIdx(i)
@@ -450,7 +450,7 @@ func (exec *approxCountVarExec) Flush() (*vector.Vector, error) {
 		exec.ret.updateNextAccessIdx(exec.partialGroup)
 		setter(getter() + exec.partialResult.(uint64))
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *approxCountVarExec) Free() {

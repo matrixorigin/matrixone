@@ -241,12 +241,12 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *countColumnExec) Flush() (*vector.Vector, error) {
+func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 	if exec.partialResult != nil {
 		x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
 		exec.ret.values[x][y] += exec.partialResult.(int64)
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *countColumnExec) Free() {
@@ -342,12 +342,12 @@ func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 	return nil
 }
 
-func (exec *countStarExec) Flush() (*vector.Vector, error) {
+func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 	if exec.partialResult != nil {
 		x, y := exec.ret.updateNextAccessIdx(exec.partialGroup)
 		exec.ret.values[x][y] += exec.partialResult.(int64)
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *countStarExec) Free() {

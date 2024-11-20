@@ -406,11 +406,11 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
-		vec, err := agg.Flush()
+		vecs, err := agg.Flush()
 		if err != nil {
 			return err
 		}
-		ctr.bat.SetVector(int32(i), vec)
+		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
 

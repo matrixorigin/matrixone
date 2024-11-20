@@ -524,7 +524,7 @@ func (exec *aggregatorFromBytesToFixed[to]) distinctBatchFill(
 	return nil
 }
 
-func (exec *aggregatorFromBytesToFixed[to]) Flush() (*vector.Vector, error) {
+func (exec *aggregatorFromBytesToFixed[to]) Flush() ([]*vector.Vector, error) {
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
@@ -586,7 +586,7 @@ func (exec *aggregatorFromBytesToFixed[to]) Flush() (*vector.Vector, error) {
 		}
 	}
 
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *aggregatorFromBytesToFixed[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {

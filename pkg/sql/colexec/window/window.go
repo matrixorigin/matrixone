@@ -297,10 +297,11 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if ctr.vec != nil {
 		ctr.vec.Free(proc.Mp())
 	}
-	ctr.vec, err = ctr.bat.Aggs[idx].Flush()
+	vecs, err := ctr.bat.Aggs[idx].Flush()
 	if err != nil {
 		return err
 	}
+	ctr.vec = vecs[0]
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}

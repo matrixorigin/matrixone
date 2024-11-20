@@ -417,7 +417,7 @@ func (exec *medianColumnNumericExec[T]) BatchMerge(next AggFuncExec, offset int,
 	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
 }
 
-func (exec *medianColumnNumericExec[T]) Flush() (*vector.Vector, error) {
+func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 	vs := exec.ret.values
 
 	groups := len(exec.groups)
@@ -445,7 +445,7 @@ func (exec *medianColumnNumericExec[T]) Flush() (*vector.Vector, error) {
 			s++
 		}
 	}
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *medianColumnDecimalExec[T]) Merge(next AggFuncExec, groupIdx1 int, groupIdx2 int) error {
@@ -458,7 +458,7 @@ func (exec *medianColumnDecimalExec[T]) BatchMerge(next AggFuncExec, offset int,
 	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
 }
 
-func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
+func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 	var err error
 	vs := exec.ret.values
 	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
@@ -550,7 +550,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 
 	}
 
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 type numericSlice[T numeric] []T

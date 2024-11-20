@@ -426,7 +426,7 @@ func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
 	return nil
 }
 
-func (exec *aggregatorFromBytesToBytes) Flush() (*vector.Vector, error) {
+func (exec *aggregatorFromBytesToBytes) Flush() ([]*vector.Vector, error) {
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
@@ -488,7 +488,7 @@ func (exec *aggregatorFromBytesToBytes) Flush() (*vector.Vector, error) {
 		}
 	}
 
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *aggregatorFromBytesToBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {

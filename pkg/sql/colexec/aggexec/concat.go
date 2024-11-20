@@ -193,8 +193,8 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	return nil
 }
 
-func (exec *groupConcatExec) Flush() (*vector.Vector, error) {
-	return exec.ret.flushAll()[0], nil
+func (exec *groupConcatExec) Flush() ([]*vector.Vector, error) {
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *groupConcatExec) Free() {

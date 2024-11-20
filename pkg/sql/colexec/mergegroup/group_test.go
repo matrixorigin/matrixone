@@ -235,10 +235,10 @@ func TestMergeGroupBehavior2(t *testing.T) {
 					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
 
 					// flush to check the result
-					vec, err := outputBatch.Aggs[0].Flush()
+					vecs, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](vec)[0])
-					vec.Free(proc.Mp())
+					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](vec[0])[0])
+					vecs[0].Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}
@@ -295,10 +295,10 @@ func TestMergeGroupBehavior2(t *testing.T) {
 					require.Equal(t, 1, len(outputBatch.Aggs))
 
 					// flush to check the result
-					vec, err := outputBatch.Aggs[0].Flush()
+					vecs, err := outputBatch.Aggs[0].Flush()
 					require.NoError(t, err)
-					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](vec)[0])
-					vec.Free(proc.Mp())
+					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](vecs[0])[0])
+					vecs[0].Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}

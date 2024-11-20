@@ -287,7 +287,7 @@ func (exec *clusterCentersExec) BatchMerge(next AggFuncExec, offset int, groups 
 	return nil
 }
 
-func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
+func (exec *clusterCentersExec) Flush() ([]*vector.Vector, error) {
 	switch exec.singleAggInfo.argType.Oid {
 	case types.T_array_float32:
 		if err := exec.flushArray32(); err != nil {
@@ -302,7 +302,7 @@ func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
 			"unsupported type '%s' for cluster_centers", exec.singleAggInfo.argType.String())
 	}
 
-	return exec.ret.flushAll()[0], nil
+	return exec.ret.flushAll(), nil
 }
 
 func (exec *clusterCentersExec) flushArray32() error {
