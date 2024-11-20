@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -605,6 +606,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 					zap.String("current uuid", cn.uuid),
 					zap.String("current addr", cn.addr),
 					zap.Any("bad backend servers", badCNServers),
+					zap.Int64("goId", goid.Get()),
 					zap.Error(err),
 				)
 				badCNServers[cn.addr] = struct{}{}

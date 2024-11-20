@@ -1856,6 +1856,12 @@ func (tbl *txnTable) getPartitionState(
 				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
 			}
 			tbl._partState.Store(ps)
+			if tbl.tableId == catalog.MO_COLUMNS_ID {
+				logutil.Info("open partition state for mo_columns",
+					zap.String("txn", tbl.db.op.Txn().DebugString()),
+					zap.String("desc", ps.Desc()),
+					zap.String("pointer", fmt.Sprintf("%p", ps)))
+			}
 		}
 		return tbl._partState.Load(), nil
 	}
