@@ -711,13 +711,14 @@ func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
 		s.Statement = append(s.Statement, sqlConnector...)
 		s.Statement = append(s.Statement, rawSql[len(rawSql)-70:]...)
 	} else {
-		// TODO
-		copy(s.Statement, truncatedSql)
+		bytes := util.UnsafeStringToBytes(truncatedSql)
+		length := min(cap(s.Statement), len(bytes))
+		s.Statement = append(s.Statement, bytes[:length]...)
 	}
 }
 
 func (s *StatementInfo) CopyStatementInfo() string {
-	builder := strings.Builder{}
+	builder := &strings.Builder{}
 	builder.Grow(len(s.Statement))
 	builder.Write(s.Statement)
 	return builder.String()
