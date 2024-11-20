@@ -4519,7 +4519,7 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 }
 
 func shuffleBlocksByHash(relData engine.RelData, newRelData engine.RelData, cncnt int32, cnidx int32) {
-	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+	engine.ForRangeBlockInfo(0, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
@@ -4540,7 +4540,7 @@ func shuffleBlocksByRange(proc *process.Process, relData engine.RelData, newRelD
 	var init bool
 	var index uint64
 
-	err := engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+	err := engine.ForRangeBlockInfo(0, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
