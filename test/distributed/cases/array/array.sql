@@ -243,5 +243,11 @@ select cast("[76875768584509877574546435800000005,895588575776777477477477445646
 -- l2_distance_sq
 select l2_distance("[0, 0, 0]", "[3, 4, 0]"), l2_distance_sq("[0, 0, 0]", "[3, 4, 0]");
 
+CREATE TABLE `vector_test` (id INT PRIMARY KEY AUTO_INCREMENT, vector vecf32(3));
+INSERT INTO `vector_test` VALUES(1,"[1,2,4]");
+prepare s1 from 'SELECT id, cosine_similarity(vector, ?) FROM vector_test';
+set @a="[1,2,3]";
+execute s1 using @a;
+
 -- post
 drop database vecdb;
