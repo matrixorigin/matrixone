@@ -1322,6 +1322,21 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyV
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, keyVector)
 }
 
+// PrimaryKeysMayBeUpserted mocks base method.
+func (m *MockRelation) PrimaryKeysMayBeUpserted(ctx context.Context, from, to types.TS, keyVector *vector.Vector) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrimaryKeysMayBeUpserted", ctx, from, to, keyVector)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PrimaryKeysMayBeUpserted indicates an expected call of PrimaryKeysMayBeUpserted.
+func (mr *MockRelationMockRecorder) PrimaryKeysMayBeUpserted(ctx, from, to, keyVector interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeUpserted", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeUpserted), ctx, from, to, keyVector)
+}
+
 // Ranges mocks base method.
 func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr, arg2, arg3 int) (engine.RelData, error) {
 	m.ctrl.T.Helper()
