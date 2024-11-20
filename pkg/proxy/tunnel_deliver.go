@@ -15,8 +15,10 @@
 package proxy
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 )
 
 type TunnelDeliver interface {
@@ -56,7 +58,7 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 	}
 	if t.mu.inTransfer {
 		d.logger.Info("tunnel is already in transfer, skip transfer",
-			zap.Uint32("conn ID", t.cc.ConnID()))
+			zap.Uint32("conn ID", t.cc.ConnID()), zap.Int64("goId", goid.Get()))
 		return
 	}
 
@@ -72,7 +74,7 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 		t.mu.inTransfer = false
 		t.setTransferType(transferByRebalance)
 		d.logger.Info("rebalance queue is full",
-			zap.Uint32("conn ID", t.cc.ConnID()))
+			zap.Uint32("conn ID", t.cc.ConnID()), zap.Int64("goId", goid.Get()))
 	}
 
 	preDeliver()
