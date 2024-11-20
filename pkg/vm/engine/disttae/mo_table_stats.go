@@ -186,18 +186,6 @@ func initMoTableStatsConfig(
 		}
 	}()
 
-	go func() {
-		if err = betaTask(ctx, eng.service, eng); err != nil {
-			return
-		}
-	}()
-
-	go func() {
-		if err = gamaTask(ctx, eng.service, eng); err != nil {
-			return
-		}
-	}()
-
 	if dynamicCtx.alphaTaskPool, err = ants.NewPool(
 		runtime.NumCPU(),
 		ants.WithNonblocking(false)); err != nil {
@@ -273,6 +261,22 @@ func initMoTableStatsConfig(
 	}
 
 	dynamicCtx.tableStock.tbls = make([]*tablePair, 0, 1)
+
+	// start sub tasks
+	{
+		go func() {
+			if err = betaTask(ctx, eng.service, eng); err != nil {
+				return
+			}
+		}()
+
+		go func() {
+			if err = gamaTask(ctx, eng.service, eng); err != nil {
+				return
+			}
+		}()
+	}
+
 	return nil
 }
 
@@ -444,6 +448,10 @@ func forceUpdateQuery(
 	eng *Engine,
 ) (statsVals []any, err error) {
 
+	if len(tbls) == 0 {
+		return
+	}
+
 	var (
 		to      types.TS
 		val     any
@@ -531,6 +539,10 @@ func normalQuery(
 	defaultVal any,
 	accs, dbs, tbls []uint64,
 ) (statsVals []any, err error) {
+
+	if len(tbls) == 0 {
+		return
+	}
 
 	sql := fmt.Sprintf(getTableStatsSQL,
 		catalog.MO_CATALOG,
