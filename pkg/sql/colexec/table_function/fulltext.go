@@ -181,12 +181,10 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 // run SQL to get the (doc_id, pos) of all patterns (words) in the search string
-func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) {
+func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	var union []string
 
 	var keywords []string
-
-	defer close(u.result_chan)
 
 	for _, p := range s.Pattern {
 		ssNoOp := p.GetLeafText(fulltext.TEXT)
@@ -207,8 +205,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 			// remove the last character which should be '*' for prefix search
 			slen := len(w)
 			if w[slen-1] != '*' {
-				u.errors <- moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
-				return
+				return executor.Result{}, moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
 			}
 			// prefix search
 			prefix := w[0 : slen-1]
@@ -227,12 +224,19 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		u.errors <- err
-		return
+		return executor.Result{}, err
 	}
+
+	return res, nil
+}
+
+func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, res executor.Result) {
+
 	defer res.Close()
+	defer close(u.result_chan)
 
 	n_doc_id := 0
+	var last_doc_id any = nil
 	for _, bat := range res.Batches {
 
 		if len(bat.Vecs) != 3 {
@@ -256,7 +260,28 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 
 			// word string
 			word := bat.Vecs[2].GetStringAt(i)
-			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
+
+			if last_doc_id == nil {
+				last_doc_id = doc_id
+			} else if last_doc_id != doc_id {
+				// new doc_id
+				last_doc_id = doc_id
+				n_doc_id++
+			}
+
+			//logutil.Infof("WORD:%s, DOC_ID:%v, POS:%d, LAST: %v", word, doc_id, pos, last_doc_id)
+			if n_doc_id >= 8192 {
+				scoremap, err := s.Eval()
+				if err != nil {
+					u.errors <- err
+					return
+				}
+				if len(scoremap) > 0 {
+					u.result_chan <- scoremap
+				}
+				clear(s.WordAccums)
+				n_doc_id = 0
+			}
 
 			w, ok := s.WordAccums[word]
 			if !ok {
@@ -268,22 +293,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
-				// before add new doc_id, return a SearchAccum to process
-				if n_doc_id >= 8192 {
-					scoremap, err := s.Eval()
-					if err != nil {
-						u.errors <- err
-						return
-					}
-					if len(scoremap) > 0 {
-						u.result_chan <- scoremap
-					}
-					clear(s.WordAccums)
-					n_doc_id = 0
-				}
-
 				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int32{pos}, DocCount: 1}
-				n_doc_id++
 			}
 		}
 
@@ -344,5 +354,12 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	s.Nrow = nrow
 
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
-	runWordStats(u, proc, s)
+	res, err := runWordStats(u, proc, s)
+	if err != nil {
+		u.errors <- err
+		return
+	}
+
+	go getResults(u, proc, s, res)
+
 }
