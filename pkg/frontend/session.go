@@ -138,10 +138,6 @@ type Session struct {
 
 	errInfo *errInfo
 
-	//fromRealUser distinguish the sql that the user inputs from the one
-	//that the internal or background program executes
-	fromRealUser bool
-
 	cache *privilegeCache
 
 	mu sync.Mutex
@@ -782,10 +778,10 @@ func (ses *Session) InvalidatePrivilegeCache() {
 }
 
 // GetBackgroundExec generates a background executor
-func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (ses *Session) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	ses.EnterFPrint(FPGetBackgroundExec)
 	defer ses.ExitFPrint(FPGetBackgroundExec)
-	return NewBackgroundExec(ctx, ses)
+	return NewBackgroundExec(ctx, ses, opts...)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
@@ -812,7 +808,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	return ses.shareTxnBackExecReused
 }
 
-func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		if ses.shareTxnBackExecReused == nil {
 			ses.shareTxnBackExecReused = &backExec{}
@@ -821,6 +817,9 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		}
 		ses.shareTxnBackExecReused.init(ses, txnOp, db, callBack)
 		ses.shareTxnBackExecReused.backSes.upstream = ses
+		if len(opts) > 0 && opts[0] != nil {
+			ses.shareTxnBackExecReused.backSes.fromRealUser = opts[0].fromRealUser
+		}
 		ses.shareTxnBackExecReused.inUse = true
 		return ses.shareTxnBackExecReused
 	} else {
@@ -831,6 +830,9 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		}
 		ses.backExecReused.init(ses, txnOp, db, callBack)
 		ses.backExecReused.backSes.upstream = ses
+		if len(opts) > 0 && opts[0] != nil {
+			ses.backExecReused.backSes.fromRealUser = opts[0].fromRealUser
+		}
 		ses.backExecReused.inUse = true
 		return ses.backExecReused
 	}
@@ -1165,7 +1167,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
