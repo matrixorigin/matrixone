@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 	"sync"
 	"time"
@@ -691,7 +690,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	logutil.Infof("table %v on cn %v, all block cnt %v", s.DataSource.TableDef.Name, c.addr, s.NodeInfo.Data.DataCnt())
 	return nil
 }
 
