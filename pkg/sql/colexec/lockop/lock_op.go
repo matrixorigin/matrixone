@@ -130,7 +130,10 @@ func callNonBlocking(
 			return result, lockOp.ctr.retryError
 		}
 		err := lockTalbeIfLockCountIsZero(proc, lockOp)
-		return result, err
+		if err != nil {
+			return result, err
+		}
+		return result, lockOp.ctr.retryError
 	}
 	if result.Batch.IsEmpty() {
 		analyzer.Output(result.Batch)
