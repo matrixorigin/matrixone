@@ -3993,12 +3993,7 @@ func collectTombstones(
 
 func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
-	blockFilterList []*plan.Expr, crs *perfcounter.CounterSet, onRemoteCN bool) (engine.RelData, error) {
-
-	var policy engine.DataCollectPolicy = engine.Policy_CollectAllData
-	if onRemoteCN {
-		policy = engine.Policy_CollectCommittedData
-	}
+	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy) (engine.RelData, error) {
 
 	preAllocSize := 2
 	if !c.IsTpQuery() {
@@ -4009,12 +4004,12 @@ func (c *Compile) expandRanges(
 		}
 	}
 
-	newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+	counterSet := new(perfcounter.CounterSet)
+	newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
 	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
 	if err != nil {
 		return nil, err
 	}
-	//tombstones, err := rel.CollectTombstones(ctx, c.TxnOffset)
 
 	if node.TableDef.Partition != nil {
 		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
@@ -4061,8 +4056,17 @@ func (c *Compile) expandRanges(
 		}
 	}
 
-	return relData, nil
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddScopePrepareS3Request(statistic.S3Request{
+		List:      counterSet.FileService.S3.List.Load(),
+		Head:      counterSet.FileService.S3.Head.Load(),
+		Put:       counterSet.FileService.S3.Put.Load(),
+		Get:       counterSet.FileService.S3.Get.Load(),
+		Delete:    counterSet.FileService.S3.Delete.Load(),
+		DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
+	})
 
+	return relData, nil
 }
 
 func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.Relation, engine.Database, context.Context, error) {

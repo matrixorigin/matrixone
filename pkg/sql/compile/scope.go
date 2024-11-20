@@ -650,21 +650,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		return err
 	}
 
-	counterSet := new(perfcounter.CounterSet)
-	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet, s.IsRemote)
+	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData)
 	if err != nil {
 		return err
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddScopePrepareS3Request(statistic.S3Request{
-		List:      counterSet.FileService.S3.List.Load(),
-		Head:      counterSet.FileService.S3.Head.Load(),
-		Put:       counterSet.FileService.S3.Put.Load(),
-		Get:       counterSet.FileService.S3.Get.Load(),
-		Delete:    counterSet.FileService.S3.Delete.Load(),
-		DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
-	})
 
 	if s.NodeInfo.CNCNT > 1 {
 		if relData.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
