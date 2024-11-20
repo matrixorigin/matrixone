@@ -110,6 +110,13 @@ func (sample *Sample) Prepare(proc *process.Process) (err error) {
 		sample.ctr.groupVectorsNullable = groupKeyNullable
 	}
 
+	if sample.ProjectList != nil {
+		err := sample.PrepareProjection(proc)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

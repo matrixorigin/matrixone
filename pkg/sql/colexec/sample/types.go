@@ -56,6 +56,7 @@ type Sample struct {
 	GroupExprs []*plan.Expr
 
 	vm.OperatorBase
+	colexec.Projection
 }
 
 func (sample *Sample) GetOperatorBase() *vm.OperatorBase {
@@ -232,12 +233,19 @@ func (sample *Sample) Free(proc *process.Process, pipelineFailed bool, err error
 			sample.ctr.buf = nil
 		}
 
+		sample.FreeProjection(proc)
+
 		sample.ctr = nil
 	}
 }
 
 func (sample *Sample) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
+	var err error
+	batch := input
+	if sample.ProjectList != nil {
+		batch, err = sample.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (sample *Sample) ConvertToPipelineOperator(in *pipeline.Instruction) {

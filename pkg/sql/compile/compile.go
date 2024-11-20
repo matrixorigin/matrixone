@@ -2017,105 +2017,112 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	for i := range ss {
-		if ss[i].RootOp == nil {
+		rootOp := ss[i].RootOp
+		if rootOp == nil {
 			c.setProjection(n, ss[i])
 			continue
 		}
 
-		switch ss[i].RootOp.(type) {
+		switch op := rootOp.(type) {
 		case *table_scan.TableScan:
-			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
-				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *value_scan.ValueScan:
-			if ss[i].RootOp.(*value_scan.ValueScan).ProjectList == nil {
-				ss[i].RootOp.(*value_scan.ValueScan).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *fill.Fill:
-			if ss[i].RootOp.(*fill.Fill).ProjectList == nil {
-				ss[i].RootOp.(*fill.Fill).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *source.Source:
-			if ss[i].RootOp.(*source.Source).ProjectList == nil {
-				ss[i].RootOp.(*source.Source).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *external.External:
-			if ss[i].RootOp.(*external.External).ProjectList == nil {
-				ss[i].RootOp.(*external.External).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *group.Group:
-			if ss[i].RootOp.(*group.Group).ProjectList == nil {
-				ss[i].RootOp.(*group.Group).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *mergegroup.MergeGroup:
-			if ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList == nil {
-				ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *anti.AntiJoin:
-			if ss[i].RootOp.(*anti.AntiJoin).ProjectList == nil {
-				ss[i].RootOp.(*anti.AntiJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *indexjoin.IndexJoin:
-			if ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList == nil {
-				ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *join.InnerJoin:
-			if ss[i].RootOp.(*join.InnerJoin).ProjectList == nil {
-				ss[i].RootOp.(*join.InnerJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *left.LeftJoin:
-			if ss[i].RootOp.(*left.LeftJoin).ProjectList == nil {
-				ss[i].RootOp.(*left.LeftJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *loopjoin.LoopJoin:
-			if ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList == nil {
-				ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *product.Product:
-			if ss[i].RootOp.(*product.Product).ProjectList == nil {
-				ss[i].RootOp.(*product.Product).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *productl2.Productl2:
-			if ss[i].RootOp.(*productl2.Productl2).ProjectList == nil {
-				ss[i].RootOp.(*productl2.Productl2).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *semi.SemiJoin:
-			if ss[i].RootOp.(*semi.SemiJoin).ProjectList == nil {
-				ss[i].RootOp.(*semi.SemiJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
 		case *single.SingleJoin:
-			if ss[i].RootOp.(*single.SingleJoin).ProjectList == nil {
-				ss[i].RootOp.(*single.SingleJoin).ProjectList = n.ProjectList
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *sample.Sample:
+			if op.ProjectList == nil {
+				op.ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
@@ -2124,6 +2131,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			c.setProjection(n, ss[i])
 		}
 	}
+
 	c.anal.isFirst = false
 	return ss
 }
