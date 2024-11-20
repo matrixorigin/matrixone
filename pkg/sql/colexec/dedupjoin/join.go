@@ -415,7 +415,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 			switch ap.OnDuplicateAction {
 			case plan.Node_FAIL:
 				// do nothing for txn.mode = Optimistic
-				if isPessimistic {
+				if !isPessimistic {
 					continue
 				}
 
