@@ -285,7 +285,9 @@ func (ls *LocalDisttaeDataSource) Next(
 		return
 	}
 
-	injected, logLevel := objectio.LogReaderInjected(ls.table.tableName)
+	injected, logLevel := objectio.LogReaderInjected(
+		ls.table.db.databaseName, ls.table.tableName,
+	)
 	if injected && logLevel > 0 {
 		defer func() {
 			if err != nil {
