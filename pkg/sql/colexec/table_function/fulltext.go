@@ -35,8 +35,9 @@ const (
 )
 
 type fulltextState struct {
-	inited   bool
-	scoremap map[any]float32
+	inited      bool
+	result_chan chan map[any]float32
+	errors      chan error
 
 	// holding output batch
 	batch *batch.Batch
@@ -56,20 +57,26 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 
 func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 
+	var scoremap map[any]float32
+	var ok bool
+
 	u.batch.CleanOnlyData()
 
-	max_batch_size := 8192
-	keys := make([]any, 0, max_batch_size)
-	n := 0
+	select {
+	case err := <-u.errors:
+		return vm.CancelResult, err
+	case scoremap, ok = <-u.result_chan:
+		if !ok {
+			return vm.CancelResult, nil
+		}
+	}
+
 	// return result
 	if u.batch.VectorCount() == 1 {
 		// only doc_id returned
 
 		// write the batch
-		for key := range u.scoremap {
-			if n >= max_batch_size {
-				break
-			}
+		for key := range scoremap {
 			doc_id := key
 			if str, ok := doc_id.(string); ok {
 				bytes := []byte(str)
@@ -77,16 +84,10 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 			}
 			// type of id follow primary key column
 			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
-
-			keys = append(keys, key)
-			n++
 		}
 	} else {
 		// doc_id and score returned
-		for key := range u.scoremap {
-			if n >= max_batch_size {
-				break
-			}
+		for key := range scoremap {
 			doc_id := key
 			if str, ok := doc_id.(string); ok {
 				bytes := []byte(str)
@@ -96,18 +97,11 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
 
 			// score
-			vector.AppendFixed[float32](u.batch.Vecs[1], u.scoremap[key], false, proc.Mp())
-
-			keys = append(keys, key)
-			n++
+			vector.AppendFixed[float32](u.batch.Vecs[1], scoremap[key], false, proc.Mp())
 		}
 	}
 
-	for _, k := range keys {
-		delete(u.scoremap, k)
-	}
-
-	u.batch.SetRowCount(n)
+	u.batch.SetRowCount(len(scoremap))
 
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
@@ -122,11 +116,10 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		u.batch = tf.createResultBatch()
+		u.result_chan = make(chan map[any]float32)
+		u.errors = make(chan error)
 		u.inited = true
 	}
-
-	var err error
-	u.scoremap = nil
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
@@ -152,10 +145,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	u.scoremap, err = fulltextIndexMatch(proc, tf, source_table, index_table, pattern, mode, u.batch)
-	if err != nil {
-		return err
-	}
+	go fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
 
 	return nil
 }
@@ -191,10 +181,13 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 // run SQL to get the (doc_id, pos) of all patterns (words) in the search string
-func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
+func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) {
 	var union []string
 
 	var keywords []string
+
+	defer close(u.result_chan)
+
 	for _, p := range s.Pattern {
 		ssNoOp := p.GetLeafText(fulltext.TEXT)
 		for _, w := range ssNoOp {
@@ -214,7 +207,8 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 			// remove the last character which should be '*' for prefix search
 			slen := len(w)
 			if w[slen-1] != '*' {
-				return moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
+				u.errors <- moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
+				return
 			}
 			// prefix search
 			prefix := w[0 : slen-1]
@@ -223,18 +217,27 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 	}
 
 	sql := strings.Join(union, " UNION ")
+
+	if len(union) == 1 {
+		sql += " ORDER BY doc_id"
+	} else {
+		sql = fmt.Sprintf("SELECT * FROM (%s) ORDER BY doc_id", sql)
+	}
 	//logutil.Infof("SQL is %s", sql)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return err
+		u.errors <- err
+		return
 	}
 	defer res.Close()
 
+	n_doc_id := 0
 	for _, bat := range res.Batches {
 
 		if len(bat.Vecs) != 3 {
-			return moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+			u.errors <- moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+			return
 		}
 
 		for i := 0; i < bat.RowCount(); i++ {
@@ -265,15 +268,36 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
+				// before add new doc_id, return a SearchAccum to process
+				if n_doc_id >= 8192 {
+					scoremap, err := s.Eval()
+					if err != nil {
+						u.errors <- err
+						return
+					}
+					if len(scoremap) > 0 {
+						u.result_chan <- scoremap
+					}
+					clear(s.WordAccums)
+					n_doc_id = 0
+				}
+
 				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int32{pos}, DocCount: 1}
+				n_doc_id++
 			}
 		}
 
 	}
 
-	// we got all results for all words required.  Evaluate the Pattern against the WordAccums to get answer.
+	scoremap, err := s.Eval()
+	if err != nil {
+		u.errors <- err
+		return
 
-	return nil
+	}
+	if len(scoremap) > 0 {
+		u.result_chan <- scoremap
+	}
 }
 
 // Run SQL to get number of records in source table
@@ -301,27 +325,24 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 	return nrow, nil
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (map[any]float32, error) {
+func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
+	mode int64, bat *batch.Batch) {
 
 	// parse the search string to []Pattern and create SearchAccum
 	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
-		return nil, err
+		u.errors <- err
+		return
 	}
 
 	// count(*) to get number of records in source table
 	nrow, err := runCountStar(proc, s)
 	if err != nil {
-		return nil, err
+		u.errors <- err
+		return
 	}
 	s.Nrow = nrow
 
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
-	err = runWordStats(proc, s)
-	if err != nil {
-		return nil, err
-	}
-
-	// compute the ranking
-	return s.Eval()
+	runWordStats(u, proc, s)
 }
