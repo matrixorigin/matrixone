@@ -165,7 +165,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for _, part := range idxDef.Parts {
-			if _, ok := updateExprs[part]; ok {
+			if _, ok := updateExprs[catalog.ResolveAlias(part)]; ok {
 				if idxDef.Unique {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update unique key on duplicate")
 				} else {
@@ -589,7 +589,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{idxTableNodeID, lastNodeID},
-				JoinType: plan.Node_INNER,
+				JoinType: plan.Node_RIGHT,
 				OnList:   []*plan.Expr{joinCond},
 			}, bindCtx)
 		}
