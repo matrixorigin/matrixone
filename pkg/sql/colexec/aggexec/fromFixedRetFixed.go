@@ -294,7 +294,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) init(
 	impl aggImplementation) {
 
 	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 
 	var v to

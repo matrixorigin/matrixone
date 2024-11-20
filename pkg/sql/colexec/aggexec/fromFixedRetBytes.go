@@ -239,7 +239,7 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 	impl aggImplementation) {
 
 	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 
 	var v string

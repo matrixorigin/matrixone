@@ -159,9 +159,10 @@ func MakeSingleColumnAggInformation(
 	id int64, paramType types.Type, getRetType func(p []types.Type) types.Type,
 	setNullForEmptyGroup bool) SingleColumnAggInformation {
 	return SingleColumnAggInformation{
-		id:                   id,
-		arg:                  paramType,
-		ret:                  getRetType,
-		setNullForEmptyGroup: setNullForEmptyGroup,
+		id:  id,
+		arg: paramType,
+		ret: getRetType,
+		// do not support this optimization now.
+		setNullForEmptyGroup: true,
 	}
 }

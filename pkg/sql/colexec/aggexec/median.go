@@ -96,7 +96,7 @@ func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R f
 		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r),
 	}
 	if info.IsDistinct() {
-		s.distinctHash = newDistinctHash(mg.Mp(), false)
+		s.distinctHash = newDistinctHash()
 	}
 	return s
 }

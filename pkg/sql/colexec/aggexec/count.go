@@ -60,7 +60,7 @@ func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec
 		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
 	}
 	if info.distinct {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 	return exec
 }

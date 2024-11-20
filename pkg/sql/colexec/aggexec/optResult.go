@@ -168,11 +168,6 @@ func (r *optSplitResult) init(
 	r.nowIdx1 = 0
 }
 
-func (r *optSplitResult) noNeedToCountEmptyGroup() {
-	r.optInformation.doesThisNeedEmptyList = false
-	r.optInformation.shouldSetNullToEmptyGroup = false
-}
-
 // getNspFromBoolVector generate a nsp bitmap from a bool type vector and return it.
 func getNspFromBoolVector(v *vector.Vector) *nulls.Nulls {
 	bs := vector.MustFixedColNoTypeCheck[bool](v)

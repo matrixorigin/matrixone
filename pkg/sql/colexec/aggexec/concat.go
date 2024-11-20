@@ -71,7 +71,7 @@ func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string
 		separator:    []byte(separator),
 	}
 	if info.distinct {
-		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+		exec.distinctHash = newDistinctHash()
 	}
 	return exec
 }
