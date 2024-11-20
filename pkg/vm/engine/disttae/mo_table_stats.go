@@ -244,7 +244,8 @@ func initMoTableStatsConfig(
 
 	dynamicCtx.objIdsPool = sync.Pool{
 		New: func() interface{} {
-			return make([]types.Objectid, 0)
+			objIds := make([]types.Objectid, 0)
+			return &objIds
 		},
 	}
 
@@ -546,16 +547,17 @@ func normalQuery(
 	var (
 		val any
 
-		idxes   []int
-		gotTIds []int64
-		stats   map[string]any
+		idxes   = make([]int, 0, sqlRet.RowCount())
+		gotTIds = make([]int64, 0, sqlRet.RowCount())
+
+		stats map[string]any
 
 		tblIdColIdx  = uint64(0)
 		updateColIdx = uint64(1)
 		statsColIdx  = uint64(2)
 
-		now     = time.Now()
-		updates []time.Time
+		//now     = time.Now()
+		//updates []time.Time
 	)
 
 	for i := range sqlRet.RowCount() {
@@ -573,7 +575,7 @@ func normalQuery(
 		idx, found := sort.Find(len(gotTIds), func(j int) int { return int(tbls[i]) - int(gotTIds[j]) })
 
 		if !found {
-			updates = append(updates, now)
+			//updates = append(updates, now)
 			statsVals = append(statsVals, defaultVal)
 			continue
 		}
@@ -596,12 +598,12 @@ func normalQuery(
 			return nil, err
 		}
 
-		var ud time.Time
-		if ud, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
-			return
-		}
+		//var ud time.Time
+		//if ud, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
+		//	return
+		//}
 
-		updates = append(updates, ud)
+		//updates = append(updates, ud)
 	}
 
 	return statsVals, nil
@@ -753,7 +755,7 @@ type betaCycleStash struct {
 
 	born time.Time
 
-	dataObjIds []types.Objectid
+	dataObjIds *[]types.Objectid
 
 	totalSize   float64
 	totalRows   float64
@@ -817,12 +819,6 @@ func tableStatsExecutor(
 	eng engine.Engine,
 ) (err error) {
 
-	defer func() {
-		if err != nil {
-			//fmt.Println(err)
-		}
-	}()
-
 	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
@@ -834,8 +830,7 @@ func tableStatsExecutor(
 		select {
 		case <-ctx.Done():
 			logutil.Info("table stats executor exit by ctx.Done", zap.Error(ctx.Err()))
-			err = ctx.Err()
-			break
+			return ctx.Err()
 
 		case <-executeTicker.C:
 			if checkDisableTask() {
@@ -843,7 +838,7 @@ func tableStatsExecutor(
 			}
 
 			if err = prepare(ctx, service, eng); err != nil {
-				break
+				return err
 			}
 
 			if err = alphaTask(
@@ -852,7 +847,7 @@ func tableStatsExecutor(
 				dynamicCtx.tableStock.newest,
 			); err != nil {
 				logutil.Info("table stats alpha exit by err", zap.Error(err))
-				break
+				return err
 			}
 
 			dynamicCtx.tableStock.tbls = dynamicCtx.tableStock.tbls[:0]
@@ -924,6 +919,7 @@ func insertNewTables(
 
 	valFmt := "(%d,%d,%d,'%s','%s','{}','%s',0)"
 
+	values = make([]string, 0, sqlRet.RowCount())
 	for i := range sqlRet.RowCount() {
 		if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 			return err
@@ -1287,11 +1283,11 @@ func statsCalculateOp(
 	bcs := betaCycleStash{
 		born:       time.Now(),
 		snapshot:   tbl.snapshot,
-		dataObjIds: dynamicCtx.objIdsPool.Get().([]types.Objectid),
+		dataObjIds: dynamicCtx.objIdsPool.Get().(*[]types.Objectid),
 	}
 
 	defer func() {
-		bcs.dataObjIds = bcs.dataObjIds[:0]
+		*bcs.dataObjIds = (*bcs.dataObjIds)[:0]
 		dynamicCtx.objIdsPool.Put(bcs.dataObjIds)
 	}()
 
@@ -1572,8 +1568,8 @@ func collectVisibleData(
 
 		bcs.totalSize += float64(obj.Size())
 		bcs.totalRows += float64(obj.Rows())
-		bcs.dataObjIds = append(
-			bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
+		*bcs.dataObjIds = append(
+			*bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
 	}
 
 	if bcs.totalRows != 0 {
@@ -1584,12 +1580,12 @@ func collectVisibleData(
 	for dRowIter.Next() {
 		entry := dRowIter.Entry()
 
-		idx := slices.IndexFunc(bcs.dataObjIds, func(objId types.Objectid) bool {
+		idx := slices.IndexFunc(*bcs.dataObjIds, func(objId types.Objectid) bool {
 			return objId.EQ(entry.BlockID.Object())
 		})
 
 		if idx == -1 {
-			bcs.dataObjIds = append(bcs.dataObjIds, *entry.BlockID.Object())
+			*bcs.dataObjIds = append(*bcs.dataObjIds, *entry.BlockID.Object())
 		}
 
 		bcs.totalRows += float64(1)
@@ -1643,7 +1639,7 @@ func applyTombstones(
 				defer release()
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
-				cnt := getDeletedRows(bcs.dataObjIds, rowIds)
+				cnt := getDeletedRows(*bcs.dataObjIds, rowIds)
 
 				bcs.deletedRows += float64(cnt)
 				//deletedRows += float64(cnt)
@@ -1674,7 +1670,7 @@ func applyTombstones(
 			return true, nil
 		}
 
-		bcs.deletedRows += float64(getDeletedRows(bcs.dataObjIds, []types.Rowid{entry.RowID}))
+		bcs.deletedRows += float64(getDeletedRows(*bcs.dataObjIds, []types.Rowid{entry.RowID}))
 		//deletedRows += float64(getDeletedRows(moTableStats.bcs.dataObjIds, []types.Rowid{entry.RowID}))
 
 		return true, nil
@@ -1780,6 +1776,4 @@ func bulkUpdateTableOnlyTS(
 	for i := range tbls {
 		tbls[i].Done(ret.Error())
 	}
-
-	return
 }

@@ -19,12 +19,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/robfig/cron/v3"
 )
 
 // genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.
@@ -80,6 +79,18 @@ func GenInitCronTaskSQL() (string, error) {
 		return "", err
 	}
 	cronTasks = append(cronTasks, task3)
+
+	task4, err := createCronTask(
+		task.TaskMetadata{
+			ID:       "mo_table_stats",
+			Executor: task.TaskCode_MOTableStats,
+			Options:  task.TaskOptions{Concurrency: 1},
+		}, export.MergeTaskCronExprEveryMin)
+	if err != nil {
+		return "", err
+	}
+
+	cronTasks = append(cronTasks, task4)
 
 	sql := fmt.Sprintf(`insert into %s.sys_cron_task (
                            task_metadata_id,
