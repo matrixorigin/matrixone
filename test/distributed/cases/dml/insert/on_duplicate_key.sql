@@ -10,7 +10,9 @@ select * from t1;
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
+-- @bvt:issue#4423
 select * from t1;
+-- @bvt:issue
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,2), (1,22) on duplicate key update b=b+10;
@@ -44,7 +46,9 @@ select * from t1;
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
+-- @bvt:issue#4423
 select * from t1;
+-- @bvt:issue
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,2), (1,22) on duplicate key update b=b+10;
@@ -70,7 +74,9 @@ CREATE TABLE IF NOT EXISTS indup_00(`id` INT UNSIGNED,`act_name` VARCHAR(20) NOT
 insert into indup_00 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
 select * from indup_00 order by id;
 insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+-- @bvt:issue#4423
 select * from indup_00 order by id;
+-- @bvt:issue
 drop table indup_00;
 CREATE TABLE IF NOT EXISTS indup(
 col1 INT primary key,
@@ -79,14 +85,18 @@ col3 VARCHAR(30) NOT NULL,
 col4 BIGINT default 30
 );
 insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+-- @bvt:issue#4423
 select * from indup;
 insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
 select * from indup;
+-- @bvt:issue
 drop table indup;
 create table t1(a int primary key, b int, c int);
 insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,9,1),(11,8,2) on duplicate key update a=a+10, c=10;
+-- @bvt:issue#4423
 select * from t1 order by a;
+-- @bvt:issue
 
 drop table if exists t1;
 create table t1(a int primary key, b int unique key);

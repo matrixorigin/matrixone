@@ -18,8 +18,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func InSubMetaTables(m *plan.SubscriptionMeta, tableName string) bool {
@@ -94,4 +98,38 @@ func RemoveTable(oldTableListStr, tblName string) string {
 	}
 	slices.Sort(newTableList)
 	return strings.Join(newTableList, Sep)
+}
+
+// GetAccounts returns
+// nameInfoMap: map[accName] -> AccountInfo
+// idInfoMap: map[accId] -> AccountInfo
+var GetAccounts = func(txn executor.TxnExecutor) (nameInfoMap map[string]*AccountInfo, idInfoMap map[int32]*AccountInfo, err error) {
+	sql := "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(0))
+	if err != nil {
+		return
+	}
+	defer res.Close()
+
+	nameInfoMap = make(map[string]*AccountInfo)
+	idInfoMap = make(map[int32]*AccountInfo)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			var accountInfo AccountInfo
+			accountInfo.Id = vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
+			accountInfo.Name = cols[1].GetStringAt(i)
+			accountInfo.Status = cols[2].GetStringAt(i)
+			accountInfo.Version = vector.GetFixedAtWithTypeCheck[uint64](cols[3], i)
+			if !cols[4].IsNull(uint64(i)) {
+				accountInfo.SuspendedTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[4], i).String2(time.Local, cols[4].GetType().Scale)
+			} else {
+				accountInfo.SuspendedTime = ""
+			}
+			nameInfoMap[accountInfo.Name] = &accountInfo
+			idInfoMap[accountInfo.Id] = &accountInfo
+		}
+		return true
+	})
+	return
 }
