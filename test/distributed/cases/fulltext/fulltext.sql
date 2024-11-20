@@ -350,8 +350,10 @@ drop table src;
 
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
-insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
 create fulltext index ftidx on t1 (b);
+select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
+drop table t1;
 
 
 -- #20149
