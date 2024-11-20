@@ -519,7 +519,7 @@ func Benchmark_Bytes2String(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			buf := make([]byte, 0, len(str))
-			buf = append(buf, str...)
+			_ = append(buf, str...)
 		}
 	})
 	b.Run("byte2StringBuilder", func(b *testing.B) {
