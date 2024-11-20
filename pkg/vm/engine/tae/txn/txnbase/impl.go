@@ -57,13 +57,17 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 		return moerr.NewTAECommitNoCtxf("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Add(1)
-	if err = txn.Freeze(ctx); err == nil {
-		txn.GetStore().StartTrace()
-		err = txn.Mgr.OnOpTxn(&OpTxn{
-			ctx: ctx,
-			Txn: txn,
-			Op:  OpCommit,
-		})
+	freezeErr := txn.Mgr.addTxn()
+	err = freezeErr
+	if err == nil {
+		if err = txn.Freeze(ctx); err == nil {
+			txn.GetStore().StartTrace()
+			err = txn.Mgr.OnOpTxn(&OpTxn{
+				ctx: ctx,
+				Txn: txn,
+				Op:  OpCommit,
+			})
+		}
 	}
 
 	// TxnManager is closed
@@ -81,6 +85,9 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	//if txn.Err == nil {
 	//txn.Status = txnif.TxnStatusCommitted
 	//}
+	if freezeErr == nil {
+		txn.Mgr.deleteTxn()
+	}
 	if err = txn.Mgr.DeleteTxn(txn.GetID()); err != nil {
 		return
 	}

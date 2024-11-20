@@ -10344,10 +10344,12 @@ func TestFreezeTxnManganger2(t *testing.T) {
 			if err != nil {
 				return
 			}
-			success.Add(1)
 			err = tae.DoAppendWithTxn(bats[i], txn, false)
 			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit(ctx))
+			err = txn.Commit(ctx)
+			if err == nil {
+				success.Add(1)
+			}
 		}
 	}
 

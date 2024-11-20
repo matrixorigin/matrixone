@@ -161,11 +161,10 @@ func (mgr *TxnManager) waitAllTxnCommit() {
 func (mgr *TxnManager) getActiveTxnCount() int32 {
 	return mgr.activeTxnCount.Load()
 }
-func (mgr *TxnManager) addTxn(txnID string, txn txnif.TxnAsyncer) error {
+func (mgr *TxnManager) addTxn() error {
 	if mgr.freeze.Load() {
 		return moerr.NewInternalErrorNoCtx("txn mananger is frozen")
 	}
-	mgr.IDMap.Store(txnID, txn)
 	mgr.activeTxnCount.Add(1)
 	return nil
 }
@@ -192,7 +191,10 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	err = mgr.addTxn(txn.GetID(), txn)
+	if mgr.freeze.Load() {
+		return moerr.NewInternalErrorNoCtx("txn mananger is frozen")
+	}
+	mgr.IDMap.Store(txn.GetID(), txn)
 	return
 }
 
@@ -203,13 +205,16 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
+	if mgr.freeze.Load() {
+		return nil, moerr.NewInternalErrorNoCtx("txn mananger is frozen")
+	}
 	txnId := mgr.IdAlloc.Alloc()
 	startTs := *mgr.MaxCommittedTS.Load()
 
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	err = mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
+	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -222,11 +227,14 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
+	if mgr.freeze.Load() {
+		return nil, moerr.NewInternalErrorNoCtx("txn mananger is frozen")
+	}
 	store := mgr.TxnStoreFactory()
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	err = mgr.addTxn(util.UnsafeBytesToString(txnId), txn)
+	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -240,13 +248,16 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
+	if mgr.freeze.Load() {
+		return nil, moerr.NewInternalErrorNoCtx("txn mananger is frozen")
+	}
 	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); ok {
 		txn = value.(txnif.AsyncTxn)
 	} else {
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
-		err = mgr.addTxn(util.UnsafeBytesToString(id), txn)
+		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
 	}
 	return
 }
@@ -257,11 +268,13 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 		logutil.Warnf("Txn %s not found", id)
 		return
 	}
+	return
+}
+func (mgr *TxnManager) deleteTxn() {
 	mgr.doneCond.L.Lock()
 	mgr.activeTxnCount.Add(-1)
 	mgr.doneCond.L.Unlock()
 	mgr.doneCond.Broadcast()
-	return
 }
 
 func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
