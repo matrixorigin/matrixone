@@ -455,15 +455,17 @@ func (exec *singleAggFuncExecNew4) Flush() (*vector.Vector, error) {
 					n = lim
 				}
 
-				for j := 0; j < n; j++ {
+				for j, k := 0, i; j < n; j++ {
 					if exec.ret.isGroupEmpty(x, j) {
+						k++
 						continue
 					}
 					exec.ret.setNextAccessDirectly(x, j)
 
-					if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
+					if err := exec.flush(exec.execContext.getGroupContext(k), commonContext, getter, setter); err != nil {
 						return nil, err
 					}
+					k++
 				}
 				x++
 			}
@@ -475,12 +477,13 @@ func (exec *singleAggFuncExecNew4) Flush() (*vector.Vector, error) {
 					n = lim
 				}
 
-				for j := 0; j < n; j++ {
+				for j, k := 0, i; j < n; j++ {
 					exec.ret.setNextAccessDirectly(x, j)
 
-					if err := exec.flush(exec.execContext.getGroupContext(i), commonContext, getter, setter); err != nil {
+					if err := exec.flush(exec.execContext.getGroupContext(k), commonContext, getter, setter); err != nil {
 						return nil, err
 					}
+					k++
 				}
 				x++
 			}
