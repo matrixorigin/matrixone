@@ -87,6 +87,9 @@ func GenInitCronTaskSQL() (string, error) {
 			Executor: task.TaskCode_MOTableStats,
 			Options:  task.TaskOptions{Concurrency: 1},
 		}, export.MergeTaskCronExprEveryMin)
+	if err != nil {
+		return "", err
+	}
 
 	cronTasks = append(cronTasks, task4)
 
