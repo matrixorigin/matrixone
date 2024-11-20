@@ -585,7 +585,7 @@ func (tbl *txnTable) Ranges(
 func (tbl *txnTable) doRanges(
 	ctx context.Context,
 	exprs []*plan.Expr,
-	preAllocSize int,
+	preAllocBlocks int,
 	policy engine.DataCollectPolicy,
 	txnOffset int,
 ) (data engine.RelData, err error) {
@@ -595,7 +595,10 @@ func (tbl *txnTable) doRanges(
 
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
-	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
+	blocks := objectio.PreAllocBlockInfoSlice(preAllocBlocks)
+	if policy&engine.Policy_CollectUncommittedData != 0 {
+		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
+	}
 
 	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
