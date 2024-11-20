@@ -60,7 +60,7 @@ const (
 func getUseOldImplVariable(proc *process.Process) bool {
 	var (
 		err        error
-		useOldImpl interface{} = ""
+		useOldImpl interface{}
 	)
 
 	if useOldImpl, err = proc.GetResolveVariableFunc()(
