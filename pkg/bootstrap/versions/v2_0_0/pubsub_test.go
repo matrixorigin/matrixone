@@ -17,6 +17,7 @@ package v2_0_0
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/prashantv/gostub"
@@ -31,7 +32,7 @@ func TestUpgradePubSub(t *testing.T) {
 	})
 	defer getAccountsStub.Reset()
 
-	getAllPubInfosStub := gostub.Stub(&pubsub.GetAllPubInfos, func(_ executor.TxnExecutor, _ map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
+	getAllPubInfosStub := gostub.Stub(&versions.GetAllPubInfos, func(_ executor.TxnExecutor, _ map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
 		return map[string]*pubsub.PubInfo{
 			"accName#pubName": {PubName: "pubName", SubAccountsStr: "accName"},
 		}, nil
