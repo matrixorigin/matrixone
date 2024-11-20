@@ -49,13 +49,15 @@ const (
 // Mo functions are better tested with bvt.
 
 var MoTableRowsSizeUseOldImpl atomic.Bool
+var MoTableRowsSizeForceUpdate atomic.Bool
 
 const (
-	moTableRowsSizeForceUpdate = "mo_table_stats.force_update"
-	moTableRowSizeUseOldImpl   = "mo_table_stats.use_old_impl"
+	moTableRowsSizeForceUpdate    = "mo_table_stats.force_update"
+	moTableRowSizeUseOldImpl      = "mo_table_stats.use_old_impl"
+	moTableRowSizeResetUpdateTime = "mo_table_stats.reset_update_time"
 )
 
-func getUseOldImplVariable(proc *process.Process) string {
+func getUseOldImplVariable(proc *process.Process) bool {
 	var (
 		err        error
 		useOldImpl interface{} = ""
@@ -68,10 +70,10 @@ func getUseOldImplVariable(proc *process.Process) string {
 			zap.Error(err))
 	}
 
-	return strings.ToLower(useOldImpl.(string))
+	return strings.ToLower(useOldImpl.(string)) == "yes"
 }
 
-func getForceUpdateVariable(proc *process.Process) string {
+func getForceUpdateVariable(proc *process.Process) bool {
 	var (
 		err         error
 		forceUpdate interface{}
@@ -84,7 +86,23 @@ func getForceUpdateVariable(proc *process.Process) string {
 			zap.Error(err))
 	}
 
-	return strings.ToLower(forceUpdate.(string))
+	return strings.ToLower(forceUpdate.(string)) == "yes"
+}
+
+func getResetUpdateTimeVariable(proc *process.Process) bool {
+	var (
+		err             error
+		resetUpdateTime interface{}
+	)
+
+	if resetUpdateTime, err = proc.GetResolveVariableFunc()(
+		moTableRowSizeResetUpdateTime, true, false); err != nil {
+		logutil.Info("get sys variable failed",
+			zap.String("variable", moTableRowSizeResetUpdateTime),
+			zap.Error(err))
+	}
+
+	return strings.ToLower(resetUpdateTime.(string)) == "yes"
 }
 
 func MoTableSize(
@@ -96,7 +114,7 @@ func MoTableSize(
 ) (err error) {
 
 	useOldStr := getUseOldImplVariable(proc)
-	if (useOldStr == "" && MoTableRowsSizeUseOldImpl.Load()) || useOldStr == "yes" {
+	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
 		// the old implement
 		return MoTableSizeOld(iVecs, result, proc, length, selectList)
 	}
@@ -113,7 +131,7 @@ func MoTableRows(
 ) (err error) {
 
 	useOldStr := getUseOldImplVariable(proc)
-	if (useOldStr == "" && MoTableRowsSizeUseOldImpl.Load()) || useOldStr == "yes" {
+	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
 		// the old implement
 		return MoTableRowsOld(iVecs, result, proc, length, selectList)
 	}
@@ -130,7 +148,7 @@ func MoTableRows(
 
 type GetMoTableSizeRowsFuncType = func() func(
 	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool) ([]uint64, error)
+	engine.Engine, bool, bool) ([]uint64, error)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -188,7 +206,8 @@ func MoTableSizeRowsHelper(
 		ret                   []uint64
 		accIds, dbIds, tblIds []uint64
 
-		forceUpdate = getForceUpdateVariable(proc)
+		forceUpdate     = getForceUpdateVariable(proc)
+		resetUpdateTime = getResetUpdateTimeVariable(proc)
 
 		rs   *vector.FunctionResult[int64]
 		dbs  vector.FunctionParameterWrapper[types.Varlena]
@@ -283,9 +302,9 @@ func MoTableSizeRowsHelper(
 	}
 
 	ret, err = (*executor.Load())()(
-		proc.Ctx,
-		accIds, dbIds, tblIds,
-		eng, forceUpdate == "yes")
+		proc.Ctx, accIds, dbIds, tblIds, eng,
+		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+		resetUpdateTime)
 
 	if err != nil {
 		return err

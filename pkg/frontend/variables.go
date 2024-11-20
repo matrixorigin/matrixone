@@ -3662,6 +3662,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("mo_table_stats.use_old_impl"),
 		Default:           "",
 	},
+	"mo_table_stats.reset_update_time": {
+		Name:              "mo_table_stats.reset_update_time",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("mo_table_stats.reset_update_time"),
+		Default:           "",
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
