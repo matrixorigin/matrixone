@@ -4026,7 +4026,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
+				engine.ForRangeBlockInfo(0, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
@@ -4048,7 +4048,7 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
+				engine.ForRangeBlockInfo(0, subRelData.DataCnt(), subRelData,
 					func(blk *objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
