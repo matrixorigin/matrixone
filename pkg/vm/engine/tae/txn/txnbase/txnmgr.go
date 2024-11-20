@@ -124,6 +124,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
 		wg:              sync.WaitGroup{},
+		doneCond:        *sync.NewCond(&sync.Mutex{}),
 	}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()

@@ -10295,3 +10295,23 @@ func TestS3TransferInMerge(t *testing.T) {
 
 	tae.CheckRowsByScan(9, true)
 }
+
+func TestFreezeTxnManganger(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.TxnMgr.Freeze()
+
+	_, err := tae.StartTxn(nil)
+	assert.Error(t, err)
+}
