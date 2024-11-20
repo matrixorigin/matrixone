@@ -144,6 +144,7 @@ func (c *Compile) Release() {
 	}
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
+		c.proc.ResetCloneTxnOperator()
 	}
 	releaseCompile(c)
 }
@@ -169,6 +170,7 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
+	proc.ResetCloneTxnOperator()
 	c.proc = proc
 
 	c.fill = fill
