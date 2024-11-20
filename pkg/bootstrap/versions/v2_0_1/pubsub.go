@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -58,7 +59,7 @@ func migrateMoPubs(txn executor.TxnExecutor) (err error) {
 	}
 
 	// allPubInfos: pubAccountName#pubName -> pubInfo
-	allPubInfos, err := pubsub.GetAllPubInfos(txn, accNameInfoMap)
+	allPubInfos, err := versions.GetAllPubInfos(txn, accNameInfoMap)
 	if err != nil {
 		return
 	}
