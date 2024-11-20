@@ -659,7 +659,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		logutil.Infof("table %v on single cn, block cnt %v", s.DataSource.TableDef.Name, s.NodeInfo.Data.DataCnt())
 		return nil
 	}
 
@@ -669,7 +668,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	logutil.Infof("table %v on cn %v, commited block cnt %v", s.DataSource.TableDef.Name, s.NodeInfo.CNIDX, commited.DataCnt())
 	if commited.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
 		logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
 			s.DataSource.TableDef.Name, commited.DataCnt(), s.DataSource.node.Stats.BlockNum)
@@ -689,17 +687,14 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	//collect uncommited data if it's local cn
-	if s.NodeInfo.CNIDX == 0 {
+	if !s.IsRemote {
 		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData)
 		if err != nil {
 			return err
 		}
-		logutil.Infof("table %v on cn %v, uncommited block cnt %v", s.DataSource.TableDef.Name, s.NodeInfo.CNIDX, s.NodeInfo.Data.DataCnt())
 		s.NodeInfo.Data.AppendBlockInfoSlice(newRelData.GetBlockInfoSlice())
-		logutil.Infof("table %v on cn %v, all block cnt %v", s.DataSource.TableDef.Name, s.NodeInfo.CNIDX, s.NodeInfo.Data.DataCnt())
 	} else {
 		s.NodeInfo.Data = newRelData
-		logutil.Infof("table %v on cn %v, all block cnt %v", s.DataSource.TableDef.Name, s.NodeInfo.CNIDX, s.NodeInfo.Data.DataCnt())
 	}
 
 	if newRelData.DataCnt() > averageSize+averageSize/2 || newRelData.DataCnt() < averageSize/2 {

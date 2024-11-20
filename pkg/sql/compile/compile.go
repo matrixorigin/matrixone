@@ -4182,7 +4182,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			CNIDX: int32(i),
 		})
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 	return nodes, nil
 }
 
