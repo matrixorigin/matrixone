@@ -692,8 +692,15 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
+		if s.DataSource.TableDef.Name == "bmsql_stock" || s.DataSource.TableDef.Name == "bmsql_oorder" {
+			tryall, _ := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData)
+			logutil.Infof("debug1: localcn tablename %v all %v uncommited %v commited %v after shuffle %v", s.DataSource.TableDef.Name, tryall.DataCnt(), s.NodeInfo.Data.DataCnt(), commited.DataCnt(), newRelData.DataCnt())
+		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(newRelData.GetBlockInfoSlice())
 	} else {
+		if s.DataSource.TableDef.Name == "bmsql_stock" || s.DataSource.TableDef.Name == "bmsql_oorder" {
+			logutil.Infof("debug1: remotecn tablename %v commited %v after shuffle %v", s.DataSource.TableDef.Name, commited.DataCnt(), newRelData.DataCnt())
+		}
 		s.NodeInfo.Data = newRelData
 	}
 
