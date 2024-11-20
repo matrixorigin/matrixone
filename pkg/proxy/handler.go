@@ -20,6 +20,9 @@ import (
 	"net"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // handler is the proxy service handler.
@@ -213,11 +215,14 @@ func (h *handler) handle(c goetty.IOSession) error {
 		}
 	}()
 
+	goId := goid.Get()
+
 	h.logger.Info("build connection",
 		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
 		zap.String("proxy->server", fmt.Sprintf("%s -> %s", sc.RawConn().LocalAddr(), sc.RawConn().RemoteAddr())),
 		zap.Uint32("conn ID", cc.ConnID()),
 		zap.Uint64("session ID", c.ID()),
+		zap.Int64("goId", goId),
 	)
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
@@ -263,6 +268,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 			h.logger.Info("connection closed",
 				zap.Uint32("Conn ID", cc.ConnID()),
 				zap.Uint64("session ID", c.ID()),
+				zap.Int64("goId", goId),
 			)
 			return nil
 		}
@@ -270,6 +276,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.logger.Error("proxy handle error",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Uint64("session ID", c.ID()),
+			zap.Int64("goId", goId),
 			zap.Error(err),
 		)
 		return err
