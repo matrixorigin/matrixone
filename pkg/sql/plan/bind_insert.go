@@ -73,6 +73,22 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, onDupAction)
 }
 
+func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
+	if builder.optimizerHints != nil && builder.optimizerHints.skipDedup == 1 {
+		return true
+	}
+
+	if builder.qry.LoadTag || builder.isRestore {
+		return true
+	}
+
+	if strings.HasPrefix(tableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+		return true
+	}
+
+	return false
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -156,7 +172,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.qry.LoadTag || builder.isRestore || (builder.optimizerHints != nil && builder.optimizerHints.skipDedup == 1) {
+	if builder.canSkipDedup(dmlCtx.tableDefs[0]) {
 		// load do not handle primary/unique key confliction
 		for i, tableDef := range dmlCtx.tableDefs {
 			idxObjRefs[i] = make([]*plan.ObjectRef, len(tableDef.Indexes))
