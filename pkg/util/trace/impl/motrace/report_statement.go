@@ -401,7 +401,8 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.Host = s.Host
 	stmt.RoleId = s.RoleId
 	stmt.Database = s.Database
-	stmt.Statement = s.Statement
+	stmt.Statement = stmt.Statement[:0]
+	stmt.Statement = append(stmt.Statement, s.Statement...)
 	// s.StmtBuilder.Reset()
 	stmt.StatementFingerprint = s.StatementFingerprint
 	stmt.StatementTag = s.StatementTag
