@@ -293,7 +293,9 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
-				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int32{pos}, DocCount: 1}
+				positions := make([]int32, 0, 128)
+				positions = append(positions, pos)
+				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: positions, DocCount: 1}
 			}
 		}
 
