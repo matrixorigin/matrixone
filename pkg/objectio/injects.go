@@ -225,9 +225,9 @@ func InjectRanges(
 }
 
 func PartitionStateInjected(dbName, tableName string) (bool, int) {
-	_, sarg, injected := fault.TriggerFault(FJ_TracePartitionState)
+	iarg, sarg, injected := fault.TriggerFault(FJ_TracePartitionState)
 	if !injected {
 		return false, 0
 	}
-	return checkLoggingArgs(0, sarg, dbName, tableName)
+	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
 }
