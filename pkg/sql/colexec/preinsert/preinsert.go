@@ -292,7 +292,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 				}
 				fromTs := types.TimestampToTS(from)
 				toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-				if mayChanged, err := rel.PrimaryKeysMayBeModified(proc.Ctx, fromTs, toTs, vec); err == nil {
+				if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, vec); err == nil {
 					if mayChanged {
 						logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 						return moerr.NewTxnNeedRetry(proc.Ctx)
