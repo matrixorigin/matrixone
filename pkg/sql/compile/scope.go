@@ -650,45 +650,59 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		return err
 	}
 
-	relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData)
+	if s.NodeInfo.CNCNT == 1 {
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData)
+		if err != nil {
+			return err
+		}
+		err = s.aggOptimize(c, rel, ctx)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	//collect uncommited data if it's local cn
+	if s.NodeInfo.CNIDX == 0 {
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData)
+		if err != nil {
+			return err
+		}
+	}
+
+	//need to shuffle blocks when cncnt>1
+	var commited engine.RelData
+	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData)
 	if err != nil {
 		return err
 	}
+	if commited.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
+		logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
+			s.DataSource.TableDef.Name, commited.DataCnt(), s.DataSource.node.Stats.BlockNum)
+	}
 
-	if s.NodeInfo.CNCNT > 1 {
-		if relData.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
-			logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
-				s.DataSource.TableDef.Name, relData.DataCnt(), s.DataSource.node.Stats.BlockNum)
-		}
-
-		//need to shuffle blocks
-		//todo: optimize this, shuffle blocks in expand ranges
-		// add memory table block
-		averageSize := relData.DataCnt() / int(s.NodeInfo.CNCNT)
-		newRelData := relData.BuildEmptyRelData(averageSize)
-		if !s.IsRemote {
-			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
-		}
-		if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-			err = shuffleBlocksByRange(c.proc, relData, newRelData, s.DataSource.node, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
-			if err != nil {
-				return err
-			}
-		} else {
-			shuffleBlocksByHash(relData, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
-		}
-		s.NodeInfo.Data = newRelData
-		if newRelData.DataCnt() > averageSize+averageSize/2 || newRelData.DataCnt() < averageSize/2 {
-			logutil.Warnf("workload distribution for table %v maybe not balanced! total blocks %v average blocks %v current addr %v currnet blocks %v",
-				s.DataSource.TableDef.Name, relData.DataCnt(), averageSize, c.addr, s.NodeInfo.Data.DataCnt())
+	//need to shuffle blocks
+	//todo: optimize this, shuffle blocks in expand ranges
+	averageSize := commited.DataCnt() / int(s.NodeInfo.CNCNT)
+	newRelData := commited.BuildEmptyRelData(averageSize)
+	if !s.IsRemote {
+		newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+	}
+	if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+		err = shuffleBlocksByRange(c.proc, commited, newRelData, s.DataSource.node, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
+		if err != nil {
+			return err
 		}
 	} else {
-		s.NodeInfo.Data = relData
+		shuffleBlocksByHash(commited, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 	}
 
-	err = s.aggOptimize(c, rel, ctx)
-	if err != nil {
-		return err
+	s.NodeInfo.Data.AppendBlockInfoSlice(newRelData.GetBlockInfoSlice())
+
+	if newRelData.DataCnt() > averageSize+averageSize/2 || newRelData.DataCnt() < averageSize/2 {
+		logutil.Warnf("workload distribution for table %v maybe not balanced! total blocks %v average blocks %v current addr %v currnet blocks %v",
+			s.DataSource.TableDef.Name, commited.DataCnt(), averageSize, c.addr, s.NodeInfo.Data.DataCnt())
 	}
 
 	return nil

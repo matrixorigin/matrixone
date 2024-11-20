@@ -295,6 +295,10 @@ func (rd *MemRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
 	panic("not supported")
 }
 
+func (rd *MemRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
+	panic("not supported")
+}
+
 func (rd *MemRelationData) GetShardIDList() []uint64 {
 	ids := make([]uint64, rd.Shards.Len())
 	idsLen := rd.Shards.Len()

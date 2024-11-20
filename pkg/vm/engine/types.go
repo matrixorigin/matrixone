@@ -703,6 +703,7 @@ type RelData interface {
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
+	AppendBlockInfoSlice(objectio.BlockInfoSlice)
 }
 
 // ForRangeShardID [begin, end)
@@ -1061,6 +1062,10 @@ func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 }
 
 func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
 	panic("not supported")
 }
 

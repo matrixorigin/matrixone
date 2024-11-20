@@ -3996,11 +3996,13 @@ func (c *Compile) expandRanges(
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy) (engine.RelData, error) {
 
 	preAllocSize := 2
-	if !c.IsTpQuery() {
-		if len(blockFilterList) > 0 {
-			preAllocSize = 64
-		} else {
-			preAllocSize = int(node.Stats.BlockNum)
+	if policy&engine.Policy_CollectCommittedData != 0 {
+		if !c.IsTpQuery() {
+			if len(blockFilterList) > 0 {
+				preAllocSize = 64
+			} else {
+				preAllocSize = int(node.Stats.BlockNum)
+			}
 		}
 	}
 
