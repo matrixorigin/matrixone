@@ -111,10 +111,10 @@ type AggFuncExec interface {
 
 // indicate who implements the AggFuncExec interface.
 var (
-	_ AggFuncExec = (*singleAggFuncExecNew1[int32, int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew2[int32])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew3[int64])(nil)
-	_ AggFuncExec = (*singleAggFuncExecNew4)(nil)
+	_ AggFuncExec = (*aggregatorFromFixedToFixed[int32, int64])(nil)
+	_ AggFuncExec = (*aggregatorFromFixedToBytes[int32])(nil)
+	_ AggFuncExec = (*aggregatorFromBytesToFixed[int64])(nil)
+	_ AggFuncExec = (*aggregatorFromBytesToBytes)(nil)
 	_ AggFuncExec = &groupConcatExec{}
 )
 
@@ -185,15 +185,15 @@ func makeSingleAgg(
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4NewVersion(mg, info, agg)
+		return newAggregatorFromBytesToBytes(mg, info, agg)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec2NewVersion(mg, info, agg)
+		return newAggregatorFromFixedToBytes(mg, info, agg)
 	}
 
 	if pIsVarLen {
-		return newSingleAggFuncExec3NewVersion(mg, info, agg)
+		return newAggregatorFromBytesToFixed(mg, info, agg)
 	}
 	return newSingleAggFuncExec1NewVersion(mg, info, agg)
 }

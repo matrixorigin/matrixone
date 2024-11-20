@@ -260,7 +260,7 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 		},
 	}
 
-	a := newSingleAggFuncExec4NewVersion(
+	a := newAggregatorFromBytesToBytes(
 		m, info, implement)
 
 	doAggTest[string, string](

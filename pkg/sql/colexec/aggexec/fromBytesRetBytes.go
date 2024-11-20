@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-var _ AggFuncExec = &singleAggFuncExecNew4{}
+var _ AggFuncExec = &aggregatorFromBytesToBytes{}
 
 func RegisterAggFromBytesRetBytes(
 	basicInformation SingleColumnAggInformation,
@@ -72,17 +72,15 @@ func RegisterAggFromBytesRetBytes(
 	singleAgg[basicInformation.id] = true
 }
 
-// newSingleAggFuncExec4NewVersion creates a singleAggFuncExecNew4 from the agg information.
-func newSingleAggFuncExec4NewVersion(
+func newAggregatorFromBytesToBytes(
 	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
-	e := &singleAggFuncExecNew4{}
+	e := &aggregatorFromBytesToBytes{}
 	e.init(mg, info, impl)
 	return e
 }
 
-// singleAggFuncExecNew4 is the agg executor for single-column aggregation function
-// with fixed input and output types were both var-len types.
-type singleAggFuncExecNew4 struct {
+// aggregatorFromBytesToBytes is the aggregator which accept bytes column and return a bytes result.
+type aggregatorFromBytesToBytes struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	distinctHash
@@ -98,7 +96,7 @@ type singleAggFuncExecNew4 struct {
 	flush SingleAggFlush4NewVersion
 }
 
-func (exec *singleAggFuncExecNew4) marshal() ([]byte, error) {
+func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -113,12 +111,12 @@ func (exec *singleAggFuncExecNew4) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExecNew4) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
-func (exec *singleAggFuncExecNew4) init(
+func (exec *aggregatorFromBytesToBytes) init(
 	mg AggMemoryManager,
 	info singleAggInfo,
 	impl aggImplementation) {
@@ -146,7 +144,7 @@ func (exec *singleAggFuncExecNew4) init(
 	exec.merge = impl.logic.merge.(SingleAggMerge4NewVersion)
 }
 
-func (exec *singleAggFuncExecNew4) GroupGrow(more int) error {
+func (exec *aggregatorFromBytesToBytes) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -161,12 +159,12 @@ func (exec *singleAggFuncExecNew4) GroupGrow(more int) error {
 	return nil
 }
 
-func (exec *singleAggFuncExecNew4) PreAllocateGroups(more int) error {
+func (exec *aggregatorFromBytesToBytes) PreAllocateGroups(more int) error {
 	exec.execContext.preAllocate(more)
 	return exec.ret.preExtend(more)
 }
 
-func (exec *singleAggFuncExecNew4) Fill(
+func (exec *aggregatorFromBytesToBytes) Fill(
 	group int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -193,7 +191,7 @@ func (exec *singleAggFuncExecNew4) Fill(
 	return err
 }
 
-func (exec *singleAggFuncExecNew4) BulkFill(
+func (exec *aggregatorFromBytesToBytes) BulkFill(
 	group int, vectors []*vector.Vector) error {
 	length := vectors[0].Length()
 	if length == 0 || vectors[0].IsConstNull() {
@@ -246,7 +244,7 @@ func (exec *singleAggFuncExecNew4) BulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew4) distinctBulkFill(
+func (exec *aggregatorFromBytesToBytes) distinctBulkFill(
 	group int, vectors []*vector.Vector, length int) error {
 	x, y := exec.ret.updateNextAccessIdx(group)
 	getter := exec.ret.get
@@ -297,7 +295,7 @@ func (exec *singleAggFuncExecNew4) distinctBulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew4) BatchFill(
+func (exec *aggregatorFromBytesToBytes) BatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	if len(groups) == 0 || vectors[0].IsConstNull() {
 		return nil
@@ -364,7 +362,7 @@ func (exec *singleAggFuncExecNew4) BatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew4) distinctBatchFill(
+func (exec *aggregatorFromBytesToBytes) distinctBatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	getter := exec.ret.get
 	setter := exec.ret.set
@@ -428,7 +426,7 @@ func (exec *singleAggFuncExecNew4) distinctBatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew4) Flush() (*vector.Vector, error) {
+func (exec *aggregatorFromBytesToBytes) Flush() (*vector.Vector, error) {
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
@@ -493,8 +491,8 @@ func (exec *singleAggFuncExecNew4) Flush() (*vector.Vector, error) {
 	return exec.ret.flushAll()[0], nil
 }
 
-func (exec *singleAggFuncExecNew4) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*singleAggFuncExecNew4)
+func (exec *aggregatorFromBytesToBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*aggregatorFromBytesToBytes)
 
 	x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
 	x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
@@ -514,8 +512,8 @@ func (exec *singleAggFuncExecNew4) Merge(next AggFuncExec, groupIdx1, groupIdx2 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew4) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*singleAggFuncExecNew4)
+func (exec *aggregatorFromBytesToBytes) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*aggregatorFromBytesToBytes)
 	getter1 := exec.ret.get
 	getter2 := other.ret.get
 	setter := exec.ret.set
@@ -547,7 +545,7 @@ func (exec *singleAggFuncExecNew4) BatchMerge(next AggFuncExec, offset int, grou
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew4) Free() {
+func (exec *aggregatorFromBytesToBytes) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }

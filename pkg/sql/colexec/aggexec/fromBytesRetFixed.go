@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-var _ AggFuncExec = &singleAggFuncExecNew3[bool]{}
+var _ AggFuncExec = &aggregatorFromBytesToFixed[bool]{}
 
 // for sca.
 var _ = RegisterAggFromBytesRetFixed[bool]
@@ -78,109 +78,107 @@ func RegisterAggFromBytesRetFixed[to types.FixedSizeTExceptStrType](
 	singleAgg[basicInformation.id] = true
 }
 
-// newSingleAggFuncExec3NewVersion creates a singleAggFuncExecNew3 from the agg information.
-func newSingleAggFuncExec3NewVersion(
+func newAggregatorFromBytesToFixed(
 	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.retType.Oid {
 	case types.T_bool:
-		e := &singleAggFuncExecNew3[bool]{}
+		e := &aggregatorFromBytesToFixed[bool]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_bit:
-		e := &singleAggFuncExecNew3[uint64]{}
+		e := &aggregatorFromBytesToFixed[uint64]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_int8:
-		e := &singleAggFuncExecNew3[int8]{}
+		e := &aggregatorFromBytesToFixed[int8]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_int16:
-		e := &singleAggFuncExecNew3[int16]{}
+		e := &aggregatorFromBytesToFixed[int16]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_int32:
-		e := &singleAggFuncExecNew3[int32]{}
+		e := &aggregatorFromBytesToFixed[int32]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_int64:
-		e := &singleAggFuncExecNew3[int64]{}
+		e := &aggregatorFromBytesToFixed[int64]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_uint8:
-		e := &singleAggFuncExecNew3[uint8]{}
+		e := &aggregatorFromBytesToFixed[uint8]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_uint16:
-		e := &singleAggFuncExecNew3[uint16]{}
+		e := &aggregatorFromBytesToFixed[uint16]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_uint32:
-		e := &singleAggFuncExecNew3[uint32]{}
+		e := &aggregatorFromBytesToFixed[uint32]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_uint64:
-		e := &singleAggFuncExecNew3[uint64]{}
+		e := &aggregatorFromBytesToFixed[uint64]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_float32:
-		e := &singleAggFuncExecNew3[float32]{}
+		e := &aggregatorFromBytesToFixed[float32]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_float64:
-		e := &singleAggFuncExecNew3[float64]{}
+		e := &aggregatorFromBytesToFixed[float64]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_decimal64:
-		e := &singleAggFuncExecNew3[types.Decimal64]{}
+		e := &aggregatorFromBytesToFixed[types.Decimal64]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_decimal128:
-		e := &singleAggFuncExecNew3[types.Decimal128]{}
+		e := &aggregatorFromBytesToFixed[types.Decimal128]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_date:
-		e := &singleAggFuncExecNew3[types.Date]{}
+		e := &aggregatorFromBytesToFixed[types.Date]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_datetime:
-		e := &singleAggFuncExecNew3[types.Datetime]{}
+		e := &aggregatorFromBytesToFixed[types.Datetime]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_time:
-		e := &singleAggFuncExecNew3[types.Time]{}
+		e := &aggregatorFromBytesToFixed[types.Time]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_timestamp:
-		e := &singleAggFuncExecNew3[types.Timestamp]{}
+		e := &aggregatorFromBytesToFixed[types.Timestamp]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_TS:
-		e := &singleAggFuncExecNew3[types.TS]{}
+		e := &aggregatorFromBytesToFixed[types.TS]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_Rowid:
-		e := &singleAggFuncExecNew3[types.Rowid]{}
+		e := &aggregatorFromBytesToFixed[types.Rowid]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_Blockid:
-		e := &singleAggFuncExecNew3[types.Blockid]{}
+		e := &aggregatorFromBytesToFixed[types.Blockid]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_uuid:
-		e := &singleAggFuncExecNew3[types.Uuid]{}
+		e := &aggregatorFromBytesToFixed[types.Uuid]{}
 		e.init(mg, info, impl)
 		return e
 	case types.T_enum:
-		e := &singleAggFuncExecNew3[types.Enum]{}
+		e := &aggregatorFromBytesToFixed[types.Enum]{}
 		e.init(mg, info, impl)
 		return e
 	}
 	panic(fmt.Sprintf("unsupported result type %s for singleAggFuncExec3", info.retType))
 }
 
-// singleAggFuncExecNew3 is the aggregation executor for single aggregation function
-// with a variable-length input and a fixed-length return value.
-type singleAggFuncExecNew3[to types.FixedSizeTExceptStrType] struct {
+// aggregatorFromBytesToFixed is the aggregator which accepts the bytes column and return a fixed-length type result.
+type aggregatorFromBytesToFixed[to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	distinctHash
@@ -196,7 +194,7 @@ type singleAggFuncExecNew3[to types.FixedSizeTExceptStrType] struct {
 	flush SingleAggFlush3NewVersion[to]
 }
 
-func (exec *singleAggFuncExecNew3[to]) marshal() ([]byte, error) {
+func (exec *aggregatorFromBytesToFixed[to]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -211,12 +209,12 @@ func (exec *singleAggFuncExecNew3[to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExecNew3[to]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *aggregatorFromBytesToFixed[to]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
-func (exec *singleAggFuncExecNew3[to]) init(
+func (exec *aggregatorFromBytesToFixed[to]) init(
 	mg AggMemoryManager,
 	info singleAggInfo,
 	impl aggImplementation) {
@@ -244,7 +242,7 @@ func (exec *singleAggFuncExecNew3[to]) init(
 	exec.merge = impl.logic.merge.(SingleAggMerge3NewVersion[to])
 }
 
-func (exec *singleAggFuncExecNew3[to]) GroupGrow(more int) error {
+func (exec *aggregatorFromBytesToFixed[to]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -259,12 +257,12 @@ func (exec *singleAggFuncExecNew3[to]) GroupGrow(more int) error {
 	return nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) PreAllocateGroups(more int) error {
+func (exec *aggregatorFromBytesToFixed[to]) PreAllocateGroups(more int) error {
 	exec.execContext.preAllocate(more)
 	return exec.ret.preExtend(more)
 }
 
-func (exec *singleAggFuncExecNew3[to]) Fill(
+func (exec *aggregatorFromBytesToFixed[to]) Fill(
 	group int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
@@ -291,7 +289,7 @@ func (exec *singleAggFuncExecNew3[to]) Fill(
 	return err
 }
 
-func (exec *singleAggFuncExecNew3[to]) BulkFill(
+func (exec *aggregatorFromBytesToFixed[to]) BulkFill(
 	group int, vectors []*vector.Vector) error {
 	length := vectors[0].Length()
 	if length == 0 || vectors[0].IsConstNull() {
@@ -344,7 +342,7 @@ func (exec *singleAggFuncExecNew3[to]) BulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) distinctBulkFill(
+func (exec *aggregatorFromBytesToFixed[to]) distinctBulkFill(
 	group int, vectors []*vector.Vector, length int) error {
 	x, y := exec.ret.updateNextAccessIdx(group)
 	getter := exec.ret.get
@@ -395,7 +393,7 @@ func (exec *singleAggFuncExecNew3[to]) distinctBulkFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) BatchFill(
+func (exec *aggregatorFromBytesToFixed[to]) BatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	if len(groups) == 0 || vectors[0].IsConstNull() {
 		return nil
@@ -462,7 +460,7 @@ func (exec *singleAggFuncExecNew3[to]) BatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) distinctBatchFill(
+func (exec *aggregatorFromBytesToFixed[to]) distinctBatchFill(
 	offset int, groups []uint64, vectors []*vector.Vector) error {
 	getter := exec.ret.get
 	setter := exec.ret.set
@@ -526,7 +524,7 @@ func (exec *singleAggFuncExecNew3[to]) distinctBatchFill(
 	return nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) Flush() (*vector.Vector, error) {
+func (exec *aggregatorFromBytesToFixed[to]) Flush() (*vector.Vector, error) {
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
@@ -591,8 +589,8 @@ func (exec *singleAggFuncExecNew3[to]) Flush() (*vector.Vector, error) {
 	return exec.ret.flushAll()[0], nil
 }
 
-func (exec *singleAggFuncExecNew3[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*singleAggFuncExecNew3[to])
+func (exec *aggregatorFromBytesToFixed[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*aggregatorFromBytesToFixed[to])
 
 	x1, y1 := exec.ret.updateNextAccessIdx(groupIdx1)
 	x2, y2 := other.ret.updateNextAccessIdx(groupIdx2)
@@ -612,8 +610,8 @@ func (exec *singleAggFuncExecNew3[to]) Merge(next AggFuncExec, groupIdx1, groupI
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew3[to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*singleAggFuncExecNew3[to])
+func (exec *aggregatorFromBytesToFixed[to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*aggregatorFromBytesToFixed[to])
 	getter1 := exec.ret.get
 	getter2 := other.ret.get
 	setter := exec.ret.set
@@ -645,7 +643,7 @@ func (exec *singleAggFuncExecNew3[to]) BatchMerge(next AggFuncExec, offset int, 
 	return exec.distinctHash.merge(&other.distinctHash)
 }
 
-func (exec *singleAggFuncExecNew3[to]) Free() {
+func (exec *aggregatorFromBytesToFixed[to]) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }
