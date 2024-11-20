@@ -54,6 +54,7 @@ func (c *Compile) Compile(
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
+	c.proc.ResetCloneTxnOperator()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -138,6 +139,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// init context for pipeline.
 	c.proc.ResetQueryContext()
+	c.proc.ResetCloneTxnOperator()
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
