@@ -109,8 +109,10 @@ begin;
 delete from t1 where a = 1;
 insert into t1 values (1, 1);
 -- @session:id=1{
+begin;
 -- @wait:0:commit
 delete from t1 where a = 1;
 insert into t1 values (1, 1);
+commit;
 -- @session}
 commit;

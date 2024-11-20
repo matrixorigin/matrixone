@@ -121,6 +121,8 @@ create table t1 (a int primary key, b int);
 begin;
 delete from t1 where a = 1;
 insert into t1 values (1, 1);
+begin;
 delete from t1 where a = 1;
 insert into t1 values (1, 1);
+commit;
 commit;
