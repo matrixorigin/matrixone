@@ -19,8 +19,6 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -88,8 +86,12 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 		// always hash empty string to first bucket
 		return 0
 	}
-	//sample five bytes
-	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
+	if lenBytes == 1 {
+		return uint64(bytes[0]) % upperLimit
+	}
+	//sample 7 bytes
+	h := ((uint64(bytes[0])+1)*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])+1) +
+		(uint64(bytes[lenBytes-1])+1)*(uint64(bytes[1])+uint64(bytes[lenBytes-2])+1))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
 }
 
@@ -637,7 +639,6 @@ func shouldUseShuffleRanges(s *pb.ShuffleRange, colname string) []float64 {
 		return nil
 	}
 	if s.Uniform < uniformThreshold {
-		logutil.Infof("col %v data distribution is not uniformed, use shuffle range to avoid shuffle imbalance", colname)
 		return s.Result
 	}
 	return nil
