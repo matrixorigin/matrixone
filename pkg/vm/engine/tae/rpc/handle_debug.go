@@ -333,29 +333,19 @@ func (h *Handle) HandleGetChangedTableList(
 
 	rr := h.db.LogtailMgr.GetReader(from, now)
 
-	cc := h.GetDB().Catalog
-
-	tree, _ := rr.GetDirty()
-	for _, val := range tree.Tables {
-		dbId := val.DbID
-		tblId := val.ID
-
-		if !isTheTblIWant(tblId, types.MaxTs()) {
+	for i := range req.TableIds {
+		tree := rr.GetDirtyByTable(req.DatabaseIds[i], req.TableIds[i])
+		if tree.IsEmpty() {
 			continue
 		}
 
-		if dbEntry, err = cc.GetDatabaseByID(dbId); err != nil {
-			logErr(err, fmt.Sprintf("get DBEntry failed dbId=%d", dbId))
+		if !isTheTblIWant(req.TableIds[i], types.MaxTs()) {
 			continue
 		}
 
-		if dbEntry == nil {
-			continue
-		}
-
-		resp.TableIds = append(resp.TableIds, tblId)
-		resp.DatabaseIds = append(resp.DatabaseIds, dbId)
-		resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
+		resp.TableIds = append(resp.TableIds, req.TableIds[i])
+		resp.DatabaseIds = append(resp.DatabaseIds, req.DatabaseIds[i])
+		resp.AccIds = append(resp.AccIds, req.AccIds[i])
 	}
 
 	tt := now.ToTimestamp()
