@@ -116,10 +116,12 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 
 		u.batch = tf.createResultBatch()
+		u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
 		u.inited = true
 	}
 
-	u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
+	// reset slice
+	u.doc.Words = u.doc.Words[:0]
 	u.offset = 0
 
 	// cleanup the batch
