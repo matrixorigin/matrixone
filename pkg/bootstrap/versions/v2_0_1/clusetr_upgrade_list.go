@@ -14,6 +14,32 @@
 
 package v2_0_1
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"fmt"
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
+
+var needMigrateMoPubs = false
+
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_pubs_add_account_id_column,
+}
+
+var upg_mo_pubs_add_account_id_column = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    fmt.Sprintf("alter table %s.%s add column account_id int not null first, drop primary key, add primary key(account_id, pub_name)", catalog.MO_CATALOG, catalog.MO_PUBS),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PUBS, "account_id")
+		if err != nil {
+			return false, err
+		}
+
+		needMigrateMoPubs = !colInfo.IsExits
+		return colInfo.IsExits, nil
+	},
+}

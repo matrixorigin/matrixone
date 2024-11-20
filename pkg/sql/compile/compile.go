@@ -541,6 +541,7 @@ func (c *Compile) runOnce() (err error) {
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
 		err = c.runSql(sql)
 		if err != nil {
+			c.debugLogFor19288(err, sql)
 			return err
 		}
 	}
@@ -573,6 +574,13 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+// add log to check if background sql return NeedRetry error when origin sql execute successfully
+func (c *Compile) debugLogFor19288(err error, bsql string) {
+	if c.isRetryErr(err) {
+		logutil.Debugf("Origin SQL: %s\nBackground SQL: %s\nTransaction Meta: %v", c.originSQL, bsql, c.proc.GetTxnOperator().Txn())
+	}
 }
 
 func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
@@ -4885,6 +4893,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 	for _, sql := range detectSqls {
 		err := runDetectSql(c, sql)
 		if err != nil {
+			c.debugLogFor19288(err, sql)
 			return err
 		}
 	}
