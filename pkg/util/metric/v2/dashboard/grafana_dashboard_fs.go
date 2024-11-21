@@ -39,7 +39,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 			c.initFSObjectStorageRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
-			c.initFSMallocRow(),
+			c.initFSHTTPTraceRow(),
 			c.initFSReadWriteBytesRow(),
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
@@ -202,12 +202,14 @@ func (c *DashboardCreator) initFSS3ConnDurationRow() dashboard.Option {
 			[]string{
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="connect"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="get-conn"`),
+				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="got-first-response"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="dns-resolve"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="tls-handshake"`),
 			},
 			[]string{
 				"connect",
 				"get-conn",
+				"got-first-response",
 				"dns-resolve",
 				"tls-handshake",
 			},
@@ -286,26 +288,6 @@ func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
-	return dashboard.Row(
-		"malloc stats",
-
-		c.withMultiGraph(
-			"active objects",
-			3,
-			[]string{
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="io_entry_data"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="bytes"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="memory_cache"`) + `)`,
-			},
-			[]string{
-				"io_entry_data",
-				"bytes",
-				"memory_cache",
-			}),
-	)
-}
-
 func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 	return dashboard.Row(
 		"Object Storage",
@@ -353,6 +335,35 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 				"list",
 				"exists",
 				"stat",
+			},
+		),
+	)
+}
+
+func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
+	return dashboard.Row(
+		"HTTP Trace",
+
+		c.withMultiGraph(
+			"trace",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="DNSStart"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="ConnectStart"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="TSLHandshakeStart"`) + `)`,
+			},
+			[]string{
+				"GetConn",
+				"GotConn",
+				"GotConnReused",
+				"GotConnIdle",
+				"DNSStart",
+				"ConnectStart",
+				"TLSHandshakeStart",
 			},
 		),
 	)

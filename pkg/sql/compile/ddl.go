@@ -1798,6 +1798,8 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 		return err
 	}
 
+	c.setHaveDDL(true)
+
 	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
@@ -2149,7 +2151,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e

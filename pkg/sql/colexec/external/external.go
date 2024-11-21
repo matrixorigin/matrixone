@@ -182,8 +182,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	//anal.Input(nil, external.GetIsFirst())
-	analyzer.Input(nil)
 
 	var err error
 	result := vm.NewCallResult()
@@ -208,6 +206,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.End = true
 		return result, err
 	}
+	analyzer.Input(external.ctr.buf)
 
 	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {

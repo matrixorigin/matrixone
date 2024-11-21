@@ -4573,10 +4573,10 @@ func removeEmtpyNodes(
 	var newnodes engine.Nodes
 	for i := range nodes {
 		if nodes[i].Data.DataCnt() > maxCnt {
-			maxCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			maxCnt = nodes[i].Data.DataCnt()
 		}
 		if nodes[i].Data.DataCnt() < minCnt {
-			minCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			minCnt = nodes[i].Data.DataCnt()
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4655,8 +4655,9 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
-			objTimeStamp := location.Name()[:7]
-			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
+			objID := location.ObjectId()
+
+			index := plan2.SimpleCharHashToRange(objID[:], uint64(len(c.cnList)))
 			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
