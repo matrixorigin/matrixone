@@ -528,6 +528,56 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 	return buffer.EncodeUint16(r), nil
 }
 
+func HandleShardingReadPrimaryKeysMayBeUpserted(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		engine,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var from, to types.TS
+	err = from.Unmarshal(param.PrimaryKeysMayBeModifiedParam.From)
+	if err != nil {
+		return nil, err
+	}
+
+	err = to.Unmarshal(param.PrimaryKeysMayBeModifiedParam.To)
+	if err != nil {
+		return nil, err
+	}
+
+	keyVector := vector.NewVecFromReuse()
+	err = keyVector.UnmarshalBinary(param.PrimaryKeysMayBeModifiedParam.KeyVector)
+	if err != nil {
+		return nil, err
+	}
+
+	modify, err := tbl.PrimaryKeysMayBeUpserted(
+		ctx,
+		from,
+		to,
+		keyVector,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var r uint16
+	if modify {
+		r = 1
+	}
+	return buffer.EncodeUint16(r), nil
+}
+
 // HandleShardingReadMergeObjects handles sharding read MergeObjects
 func HandleShardingReadMergeObjects(
 	ctx context.Context,
