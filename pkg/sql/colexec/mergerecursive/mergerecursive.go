@@ -43,13 +43,7 @@ func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
 }
 
 func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeRecursive.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &mergeRecursive.ctr
 
@@ -105,6 +99,5 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 
 	result.Batch = mergeRecursive.ctr.buf
 	result.Status = vm.ExecHasMore
-	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -162,20 +162,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 }
 
 func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := group.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := group.ctr.processGroupByAndAgg(group, proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

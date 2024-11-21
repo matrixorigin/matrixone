@@ -107,13 +107,7 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 }
 
 func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := fill.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &fill.ctr
 
@@ -164,7 +158,6 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 	}
 
 	result.Batch = ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -309,7 +302,6 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		}
 	}
 	result.Batch = ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -447,7 +439,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
@@ -491,7 +482,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -507,7 +497,6 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 		result.Batch = ctr.bats[ctr.idx]
 		result.Status = vm.ExecNext
 		ctr.idx++
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 	for i := 0; ; i++ {
@@ -551,7 +540,6 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, analyzer pro
 	result.Status = vm.ExecNext
 	ctr.idx++
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

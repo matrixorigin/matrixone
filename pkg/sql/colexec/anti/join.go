@@ -66,13 +66,7 @@ func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := antiJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ap := antiJoin
 	input := vm.NewCallResult()
@@ -100,7 +94,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if inbat.Last() {
 				result.Batch = inbat
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if inbat.IsEmpty() {
@@ -130,7 +123,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

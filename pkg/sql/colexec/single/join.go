@@ -72,13 +72,7 @@ func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := singleJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &singleJoin.ctr
 	input := vm.NewCallResult()
@@ -105,7 +99,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			if bat.Last() {
 				result.Batch = bat
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if bat.IsEmpty() {
@@ -141,7 +134,6 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

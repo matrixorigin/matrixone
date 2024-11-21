@@ -41,7 +41,9 @@ func (op *MockOperator) GetOperatorBase() *vm.OperatorBase {
 }
 
 func NewMockOperator() *MockOperator {
-	return &MockOperator{}
+	mockOp := &MockOperator{}
+	mockOp.OpAnalyzer = process.NewAnalyzer(0, false, false, "mock_op")
+	return mockOp
 }
 
 func (op *MockOperator) ResetBatchs() {

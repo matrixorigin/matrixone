@@ -99,13 +99,9 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return vm.OpCallWithProjection(lockOp.GetChildren(0), proc)
+		return vm.Exec(lockOp.GetChildren(0), proc)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -117,8 +113,6 @@ func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -135,7 +129,6 @@ func callNonBlocking(
 		return result, lockOp.ctr.retryError
 	}
 	if result.Batch.IsEmpty() {
-		analyzer.Output(result.Batch)
 		return result, err
 	}
 
@@ -144,7 +137,6 @@ func callNonBlocking(
 		return result, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

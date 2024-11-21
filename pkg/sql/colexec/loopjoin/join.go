@@ -74,13 +74,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 }
 
 func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := loopJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &loopJoin.ctr
 	input := vm.NewCallResult()
@@ -150,7 +144,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil

@@ -110,24 +110,11 @@ func (sample *Sample) Prepare(proc *process.Process) (err error) {
 		sample.ctr.groupVectorsNullable = groupKeyNullable
 	}
 
-	if sample.ProjectList != nil {
-		err := sample.PrepareProjection(proc)
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := sample.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	// duplicate code from other operators.
 	result, lastErr := vm.ChildrenCall(sample.GetChildren(0), proc, analyzer)
@@ -154,7 +141,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		sample.ctr.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
-		analyzer.Output(result.Batch)
 		return result, lastErr
 	}
 
@@ -183,7 +169,6 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
 	sample.ctr.buf = result.Batch
-	analyzer.Output(result.Batch)
 	return result, err
 }
 

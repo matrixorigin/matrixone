@@ -71,13 +71,7 @@ func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := semiJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &semiJoin.ctr
 	input := vm.NewCallResult()
@@ -158,7 +152,6 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

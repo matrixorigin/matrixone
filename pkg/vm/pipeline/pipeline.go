@@ -68,7 +68,7 @@ func (p *Pipeline) Run(proc *process.Process) (end bool, err error) {
 	vm.ModifyOutputOpNodeIdx(p.rootOp, proc)
 
 	for end = false; !end; {
-		result, er := vm.OpCallWithProjection(p.rootOp, proc)
+		result, er := vm.Exec(p.rootOp, proc)
 		if er != nil {
 			return true, er
 		}

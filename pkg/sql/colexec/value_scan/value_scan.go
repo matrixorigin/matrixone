@@ -123,14 +123,8 @@ func (valueScan *ValueScan) Prepare(proc *process.Process) error {
 }
 
 func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
-	err, isCancel := vm.CancelCheck(proc)
-	if isCancel {
-		return vm.CancelResult, err
-	}
 	analyzer := valueScan.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
+	var err error
 	result := vm.NewCallResult()
 	if valueScan.runningCtx.nowIdx < len(valueScan.Batchs) {
 		result.Batch, err = valueScan.genSubBatchFromOriginBatch(proc)
@@ -140,8 +134,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	analyzer.Input(result.Batch)
-	analyzer.Output(result.Batch)
-
 	return result, err
 }
 

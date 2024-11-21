@@ -115,14 +115,6 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 }
 
 func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
-	analyzer := timeWin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	ctr := &timeWin.ctr
 	var err error
 
@@ -130,7 +122,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case interval:
-			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -148,10 +140,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.bat
-			analyzer.Output(result.Batch)
 			return result, nil
 		case receive:
-			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -214,7 +205,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			result, err := vm.OpCallWithProjection(timeWin.GetChildren(0), proc)
+			result, err := vm.Exec(timeWin.GetChildren(0), proc)
 			if err != nil {
 				return result, err
 			}
@@ -266,13 +257,11 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.bat
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case end:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		}

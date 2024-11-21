@@ -51,13 +51,7 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 }
 
 func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := shuffleBuild.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ap := shuffleBuild
@@ -67,18 +61,15 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		case ReceiveBatch:
 			err := ctr.collectBuildBatches(ap, proc, analyzer)
 			if err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if err = ctr.handleRuntimeFilter(ap, proc); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			ctr.state = BuildHashMap
 		case BuildHashMap:
 			err := ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, false, proc)
 			if err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			if !ap.NeedBatches {
@@ -106,7 +97,6 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

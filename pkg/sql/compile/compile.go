@@ -2120,12 +2120,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(n, ss[i])
 			}
-		case *sample.Sample:
-			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
 
 		default:
 			c.setProjection(n, ss[i])

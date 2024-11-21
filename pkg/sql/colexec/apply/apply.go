@@ -55,18 +55,11 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return
 	}
-	err = apply.PrepareProjection(proc)
 	return
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := apply.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -86,7 +79,6 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if ctr.inbat.Last() {
 				result.Batch = ctr.inbat
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if ctr.inbat.IsEmpty() {
@@ -115,7 +107,6 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 
-		analyzer.Output(result.Batch)
 		return result, nil
 
 	}

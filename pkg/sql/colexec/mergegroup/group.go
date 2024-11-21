@@ -53,13 +53,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 }
 
 func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeGroup.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &mergeGroup.ctr
 	result := vm.NewCallResult()
@@ -111,7 +105,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 				result.Batch = ctr.bat
 			}
 			ctr.state = End
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:
