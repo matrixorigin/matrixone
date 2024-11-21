@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -871,6 +870,48 @@ func logWaiterStatusChanged(
 			zap.Stringer("waiter", w),
 			zap.Int("from-state", int(from)),
 			zap.Int("to-state", int(to)),
+		)
+	}
+}
+
+func logRefWaiter(
+	logger *log.MOLogger,
+	info string,
+	txn []byte,
+	w *waiter,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Log(
+			"ref waiter",
+			getLogOptions(zap.InfoLevel),
+			zap.String("txn", hex.EncodeToString(txn)),
+			zap.String("info", info),
+			zap.String("waiter", fmt.Sprintf("%p", w)),
+		)
+	}
+}
+
+func logCloseWaiter(
+	logger *log.MOLogger,
+	info string,
+	txn []byte,
+	w *waiter,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Log(
+			"close waiter",
+			getLogOptions(zap.InfoLevel),
+			zap.String("txn", hex.EncodeToString(txn)),
+			zap.String("info", info),
+			zap.String("waiter", fmt.Sprintf("%p", w)),
 		)
 	}
 }
