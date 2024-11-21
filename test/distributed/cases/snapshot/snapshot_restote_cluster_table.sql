@@ -1,3 +1,7 @@
+select enable_fault_injection();
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
+
+
 use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);
@@ -72,3 +76,5 @@ drop table if exists mo_catalog.cluster_table_2;
 drop account if exists acc01;
 -- @ignore:1
 show snapshots;
+
+select disable_fault_injection();
