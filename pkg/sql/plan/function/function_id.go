@@ -103,6 +103,7 @@ const (
 	CORR
 	COS
 	COT
+	CRC32
 	COUNT
 	COUNT_IF
 	COVAR_POP
@@ -565,6 +566,7 @@ var functionIdRegister = map[string]int32{
 	"atan":                           ATAN,
 	"cos":                            COS,
 	"cot":                            COT,
+	"crc32":                          CRC32,
 	"timestamp":                      TIMESTAMP,
 	"database":                       DATABASE,
 	"schema":                         DATABASE,

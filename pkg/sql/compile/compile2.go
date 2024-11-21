@@ -55,6 +55,9 @@ func (c *Compile) Compile(
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
+	// clear the clone txn operator to avoid reuse.
+	c.proc.ResetCloneTxnOperator()
+
 	// statistical information record and trace.
 	compileStart := time.Now()
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
@@ -138,13 +141,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// init context for pipeline.
 	c.proc.ResetQueryContext()
+	c.proc.ResetCloneTxnOperator()
 	c.InitPipelineContextToExecuteQuery()
-
-	// record this query to compile service.
-	GetCompileService().recordRunningCompile(c, txnOperator)
-	defer func() {
-		GetCompileService().removeRunningCompile(c, txnOperator)
-	}()
 
 	// check if there is any action to cancel this query.
 	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
@@ -166,6 +164,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
+		txnOperator.EnterRunSql()
 	}
 
 	var isExplainPhyPlan = false
@@ -180,9 +179,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
+		if txnOperator != nil {
+			txnOperator.ExitRunSql()
+		}
 	}()
 
 	// update the top context with some trace information and values.

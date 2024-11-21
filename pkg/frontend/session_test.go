@@ -748,3 +748,17 @@ func Test_OperatorLock(t *testing.T) {
 	err = setUserLock(ctx, "user1", bh)
 	assert.NoError(t, err)
 }
+
+func TestReserveConnAndClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	rm, _ := NewRoutineManager(context.Background(), "")
+	ses.rm = rm
+	rm = ses.getRoutineManager()
+	rm.sessionManager.AddSession(ses)
+
+	ses.ReserveConnAndClose()
+	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
+}

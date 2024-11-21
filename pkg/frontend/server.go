@@ -222,7 +222,8 @@ func (mo *MOServer) handshake(rs *Conn) error {
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getPu(mo.service).SV.SessionTimeout.Duration, moerr.CauseHandshake)
+	//set connect timeout
+	tempCtx, tempCancel := context.WithTimeoutCause(ctx, getPu(mo.service).SV.ConnectTimeout.Duration, moerr.CauseHandshake)
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)

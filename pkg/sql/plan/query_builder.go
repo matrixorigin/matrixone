@@ -26,9 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -468,6 +466,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
+		if node.DedupJoinCtx != nil {
+			for _, col := range node.DedupJoinCtx.OldColList {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
+
+			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
+
 		internalMap := make(map[[2]int32][2]int32)
 
 		leftID := node.Children[0]
@@ -497,6 +505,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 			if err != nil {
 				return nil, err
+			}
+		}
+
+		remapInfo.tip = "DedupJoinCtx"
+		if node.DedupJoinCtx != nil {
+			for i, col := range node.DedupJoinCtx.OldColList {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&node.DedupJoinCtx.OldColList[i], internalMap, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for idx, expr := range node.DedupJoinCtx.UpdateColExprList {
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = idx
+				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -1496,23 +1524,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_INSERT, plan.Node_DELETE:
-		for _, expr := range node.InsertDeleteCols {
-			increaseRefCnt(expr, 1, colRefCnt)
-		}
-
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
-		}
-
-		remapInfo.tip = "InsertDeleteCols"
-		for idx, expr := range node.InsertDeleteCols {
-			increaseRefCnt(expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
-			if err != nil {
-				return nil, err
-			}
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -2565,12 +2579,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var timeWindowGroup *plan.Expr
 
 	if clause == nil {
-		proc := builder.compCtx.GetProcess()
 		rowCount := len(valuesClause.Rows)
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
-		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
 		strTyp := plan.Type{
 			Id:          int32(types.T_text),
 			NotNullable: false,
@@ -2600,14 +2612,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			vec := vector.NewVec(types.T_text.ToType())
-			bat.Vecs[i] = vec
 			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {
-				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-					bat.Clean(proc.Mp())
-					return 0, err
-				}
 				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
@@ -2617,9 +2623,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					return 0, err
 				}
 				rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
-					RowPos: int32(j),
-					Expr:   planExpr,
-					Pos:    -1,
+					Expr: planExpr,
 				})
 			}
 
@@ -2635,7 +2639,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				Typ:   strTyp,
 			}
 		}
-		bat.SetRowCount(rowCount)
 		nodeUUID, _ := uuid.NewV7()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_VALUE_SCAN,
@@ -2645,11 +2648,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			Uuid:         nodeUUID[:],
 			NotCacheable: true,
 		}, ctx)
-		if builder.isPrepareStatement {
-			proc.SetPrepareBatch(bat)
-		} else {
-			proc.SetValueScanBatch(nodeUUID, bat)
-		}
 
 		if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx); err != nil {
 			return 0, err
