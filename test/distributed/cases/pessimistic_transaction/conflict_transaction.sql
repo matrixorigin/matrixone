@@ -102,3 +102,17 @@ insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),
 select * from ct_07;
 commit;
 select * from ct_07;
+
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+-- @session:id=1{
+begin;
+-- @wait:0:commit
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+commit;
+-- @session}
+commit;
