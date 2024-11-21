@@ -1,3 +1,9 @@
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
+add_fault_point(fj/debug/19787, :::, echo, 0, )
+true
 create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 create database if not exists db1;
 create table db1.t1 (a int);
@@ -121,3 +127,6 @@ drop snapshot syssn1;
 drop account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+select disable_fault_injection();
+disable_fault_injection()
+true
