@@ -77,13 +77,17 @@ func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	return k
 }
 
-func ModifyBlockLimitOfAggregator(a AggFuncExec, n int) {
+func ModifyChunkSizeOfAggregator(a AggFuncExec, n int) {
 	r := a.getOptResult()
 	r.modifyChunkSize(n)
 }
 
-// SyncAggregatorsBlockLimit sync all aggregator with their min chunk size.
-func SyncAggregatorsBlockLimit(as []AggFuncExec) (syncLimit int) {
+func GetChunkSizeOfAggregator(a AggFuncExec) int {
+	return a.getOptResult().getChunkSize()
+}
+
+// SyncAggregatorsChunkSize sync all aggregator with their min chunk size.
+func SyncAggregatorsChunkSize(as []AggFuncExec) (syncLimit int) {
 	m := as[0].getOptResult().getChunkSize()
 	if len(as) > 1 {
 		for i := 1; i < len(as); i++ {
