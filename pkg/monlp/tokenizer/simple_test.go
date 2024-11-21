@@ -21,7 +21,7 @@ import (
 
 func tokenize(input []byte) []Token {
 	tknz, _ := NewSimpleTokenizer(input)
-	var tokens []Token
+	var tokens []Token = make([]Token, 0, 128)
 	for t := range tknz.Tokenize() {
 		tokens = append(tokens, t)
 	}
