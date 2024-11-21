@@ -53,7 +53,6 @@ require (
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
-	github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78
 	github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.78
@@ -87,6 +86,7 @@ require (
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.26.0
+	golang.org/x/text v0.19.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.34.2
@@ -133,7 +133,6 @@ require (
 	github.com/tetratelabs/wazero v1.7.3 // indirect
 	golang.org/x/crypto v0.28.0 // indirect
 	golang.org/x/net v0.30.0 // indirect
-	golang.org/x/text v0.19.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 )
 
