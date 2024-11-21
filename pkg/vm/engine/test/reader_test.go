@@ -431,6 +431,12 @@ func Test_ShardingHandler(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, catalog.MO_TABLES, 0)
+	require.NoError(t, err)
+	defer rmFault()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -623,6 +629,12 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		rpcAgent      *testutil.MockRPCAgent
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
+	require.NoError(t, err)
+	defer rmFault()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
