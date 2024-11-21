@@ -683,12 +683,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			var defExpr *Expr
 			idxs := make([]int32, len(rightTableDef.Cols))
 			updateExprs := make(map[string]*Expr)
+			binder := NewUpdateBinder(builder.GetContext(), builder, nil, rightTableDef.Cols)
 			for i, col := range rightTableDef.Cols {
 				info.idx = info.idx + 1
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
-					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
-					binder.builder = builder
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
