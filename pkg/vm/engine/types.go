@@ -726,6 +726,9 @@ func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
 	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
+	if begin >= relData.DataCnt() {
+		return nil
+	}
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()

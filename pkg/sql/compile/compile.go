@@ -4014,11 +4014,13 @@ func (c *Compile) expandRanges(
 		return nil, err
 	}
 
-	begin := 0
-	if policy&engine.Policy_CollectUncommittedData != 0 {
-		begin = 1 //skip empty block info
-	}
 	if node.TableDef.Partition != nil {
+		preAllocSize = 2
+		begin := 0
+		if policy&engine.Policy_CollectUncommittedData != 0 {
+			begin = 1 //skip empty block info
+		}
+
 		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
 			for i, partitionItem := range node.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
@@ -4026,7 +4028,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
@@ -4048,7 +4050,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, 2, c.TxnOffset, policy)
+				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
 				if err != nil {
 					return nil, err
 				}
