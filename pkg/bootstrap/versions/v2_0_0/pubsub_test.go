@@ -24,14 +24,14 @@ import (
 )
 
 func TestUpgradePubSub(t *testing.T) {
-	getAccountsStub := gostub.Stub(&getAccounts, func(_ executor.TxnExecutor) (map[string]*pubsub.AccountInfo, error) {
+	getAccountsStub := gostub.Stub(&pubsub.GetAccounts, func(_ executor.TxnExecutor) (map[string]*pubsub.AccountInfo, map[int32]*pubsub.AccountInfo, error) {
 		return map[string]*pubsub.AccountInfo{
 			"accName": {Id: 0, Name: "accName"},
-		}, nil
+		}, nil, nil
 	})
 	defer getAccountsStub.Reset()
 
-	getAllPubInfosStub := gostub.Stub(&getAllPubInfos, func(_ executor.TxnExecutor, _ map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
+	getAllPubInfosStub := gostub.Stub(&pubsub.GetAllPubInfos, func(_ executor.TxnExecutor, _ map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
 		return map[string]*pubsub.PubInfo{
 			"accName#pubName": {PubName: "pubName", SubAccountsStr: "accName"},
 		}, nil

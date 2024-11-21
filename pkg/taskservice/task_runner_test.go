@@ -252,10 +252,12 @@ func TestRemoveRunningTask(t *testing.T) {
 				if len(r.runningTasks.completedTasks) != 0 {
 					_, completed := r.runningTasks.completedTasks[task.ID]
 					if !exists && completed {
+						r.runningTasks.RUnlock()
 						return
 					}
 				} else {
 					if !exists {
+						r.runningTasks.RUnlock()
 						return
 					}
 				}

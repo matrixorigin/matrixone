@@ -193,6 +193,14 @@ Project
               ->  Table Scan on fulltext.src
               ->  Table Function on fulltext_index_scan
                     ->  Values Scan "*VALUES*" 
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+body    VARCHAR(65535)    YES    MUL    null        
+title    TEXT(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`body`,`title`),\n FULLTEXT(`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -216,6 +224,10 @@ insert into src2 values ('id4', 4, 'light brown', 't5');
 select * from src2 where match(body, title) against('t5');
 id1    id2    body    title
 id4    4    light brown    t5
+desc src;
+no such table fulltext.src
+show create table src;
+no such table fulltext.src
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -236,6 +248,14 @@ id    json1    json2
 select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES    MUL    null        
+json2    JSON(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, json1 text, json2 varchar);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -256,6 +276,14 @@ id    json1    json2
 select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
 id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    TEXT(0)    YES    MUL    null        
+json2    VARCHAR(65535)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -359,6 +387,14 @@ delete from src;
 select count(*) from src;
 count(*)
 0
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+body    VARCHAR(65535)    YES        null        
+title    TEXT(0)    YES    MUL    null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`title`,`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -370,6 +406,15 @@ select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
 id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
+desc src2;
+Field    Type    Null    Key    Default    Extra    Comment
+id1    VARCHAR(65535)    NO    PRI    null        
+id2    BIGINT(64)    NO    PRI    null        
+body    CHAR(128)    YES    MUL    null        
+title    TEXT(0)    YES        null        
+show create table src2;
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT(`body`,`title`)\n)
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -390,6 +435,14 @@ select * from src where match(json1, json2) against('中文學習教材' in natu
 id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
 update src set json1='{"c":"update json"}' where id=0;
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES    MUL    null        
+json2    JSON(0)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -413,8 +466,20 @@ update src set json1='{"c":"update json"}' where id=0;
 select * from src where match(json1, json2) against('"update json"' in boolean mode);
 id    json1    json2
 0    {"c":"update json"}    {"d": "happy birthday", "f":"winter"}
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    TEXT(0)    YES    MUL    null        
+json2    VARCHAR(65535)    YES        null        
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
-insert into t1 select result, "test create big fulltext index" from generate_series(300000) g;
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
 create fulltext index ftidx on t1 (b);
+select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
+b
+test create big fulltext index
+drop table t1;

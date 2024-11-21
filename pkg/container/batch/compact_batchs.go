@@ -70,7 +70,7 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 
 	// fast path 1
 	lastBatRowCount := bats.batchs[batLen-1].rowCount
-	if lastBatRowCount == 0 {
+	if lastBatRowCount == DefaultBatchMaxRow {
 		bats.batchs = append(bats.batchs, inBatch)
 		return nil
 	}
@@ -103,6 +103,16 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 
 	// empty bats
 	if batLen == 0 {
+		tmpBat, err = inBatch.Dup(mpool)
+		if err != nil {
+			return err
+		}
+		bats.batchs = append(bats.batchs, tmpBat)
+		return nil
+	}
+
+	lastBatRowCount := bats.batchs[batLen-1].rowCount
+	if lastBatRowCount == DefaultBatchMaxRow {
 		tmpBat, err = inBatch.Dup(mpool)
 		if err != nil {
 			return err

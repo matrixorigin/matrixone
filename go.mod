@@ -61,6 +61,7 @@ require (
 	github.com/ncruces/go-dns v1.2.5
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/parquet-go/parquet-go v0.23.0
+	github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274
 	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5

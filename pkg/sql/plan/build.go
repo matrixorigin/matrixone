@@ -361,8 +361,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildLockTables(stmt, ctx)
 	case *tree.UnLockTableStmt:
 		return buildUnLockTables(stmt, ctx)
-	case *tree.ShowPublications:
-		return buildShowPublication(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
 	case *tree.ShowStages:
