@@ -1,6 +1,3 @@
-select enable_fault_injection();
-select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
-
 CREATE DATABASE Company;
 USE Company;
 
@@ -874,4 +871,3 @@ drop snapshot if exists snapshot_01;
 -- @ignore:1
 show snapshots;
 
-select disable_fault_injection();
