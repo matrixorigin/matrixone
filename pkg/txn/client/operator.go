@@ -620,7 +620,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if tc.reset.runningSQL.Load() && !tc.markAborted() {
-		tc.logger.Fatal("commit on running txn")
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
 	}
 
 	tc.reset.commitCounter.addEnter()
