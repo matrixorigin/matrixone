@@ -14,3 +14,191 @@ crc32(col1)
 2286445522
 null
 158520161
+SELECT CRC32('Hello, World!') AS crc32_hello_world;
+crc32_hello_world
+3964322768
+select CRC32('');
+CRC32()
+0
+select crc32('hello world!');
+crc32(hello world!)
+62177901
+select crc32('euwpqeiwqpjvmrwqewq');
+crc32(euwpqeiwqpjvmrwqewq)
+12334261
+select crc32('372913721ojgi132uio3jkel2m1kl3hi21fr41234321421');
+crc32(372913721ojgi132uio3jkel2m1kl3hi21fr41234321421)
+442562693
+select crc32('aaaaaaa');
+crc32(aaaaaaa)
+1535844468
+select CRC32('hello!@#$%');
+CRC32(hello!@#$%)
+3807139106
+select crc32('$^*(&)(*)($%^$%#%^&(*&(*');
+crc32($^*(&)(*)($%^$%#%^&(*&(*)
+3521867048
+select crc32('a'), crc32('ab'), CRC32('abc'), CRC32('abcd'), CRC32('abcde');
+crc32(a)    crc32(ab)    CRC32(abc)    CRC32(abcd)    CRC32(abcde)
+3904355907    2659403885    891568578    3984772369    2240272485
+select crc32('hello'), crc32('hello world'), crc32('hello multicolored world!')
+select crc32('-12809132123');
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 7 near "
+select crc32('-12809132123');";
+select crc32('37291890239130039201840921');
+crc32(37291890239130039201840921)
+2450920968
+select crc32('TYHQWHJNfjewkefhklwew');
+crc32(TYHQWHJNfjewkefhklwew)
+3847173571
+select crc32('huejwkfnewnjfnfe4woipofemwkemvwkTYUJIWfjkqajefiowjvkew');
+crc32(huejwkfnewnjfnfe4woipofemwkemvwkTYUJIWfjkqajefiowjvkew)
+3995464941
+select crc32('你好世界');
+crc32(你好世界)
+2943555529
+select crc32('你好，数据库');
+crc32(你好，数据库)
+2347686311
+select crc32('GitHub 上的 MatrixOne 社区充满活力、热情且知识渊博');
+crc32(GitHub 上的 MatrixOne 社区充满活力、热情且知识渊博)
+1919263296
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1 (col1 int, col2 char(10));
+insert into t1 values(1,'abcdef');
+insert into t1 values(2,'_bcdef');
+insert into t1 values(3,'a_cdef');
+insert into t1 values(4,'ab_def');
+insert into t1 values(5,'abc_ef');
+insert into t1 values(6,'abcd_f');
+insert into t1 values(7,'abcde_');
+select col1,crc32(col2) from t1;
+col1    crc32(col2)
+1    1267612143
+2    1979604786
+3    306136536
+4    4050878198
+5    1672491934
+6    1848108950
+7    344699367
+drop table t1;
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"t1":"a"}',1);
+insert into t1 values ('{"t1":"b"}',2);
+insert into t1 values ('{"t1":"c"}',3);
+select crc32(a),b from t1;
+crc32(a)    b
+3719146973    1
+1151663207    2
+866372849    3
+drop table if exists test_table;
+create table test_table (
+id int auto_increment primary key,
+text_column varchar(255) not null
+);
+insert into test_table (text_column) VALUES ('Hello, World!');
+insert into test_table (text_column) VALUES ('Goodbye, World!');
+insert into test_table (text_column) VALUES ('FooBar');
+select id, text_column, CRC32(text_column) as crc32_checksum
+from test_table;
+id    text_column    crc32_checksum
+1    Hello, World!    3964322768
+2    Goodbye, World!    3962119163
+3    FooBar    2702662723
+alter table test_table add column crc32_column int unsigned;
+update test_table
+set crc32_column = CRC32(text_column);
+select id, text_column, crc32_column
+FROM test_table;
+id    text_column    crc32_column
+1    Hello, World!    3964322768
+2    Goodbye, World!    3962119163
+3    FooBar    2702662723
+set @a = 'External Data';
+select CRC32(@a) as crc32_external_data;
+crc32_external_data
+1344405658
+select id, text_column, crc32_column
+from test_table;
+id    text_column    crc32_column
+1    Hello, World!    3964322768
+2    Goodbye, World!    3962119163
+3    FooBar    2702662723
+where crc32_column = CRC32(@a);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "where crc32_column = CRC32(@a);";
+drop table test_table;
+drop table if exists employees;
+create table employees (
+employeeNumber int(11) not null,
+lastName text not null,
+firstName text not null,
+extension text not null,
+email text not null,
+officeCode text not null,
+reportsTo int(11) DEFAULT NULL,
+jobTitle text not null,
+primary key (employeeNumber)
+);
+insert  into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing'),
+(1088,'Patterson','William','x4871','wpatterson@classicmodelcars.com','6',1056,'Sales Manager (APAC)'),
+(1102,'Bondur','Gerard','x5408','gbondur@classicmodelcars.com','4',1056,'Sale Manager (EMEA)'),
+(1143,'Bow','Anthony','x5428','abow@classicmodelcars.com','1',1056,'Sales Manager (NA)'),
+(1165,'Jennings','Leslie','x3291','ljennings@classicmodelcars.com','1',1143,'Sales Rep'),
+(1166,'Thompson','Leslie','x4065','lthompson@classicmodelcars.com','1',1143,'Sales Rep'),
+(1188,'Firrelli','Julie','x2173','jfirrelli@classicmodelcars.com','2',1143,'Sales Rep'),
+(1216,'Patterson','Steve','x4334','spatterson@classicmodelcars.com','2',1143,'Sales Rep'),
+(1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
+(1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
+(1337,'Bondur','Loui','x6493','lbondur@classicmodelcars.com','4',1102,'Sales Rep');
+select crc32(lastName),crc32(firstName) from employees;
+crc32(lastName)    crc32(firstName)
+571277278    2731328500
+2394043142    905915399
+3776301682    210200258
+2394043142    1899246478
+2421462071    767038591
+2690323275    771904982
+4158277197    690678662
+3790627590    690678662
+3776301682    1084919846
+2394043142    1466775457
+344926845    2218917577
+2872212557    3508097174
+2421462071    3576422603
+select (sum(crc32(concat_ws(lastName,firstName,extension)))) as `columns` from employees where 1=1 and reportsTo > 1000;
+columns
+30824959583
+drop table employees;
+drop table if exists jobs;
+create table job(
+jobid int primary key,
+jobTitle varchar(50)
+);
+insert into job values
+(1,'President'),
+(2,'VP Sales'),
+(3,'VP Marketing'),
+(4,'Sales Manager (APAC)'),
+(5,'Sale Manager (EMEA)'),
+(6,'Sales Manager (NA)'),
+(7,'Sales Rep'),
+(8,'Marketing');
+select crc32(jobTitle) from job;
+crc32(jobTitle)
+3967439031
+3195036148
+1862864914
+402221292
+3165046920
+2887978121
+2622443617
+376497099
+drop table job;
+drop database test;
