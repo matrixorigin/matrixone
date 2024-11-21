@@ -244,9 +244,19 @@ func Test_tableReader_Run_StaleRead(t *testing.T) {
 
 	// restart failed
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	u := &WatermarkUpdater{
+		accountId:    1,
+		taskId:       uuid.New(),
+		ie:           newWmMockSQLExecutor(),
+		watermarkMap: &sync.Map{},
+	}
 	reader = &tableReader{
-		tick:               time.NewTicker(time.Millisecond * 300),
-		sinker:             NewConsoleSinker(nil, nil),
+		tick:   time.NewTicker(time.Millisecond * 300),
+		sinker: NewConsoleSinker(nil, nil),
+		info: &DbTableInfo{
+			SourceTblIdStr: "1_0",
+		},
+		wMarkUpdater:       u,
 		resetWatermarkFunc: func(*DbTableInfo) error { return moerr.NewInternalErrorNoCtx("") },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())
@@ -263,9 +273,19 @@ func Test_tableReader_Run_NonStaleReadErr(t *testing.T) {
 		})
 	defer stub.Reset()
 
+	u := &WatermarkUpdater{
+		accountId:    1,
+		taskId:       uuid.New(),
+		ie:           newWmMockSQLExecutor(),
+		watermarkMap: &sync.Map{},
+	}
 	reader := &tableReader{
-		tick:               time.NewTicker(time.Millisecond * 300),
-		sinker:             NewConsoleSinker(nil, nil),
+		tick:   time.NewTicker(time.Millisecond * 300),
+		sinker: NewConsoleSinker(nil, nil),
+		info: &DbTableInfo{
+			SourceTblIdStr: "1_0",
+		},
+		wMarkUpdater:       u,
 		resetWatermarkFunc: func(*DbTableInfo) error { return nil },
 	}
 	reader.Run(ctx, NewCdcActiveRoutine())

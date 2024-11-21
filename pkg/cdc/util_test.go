@@ -791,7 +791,7 @@ func Test_openDbConn(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	conn, err := openDbConn("user", "password", "host", 1234)
+	conn, err := OpenDbConn("user", "password", "host", 1234)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
 }
