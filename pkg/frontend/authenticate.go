@@ -9074,12 +9074,3 @@ func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (
 
 	return true, nil
 }
-
-func isDisallowedError(err error) bool {
-	switch {
-	case errors.Is(err, io.EOF):
-		// io.EOF should be handled by the caller, should never be logged
-		return true
-	}
-	return false
-}

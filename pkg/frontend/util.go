@@ -18,7 +18,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -512,7 +514,7 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 			"query trace status",
 			logutil.StatementField(str),
 			logutil.StatusField(status.String()),
-			logutil.ErrorField(err),
+			zap.Error(err),
 			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
 		)
 	}
@@ -1822,4 +1824,13 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 
 func Slice(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func isDisallowedError(err error) bool {
+	switch {
+	case errors.Is(err, io.EOF):
+		// io.EOF should be handled by the caller, should never be logged
+		return true
+	}
+	return false
 }
