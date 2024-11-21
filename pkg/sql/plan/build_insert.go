@@ -192,7 +192,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		attrs = append(attrs, catalog.Row_ID)
-		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)
+		uniqueColWithIdx, _ := GetUniqueColAndIdxFromTableDef(tableDef)
 		uniqueColCheckExpr, err := GenUniqueColCheckExpr(ctx.GetContext(), tableDef, uniqueColWithIdx, int(insertColCount))
 		if err != nil {
 			return nil, err

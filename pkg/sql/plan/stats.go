@@ -724,6 +724,12 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
+	if expr == nil || expr.GetF() == nil {
+		return 0 //something error
+	}
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+		return 0 //make prefix_in and prefix_eq always the first filter
+	}
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 8
@@ -792,11 +798,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	return 1
 }
 
-func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			rewriteFilterListByStats(ctx, child, builder)
+			sortFilterListByStats(ctx, child, builder)
 		}
 	}
 	switch node.NodeType {
@@ -806,11 +812,6 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
 				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
-			})
-			sort.Slice(node.BlockFilterList, func(i, j int) bool {
-				blockSel1 := node.BlockFilterList[i].Selectivity
-				blockSel2 := node.BlockFilterList[j].Selectivity
-				return blockSel1 <= blockSel2
 			})
 		}
 	}
@@ -1317,16 +1318,20 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				node.BlockFilterList = nil
 			} else {
 				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
+					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+						copyOfExpr := DeepCopyExpr(node.FilterList[i])
+						copyOfExpr.Selectivity = currentBlockSel
+						blockExprList = append(blockExprList, copyOfExpr)
+					}
 				}
 			}
 		} else {
 			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				copyOfExpr := DeepCopyExpr(node.FilterList[i])
-				copyOfExpr.Selectivity = currentBlockSel
-				blockExprList = append(blockExprList, copyOfExpr)
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)

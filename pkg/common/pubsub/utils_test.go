@@ -18,8 +18,45 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 )
+
+type MockTxnExecutor struct{}
+
+func (MockTxnExecutor) Use(db string) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (MockTxnExecutor) LockTable(table string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	bat := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil)
+	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil)
+	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil)
+	bat.Vecs[4] = testutil.MakeScalarNull(types.T_timestamp, 1)
+	bat.SetRowCount(1)
+	return executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      testutil.TestUtilMp,
+	}, nil
+}
+
+func (MockTxnExecutor) Txn() client.TxnOperator {
+	//TODO implement me
+	panic("implement me")
+}
 
 func TestAddSingleQuotesJoin(t *testing.T) {
 	type args struct {
@@ -294,4 +331,11 @@ func TestJoinAccountIds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetAccounts(t *testing.T) {
+	nameInfoMap, idInfoMap, err := GetAccounts(&MockTxnExecutor{})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(nameInfoMap))
+	assert.Equal(t, 1, len(idInfoMap))
 }

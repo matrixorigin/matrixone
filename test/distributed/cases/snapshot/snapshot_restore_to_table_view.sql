@@ -1,3 +1,6 @@
+select enable_fault_injection();
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
+
 -- drop database
 drop database if exists test01;
 create database test01;
@@ -469,3 +472,5 @@ drop database EducationSystem;
 drop snapshot if exists sp06;
 -- @ignore:1
 show snapshots;
+
+select disable_fault_injection();

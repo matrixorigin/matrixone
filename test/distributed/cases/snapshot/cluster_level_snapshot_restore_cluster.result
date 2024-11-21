@@ -200,8 +200,7 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub02    repub02    *    acc02        2024-08-28 15:29:49    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub02    repub02    287677    true    *    acc02    2024-08-28 15:29:49    null    2    2    publish before creating snapshot
+SQL parser error: table "mo_pubs" does not exist
 drop database if exists procedure_test;
 create database procedure_test;
 use procedure_test;

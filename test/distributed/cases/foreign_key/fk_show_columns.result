@@ -202,6 +202,7 @@ options    TEXT(0)    YES        null
 partition_table_name    VARCHAR(1024)    NO        null        
 desc	mo_catalog.mo_pubs                    ;
 Field    Type    Null    Key    Default    Extra    Comment
+account_id    INT(32)    NO    PRI    null        
 pub_name    VARCHAR(64)    NO    PRI    null        
 database_name    VARCHAR(5000)    YES        null        
 database_id    BIGINT UNSIGNED(64)    YES        null        
@@ -524,6 +525,7 @@ options    TEXT(0)    YES        null
 partition_table_name    VARCHAR(1024)    NO        null        
 show columns from	mo_catalog.mo_pubs                    ;
 Field    Type    Null    Key    Default    Extra    Comment
+account_id    INT(32)    NO    PRI    null        
 pub_name    VARCHAR(64)    NO    PRI    null        
 database_name    VARCHAR(5000)    YES        null        
 database_id    BIGINT UNSIGNED(64)    YES        null        
@@ -836,18 +838,7 @@ comment    VARCHAR(2048)    NO        null
 options    TEXT(0)    YES        null        
 partition_table_name    VARCHAR(1024)    NO        null        
 desc	mo_catalog.mo_pubs                    ;
-Field    Type    Null    Key    Default    Extra    Comment
-pub_name    VARCHAR(64)    NO    PRI    null        
-database_name    VARCHAR(5000)    YES        null        
-database_id    BIGINT UNSIGNED(64)    YES        null        
-all_table    BOOL(0)    YES        null        
-table_list    TEXT(0)    YES        null        
-account_list    TEXT(0)    YES        null        
-created_time    TIMESTAMP(0)    YES        null        
-update_time    TIMESTAMP(0)    YES        null        
-owner    INT UNSIGNED(32)    YES        null        
-creator    INT UNSIGNED(32)    YES        null        
-comment    TEXT(0)    YES        null        
+no such table mo_catalog.mo_pubs
 desc	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
 stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
@@ -1149,18 +1140,7 @@ comment    VARCHAR(2048)    NO        null
 options    TEXT(0)    YES        null        
 partition_table_name    VARCHAR(1024)    NO        null        
 show columns from	mo_catalog.mo_pubs                    ;
-Field    Type    Null    Key    Default    Extra    Comment
-pub_name    VARCHAR(64)    NO    PRI    null        
-database_name    VARCHAR(5000)    YES        null        
-database_id    BIGINT UNSIGNED(64)    YES        null        
-all_table    BOOL(0)    YES        null        
-table_list    TEXT(0)    YES        null        
-account_list    TEXT(0)    YES        null        
-created_time    TIMESTAMP(0)    YES        null        
-update_time    TIMESTAMP(0)    YES        null        
-owner    INT UNSIGNED(32)    YES        null        
-creator    INT UNSIGNED(32)    YES        null        
-comment    TEXT(0)    YES        null        
+no such table mo_catalog.mo_pubs
 show columns from	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
 stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    

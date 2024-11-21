@@ -30,7 +30,10 @@ const (
 	FJ_TracePartitionState = "fj/trace/partitionstate"
 
 	FJ_Debug19524 = "fj/debug/19524"
-	FJ_Debug19357 = "fj/debug/19357"
+	FJ_Debug19787 = "fj/debug/19787"
+
+	FJ_LogReader    = "fj/log/reader"
+	FJ_LogWorkspace = "fj/log/workspace"
 )
 
 func Debug19524Injected() bool {
@@ -38,9 +41,9 @@ func Debug19524Injected() bool {
 	return injected
 }
 
-func Debug19357Injected() (bool, int64) {
-	iret, _, injected := fault.TriggerFault(FJ_Debug19357)
-	return injected, iret
+func Debug19787Injected() bool {
+	_, _, injected := fault.TriggerFault(FJ_Debug19787)
+	return injected
 }
 
 func RangesInjected(name string) bool {
