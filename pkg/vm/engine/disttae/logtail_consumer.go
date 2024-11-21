@@ -1241,6 +1241,12 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	return true, Subscribing, nil
 }
 
+func (c *PushClient) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subscriber.logTailClient.Close()
+}
+
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
