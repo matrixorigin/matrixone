@@ -2429,19 +2429,39 @@ insert into table03 values ('a', 'data warehouse');
 create publication publication02 database database02 account acc_save;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication02    database02    *    acc_save        2024-07-29 16:20:05    null    
+publication02    database02    *    acc_save        2024-11-21 15:19:42    null    
 create database sub_database02 from sys publication publication02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-29 16:20:05    sub_database02    2024-07-29 16:20:06    0
+publication02    sys    database02    *        2024-11-21 15:19:42    sub_database02    2024-11-21 15:19:48    0
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-29 16:20:05    sub_database02    2024-07-29 16:20:06    0
+publication02    sys    database02    *        2024-11-21 15:19:42    sub_database02    2024-11-21 15:19:48    0
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop publication publication02;
 drop database if exists database02;
+drop account acc_save;
+create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set save_query_result = on;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+select * from result_scan(last_query_id()) as t;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+set save_query_result = off;
+set save_query_result = on;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+select * from result_scan(last_query_id()) as t;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+set save_query_result = off;
 drop account acc_save;
 set save_query_result = off;
