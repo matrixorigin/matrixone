@@ -721,13 +721,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	return backSes
 }
 
-func (backSes *backSession) reInit(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
-	service := ses.GetService()
-	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
-	backSes.initFeSes(ses, txnHandler, db, callBack)
-	return backSes
-}
-
 func (backSes *backSession) initFeSes(
 	ses FeSession,
 	txnHandler *TxnHandler,
