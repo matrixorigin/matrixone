@@ -22,6 +22,11 @@ import (
 )
 
 const (
+	FJ_EmptyDB  = ""
+	FJ_EmptyTBL = ""
+)
+
+const (
 	FJ_CommitDelete  = "fj/commit/delete"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
 	FJ_TransferSlow  = "fj/transfer/slow"
@@ -96,13 +101,27 @@ func makeInjectIntArg(level, funcId int) int {
 	return level + funcId*10
 }
 
-func MakeInjectTableEqualIntArg(level int) int {
+func MakeInjectTableLoggingIntArg(level int, isEqual bool) int {
 	// 0 means equal database name
 	// 1 means contains database name
 	// 2 means equal table name
 	// 3 means contains table name
 	// 4 means contains database name and table name
-	return makeInjectIntArg(level, 2)
+	if isEqual {
+		return makeInjectIntArg(level, 2)
+	}
+	return makeInjectIntArg(level, 3)
+}
+
+func MakeInjectDBLoggingIntArg(level int, isEqual bool) int {
+	if isEqual {
+		return makeInjectIntArg(level, 0)
+	}
+	return makeInjectIntArg(level, 1)
+}
+
+func MakeInjectDBAndTableLoggingIntArg(level int) int {
+	return makeInjectIntArg(level, 4)
 }
 
 func checkLoggingArgs(
@@ -134,13 +153,66 @@ func LogReaderInjected(args ...string) (bool, int) {
 	return checkLoggingArgs(int(iarg), sarg, args...)
 }
 
+func InjectPartitionStateLogging(
+	databaseName string,
+	tableName string,
+	level int,
+) (rmFault func(), err error) {
+	return InjectLogging(
+		FJ_TracePartitionState,
+		databaseName,
+		tableName,
+		level,
+		false,
+	)
+}
+
+func InjectLogging(
+	key string,
+	databaseName string,
+	tableName string,
+	level int,
+	isEqual bool,
+) (rmFault func(), err error) {
+	var (
+		iarg int64
+		sarg string
+	)
+	if databaseName != FJ_EmptyDB && tableName != FJ_EmptyTBL {
+		iarg = int64(MakeInjectDBAndTableLoggingIntArg(level))
+		sarg = databaseName + "." + tableName
+	} else if databaseName != "" {
+		iarg = int64(MakeInjectDBLoggingIntArg(level, isEqual))
+		sarg = databaseName
+	} else if tableName != "" {
+		iarg = int64(MakeInjectTableLoggingIntArg(level, isEqual))
+		sarg = tableName
+	} else {
+		return func() {}, nil
+	}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"echo",
+		iarg,
+		sarg,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
 // inject log reader and partition state
 // `name` is the table name
 func InjectLog1(
 	tableName string,
 	level int,
 ) (rmFault func(), err error) {
-	iarg := int64(MakeInjectTableEqualIntArg(level))
+	iarg := int64(MakeInjectTableLoggingIntArg(level, true))
 	rmFault = func() {}
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -213,7 +285,7 @@ func InjectRanges(
 		FJ_TraceRanges,
 		":::",
 		"echo",
-		int64(MakeInjectTableEqualIntArg(0)),
+		int64(MakeInjectTableLoggingIntArg(0, true)),
 		tableName,
 	); err != nil {
 		return
