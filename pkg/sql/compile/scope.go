@@ -694,7 +694,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(newRelData.GetBlockInfoSlice())
 	} else {
-		tombstones, err := collectTombstones(c, s.DataSource.node, rel)
+		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
 		if err != nil {
 			return err
 		}
@@ -919,7 +919,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			blk := s.NodeInfo.Data.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 
-			tombstones, err := collectTombstones(c, scanNode, rel)
+			tombstones, err := collectTombstones(c, scanNode, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return err
 			}
