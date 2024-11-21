@@ -19,22 +19,6 @@ import (
 )
 
 var (
-	S3ConnectCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "s3_connect_total",
-			Help:      "Total number of s3 connect count.",
-		})
-
-	S3DNSResolveCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "s3_dns_resolve_total",
-			Help:      "Total number of s3 dns resolve count.",
-		})
-
 	fsReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -73,10 +57,11 @@ var (
 			Help:      "Bucketed histogram of s3 get conn duration.",
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
-	S3GetConnDurationHistogram      = s3ConnDurationHistogram.WithLabelValues("get-conn")
-	S3DNSResolveDurationHistogram   = s3ConnDurationHistogram.WithLabelValues("dns-resolve")
-	S3ConnectDurationHistogram      = s3ConnDurationHistogram.WithLabelValues("connect")
-	S3TLSHandshakeDurationHistogram = s3ConnDurationHistogram.WithLabelValues("tls-handshake")
+	S3GetConnDurationHistogram          = s3ConnDurationHistogram.WithLabelValues("get-conn")
+	S3GotFirstResponseDurationHistogram = s3ConnDurationHistogram.WithLabelValues("got-first-response")
+	S3DNSResolveDurationHistogram       = s3ConnDurationHistogram.WithLabelValues("dns-resolve")
+	S3ConnectDurationHistogram          = s3ConnDurationHistogram.WithLabelValues("connect")
+	S3TLSHandshakeDurationHistogram     = s3ConnDurationHistogram.WithLabelValues("tls-handshake")
 
 	localIOBytesHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -183,3 +168,17 @@ func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity pr
 	return fsCacheBytes.WithLabelValues(component, "inuse"),
 		fsCacheBytes.WithLabelValues(component, "cap")
 }
+
+var (
+	FSHTTPTraceCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "http_trace",
+			Help:      "http trace statistics",
+		},
+		[]string{
+			"op",
+		},
+	)
+)
