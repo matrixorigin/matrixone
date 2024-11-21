@@ -96,13 +96,13 @@ func makeInjectIntArg(level, funcId int) int {
 	return level + funcId*10
 }
 
-func MakeInjectTableIntArg(level int) int {
+func MakeInjectTableEqualIntArg(level int) int {
 	// 0 means equal database name
 	// 1 means contains database name
 	// 2 means equal table name
 	// 3 means contains table name
 	// 4 means contains database name and table name
-	return makeInjectIntArg(level, 0)
+	return makeInjectIntArg(level, 2)
 }
 
 func checkLoggingArgs(
@@ -140,7 +140,7 @@ func InjectLog1(
 	tableName string,
 	level int,
 ) (rmFault func(), err error) {
-	iarg := int64(MakeInjectTableIntArg(level))
+	iarg := int64(MakeInjectTableEqualIntArg(level))
 	rmFault = func() {}
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -213,7 +213,7 @@ func InjectRanges(
 		FJ_TraceRanges,
 		":::",
 		"echo",
-		int64(MakeInjectTableIntArg(0)),
+		int64(MakeInjectTableEqualIntArg(0)),
 		tableName,
 	); err != nil {
 		return
