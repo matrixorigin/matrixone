@@ -15,7 +15,9 @@
 package engine_util
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -38,6 +41,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -397,12 +401,31 @@ func (r *reader) Read(
 	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
+	var blkInfo *objectio.BlockInfo
 
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil || dataState == engine.End {
 			r.Close()
+		}
+
+		if v := ctx.Value(defines.ReaderSummaryKey{}); v != nil {
+			buf := v.(*bytes.Buffer)
+			switch dataState {
+			case engine.InMem:
+				buf.WriteString(fmt.Sprintf("[InMem] Source %v || Data %v",
+					r.source.String(),
+					common.MoBatchToString(outBatch, 5),
+				),
+				)
+			case engine.Persisted:
+				if outBatch.RowCount() > 0 {
+					buf.WriteString(fmt.Sprintf("[Blk] Info %v || Data %v",
+						blkInfo.String(), common.MoBatchToString(outBatch, 5)),
+					)
+				}
+			}
 		}
 	}()
 

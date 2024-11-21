@@ -1,3 +1,6 @@
+select enable_fault_injection();
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
+
 create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 
 -- @session:id=2&user=acc1:admin1&password=test123
@@ -68,3 +71,5 @@ drop snapshot syssn1;
 drop account acc1;
 -- @ignore:1
 show snapshots;
+
+select disable_fault_injection();

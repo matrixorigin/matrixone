@@ -1798,6 +1798,8 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 		return err
 	}
 
+	c.setHaveDDL(true)
+
 	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
