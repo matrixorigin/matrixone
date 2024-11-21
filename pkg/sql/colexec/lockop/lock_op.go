@@ -126,12 +126,11 @@ func callNonBlocking(
 	}
 
 	if result.Batch == nil {
-		if lockOp.ctr.retryError != nil {
-			return result, lockOp.ctr.retryError
-		}
-		err := lockTalbeIfLockCountIsZero(proc, lockOp)
-		if err != nil {
-			return result, err
+		if lockOp.ctr.retryError == nil {
+			err := lockTalbeIfLockCountIsZero(proc, lockOp)
+			if err != nil {
+				return result, err
+			}
 		}
 		return result, lockOp.ctr.retryError
 	}
@@ -1009,8 +1008,8 @@ func lockTalbeIfLockCountIsZero(
 	proc *process.Process,
 	lockOp *LockOp,
 ) error {
-	rt := lockOp.ctr
-	if rt.lockCount != 0 {
+	ctr := lockOp.ctr
+	if ctr.lockCount != 0 {
 		return nil
 	}
 	for idx := 0; idx < len(lockOp.targets); idx++ {
@@ -1038,11 +1037,6 @@ func lockTalbeIfLockCountIsZero(
 			err = performLock(bat, proc, lockOp, anal, idx)
 			if err != nil {
 				return err
-			} else if rt.retryError != nil {
-				if rt.defChanged {
-					rt.retryError = retryWithDefChangedError
-				}
-				return rt.retryError
 			}
 		} else {
 			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
@@ -1051,7 +1045,7 @@ func lockTalbeIfLockCountIsZero(
 			}
 		}
 	}
-	rt.lockCount = 1
+	ctr.lockCount = 1
 
 	return nil
 }
