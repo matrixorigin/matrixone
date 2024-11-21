@@ -20,12 +20,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
-	"fmt"
-	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -486,6 +483,8 @@ func TestS3FSWithSubPath(t *testing.T) {
 }
 
 func BenchmarkS3ConcurrentRead(b *testing.B) {
+	ctx := context.Background()
+
 	config, err := loadS3TestConfig(b)
 	if err != nil {
 		b.Fatal(err)
@@ -497,51 +496,6 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 	b.Setenv("AWS_REGION", config.Region)
 	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
-	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			//fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			}
-			//fmt.Printf("got conn: %+v\n", info)
-		},
-
-		PutIdleConn: func(err error) {
-			//if err != nil {
-			//	fmt.Printf("put idle conn failed: %v\n", err)
-			//}
-		},
-
-		ConnectStart: func(network, addr string) {
-			numConnect.Add(1)
-			//fmt.Printf("connect %v %v\n", network, addr)
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
@@ -599,7 +553,6 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 				if err != nil {
 					panic(err)
 				}
-				numRead.Add(1)
 			}()
 		}
 		for i := 0; i < cap(sem); i++ {
@@ -610,6 +563,8 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 }
 
 func TestSequentialS3Read(t *testing.T) {
+	ctx := context.Background()
+
 	config, err := loadS3TestConfig(t)
 	if err != nil {
 		t.Fatal(err)
@@ -618,55 +573,6 @@ func TestSequentialS3Read(t *testing.T) {
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
-	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			} else {
-				fmt.Printf("got conn not reuse: %+v\n", info)
-			}
-		},
-
-		PutIdleConn: func(err error) {
-			if err != nil {
-				fmt.Printf("put idle conn failed: %v\n", err)
-			}
-		},
-
-		ConnectDone: func(network string, addr string, err error) {
-			numConnect.Add(1)
-			fmt.Printf("connect done: %v %v\n", network, addr)
-			if err != nil {
-				fmt.Printf("connect error: %v\n", err)
-			}
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
@@ -715,7 +621,6 @@ func TestSequentialS3Read(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		numRead.Add(1)
 	}
 
 }

@@ -93,7 +93,7 @@ TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1i1(index)
         Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = 5)
-        Block Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = 5)
+        Block Filter Cond: prefix_between(#[0,0])
 select c3,c4,c5 from t1 where c3 between 4 and 7 and c5=5;
 c3    c4    c5
 6    2    5
@@ -223,7 +223,7 @@ Project
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t1i1(index)
               Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) < 100)
-              Block Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) < 100)
+              Block Filter Cond: prefix_between(#[0,0])
 select count(*) from t1 where c3 between 1 and 100 and c5 <100;
 count(*)
 1000
@@ -234,7 +234,7 @@ Project
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t1i1(index)
               Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = -1)
-              Block Filter Cond: prefix_between(#[0,0]), (serial_extract(#[0,0], 2, INT)) = -1)
+              Block Filter Cond: prefix_between(#[0,0])
 select count(*) from t1 where c3 between 100 and 200 and c5 =-1;
 count(*)
 110

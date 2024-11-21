@@ -39,14 +39,16 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type backExec struct {
-	backSes *backSession
-	inUse   bool
+	backSes    *backSession
+	inUse      bool
+	statsArray *statistic.StatsArray
 }
 
 func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
@@ -54,6 +56,12 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 		back.backSes = newBackSession(ses, txnOp, db, callBack)
 	} else {
 		back.backSes.reInit(ses, txnOp, db, callBack)
+	}
+
+	if back.statsArray != nil {
+		back.statsArray.Reset()
+	} else {
+		back.statsArray = statistic.NewStatsArray()
 	}
 }
 
@@ -72,13 +80,23 @@ func (back *backExec) Close() {
 	back.backSes.Close()
 }
 
+func (back *backExec) GetExecStatsArray() statistic.StatsArray {
+	if back.statsArray != nil {
+		return *back.statsArray
+	} else {
+		var stats statistic.StatsArray
+		stats.Reset()
+		return stats
+	}
+}
+
 func (back *backExec) Exec(ctx context.Context, sql string) error {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -132,7 +150,13 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		ses:    back.backSes,
 	}
 	defer execCtx.Close()
-	return doComQueryInBack(back.backSes, &execCtx, userInput)
+
+	tmpStatsArray := statistic.NewStatsArray()
+	defer func() {
+		back.statsArray.Add(tmpStatsArray)
+	}()
+
+	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -142,7 +166,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
 
-	ctx = perfcounter.AttachInternalExecutorKey(ctx)
+	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -190,7 +214,12 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		ses:    back.backSes,
 	}
 	defer execCtx.Close()
-	return doComQueryInBack(back.backSes, &execCtx, userInput)
+
+	tmpStatsArray := statistic.NewStatsArray()
+	defer func() {
+		back.statsArray.Add(tmpStatsArray)
+	}()
+	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
 }
 
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -230,12 +259,14 @@ func (back *backExec) Clear() {
 	if back == nil {
 		return
 	}
+	back.statsArray = nil
 	back.backSes.Clear()
 }
 
 // execute query
 func doComQueryInBack(
 	backSes *backSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 	input *UserInput,
 ) (retErr error) {
@@ -243,6 +274,10 @@ func doComQueryInBack(
 	defer backSes.ExitFPrint(FPDoComQueryInBack)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
+
+	// record start time of parsing
+	beginInstant := time.Now()
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
@@ -301,6 +336,11 @@ func doComQueryInBack(
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+
+	// Instantiate StatsInfo to track SQL resource statistics
+	statsInfo := new(statistic.StatsInfo)
+	statsInfo.ParseStage.ParseStartTime = beginInstant
+	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
@@ -312,8 +352,12 @@ func doComQueryInBack(
 		proc,
 		backSes,
 	)
+	// SQL parsing completed, record end time
+	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
+		statsInfo.ParseStage.ParseDuration = ParseDuration
+
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(execCtx.reqCtx, err.Error())
@@ -346,6 +390,11 @@ func doComQueryInBack(
 			insertStmt.FromDataTenantID = input.opAccount
 		}
 
+		statsInfo.Reset()
+		//average parse duration
+		statsInfo.ParseStage.ParseStartTime = beginInstant
+		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+
 		tenant := backSes.GetTenantNameWithStmt(stmt)
 
 		/*
@@ -377,7 +426,7 @@ func doComQueryInBack(
 		execCtx.proc = proc
 		execCtx.ses = backSes
 		execCtx.cws = cws
-		err = executeStmtWithTxn(backSes, execCtx)
+		err = executeStmtWithTxn(backSes, statsArr, execCtx)
 		if err != nil {
 			return err
 		}
@@ -387,6 +436,7 @@ func doComQueryInBack(
 }
 
 func executeStmtInBack(backSes *backSession,
+	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
 	execCtx.ses.EnterFPrint(FPExecStmtInBack)
@@ -437,7 +487,10 @@ func executeStmtInBack(backSes *backSession,
 	}
 
 	defer func() {
-		if c, ok := ret.(*compile.Compile); ok {
+		if c, ok := ret.(*compile.Compile); ok && statsArr != nil {
+			statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
+			statsArr.Reset()
+			statsArr.Add(&statsByte)
 			c.Release()
 		}
 	}()
@@ -511,8 +564,9 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
+	opts ...*BackgroundExecOption,
 ) BackgroundExec {
-	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2)
+	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2, opts...)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
@@ -713,7 +767,7 @@ func (backSes *backSession) initFeSes(
 	return backSes
 }
 
-func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		if backSes.shareTxnBackExecReused == nil {
 			backSes.shareTxnBackExecReused = &backExec{}
@@ -923,7 +977,7 @@ func (backSes *backSession) GetTenantName() string {
 }
 
 func (backSes *backSession) GetFromRealUser() bool {
-	return false
+	return backSes.fromRealUser
 }
 
 func (backSes *backSession) GetDebugString() string {
@@ -961,10 +1015,10 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	return nil, nil
 }
 
-func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (backSes *backSession) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
 	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
-	return NewBackgroundExec(ctx, backSes)
+	return NewBackgroundExec(ctx, backSes, opts...)
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {

@@ -136,7 +136,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		return ce, nil
 
 	case *plan.Expr_P:
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), types.T_text.ToType()), nil
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -676,11 +677,6 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
-	}
-
-	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
-	if batches[relIndex] == batch.EmptyForConstFoldBatch {
-		return expr.getConstNullVec(expr.typ, 1), nil
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
