@@ -57,7 +57,7 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	a2.proc = proc
 	a2.service = tn
 	a2.parameter = "test.:::.echo.0."
-	ret, err = handleAddFaultPoint(a2.proc, a2.service, a2.parameter, a2.sender)
+	_, err = handleAddFaultPoint(a2.proc, a2.service, a2.parameter, a2.sender)
 	require.NoError(t, err)
 
 	// testing query with cn cmd
