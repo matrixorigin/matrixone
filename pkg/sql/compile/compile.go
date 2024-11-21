@@ -541,6 +541,7 @@ func (c *Compile) runOnce() (err error) {
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
 		err = c.runSql(sql)
 		if err != nil {
+			c.debugLogFor19288(err, sql)
 			return err
 		}
 	}
@@ -573,6 +574,13 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+// add log to check if background sql return NeedRetry error when origin sql execute successfully
+func (c *Compile) debugLogFor19288(err error, bsql string) {
+	if c.isRetryErr(err) {
+		logutil.Debugf("Origin SQL: %s\nBackground SQL: %s\nTransaction Meta: %v", c.originSQL, bsql, c.proc.GetTxnOperator().Txn())
+	}
 }
 
 func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
@@ -4559,10 +4567,10 @@ func removeEmtpyNodes(
 	var newnodes engine.Nodes
 	for i := range nodes {
 		if nodes[i].Data.DataCnt() > maxCnt {
-			maxCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			maxCnt = nodes[i].Data.DataCnt()
 		}
 		if nodes[i].Data.DataCnt() < minCnt {
-			minCnt = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			minCnt = nodes[i].Data.DataCnt()
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4641,8 +4649,9 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 		func(blk *objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
-			objTimeStamp := location.Name()[:7]
-			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
+			objID := location.ObjectId()
+
+			index := plan2.SimpleCharHashToRange(objID[:], uint64(len(c.cnList)))
 			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
@@ -4885,6 +4894,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 	for _, sql := range detectSqls {
 		err := runDetectSql(c, sql)
 		if err != nil {
+			c.debugLogFor19288(err, sql)
 			return err
 		}
 	}

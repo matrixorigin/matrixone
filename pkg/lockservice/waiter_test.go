@@ -27,8 +27,8 @@ import (
 
 func TestAcquireWaiter(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
 
 		assert.Equal(t, 0, len(w.c))
 		assert.Equal(t, int32(1), w.refCount.Load())
@@ -37,8 +37,8 @@ func TestAcquireWaiter(t *testing.T) {
 
 func TestWait(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
 
 		w.setStatus(blocking)
 		go func() {
@@ -52,8 +52,8 @@ func TestWait(t *testing.T) {
 
 func TestWaitWithTimeout(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
 		w.setStatus(blocking)
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -64,9 +64,9 @@ func TestWaitWithTimeout(t *testing.T) {
 
 func TestWaitAndNotifyConcurrent(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
 		w.setStatus(blocking)
-		defer w.close()
+		defer w.close("", nil)
 
 		w.beforeSwapStatusAdjustFunc = func() {
 			w.setStatus(notified)
@@ -82,8 +82,8 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 
 func TestWaitMultiTimes(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
+		defer w.close("", nil)
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 		defer cancel()
@@ -99,9 +99,9 @@ func TestWaitMultiTimes(t *testing.T) {
 
 func TestNotifyAfterCompleted(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{})
+		w := acquireWaiter(pb.WaitTxn{}, "", nil)
 		require.Equal(t, 0, len(w.c))
-		defer w.close()
+		defer w.close("", nil)
 		w.setStatus(completed)
 		assert.False(t, w.notify(notifyValue{}, getLogger("")))
 	})
@@ -109,9 +109,9 @@ func TestNotifyAfterCompleted(t *testing.T) {
 
 func TestNotifyAfterAlreadyNotified(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{})
+		w := acquireWaiter(pb.WaitTxn{}, "", nil)
 		w.setStatus(blocking)
-		defer w.close()
+		defer w.close("", nil)
 		assert.True(t, w.notify(notifyValue{}, getLogger("")))
 		assert.NoError(t, w.wait(context.Background(), getLogger("")).err)
 		assert.False(t, w.notify(notifyValue{}, getLogger("")))
@@ -120,8 +120,8 @@ func TestNotifyAfterAlreadyNotified(t *testing.T) {
 
 func TestNotifyWithStatusChanged(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		w := acquireWaiter(pb.WaitTxn{})
-		defer w.close()
+		w := acquireWaiter(pb.WaitTxn{}, "", nil)
+		defer w.close("", nil)
 
 		w.beforeSwapStatusAdjustFunc = func() {
 			w.setStatus(completed)

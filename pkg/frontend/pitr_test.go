@@ -146,7 +146,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -185,7 +185,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -226,7 +226,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
-		sql := getPubInfoWithPitr(ts, "test")
+		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
 			{"pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
@@ -2940,7 +2940,7 @@ func TestCheckDbIsSubDb(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := checkDbIsSubDb(ctx, tt.createDbsql)
+			got, err := checkDbWhetherSub(ctx, tt.createDbsql)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("checkDbIsSubDb() error = %v, wantErr %v", err, tt.wantErr)
 				return
