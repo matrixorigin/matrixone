@@ -3655,6 +3655,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
+				}
 				return rtnErr
 			}
 		}
@@ -3668,6 +3671,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		for _, pubInfo := range pubInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
 			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubName); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
+				}
 				return
 			}
 		}
@@ -3679,6 +3685,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, dbSql, rtnErr.Error())
+			}
 			return rtnErr
 		}
 
@@ -3716,6 +3725,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
+				}
 				return rtnErr
 			}
 		}
@@ -3734,6 +3746,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
+				}
 				return rtnErr
 			}
 		}
@@ -3741,6 +3756,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
 		// delete records in mo_subs
 		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
+			}
 			return rtnErr
 		}
 
@@ -3748,6 +3766,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
+			}
 			return rtnErr
 		}
 
@@ -3755,6 +3776,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
+			}
 			return rtnErr
 		}
 
@@ -3762,6 +3786,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop mo_catalog.mo_indexes under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoIndexes)
+			}
 			return rtnErr
 		}
 
@@ -3769,18 +3796,27 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
+			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
 		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoRetention)
+			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
+			}
 			return rtnErr
 		}
 
@@ -3789,6 +3825,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3800,6 +3839,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3809,6 +3851,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3834,6 +3879,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+				}
 				return rtnErr
 			}
 		}
@@ -9025,4 +9073,13 @@ func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (
 	}
 
 	return true, nil
+}
+
+func isDisallowedError(err error) bool {
+	switch {
+	case errors.Is(err, io.EOF):
+		// io.EOF should be handled by the caller, should never be logged
+		return true
+	}
+	return false
 }
