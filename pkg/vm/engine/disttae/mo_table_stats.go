@@ -1154,9 +1154,13 @@ func alphaTask(
 				dynamicCtx.alphaTaskPool.Submit(func() {
 					defer wg.Done()
 
+					var err2 error
 					var pState *logtailreplay.PartitionState
-					if !tbls[i].onlyUpdateTS {
-						if pState, err = subscribeTable(ctx, service, eng, curTbl); err != nil {
+					if !curTbl.onlyUpdateTS {
+						if pState, err2 = subscribeTable(ctx, service, eng, curTbl); err2 != nil {
+							logutil.Info("alpha task subscribe failed",
+								zap.Error(err2),
+								zap.String("tbl", curTbl.String()))
 							return
 						}
 					}
@@ -1199,7 +1203,6 @@ func betaTask(
 	}()
 
 	var (
-		sl        statsList
 		de        = eng.(*Engine)
 		slBat     sync.Map
 		onlyTSBat []*tablePair
@@ -1238,8 +1241,12 @@ func betaTask(
 			if err = dynamicCtx.betaTaskPool.Submit(func() {
 				defer bulkWait.Done()
 
-				sl, err = statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
-				slBat.Store(tbl, sl)
+				sl, err2 := statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
+				if err2 != nil {
+					tbl.Done(err2)
+				} else {
+					slBat.Store(tbl, sl)
+				}
 
 			}); err != nil {
 				tbl.Done(err)
