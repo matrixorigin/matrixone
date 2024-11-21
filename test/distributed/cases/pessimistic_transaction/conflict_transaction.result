@@ -116,3 +116,13 @@ a    b    c    d
 1    901    2011-09-29    0.01
 2    187    2011-09-29    1.31
 3    90    2111-02-09    10.01
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+begin;
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+begin;
+delete from t1 where a = 1;
+insert into t1 values (1, 1);
+commit;
+commit;
