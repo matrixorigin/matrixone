@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -296,13 +295,13 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
 		return nil, moerr.NewInternalErrorf(ctx,
-			"failed to get query service address, conn ID: %d goId: %d", sc.ConnID(), goid.Get())
+			"failed to get query service address, conn ID: %d", sc.ConnID())
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
 		c.logger.Error("failed to send clear session request",
-			zap.Uint32("conn ID", sc.ConnID()), zap.Int64("goId", goid.Get()), zap.Error(err))
+			zap.Uint32("conn ID", sc.ConnID()), zap.Error(err))
 		return nil, err
 	}
 	if resp != nil {
@@ -310,7 +309,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	}
 	if resp == nil || resp.ResetSessionResponse == nil || !resp.ResetSessionResponse.Success {
 		return nil, moerr.NewInternalErrorf(ctx,
-			"failed to clear session, conn ID: %d goId: %d", sc.ConnID(), goid.Get())
+			"failed to clear session, conn ID: %d", sc.ConnID())
 	}
 	return resp.ResetSessionResponse.AuthString, nil
 }
@@ -386,14 +385,12 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 			if err != nil || !ok {
 				c.logger.Error("failed to set conn id",
 					zap.Uint32("conn ID", sc.ConnID()),
-					zap.Int64("goId", goid.Get()),
 					zap.Error(err),
 				)
 				// Failed to set connection ID, try to send quit command to the server.
 				if err := sc.Quit(); err != nil {
 					c.logger.Error("failed to send quit cmd to server",
 						zap.Uint32("conn ID", sc.ConnID()),
-						zap.Int64("goId", goid.Get()),
 						zap.Error(err),
 					)
 					// If send quit failed, pop the connection from the store.
@@ -410,7 +407,6 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 				c.logger.Error("authenticate failed",
 					zap.String("hash key", string(key)),
 					zap.Uint32("conn ID", connID),
-					zap.Int64("goId", goid.Get()),
 				)
 				return nil
 			}
@@ -423,7 +419,6 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 			if err := sc.Quit(); err != nil {
 				c.logger.Error("failed to send quit cmd to server",
 					zap.Uint32("conn ID", sc.ConnID()),
-					zap.Int64("goId", goid.Get()),
 					zap.Error(err),
 				)
 			}
