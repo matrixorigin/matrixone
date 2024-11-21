@@ -47,6 +47,9 @@ func acquireWaiter(
 ) *waiter {
 	w := reuse.Alloc[waiter](nil)
 	w.txn = txn
+	if w.enableChecker {
+		logRefWaiter(logger, "acquire waiter from pool", w.txn.TxnID, w)
+	}
 	if w.ref(info, logger) != 1 {
 		panic("BUG: invalid ref count")
 	}
@@ -118,7 +121,7 @@ func (w *waiter) isTxn(txnID []byte) bool {
 
 func (w *waiter) ref(info string, logger *log.MOLogger) int32 {
 	if w.enableChecker {
-		logRefWaiter(logger, info, w.txn.TxnID)
+		logRefWaiter(logger, info, w.txn.TxnID, w)
 	}
 	return w.refCount.Add(1)
 }
@@ -127,10 +130,10 @@ func (w *waiter) close(
 	info string,
 	logger *log.MOLogger,
 ) {
-	n := w.refCount.Add(-1)
 	if w.enableChecker {
-		logCloseWaiter(logger, info, w.txn.TxnID)
+		logCloseWaiter(logger, info, w.txn.TxnID, w)
 	}
+	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())
 	}
