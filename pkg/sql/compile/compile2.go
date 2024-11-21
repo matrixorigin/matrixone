@@ -160,6 +160,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
+		txnOperator.EnterRunSql()
 	}
 
 	var isExplainPhyPlan = false
@@ -173,6 +174,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
 			runC.Release()
+		}
+		if txnOperator != nil {
+			txnOperator.ExitRunSql()
 		}
 	}()
 
