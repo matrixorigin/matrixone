@@ -696,7 +696,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergerecursive.MergeRecursive:
 	case *mergegroup.MergeGroup:
 		in.Agg = &pipeline.Group{
-			NeedEval: t.NeedEval,
+			NeedEval: true,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -1221,7 +1221,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
-		arg.NeedEval = opr.Agg.NeedEval
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
@@ -1528,7 +1527,7 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 }
 
 func EncodeMergeGroup(merge *mergegroup.MergeGroup, pipe *pipeline.Group) {
-	if !merge.NeedEval || merge.PartialResults == nil {
+	if merge.PartialResults == nil {
 		return
 	}
 	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))

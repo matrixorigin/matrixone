@@ -75,16 +75,13 @@ func generateInputData(proc *process.Process, groupValues []int64, sumResult []i
 	return bat
 }
 
-// TestMergeGroupBehavior1 test the merge group operator should Evaluate the result immediately.
-func TestMergeGroupBehavior1(t *testing.T) {
+func TestMergeGroupBehavior(t *testing.T) {
 	// Test Case 1: merge from [3, sum = 6] and [3, sum = 5]
 	// the result should be [3, 11]
 	{
 		proc := testutil.NewProcess()
 
-		OperatorArgument := &MergeGroup{
-			NeedEval: true,
-		}
+		OperatorArgument := &MergeGroup{}
 		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
 
 		for k := 2; k > 0; k-- {
@@ -138,9 +135,7 @@ func TestMergeGroupBehavior1(t *testing.T) {
 	{
 		proc := testutil.NewProcess()
 
-		OperatorArgument := &MergeGroup{
-			NeedEval: true,
-		}
+		OperatorArgument := &MergeGroup{}
 		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
 
 		for k := 2; k > 0; k-- {
@@ -174,131 +169,6 @@ func TestMergeGroupBehavior1(t *testing.T) {
 					require.Equal(t, 1, len(outputBatch.Vecs))
 					require.Equal(t, 0, len(outputBatch.Aggs))
 					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
-				} else {
-					require.Fail(t, "output batch should not be nil.")
-				}
-			}
-			OperatorArgument.Reset(proc, false, nil)
-			OperatorArgument.GetChildren(0).Free(proc, false, nil)
-		}
-
-		OperatorArgument.Free(proc, false, nil)
-		OperatorArgument.GetChildren(0).Free(proc, false, nil)
-		proc.Free()
-		require.Equal(t, int64(0), proc.Mp().CurrNB())
-	}
-}
-
-// TestMergeGroupBehavior2 test the merge group operator has no need to Evaluate the result immediately,
-// but return the middle result.
-func TestMergeGroupBehavior2(t *testing.T) {
-	// Test Case 1: merge from [3, sum = 6] and [3, sum = 5]
-	// the result should be [3, sum = 11]
-	{
-		proc := testutil.NewProcess()
-
-		OperatorArgument := &MergeGroup{
-			NeedEval: false,
-		}
-		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
-
-		for k := 2; k > 0; k-- {
-			inputs := []*batch.Batch{
-				generateInputData(proc, []int64{3}, []int64{6}),
-				generateInputData(proc, []int64{3}, []int64{5}),
-				nil,
-			}
-			resetChildren(OperatorArgument, inputs)
-
-			require.NoError(t, OperatorArgument.Prepare(proc))
-
-			var outputBatch *batch.Batch
-			outputTime := 0
-
-			for {
-				result, err := OperatorArgument.Call(proc)
-				require.NoError(t, err)
-
-				if result.Status == vm.ExecStop || result.Batch == nil {
-					break
-				}
-				outputTime++
-				outputBatch = result.Batch
-			}
-			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
-
-			{
-				// check the output batch
-				if outputBatch != nil {
-					require.Equal(t, 1, len(outputBatch.Vecs))
-					require.Equal(t, 1, len(outputBatch.Aggs))
-					require.Equal(t, int64(3), vector.MustFixedColWithTypeCheck[int64](outputBatch.Vecs[0])[0])
-
-					// flush to check the result
-					vecs, err := outputBatch.Aggs[0].Flush()
-					require.NoError(t, err)
-					require.Equal(t, int64(11), vector.MustFixedColWithTypeCheck[int64](vec[0])[0])
-					vecs[0].Free(proc.Mp())
-				} else {
-					require.Fail(t, "output batch should not be nil.")
-				}
-			}
-			OperatorArgument.Reset(proc, false, nil)
-			OperatorArgument.GetChildren(0).Free(proc, false, nil)
-		}
-
-		OperatorArgument.Free(proc, false, nil)
-		OperatorArgument.GetChildren(0).Free(proc, false, nil)
-		proc.Free()
-		require.Equal(t, int64(0), proc.Mp().CurrNB())
-	}
-
-	// Test Case 2: merge from [sum = 10] and [sum = 5]
-	// the result should be [sum = 15]
-	{
-		proc := testutil.NewProcess()
-
-		OperatorArgument := &MergeGroup{
-			NeedEval: false,
-		}
-		OperatorArgument.ctr.hashKeyWidth = NeedCalculationForKeyWidth
-
-		for k := 2; k > 0; k-- {
-			inputs := []*batch.Batch{
-				generateInputData(proc, nil, []int64{10}),
-				generateInputData(proc, nil, []int64{5}),
-				nil,
-			}
-			resetChildren(OperatorArgument, inputs)
-
-			require.NoError(t, OperatorArgument.Prepare(proc))
-
-			var outputBatch *batch.Batch
-			outputTime := 0
-
-			for {
-				result, err := OperatorArgument.Call(proc)
-				require.NoError(t, err)
-
-				if result.Status == vm.ExecStop || result.Batch == nil {
-					break
-				}
-				outputTime++
-				outputBatch = result.Batch
-			}
-			require.True(t, outputTime == 1, "merge group operator should have and only 1 result out.")
-
-			{
-				// check the output batch
-				if outputBatch != nil {
-					require.Equal(t, 0, len(outputBatch.Vecs))
-					require.Equal(t, 1, len(outputBatch.Aggs))
-
-					// flush to check the result
-					vecs, err := outputBatch.Aggs[0].Flush()
-					require.NoError(t, err)
-					require.Equal(t, int64(15), vector.MustFixedColWithTypeCheck[int64](vecs[0])[0])
-					vecs[0].Free(proc.Mp())
 				} else {
 					require.Fail(t, "output batch should not be nil.")
 				}

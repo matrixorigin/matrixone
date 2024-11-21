@@ -57,8 +57,7 @@ type container struct {
 }
 
 type MergeGroup struct {
-	NeedEval bool // need to projection the aggregate column
-	ctr      container
+	ctr container
 
 	PartialResults     []any
 	PartialResultTypes []types.T
@@ -86,11 +85,6 @@ func init() {
 
 func (mergeGroup MergeGroup) TypeName() string {
 	return opName
-}
-
-func (mergeGroup *MergeGroup) WithNeedEval(needEval bool) *MergeGroup {
-	mergeGroup.NeedEval = needEval
-	return mergeGroup
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

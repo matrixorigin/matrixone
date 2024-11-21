@@ -29,7 +29,6 @@ const opName = "merge_group"
 
 func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-
 }
 
 func (mergeGroup *MergeGroup) OpType() vm.OpType {
@@ -85,28 +84,26 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 
 		case Eval:
 			if ctr.bat != nil && !ctr.bat.IsEmpty() {
-				if mergeGroup.NeedEval {
-					for i, agg := range ctr.bat.Aggs {
-						if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
-							if err := agg.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
-								return result, err
-							}
-						}
-						vec, err := agg.Flush()
-						if err != nil {
-							ctr.state = End
+				for i, agg := range ctr.bat.Aggs {
+					if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
+						if err := agg.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
 							return result, err
 						}
-						ctr.bat.Aggs[i] = nil
-						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
-						if vec != nil {
-							analyzer.Alloc(int64(vec.Size()))
-						}
-
-						agg.Free()
 					}
-					ctr.bat.Aggs = nil
+					vec, err := agg.Flush()
+					if err != nil {
+						ctr.state = End
+						return result, err
+					}
+					ctr.bat.Aggs[i] = nil
+					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+					if vec != nil {
+						analyzer.Alloc(int64(vec.Size()))
+					}
+
+					agg.Free()
 				}
+				ctr.bat.Aggs = nil
 
 				result.Batch = ctr.bat
 				if mergeGroup.ProjectList != nil {
