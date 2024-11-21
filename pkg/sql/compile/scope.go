@@ -995,12 +995,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	var runtimeFilterList []*plan.Expr
 	var shouldDrop bool
 	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
-	if err != nil || shouldDrop {
-		return
-	}
-	err = s.handleBlockList(c, runtimeFilterList)
 	if err != nil {
 		return
+	}
+	if !shouldDrop {
+		err = s.handleBlockList(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
 	}
 
 	switch {
