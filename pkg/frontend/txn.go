@@ -423,7 +423,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 				tempCtx,
 				execCtx.ses.getLastCommitTS(),
 				opts...)
-			return err2
+			return moerr.AttachCause(tempCtx, err2)
 		})
 	} else if th.txnOp.Txn().Status != txn.TxnStatus_Active {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
@@ -432,7 +432,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 				th.txnOp,
 				execCtx.ses.getLastCommitTS(),
 				opts...)
-			return err2
+			return moerr.AttachCause(tempCtx, err2)
 		})
 	} else {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txn is already active")
