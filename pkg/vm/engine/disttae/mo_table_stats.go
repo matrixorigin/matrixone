@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"runtime"
 	"slices"
@@ -123,14 +124,40 @@ const (
                   	table_id in (%v) 
 			  	order by table_id asc;`
 
-	getCandidatesSQL = `
+	getNextReadyListSQL = `
 				select
 					account_id, database_id, table_id, update_time 
 				from 
-				    %s.%s
+				    %s.%s 
+				%s 
 				order by 
 				    update_time asc
 				limit %d;`
+
+	getNextCheckAliveListSQL = `
+				select
+					%s  
+				from 
+				    %s.%s 
+				order by 
+				    update_time asc
+				group by
+				    %s 
+				limit %d;`
+
+	getCheckAliveSQL = `
+				select 
+					%s
+				from 
+					%s.%s
+				where
+				    %s in (%v);`
+
+	getDeleteFromStatsSQL = `
+				delete from 
+				    %s.%s
+				where 
+					%s in (%v);`
 
 	getUpdateTSSQL = `
 				select
@@ -426,7 +453,7 @@ func setForceUpdate(newVal bool) string {
 	return ret
 }
 
-func executeSQL(ctx context.Context, sql string) ie.InternalExecResult {
+func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecResult {
 	exec := dynamicCtx.executorPool.Get()
 	defer dynamicCtx.executorPool.Put(exec)
 
@@ -434,6 +461,7 @@ func executeSQL(ctx context.Context, sql string) ie.InternalExecResult {
 	if ret.Error() != nil {
 		logutil.Info("stats task exec sql failed",
 			zap.Error(ret.Error()),
+			zap.String("hint", hint),
 			zap.String("sql", sql))
 	}
 
@@ -480,7 +508,7 @@ func forceUpdateQuery(
 			intsJoin(dbs, ","),
 			intsJoin(tbls, ","))
 
-		sqlRet := executeSQL(ctx, sql)
+		sqlRet := executeSQL(ctx, sql, "force update query")
 		if sqlRet.Error() != nil {
 			return nil, sqlRet.Error()
 		}
@@ -516,6 +544,8 @@ func forceUpdateQuery(
 			tbl := allocateTablePair()
 			item := cc.GetTableById(uint32(accs[i]), dbs[i], tbls[i])
 			if item == nil {
+				// account, db, tbl may delete already
+				// the `update_time` not change anymore
 				continue
 			}
 
@@ -568,7 +598,7 @@ func normalQuery(
 		intsJoin(dbs, ","),
 		intsJoin(tbls, ","))
 
-	sqlRet := executeSQL(ctx, sql)
+	sqlRet := executeSQL(ctx, sql, "normal query")
 	if sqlRet.Error() != nil {
 		return nil, sqlRet.Error()
 	}
@@ -911,7 +941,7 @@ func insertNewTables(
 
 	//if dynamicCtx.lastCheckNewTables.IsEmpty() {
 	sql = fmt.Sprintf(getMinTSSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS)
-	sqlRet = executeSQL(ctx, sql)
+	sqlRet = executeSQL(ctx, sql, "insert new table-0: get min ts")
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -938,7 +968,7 @@ func insertNewTables(
 			Format("2006-01-02 15:04:05"),
 	)
 
-	sqlRet = executeSQL(ctx, sql)
+	sqlRet = executeSQL(ctx, sql, "insert new table-1: get new tables")
 	if err = sqlRet.Error(); err != nil {
 		return err
 	}
@@ -982,7 +1012,7 @@ func insertNewTables(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
 
-	sqlRet = executeSQL(ctx, sql)
+	sqlRet = executeSQL(ctx, sql, "insert new table-2: insert new tables")
 	return sqlRet.Error()
 }
 
@@ -1008,15 +1038,29 @@ func prepare(
 		return
 	}
 
-	accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng)
-	if err != nil {
-		return
-	}
+	offsetTS := types.TS{}
+	for len(dynamicCtx.tableStock.tbls) == 0 {
+		accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng, offsetTS)
+		if err != nil {
+			return err
+		}
 
-	err = getChangedTableList(
-		newCtx, service, eng, accs, dbs, tbls, ts,
-		&dynamicCtx.tableStock.tbls,
-		&dynamicCtx.tableStock.newest)
+		if len(ts) == 0 {
+			break
+		}
+
+		err = getChangedTableList(
+			newCtx, service, eng, accs, dbs, tbls, ts,
+			&dynamicCtx.tableStock.tbls,
+			&dynamicCtx.tableStock.newest)
+
+		if err != nil {
+			return err
+		}
+
+		// in case of all candidates have been deleted.
+		offsetTS = types.TimestampToTS(*ts[len(ts)-1])
+	}
 
 	return err
 }
@@ -1218,6 +1262,8 @@ func gamaTask(
 		cc   *cache.CatalogCache
 		tbls []*tablePair
 		now  time.Time
+
+		accIds, dbIds, tblIds []uint64
 	)
 
 	dynamicCtx.Lock()
@@ -1225,9 +1271,47 @@ func gamaTask(
 	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
 	dynamicCtx.Unlock()
 
+	decodeIdsFromSqlRet := func(sqlRet ie.InternalExecResult) {
+		accIds = accIds[:0]
+		dbIds = dbIds[:0]
+		tblIds = tblIds[:0]
+
+		for i := range sqlRet.RowCount() {
+			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+			accIds = append(accIds, uint64(val.(int64)))
+
+			if sqlRet.ColumnCount() == 1 {
+				continue
+			}
+
+			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+			dbIds = append(dbIds, uint64(val.(int64)))
+
+			if sqlRet.ColumnCount() == 2 {
+				continue
+			}
+
+			if val, err = sqlRet.Value(ctx, i, 2); err != nil {
+				logutil.Info("correction task failed", zap.Error(err))
+				continue
+			}
+
+			tblIds = append(tblIds, uint64(val.(int64)))
+		}
+	}
+
+	// incremental update tables with heartbeat update_time
+	// may leave some tables never been updated.
+	// this opA does such correction.
 	opA := func() {
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
-		sqlRet := executeSQL(ctx, sql)
+		sqlRet := executeSQL(ctx, sql, "gama task: get null stats list")
 		if sqlRet.Error() != nil {
 			logutil.Info("correction task get null stats failed",
 				zap.String("sql", sql),
@@ -1237,34 +1321,19 @@ func gamaTask(
 
 		now = time.Now()
 		tbls = tbls[:0]
+
+		decodeIdsFromSqlRet(sqlRet)
+
 		cc = de.GetLatestCatalogCache()
-
-		for i := range sqlRet.RowCount() {
-			tbl := allocateTablePair()
-
-			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
-				continue
-			}
-			tbl.acc = val.(int64)
-
-			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
-				continue
-			}
-			tbl.db = val.(int64)
-
-			if val, err = sqlRet.Value(ctx, i, 2); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
-				continue
-			}
-
-			tbl.tbl = val.(int64)
-
-			item := cc.GetTableById(uint32(tbl.acc), uint64(tbl.db), uint64(tbl.tbl))
+		for i := range tblIds {
+			item := cc.GetTableById(uint32(accIds[i]), uint64(dbIds[i]), uint64(tblIds[i]))
 			if item == nil {
+				// account, db, tbl may delete already
+				// the `update_time` not change anymore
 				continue
 			}
+
+			tbl := allocateTablePair()
 
 			tbl.tblName = item.Name
 			tbl.dbName = item.DatabaseName
@@ -1287,13 +1356,70 @@ func gamaTask(
 		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
 	}
 
+	colName1 := []string{
+		"account_id", "dat_id", "rel_id",
+	}
+	colName2 := []string{
+		"account_id", "database_id", "table_id",
+	}
+
+	tblName := []string{
+		catalog.MOAccountTable, catalog.MO_DATABASE, catalog.MO_TABLES,
+	}
+
+	deleteByStep := func(step int) {
+		sql := fmt.Sprintf(getNextCheckAliveListSQL,
+			colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+			colName2[step], options.DefaultBlockMaxRows)
+
+		sqlRet := executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
+		if sqlRet.Error() != nil {
+			return
+		}
+
+		decodeIdsFromSqlRet(sqlRet)
+		if len(accIds) == 0 {
+			return
+		}
+
+		sql = fmt.Sprintf(getCheckAliveSQL,
+			colName1[step], catalog.MO_CATALOG, tblName[step],
+			colName1[step], intsJoin(accIds, ","))
+		sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
+		if sqlRet.Error() != nil {
+			return
+		}
+
+		for i := range sqlRet.RowCount() {
+			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
+				continue
+			}
+
+			// remove alive acc from slice
+			idx := slices.Index(accIds, uint64(val.(int32)))
+			accIds = append(accIds[:idx], accIds[idx+1:]...)
+		}
+
+		if len(accIds) != 0 {
+			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+				colName2[step], intsJoin(accIds, ","))
+			executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
+		}
+	}
+
+	// clear deleted tbl, db, account
 	opB := func() {
-		// TODO
-		// clear deleted tbl, db, account
+		// the stats belong to any deleted accounts/databases/tables have unchanged update time
+		// since they have been deleted.
+		// so opB collects tables ascending their update time and then check if they deleted.
+
+		deleteByStep(0) // clean account
+		deleteByStep(1) // clean database
+		deleteByStep(2) // clean tables
 	}
 
 	tickerA := time.NewTicker(gamaDur)
-	tickerB := time.NewTicker(gamaDur * 2)
+	tickerB := time.NewTicker(gamaDur + time.Minute)
 
 	for {
 		select {
@@ -1306,7 +1432,7 @@ func gamaTask(
 
 		case <-tickerB.C:
 			opB()
-			tickerB.Reset(gamaDur * 2)
+			tickerB.Reset(gamaDur)
 		}
 	}
 }
@@ -1349,14 +1475,28 @@ func getCandidates(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
+	offsetTS types.TS,
 ) (accs, dbs, tbls []uint64, ts []*timestamp.Timestamp, err error) {
 
 	dynamicCtx.Lock()
 	limit := dynamicCtx.conf.GetTableListLimit
 	dynamicCtx.Unlock()
 
-	sql := fmt.Sprintf(getCandidatesSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
-	sqlRet := executeSQL(ctx, sql)
+	var (
+		sql    string
+		where  = ""
+		sqlRet ie.InternalExecResult
+	)
+
+	if !offsetTS.IsEmpty() {
+		where = fmt.Sprintf("where update_time >= '%s'",
+			offsetTS.ToTimestamp().
+				ToStdTime().
+				Format("2006-01-02 15:04:05.000000"))
+	}
+
+	sql = fmt.Sprintf(getNextReadyListSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where, limit)
+	sqlRet = executeSQL(ctx, sql, "get next ready to update list")
 	if err = sqlRet.Error(); err != nil {
 		return
 	}
@@ -1481,6 +1621,8 @@ func getChangedTableList(
 	for i := range resp.AccIds {
 		item := cc.GetTableById(uint32(resp.AccIds[i]), resp.DatabaseIds[i], resp.TableIds[i])
 		if item == nil {
+			// account, db, tbl may delete already
+			// the `update_time` not change anymore
 			continue
 		}
 
@@ -1497,6 +1639,8 @@ func getChangedTableList(
 		// has no changes, only update TS
 		item := cc.GetTableById(uint32(req.AccIds[i]), req.DatabaseIds[i], req.TableIds[i])
 		if item == nil {
+			// account, db, tbl may delete already
+			// the `update_time` not change anymore
 			continue
 		}
 
@@ -1773,7 +1917,7 @@ func bulkUpdateTableStatsList(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(vals, ","))
 
-	ret := executeSQL(ctx, sql)
+	ret := executeSQL(ctx, sql, "bulk update table stats")
 	return ret.Error()
 }
 
@@ -1810,7 +1954,7 @@ func bulkUpdateTableOnlyTS(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(vals, ","))
 
-	ret := executeSQL(ctx, sql)
+	ret := executeSQL(ctx, sql, "bulk update only ts")
 
 	for i := range tbls {
 		tbls[i].Done(ret.Error())

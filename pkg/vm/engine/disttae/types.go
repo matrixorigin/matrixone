@@ -19,15 +19,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -55,6 +52,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 const (
