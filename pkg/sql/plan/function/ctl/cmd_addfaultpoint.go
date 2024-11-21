@@ -87,7 +87,7 @@ func handleAddFaultPoint(
 	sender requestSender,
 ) (Result, error) {
 	if service != cn && service != tn {
-		return Result{}, moerr.NewInvalidInputNoCtxf("invalid service %s", service)
+		return Result{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
 	}
 
 	if service == tn {
@@ -129,7 +129,7 @@ func handleAddFaultPoint(
 			resp, _ := transferRequest2OtherCNs(proc, cns[idx], request)
 			if resp == nil {
 				// no such cn service
-				info[cns[idx]] = "no such cn service"
+				info[cns[idx]] = fmt.Sprintf("no such cn service %s", cns[idx])
 			} else {
 				info[cns[idx]] = resp.TraceSpanResponse.Resp
 			}
