@@ -68,11 +68,6 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 func (p *Partition) MutateState() (*PartitionState, func()) {
 	curState := p.state.Load()
 	state := curState.Copy()
-	//TODO::Remove the debug info for issue-19867
-	if p.TableInfo.Name == "mo_database" {
-		logutil.Infof("MutateState:table name:%s, mutate partition state from %p to %p",
-			p.TableInfo.Name, curState, state)
-	}
 	return state, func() {
 		if !p.state.CompareAndSwap(curState, state) {
 			panic("concurrent mutation")
