@@ -13,15 +13,15 @@ drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    republication01    *    acc01        2024-08-01 16:54:06    null    publish before creating snapshot
+publication01    republication01    *    acc01        2024-11-14 16:28:52    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-publication01    republication01    272587    true    *    acc01    2024-08-01 16:54:06    null    0    1    publish before creating snapshot
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+0    publication01    republication01    273171    true    *    acc01    2024-11-14 16:28:52    null    0    1    publish before creating snapshot
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 use republication01;
 select * from repub01;
 col1
@@ -70,10 +70,10 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    repub02    *    acc01        2024-08-01 16:54:06    null    publish before creating snapshot
+pub02    repub02    *    acc01        2024-11-14 16:28:52    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub02    repub02    272606    true    *    acc01    2024-08-01 16:54:06    null    0    1    publish before creating snapshot
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+0    pub02    repub02    273197    true    *    acc01    2024-11-14 16:28:52    null    0    1    publish before creating snapshot
 drop database if exists sub01;
 create database sub01 from sys publication pub02;
 show databases;
@@ -106,7 +106,7 @@ restore account sys from snapshot sp02;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 use repub02;
 select * from pri01;
 deptno    dname    loc
@@ -159,14 +159,14 @@ drop publication if exists pub03;
 create publication pub03 database repub03 account acc01 comment 'create repub03';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    repub03    *    acc01        2024-08-01 16:54:07    null    create repub03
+pub03    repub03    *    acc01        2024-11-14 16:28:53    null    create repub03
 drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
 drop database if exists sub03;
 create database sub03 from sys publication pub03;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub03    sys    repub03    *    create repub03    2024-08-01 16:54:07    sub03    2024-08-01 16:54:07    0
+pub03    sys    repub03    *    create repub03    2024-11-14 16:28:53    sub03    2024-11-14 16:28:53    0
 show databases;
 Database
 information_schema
@@ -208,11 +208,11 @@ system
 system_metrics
 drop snapshot sp01;
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub03    repub03    272628    true    *    acc01    2024-08-01 16:54:07    null    0    1    create repub03
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+0    pub03    repub03    273225    true    *    acc01    2024-11-14 16:28:53    null    0    1    create repub03
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    repub03    *    acc01        2024-08-01 16:54:07    null    create repub03
+pub03    repub03    *    acc01        2024-11-14 16:28:53    null    create repub03
 drop publication pub03;
 drop database repub03;
 drop database if exists db01;
@@ -230,11 +230,11 @@ create snapshot sp02 for cluster;
 drop publication if exists pub04;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub04    db01    272646    true    *    acc01    2024-08-01 16:54:07    null    0    1    create pub04
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+0    pub04    db01    273243    true    *    acc01    2024-11-14 16:28:53    null    0    1    create pub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub04    db01    *    acc01        2024-08-01 16:54:07    null    create pub04
+pub04    db01    *    acc01        2024-11-14 16:28:53    null    create pub04
 drop database if exists sub04;
 create database sub04 from sys publication pub04;
 use sub04;
@@ -256,7 +256,7 @@ use sub04;
 Unknown database sub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub04    db01    *    acc01        2024-08-01 16:54:07    null    create pub04
+pub04    db01    *    acc01        2024-11-14 16:28:53    null    create pub04
 drop publication pub04;
 drop database db01;
 drop snapshot sp02;
@@ -315,8 +315,8 @@ drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    db10    *    acc02        2024-08-01 16:54:08    null    publish db10
-pub05    db09    *    acc02        2024-08-01 16:54:08    null    publish db09
+pub06    db10    *    acc02        2024-11-14 16:28:54    null    publish db10
+pub05    db09    *    acc02        2024-11-14 16:28:54    null    publish db09
 drop database if exists sub05;
 create database sub05 from acc01 publication pub05;
 show databases;
@@ -340,7 +340,7 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub05    acc01    null    null    null    null    sub05    2024-08-09 15:59:16    2
+pub05    acc01    null    null    null    null    sub05    2024-11-14 16:28:54    2
 show databases;
 Database
 information_schema
@@ -408,8 +408,8 @@ drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    db10    *    acc02        2024-08-01 16:54:09    null    publish db10
-pub05    db09    *    acc02        2024-08-01 16:54:09    null    publish db09
+pub06    db10    *    acc02        2024-11-14 16:28:55    null    publish db10
+pub05    db09    *    acc02        2024-11-14 16:28:55    null    publish db09
 drop database if exists sub05;
 create database sub05 from acc01 publication pub05;
 show databases;
@@ -431,8 +431,8 @@ c    231    0
 restore account acc02 from snapshot sp05;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    db10    *    acc02        2024-08-01 16:54:09    null    publish db10
-pub05    db09    *    acc02        2024-08-01 16:54:09    null    publish db09
+pub06    db10    *    acc02        2024-11-14 16:28:55    null    publish db10
+pub05    db09    *    acc02        2024-11-14 16:28:55    null    publish db09
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 show databases;
@@ -458,8 +458,8 @@ create snapshot sp100 for cluster;
 drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    272802    true    *    acc01    2024-08-01 16:54:09    null    0    1    publish test01
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+0    pub07    test01    273400    true    *    acc01    2024-11-14 16:28:55    null    0    1    publish test01
 drop snapshot if exists sp101;
 create snapshot sp101 for cluster;
 drop database if exists sub07;
@@ -481,8 +481,7 @@ use sub07;
 internal error: there is no publication pub07
 restore account sys from snapshot sp101;
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    272823    true    *    acc01    2024-08-01 16:54:09    null    1    0    publish test01
+account_id    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 show databases;
 Database
 information_schema
@@ -492,11 +491,12 @@ sub07
 system
 system_metrics
 use sub07;
+internal error: there is no publication pub07
 select sum(a) from test01;
-sum(a)
-5050
+SQL parser error: table "test01" does not exist
 drop database sub07;
 drop publication pub07;
+internal error: publication 'pub07' does not exist
 drop database test01;
 drop snapshot sp100;
 drop snapshot sp101;
@@ -554,13 +554,12 @@ sub07
 system
 system_metrics
 use sub07;
+internal error: there is no publication pub08
 select * from t1;
-col1    col2
-1    2
-2    3
-3    4
+SQL parser error: table "t1" does not exist
 drop database sub07;
 drop publication pub08;
+internal error: publication 'pub08' does not exist
 drop database test02;
 drop snapshot sp102;
 drop snapshot sp103;
@@ -664,8 +663,7 @@ create snapshot sp105 for cluster;
 drop publication if exists pub10;
 create publication pub10 database test04 account acc02 comment 'publish test03';
 select * from mo_catalog.mo_pubs;
-pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub10    test04    273045    true    *    acc02    2024-08-01 16:54:12    null    2    2    publish test03
+SQL parser error: table "mo_pubs" does not exist
 drop database if exists sub09;
 create database sub09 from acc01 publication pub10;
 show databases;

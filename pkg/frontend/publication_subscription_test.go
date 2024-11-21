@@ -132,16 +132,17 @@ func Test_doAlterPublication(t *testing.T) {
 	mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(2)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(7)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -258,16 +259,17 @@ func Test_doAlterPublication2(t *testing.T) {
 	mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(2)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(7)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -350,16 +352,17 @@ func Test_doDropPublication(t *testing.T) {
 	mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("pub1", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("db1", nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(2)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("pub1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("db1", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(4)).Return("*", nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("", nil).AnyTimes()
-		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
-		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(7)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("*", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("", nil).AnyTimes()
+		er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(7)).Return(true, nil).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(8)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(9)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("", nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -411,7 +414,7 @@ func Test_doDropPublication(t *testing.T) {
 }
 
 func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.Background(), 0)
 	kases := []struct {
 		pubName      string
 		databaseName string
@@ -529,4 +532,12 @@ func Test_doShowSubscriptions(t *testing.T) {
 		_, ok := ses.mrs.Data[0][8].(int8)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+}
+
+func Test_getSqlForDbPubCount(t *testing.T) {
+	ctx := context.Background()
+	_, err := getSqlForDbPubCount(ctx, "db1")
+	require.Error(t, err)
+	_, err = getSqlForDbPubCount(ctx, "db 1")
+	require.Error(t, err)
 }

@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/petermattis/goid"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -124,7 +126,7 @@ func newRouter(
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	cn, err := r.sqlRouter.GetCNServerByConnID(connID)
 	if err != nil {
-		logutil.Errorf("failed to get cn server by conn id %d: %v", connID, err)
+		logutil.Errorf("failed to get cn server by conn id %d goId %d: %v", connID, goid.Get(), err)
 		return nil, err
 	}
 	if cn == nil {

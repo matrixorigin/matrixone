@@ -1,8 +1,8 @@
 select enable_fault_injection();
 enable_fault_injection()
 true
-select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
-add_fault_point(fj/trace/partitionstate, :::, echo, 1, mo_tables)
+select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
+add_fault_point(fj/debug/19787, :::, echo, 0, )
 true
 create account acc1 ADMIN_NAME 'admin1' IDENTIFIED BY 'test123';
 show databases;
@@ -36,25 +36,25 @@ t5    BASE TABLE
 t6    BASE TABLE
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
+a    INT(32)    NO    PRI    null        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null
+a    INT(32)    YES    MUL    null        
 desc t6;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null
+a    INT(32)    YES    MUL    null        
 select * from t1;
 a
 1
@@ -76,7 +76,7 @@ a
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-23 08:46:01.873457    account    acc1
+sn1    2024-11-14 03:01:41.734402887    account    acc1        
 drop database fk_test;
 restore account acc1 from snapshot sn1;
 show databases;
@@ -98,25 +98,25 @@ t5    BASE TABLE
 t6    BASE TABLE
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
+a    INT(32)    NO    PRI    null        
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    INT(32)    YES    MUL    null
+a    INT(32)    NO    PRI    null        
+b    INT(32)    YES    MUL    null        
 desc t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null
+a    INT(32)    YES    MUL    null        
 desc t6;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null
+a    INT(32)    YES    MUL    null        
 select * from t1;
 a
 1
@@ -172,7 +172,7 @@ a    b
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-23 08:46:03.237143    account    acc1
+sn1    2024-11-14 03:01:42.219753977    account    acc1        
 delete from fk_test1.t2;
 select * from fk_test1.t2;
 a    b

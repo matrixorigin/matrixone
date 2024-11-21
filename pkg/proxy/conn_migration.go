@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,6 +49,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 		zap.Uint32("conn ID", c.connID),
 		zap.String("DB", r.DB),
 		zap.Int("prepare stmt num", len(r.PrepareStmts)),
+		zap.Int64("goId", goid.Get()),
 	)
 
 	defer c.queryClient.Release(resp)
@@ -85,7 +87,9 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
 		zap.String("username", c.clientInfo.username),
-		zap.Uint32("conn ID", c.connID))
+		zap.Uint32("conn ID", c.connID),
+		zap.Int64("goId", goid.Get()),
+	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
 		ConnID:       c.connID,

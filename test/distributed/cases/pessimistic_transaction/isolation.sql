@@ -393,3 +393,4 @@ use isolation;
 delete from t1 where a = 1;
 -- @session}
 commit;
+drop table if exists t1;

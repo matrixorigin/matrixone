@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -142,11 +143,12 @@ func (ls *LocalDisttaeDataSource) String() string {
 		blks[i] = ls.rangeSlice.Get(i)
 	}
 
-	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, blk list: %v",
-		ls.snapshotTS.ToString(),
+	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, state: %p, blk list: %v",
+		ls.table.db.op.Txn().DebugString(),
 		ls.iteratePhase,
 		ls.txnOffset,
 		ls.rangesCursor,
+		ls.pState,
 		blks)
 }
 
@@ -477,7 +479,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 }
 
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
-	_ context.Context,
+	ctx context.Context,
 	colTypes []types.Type,
 	seqNums []uint16,
 	mp *mpool.MPool,
@@ -492,12 +494,19 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		sels []int64
 	)
 
+	var summaryBuf *bytes.Buffer
+	if v := ctx.Value(defines.ReaderSummaryKey{}); v != nil {
+		summaryBuf = v.(*bytes.Buffer)
+	}
 	if ls.pStateRows.insIter == nil {
 		if ls.memPKFilter.SpecFactory == nil {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
 				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
+		}
+		if summaryBuf != nil {
+			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
 		}
 	}
 
@@ -528,6 +537,12 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		applyOffset      = 0
 	)
 
+	var (
+		scan      int
+		inserted  int
+		delInFile int
+	)
+
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
@@ -536,6 +551,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 			entry := ls.pStateRows.insIter.Entry()
 			b, o := entry.RowID.Decode()
+			scan++
 
 			if sels, err = ls.ApplyTombstones(
 				ls.ctx, b, []int64{int64(o)}, applyPolicy,
@@ -550,7 +566,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			if minTS.GT(&entry.Time) {
 				minTS = entry.Time
 			}
-
+			inserted++
 			if err = vector.AppendFixed(
 				physicalColumnPtr,
 				entry.RowID,
@@ -592,6 +608,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		}
 
 		if len(deleted) > 0 {
+			delInFile += len(deleted)
 			if physicalColumnPos == -1 {
 				for i := range deleted {
 					deleted[i] += int64(applyOffset)
@@ -615,6 +632,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+
+	if summaryBuf != nil {
+		summaryBuf.WriteString(fmt.Sprintf("[PScan] scan:%d, inserted:%d, delInFile:%d, outBatchRowCnt: %v\n", scan, inserted, delInFile, outBatch.RowCount()))
+	}
 
 	return nil
 }
@@ -799,13 +820,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-	s3FlushedDeletes.RWMutex.Lock()
-	defer s3FlushedDeletes.RWMutex.Unlock()
-
-	if len(s3FlushedDeletes.data) == 0 {
-		return
-	}
+	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
 
 	release := func() {}
 	if deletedRows == nil {
@@ -815,14 +830,21 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	}
 	defer release()
 
-	var curr int
+	var tombstones []objectio.ObjectStats
+	s3FlushedDeletes.Range(func(key, value any) bool {
+		tombstones = append(tombstones, key.(objectio.ObjectStats))
+		return true
+	})
+
+	curr := 0
 	getTombstone := func() (*objectio.ObjectStats, error) {
-		if curr >= len(s3FlushedDeletes.data) {
+		if curr >= len(tombstones) {
 			return nil, nil
 		}
+
 		i := curr
 		curr++
-		return &s3FlushedDeletes.data[i], nil
+		return &tombstones[i], nil
 	}
 
 	if err = blockio.GetTombstonesByBlockId(

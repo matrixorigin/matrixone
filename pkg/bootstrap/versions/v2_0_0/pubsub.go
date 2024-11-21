@@ -21,90 +21,15 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
-
-var getAccounts = func(txn executor.TxnExecutor) (nameInfoMap map[string]*pubsub.AccountInfo, err error) {
-	sql := "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
-
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(0))
-	if err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("getAccounts error", zap.Error(err))
-		return
-	}
-	defer res.Close()
-
-	nameInfoMap = make(map[string]*pubsub.AccountInfo)
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			var accountInfo pubsub.AccountInfo
-			accountInfo.Id = vector.GetFixedAtWithTypeCheck[int32](cols[0], i)
-			accountInfo.Name = cols[1].GetStringAt(i)
-			accountInfo.Status = cols[2].GetStringAt(i)
-			accountInfo.Version = vector.GetFixedAtWithTypeCheck[uint64](cols[3], i)
-			if !cols[4].IsNull(uint64(i)) {
-				accountInfo.SuspendedTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[4], i).String2(time.Local, cols[4].GetType().Scale)
-			} else {
-				accountInfo.SuspendedTime = ""
-			}
-			nameInfoMap[accountInfo.Name] = &accountInfo
-		}
-		return true
-	})
-	return
-}
-
-var getPubInfos = func(txn executor.TxnExecutor, accountId uint32) (pubInfos []*pubsub.PubInfo, err error) {
-	sql := "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, comment from mo_catalog.mo_pubs"
-
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
-	if err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("getPubInfos error", zap.Error(err))
-		return
-	}
-	defer res.Close()
-
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			var pubInfo pubsub.PubInfo
-			pubInfo.PubName = cols[0].GetStringAt(i)
-			pubInfo.DbName = cols[1].GetStringAt(i)
-			pubInfo.DbId = vector.GetFixedAtWithTypeCheck[uint64](cols[2], i)
-			pubInfo.TablesStr = cols[3].GetStringAt(i)
-			pubInfo.SubAccountsStr = cols[4].GetStringAt(i)
-			pubInfo.CreateTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[5], i).String2(time.Local, cols[5].GetType().Scale)
-			if !cols[6].IsNull(uint64(i)) {
-				pubInfo.UpdateTime = vector.GetFixedAtWithTypeCheck[types.Timestamp](cols[6], i).String2(time.Local, cols[6].GetType().Scale)
-			}
-			pubInfo.Comment = cols[7].GetStringAt(i)
-			pubInfos = append(pubInfos, &pubInfo)
-		}
-		return true
-	})
-	return
-}
-
-var getAllPubInfos = func(txn executor.TxnExecutor, accNameInfoMap map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
-	allPubInfos := make(map[string]*pubsub.PubInfo)
-	for _, accountInfo := range accNameInfoMap {
-		pubInfos, err := getPubInfos(txn, uint32(accountInfo.Id))
-		if err != nil {
-			return nil, err
-		}
-
-		for _, pubInfo := range pubInfos {
-			allPubInfos[accountInfo.Name+"#"+pubInfo.PubName] = pubInfo
-		}
-	}
-	return allPubInfos, nil
-}
 
 func getSubInfoFromSql(sql string) (subName, pubAccountName, pubName string, err error) {
 	var ast []tree.Statement
@@ -122,6 +47,7 @@ func getSubInfoFromSql(sql string) (subName, pubAccountName, pubName string, err
 	return
 }
 
+// getPubSubscribedInfos returns map[pubAccountName#pubName] -> subscribedInfos
 var getPubSubscribedInfos = func(txn executor.TxnExecutor) (subscribedInfos map[string][]*pubsub.SubInfo, err error) {
 	sql := "select dat_createsql, created_time, account_id from mo_catalog.mo_database where dat_type = 'subscription'"
 
@@ -160,18 +86,18 @@ func generateInsertSql(info *pubsub.SubInfo) string {
 }
 
 func UpgradePubSub(txn executor.TxnExecutor) (err error) {
-	accNameInfoMap, err := getAccounts(txn)
+	accNameInfoMap, _, err := pubsub.GetAccounts(txn)
 	if err != nil {
 		return
 	}
 
-	// allPubInfos: pubAccountName#pubName -> pubInfo
-	allPubInfos, err := getAllPubInfos(txn, accNameInfoMap)
+	// GetAllPubInfos returns map[pubAccountName#pubName] -> pubInfo
+	allPubInfos, err := versions.GetAllPubInfos(txn, accNameInfoMap)
 	if err != nil {
 		return
 	}
 
-	// pubSubscribedInfos: pubAccountName#pubName -> subscribedInfos
+	// getPubSubscribedInfos returns map[pubAccountName#pubName] -> subscribedInfos
 	pubSubscribedInfos, err := getPubSubscribedInfos(txn)
 	if err != nil {
 		return
