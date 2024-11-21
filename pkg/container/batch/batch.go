@@ -377,7 +377,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
-	if bat == EmptyBatch || bat == CteEndBatch {
+	if bat == EmptyBatch || bat == CteEndBatch || bat == EmptyForConstFoldBatch {
 		return
 	}
 
@@ -611,6 +611,7 @@ func (bat *Batch) Allocated() int {
 func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
+	b.Attrs = bat.Attrs
 	for i, vec := range bat.Vecs {
 		b.Vecs[i], err = vec.Window(start, end)
 		if err != nil {

@@ -170,6 +170,10 @@ var (
 	LargestEntryLimit = 10 * 1024 * 1024
 
 	CNPrimaryCheck atomic.Bool
+
+	defaultCreateTxnOpTimeout = time.Minute
+
+	defaultConnectTimeout = time.Minute
 )
 
 // FrontendParameters of the frontend
@@ -298,6 +302,16 @@ type FrontendParameters struct {
 
 	// KeyEncryptionKey is the key for encrypt key
 	KeyEncryptionKey string `toml:"key-encryption-key"`
+
+	// timeout of create txn.
+	// txnclient.New
+	// txnclient.RestartTxn
+	// engine.New
+	CreateTxnOpTimeout toml.Duration `toml:"createTxnOpTimeout" user_setting:"advanced"`
+
+	// timeout of authenticating user. different from session timeout
+	// including mysql protocol handshake, checking user, loading session variables
+	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -412,6 +426,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if len(fp.KeyEncryptionKey) == 0 {
 		fp.KeyEncryptionKey = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
+	}
+
+	if fp.CreateTxnOpTimeout.Duration == 0 {
+		fp.CreateTxnOpTimeout.Duration = defaultCreateTxnOpTimeout
+	}
+
+	if fp.ConnectTimeout.Duration == 0 {
+		fp.ConnectTimeout.Duration = defaultConnectTimeout
 	}
 }
 

@@ -21,6 +21,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMPoolLimitExceed(t *testing.T) {
+	m, err := NewMPool("test-mpool-small", 0, 0)
+	require.Nil(t, err)
+
+	_, err = m.Alloc(7775731712, false)
+	require.NotNil(t, err)
+}
+
 func TestMPool(t *testing.T) {
 	m, err := NewMPool("test-mpool-small", 0, 0)
 	require.True(t, err == nil, "new mpool failed %v", err)

@@ -551,6 +551,10 @@ func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to 
 	return true, nil
 }
 
+func (t *Table) PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+	return true, nil
+}
+
 func (t *Table) ApproxObjectsNum(ctx context.Context) int {
 	return 0
 }

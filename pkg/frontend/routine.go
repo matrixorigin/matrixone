@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -425,6 +426,8 @@ func (rt *Routine) cleanup() {
 		// we should wait for the migration and close the migration controller.
 		rt.mc.waitAndClose()
 
+		var txnMeta string
+		curRtId := GetRoutineId()
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
@@ -435,12 +438,20 @@ func (rt *Routine) cleanup() {
 				txnOpt: FeTxnOption{byRollback: true},
 			}
 			defer tempExecCtx.Close()
-			err := ses.GetTxnHandler().Rollback(&tempExecCtx)
+			txnHandler := ses.GetTxnHandler()
+			err := txnHandler.Rollback(&tempExecCtx)
 			if err != nil {
 				ses.Error(tempExecCtx.reqCtx,
 					"Failed to rollback txn",
 					zap.Error(err))
 			}
+			if txnHandler != nil && txnHandler.GetTxn() != nil {
+				txnOp := txnHandler.GetTxn()
+				txnMeta = txnOp.Txn().DebugString()
+			}
+			ses.Info(tempExecCtx.reqCtx, "routine cleanup", zap.Uint64("current go id", curRtId), zap.Uint64("record go id", rt.goroutineID), zap.String("last txnMeta", txnMeta))
+		} else {
+			logutil.Info("routine cleanup without session", zap.Uint64("current go id", curRtId), zap.Uint64("record go id", rt.goroutineID))
 		}
 
 		//step B: cancel the query

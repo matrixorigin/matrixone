@@ -266,23 +266,21 @@ type BaseProcess struct {
 	sqlContext QueryBaseContext
 	// atRuntime indicates whether the process is running in runtime.
 	atRuntime bool
+	LoadTag   bool
 
 	StmtProfile *StmtProfile
 	// Id, query id.
-	Id              string
-	Lim             Limitation
-	mp              *mpool.MPool
-	prepareBatch    *batch.Batch
-	prepareExprList any
-	valueScanBatch  map[[16]byte]*batch.Batch
+	Id  string
+	Lim Limitation
+	mp  *mpool.MPool
 	// unix timestamp
-	UnixTime            int64
-	TxnClient           client.TxnClient
-	SessionInfo         SessionInfo
-	FileService         fileservice.FileService
-	LockService         lockservice.LockService
-	IncrService         incrservice.AutoIncrementService
-	LoadTag             bool
+	UnixTime    int64
+	TxnClient   client.TxnClient
+	SessionInfo SessionInfo
+	FileService fileservice.FileService
+	LockService lockservice.LockService
+	IncrService incrservice.AutoIncrementService
+
 	LastInsertID        *uint64
 	LoadLocalReader     *io.PipeReader
 	Aicm                *defines.AutoIncrCacheManager
@@ -372,25 +370,6 @@ func (proc *Process) SetMPool(mp *mpool.MPool) {
 
 func (proc *Process) SetFileService(fs fileservice.FileService) {
 	proc.Base.FileService = fs
-}
-
-func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
-	proc.Base.valueScanBatch[key] = batch
-}
-
-func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	return proc.Base.valueScanBatch[key]
-}
-
-func (proc *Process) CleanValueScanBatchs() {
-	mp := proc.Mp()
-	for k, bat := range proc.Base.valueScanBatch {
-		if bat != nil {
-			bat.Clean(mp)
-		}
-		// todo: why not remake the map after all clean ?
-		delete(proc.Base.valueScanBatch, k)
-	}
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
