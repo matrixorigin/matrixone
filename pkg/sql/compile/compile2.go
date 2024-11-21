@@ -140,12 +140,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.proc.ResetQueryContext()
 	c.InitPipelineContextToExecuteQuery()
 
-	// record this query to compile service.
-	GetCompileService().recordRunningCompile(c, txnOperator)
-	defer func() {
-		GetCompileService().removeRunningCompile(c, txnOperator)
-	}()
-
 	// check if there is any action to cancel this query.
 	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
 		return nil, err
