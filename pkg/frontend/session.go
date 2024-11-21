@@ -138,10 +138,6 @@ type Session struct {
 
 	errInfo *errInfo
 
-	//fromRealUser distinguish the sql that the user inputs from the one
-	//that the internal or background program executes
-	fromRealUser bool
-
 	cache *privilegeCache
 
 	mu sync.Mutex
@@ -599,6 +595,8 @@ func NewSession(
 
 // ReserveConnAndClose closes the session with the connection is reserved.
 func (ses *Session) ReserveConnAndClose() {
+	rm := ses.getRoutineManager()
+	rm.sessionManager.RemoveSession(ses)
 	ses.ReserveConn()
 	ses.Close()
 }
@@ -772,10 +770,10 @@ func (ses *Session) InvalidatePrivilegeCache() {
 }
 
 // GetBackgroundExec generates a background executor
-func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (ses *Session) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	ses.EnterFPrint(FPGetBackgroundExec)
 	defer ses.ExitFPrint(FPGetBackgroundExec)
-	return NewBackgroundExec(ctx, ses)
+	return NewBackgroundExec(ctx, ses, opts...)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
@@ -802,7 +800,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	return be
 }
 
-func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	be := &backExec{}
 	be.init(ses, txnOp, db, callBack)
 	be.backSes.upstream = ses
@@ -1138,7 +1136,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,7 +92,7 @@ func UpgradePubSub(txn executor.TxnExecutor) (err error) {
 	}
 
 	// GetAllPubInfos returns map[pubAccountName#pubName] -> pubInfo
-	allPubInfos, err := pubsub.GetAllPubInfos(txn, accNameInfoMap)
+	allPubInfos, err := versions.GetAllPubInfos(txn, accNameInfoMap)
 	if err != nil {
 		return
 	}

@@ -555,8 +555,9 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
+	opts ...*BackgroundExecOption,
 ) BackgroundExec {
-	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2)
+	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2, opts...)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
@@ -749,7 +750,7 @@ func (backSes *backSession) initFeSes(
 	return backSes
 }
 
-func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
+func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
@@ -944,7 +945,7 @@ func (backSes *backSession) GetTenantName() string {
 }
 
 func (backSes *backSession) GetFromRealUser() bool {
-	return false
+	return backSes.fromRealUser
 }
 
 func (backSes *backSession) GetDebugString() string {
@@ -982,10 +983,10 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	return nil, nil
 }
 
-func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (backSes *backSession) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	backSes.EnterFPrint(FPGetBackgroundExecInBackSession)
 	defer backSes.ExitFPrint(FPGetBackgroundExecInBackSession)
-	return NewBackgroundExec(ctx, backSes)
+	return NewBackgroundExec(ctx, backSes, opts...)
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
