@@ -29,32 +29,12 @@ type ObjectsIter interface {
 	Next() bool
 	Close() error
 	Entry() ObjectEntry
-	First() bool
-	Prev() bool
-	Done() bool
 }
 
 type objectsIter struct {
 	onlyVisible bool
 	ts          types.TS
 	iter        btree.IterG[ObjectEntry]
-}
-
-func (b *objectsIter) First() bool {
-	return b.iter.First()
-}
-
-func (b *objectsIter) Prev() bool {
-	return b.iter.Prev()
-}
-
-func (b *objectsIter) Done() bool {
-	if !b.iter.Next() {
-		return true
-	}
-
-	b.iter.Prev()
-	return false
 }
 
 var _ ObjectsIter = new(objectsIter)

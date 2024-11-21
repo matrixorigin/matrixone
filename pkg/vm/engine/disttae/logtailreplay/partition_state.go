@@ -916,24 +916,6 @@ func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
 }
 
-func (p *PartitionState) GetDTBlockCnt() (
-	dBlkCnt, tBlkCnt int,
-	dRowCnt, tRowCnt int) {
-	p.dataObjectsNameIndex.Scan(func(item ObjectEntry) bool {
-		dBlkCnt += int(item.BlkCnt())
-		dRowCnt += int(item.Rows())
-		return true
-	})
-
-	p.tombstoneObjectsNameIndex.Scan(func(item ObjectEntry) bool {
-		tBlkCnt += int(item.BlkCnt())
-		tRowCnt += int(item.Rows())
-		return true
-	})
-
-	return
-}
-
 func (p *PartitionState) LogAllEntryRows() string {
 	var buf bytes.Buffer
 	p.rows.Scan(func(item RowEntry) bool {
