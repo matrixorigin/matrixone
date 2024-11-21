@@ -68,6 +68,8 @@ func getUseOldImplVariable(proc *process.Process) bool {
 		logutil.Info("get sys variable failed",
 			zap.String("variable", moTableRowSizeUseOldImpl),
 			zap.Error(err))
+
+		return false
 	}
 
 	return strings.ToLower(useOldImpl.(string)) == "yes"
@@ -84,6 +86,8 @@ func getForceUpdateVariable(proc *process.Process) bool {
 		logutil.Info("get sys variable failed",
 			zap.String("variable", moTableRowsSizeForceUpdate),
 			zap.Error(err))
+
+		return false
 	}
 
 	return strings.ToLower(forceUpdate.(string)) == "yes"
@@ -100,6 +104,8 @@ func getResetUpdateTimeVariable(proc *process.Process) bool {
 		logutil.Info("get sys variable failed",
 			zap.String("variable", moTableRowSizeResetUpdateTime),
 			zap.Error(err))
+
+		return false
 	}
 
 	return strings.ToLower(resetUpdateTime.(string)) == "yes"

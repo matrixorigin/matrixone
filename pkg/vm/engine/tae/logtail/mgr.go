@@ -113,10 +113,6 @@ type txnWithLogtails struct {
 	closeCB func()
 }
 
-func (mgr *Manager) LastTruncatedTS() types.TS {
-	return mgr.truncated
-}
-
 func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
 		txn := item.(txnif.AsyncTxn)

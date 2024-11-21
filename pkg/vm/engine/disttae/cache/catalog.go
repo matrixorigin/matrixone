@@ -855,10 +855,3 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DbId:          tblItem.DatabaseId,
 	}, tableDef
 }
-
-func (cc *CatalogCache) TableItemScan(onItem func(item *TableItem) bool) {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
-	cc.tables.data.Scan(onItem)
-}
