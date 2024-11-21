@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"runtime"
 	"slices"
@@ -41,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -840,7 +840,7 @@ func tableStatsExecutor(
 
 	newCtx := turn2SysCtx(ctx)
 
-	tickerDur := time.Minute * 5
+	tickerDur := time.Minute
 	executeTicker := time.NewTicker(tickerDur)
 
 	for {
@@ -1136,6 +1136,8 @@ func betaTask(
 		de        = eng.(*Engine)
 		slBat     sync.Map
 		onlyTSBat []*tablePair
+
+		bulkWait sync.WaitGroup
 	)
 
 	for {
@@ -1147,6 +1149,8 @@ func betaTask(
 			if tbl == nil {
 				// an alpha batch transmit done
 				bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
+
+				bulkWait.Wait()
 				_ = bulkUpdateTableStatsList(ctx, service, &slBat)
 
 				slBat.Clear()
@@ -1163,8 +1167,11 @@ func betaTask(
 				continue
 			}
 
+			bulkWait.Add(1)
 			if err = dynamicCtx.betaTaskPool.Submit(func() {
-				sl, err = statsCalculateOp(ctx, service, de.fs, tbl)
+				defer bulkWait.Done()
+
+				sl, err = statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
 				slBat.Store(tbl, sl)
 				tbl.Done(err)
 
@@ -1286,12 +1293,13 @@ func statsCalculateOp(
 	ctx context.Context,
 	service string,
 	fs fileservice.FileService,
-	tbl *tablePair,
+	snapshot types.TS,
+	pState *logtailreplay.PartitionState,
 ) (sl statsList, err error) {
 
 	bcs := betaCycleStash{
 		born:       time.Now(),
-		snapshot:   tbl.snapshot,
+		snapshot:   snapshot,
 		dataObjIds: dynamicCtx.objIdsPool.Get().(*[]types.Objectid),
 	}
 
@@ -1300,11 +1308,11 @@ func statsCalculateOp(
 		dynamicCtx.objIdsPool.Put(bcs.dataObjIds)
 	}()
 
-	if err = collectVisibleData(&bcs, tbl.pState); err != nil {
+	if err = collectVisibleData(&bcs, pState); err != nil {
 		return
 	}
 
-	if err = applyTombstones(ctx, &bcs, fs, tbl.pState); err != nil {
+	if err = applyTombstones(ctx, &bcs, fs, pState); err != nil {
 		return
 	}
 
