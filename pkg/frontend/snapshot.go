@@ -1621,6 +1621,7 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] create account %v  success", snapshotName, account.accountName))
 
 		// restore to account
 		// 1.0 get new create Account id
@@ -1631,6 +1632,7 @@ func restoreToCluster(ctx context.Context,
 		}
 
 		// 2.0 restore droped account to new account
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore droped account: %v, account id: %d to new account id: %d", snapshotName, account.accountName, account.accountId, newAccountId))
 		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, subDbToRestore, uint64(newAccountId))
 		if err != nil {
 			return err
@@ -1932,8 +1934,6 @@ func getRestoreDropedAccounts(
 			account.pwd = "111"
 
 			accounts = append(accounts, account)
-			getLogger(sid).Info(fmt.Sprintf("[%s] get droped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
-
 		}
 	}
 	return
