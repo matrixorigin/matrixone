@@ -96,6 +96,33 @@ type thisResult struct {
 	aggList []aggexec.AggFuncExec
 }
 
+func (r *thisResult) tryToInitHashTable(isStrHash bool, hashKeyNullable bool) error {
+	if r.hash != nil {
+		return nil
+	}
+
+	if isStrHash {
+		h, err := hashmap.NewStrMap(hashKeyNullable)
+		if err != nil {
+			return err
+		}
+		r.hash = h
+		r.itr = h.NewIterator()
+		return nil
+	}
+	h, err := hashmap.NewIntHashMap(hashKeyNullable)
+	if err != nil {
+		return err
+	}
+	r.hash = h
+	r.itr = h.NewIterator()
+	return nil
+}
+
+func (r *thisResult) reset(m *mpool.MPool) {
+	r.free(m)
+}
+
 func (r *thisResult) free(m *mpool.MPool) {
 	if r.hash != nil {
 		r.hash.Free()
@@ -115,6 +142,31 @@ func (r *thisResult) free(m *mpool.MPool) {
 	r.toNext, r.aggList = nil, nil
 }
 
+func (r *thisResult) popOneResult() (*batch.Batch, error) {
+	if len(r.toNext) == 0 {
+		return nil, nil
+	}
+
+	if r.aggList != nil {
+		for i := range r.aggList {
+			vecs, err := r.aggList[i].Flush()
+			if err != nil {
+				return nil, err
+			}
+
+			for j := range vecs {
+				r.toNext[j].Vecs = append(r.toNext[j].Vecs, vecs[j])
+			}
+		}
+
+		r.aggList = nil
+	}
+
+	first := r.toNext[0]
+	r.toNext = r.toNext[1:]
+	return first, nil
+}
+
 func (r *thisResult) updateInserted(vals []uint64, groupCountBefore uint64) {
 	if cap(r.inserted) < len(vals) {
 		r.inserted = make([]uint8, len(vals))
@@ -126,6 +178,8 @@ func (r *thisResult) updateInserted(vals []uint64, groupCountBefore uint64) {
 		if v > groupCountBefore {
 			r.inserted[i] = 1
 			groupCountBefore++
+		} else {
+			r.inserted[i] = 0
 		}
 	}
 }
