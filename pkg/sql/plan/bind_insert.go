@@ -588,8 +588,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
-				Children: []int32{idxTableNodeID, lastNodeID},
-				JoinType: plan.Node_RIGHT,
+				Children: []int32{lastNodeID, idxTableNodeID},
+				JoinType: plan.Node_LEFT,
 				OnList:   []*plan.Expr{joinCond},
 			}, bindCtx)
 		}
