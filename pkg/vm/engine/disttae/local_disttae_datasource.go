@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"slices"
 	"sort"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -77,11 +78,6 @@ func NewLocalDataSource(
 		state, err := table.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
-		}
-		//TODO::Remove the debug info for issue-19867
-		if table.tableName == "mo_database" && table.db.op.IsSnapOp() {
-			logutil.Infof("NewLocalDataSource:tbl:%p, table name:%s, get partition state:%p,snapshot op:%s",
-				table, table.tableName, state, table.db.op.Txn().DebugString())
 		}
 		source.pState = state
 	}
