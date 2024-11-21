@@ -15,6 +15,10 @@
 package logutil
 
 import (
+	"errors"
+	"fmt"
+	"io"
+
 	"go.uber.org/zap"
 )
 
@@ -35,5 +39,17 @@ func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, t
 func Discardable() zap.Field   { return zap.Bool(MOInternalFiledKeyDiscardable, true) }
 
 func ErrorField(err error) zap.Field {
+	if isDisallowedError(err) {
+		panic(fmt.Sprintf("this error should not be logged: %v", err))
+	}
 	return zap.Error(err)
+}
+
+func isDisallowedError(err error) bool {
+	switch {
+	case errors.Is(err, io.EOF):
+		// io.EOF should be handled by the caller, should never be logged
+		return true
+	}
+	return false
 }
