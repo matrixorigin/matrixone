@@ -176,9 +176,10 @@ func initMoTableStatsConfig(
 	eng *Engine,
 ) (err error) {
 
-	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
+
+	newCtx := turn2SysCtx(ctx)
 
 	defer func() {
 		if err != nil {
@@ -198,10 +199,10 @@ func initMoTableStatsConfig(
 		return
 	}
 
-	dynamicCtx.mu.conf = eng.config.statsConf
-	dynamicCtx.mu.defaultConf = eng.config.statsConf
+	dynamicCtx.conf = eng.config.statsConf
+	dynamicCtx.defaultConf = eng.config.statsConf
 
-	function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.mu.conf.DisableMoTableStatsTask)
+	function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.DisableStatsTask)
 
 	dynamicCtx.executorPool = sync.Pool{
 		New: func() interface{} {
@@ -218,16 +219,16 @@ func initMoTableStatsConfig(
 	//dynamicCtx.db, err = sql.Open("mo_table_stats")
 	dynamicCtx.sqlOpts = ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 
-	if dynamicCtx.mu.conf.GetTableListLimit <= 0 {
-		dynamicCtx.mu.conf.GetTableListLimit = defaultGetTableListLimit
+	if dynamicCtx.conf.GetTableListLimit <= 0 {
+		dynamicCtx.conf.GetTableListLimit = defaultGetTableListLimit
 	}
 
-	if dynamicCtx.mu.conf.UpdateDuration <= 0 {
-		dynamicCtx.mu.conf.UpdateDuration = defaultAlphaCycleDur
+	if dynamicCtx.conf.UpdateDuration <= 0 {
+		dynamicCtx.conf.UpdateDuration = defaultAlphaCycleDur
 	}
 
-	if dynamicCtx.mu.conf.CorrectionDuration <= 0 {
-		dynamicCtx.mu.conf.CorrectionDuration = defaultGamaCycleDur
+	if dynamicCtx.conf.CorrectionDuration <= 0 {
+		dynamicCtx.conf.CorrectionDuration = defaultGamaCycleDur
 	}
 
 	dynamicCtx.objIdsPool = sync.Pool{
@@ -239,7 +240,7 @@ func initMoTableStatsConfig(
 
 	// the queue length also decides the parallelism of subscription
 	dynamicCtx.tblQueue = make(chan *tablePair,
-		min(100, dynamicCtx.mu.conf.GetTableListLimit/5))
+		min(100, dynamicCtx.conf.GetTableListLimit/5))
 
 	// registerMoTableSizeRows
 	{
@@ -265,13 +266,13 @@ func initMoTableStatsConfig(
 	// start sub tasks
 	{
 		go func() {
-			if err = betaTask(ctx, eng.service, eng); err != nil {
+			if err = betaTask(newCtx, eng.service, eng); err != nil {
 				return
 			}
 		}()
 
 		go func() {
-			if err = gamaTask(ctx, eng.service, eng); err != nil {
+			if err = gamaTask(newCtx, eng.service, eng); err != nil {
 				return
 			}
 		}()
@@ -281,20 +282,19 @@ func initMoTableStatsConfig(
 }
 
 type MoTableStatsConfig struct {
-	UpdateDuration          time.Duration `toml:"update-duration"`
-	ForceUpdate             bool          `toml:"force-update"`
-	GetTableListLimit       int           `toml:"get-table-list-limit"`
-	StatsUsingOldImpl       bool          `toml:"stats-using-old-impl"`
-	DisableMoTableStatsTask bool          `toml:"disable-mo-table-stats-task"`
-	CorrectionDuration      time.Duration `toml:"correction-duration"`
+	UpdateDuration     time.Duration `toml:"update-duration"`
+	ForceUpdate        bool          `toml:"force-update"`
+	GetTableListLimit  int           `toml:"get-table-list-limit"`
+	StatsUsingOldImpl  bool          `toml:"stats-using-old-impl"`
+	DisableStatsTask   bool          `toml:"disable-stats-task"`
+	CorrectionDuration time.Duration `toml:"correction-duration"`
 }
 
 var dynamicCtx struct {
-	mu struct {
-		sync.RWMutex
-		defaultConf MoTableStatsConfig
-		conf        MoTableStatsConfig
-	}
+	sync.RWMutex
+
+	defaultConf MoTableStatsConfig
+	conf        MoTableStatsConfig
 
 	tblQueue chan *tablePair
 
@@ -337,7 +337,7 @@ func HandleMoTableStatsCtl(cmd string) string {
 	case "force_update":
 		return setForceUpdate(val == "true")
 	case "move_on":
-		return setDisableTask(val == "true")
+		return setMoveOnTask(val == "true")
 
 	case "restore_default_setting":
 		return restoreDefaultSetting(val == "true")
@@ -347,11 +347,11 @@ func HandleMoTableStatsCtl(cmd string) string {
 	}
 }
 
-func checkDisableTask() bool {
-	dynamicCtx.mu.Lock()
-	defer dynamicCtx.mu.Unlock()
+func checkMoveOnTask() bool {
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
 
-	disable := dynamicCtx.mu.conf.DisableMoTableStatsTask
+	disable := dynamicCtx.conf.DisableStatsTask
 	function.MoTableRowsSizeUseOldImpl.Store(disable)
 
 	if disable {
@@ -366,26 +366,26 @@ func restoreDefaultSetting(ok bool) string {
 		return "noop"
 	}
 
-	dynamicCtx.mu.Lock()
-	defer dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
 
-	dynamicCtx.mu.conf = dynamicCtx.mu.defaultConf
-	function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.mu.conf.StatsUsingOldImpl)
-	function.MoTableRowsSizeForceUpdate.Store(dynamicCtx.mu.conf.ForceUpdate)
+	dynamicCtx.conf = dynamicCtx.defaultConf
+	function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.StatsUsingOldImpl)
+	function.MoTableRowsSizeForceUpdate.Store(dynamicCtx.conf.ForceUpdate)
 
 	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
-		!dynamicCtx.mu.conf.DisableMoTableStatsTask,
-		dynamicCtx.mu.conf.StatsUsingOldImpl,
-		dynamicCtx.mu.conf.ForceUpdate)
+		!dynamicCtx.conf.DisableStatsTask,
+		dynamicCtx.conf.StatsUsingOldImpl,
+		dynamicCtx.conf.ForceUpdate)
 }
 
-func setDisableTask(newVal bool) string {
-	dynamicCtx.mu.Lock()
-	defer dynamicCtx.mu.Unlock()
+func setMoveOnTask(newVal bool) string {
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
 
-	oldState := dynamicCtx.mu.conf.DisableMoTableStatsTask
-	function.MoTableRowsSizeUseOldImpl.Store(newVal)
-	dynamicCtx.mu.conf.DisableMoTableStatsTask = newVal
+	oldState := !dynamicCtx.conf.DisableStatsTask
+	function.MoTableRowsSizeUseOldImpl.Store(!newVal)
+	dynamicCtx.conf.DisableStatsTask = !newVal
 
 	ret := fmt.Sprintf("move on state, %v to %v", oldState, newVal)
 	logutil.Info(ret)
@@ -394,12 +394,12 @@ func setDisableTask(newVal bool) string {
 }
 
 func setUseOldImpl(newVal bool) string {
-	dynamicCtx.mu.Lock()
-	defer dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
 
-	oldState := dynamicCtx.mu.conf.StatsUsingOldImpl
+	oldState := dynamicCtx.conf.StatsUsingOldImpl
 	function.MoTableRowsSizeUseOldImpl.Store(newVal)
-	dynamicCtx.mu.conf.StatsUsingOldImpl = newVal
+	dynamicCtx.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl, %v to %v", oldState, newVal)
 	logutil.Info(ret)
@@ -408,12 +408,12 @@ func setUseOldImpl(newVal bool) string {
 }
 
 func setForceUpdate(newVal bool) string {
-	dynamicCtx.mu.Lock()
-	defer dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
 
-	oldState := dynamicCtx.mu.conf.ForceUpdate
+	oldState := dynamicCtx.conf.ForceUpdate
 	function.MoTableRowsSizeForceUpdate.Store(newVal)
-	dynamicCtx.mu.conf.ForceUpdate = newVal
+	dynamicCtx.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update, %v to %v", oldState, newVal)
 	logutil.Info(ret)
@@ -645,22 +645,20 @@ func queryStats(
 		}
 	}()
 
-	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
+	newCtx := turn2SysCtx(ctx)
 
 	if forceUpdate || resetUpdateTime {
 		if len(tbls) >= defaultGetTableListLimit {
 			logutil.Warn("query stats with force update", zap.Int("tbl-list-length", len(tbls)))
 		}
 		return forceUpdateQuery(
-			ctx, statsIdx, defaultVal,
+			newCtx, statsIdx, defaultVal,
 			accs, dbs, tbls,
 			resetUpdateTime,
 			eng.(*engine.EntireEngine).Engine.(*Engine))
 	}
 
-	return normalQuery(ctx, statsIdx, defaultVal, accs, dbs, tbls)
+	return normalQuery(newCtx, statsIdx, defaultVal, accs, dbs, tbls)
 }
 
 func MTSTableSize(
@@ -825,36 +823,43 @@ func GetMOTableStatsExecutor(
 	}
 }
 
+func turn2SysCtx(ctx context.Context) context.Context {
+	newCtx := ctx
+	if val := ctx.Value(defines.TenantIDKey{}); val == nil || val.(uint32) != catalog.System_Account {
+		newCtx = context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	}
+
+	return newCtx
+}
+
 func tableStatsExecutor(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
 ) (err error) {
 
-	if val := ctx.Value(defines.TenantIDKey{}); val == nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
+	newCtx := turn2SysCtx(ctx)
 
 	tickerDur := time.Minute * 5
 	executeTicker := time.NewTicker(tickerDur)
 
 	for {
 		select {
-		case <-ctx.Done():
-			logutil.Info("table stats executor exit by ctx.Done", zap.Error(ctx.Err()))
-			return ctx.Err()
+		case <-newCtx.Done():
+			logutil.Info("table stats executor exit by ctx.Done", zap.Error(newCtx.Err()))
+			return newCtx.Err()
 
 		case <-executeTicker.C:
-			if checkDisableTask() {
+			if checkMoveOnTask() {
 				continue
 			}
 
-			if err = prepare(ctx, service, eng); err != nil {
+			if err = prepare(newCtx, service, eng); err != nil {
 				return err
 			}
 
 			if err = alphaTask(
-				ctx, service, eng,
+				newCtx, service, eng,
 				dynamicCtx.tableStock.tbls,
 				dynamicCtx.tableStock.newest,
 			); err != nil {
@@ -864,9 +869,9 @@ func tableStatsExecutor(
 
 			dynamicCtx.tableStock.tbls = dynamicCtx.tableStock.tbls[:0]
 
-			dynamicCtx.mu.Lock()
-			executeTicker.Reset(dynamicCtx.mu.conf.UpdateDuration)
-			dynamicCtx.mu.Unlock()
+			dynamicCtx.Lock()
+			executeTicker.Reset(dynamicCtx.conf.UpdateDuration)
+			dynamicCtx.Unlock()
 		}
 	}
 }
@@ -1035,9 +1040,9 @@ func alphaTask(
 
 	wg := sync.WaitGroup{}
 
-	dynamicCtx.mu.Lock()
-	limit := dynamicCtx.mu.conf.GetTableListLimit
-	dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	limit := dynamicCtx.conf.GetTableListLimit
+	dynamicCtx.Unlock()
 
 	batCnt := max(max(len(tbls)/5, limit/5), 200)
 
@@ -1186,10 +1191,10 @@ func gamaTask(
 		now  time.Time
 	)
 
-	dynamicCtx.mu.Lock()
-	gamaDur := dynamicCtx.mu.conf.CorrectionDuration
-	gamaLimit := max(dynamicCtx.mu.conf.GetTableListLimit/100, 100)
-	dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	gamaDur := dynamicCtx.conf.CorrectionDuration
+	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
+	dynamicCtx.Unlock()
 
 	opA := func() {
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
@@ -1316,9 +1321,9 @@ func getCandidates(
 	eng engine.Engine,
 ) (accs, dbs, tbls []uint64, ts []*timestamp.Timestamp, err error) {
 
-	dynamicCtx.mu.Lock()
-	limit := dynamicCtx.mu.conf.GetTableListLimit
-	dynamicCtx.mu.Unlock()
+	dynamicCtx.Lock()
+	limit := dynamicCtx.conf.GetTableListLimit
+	dynamicCtx.Unlock()
 
 	sql := fmt.Sprintf(getCandidatesSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
 	sqlRet := executeSQL(ctx, sql)
