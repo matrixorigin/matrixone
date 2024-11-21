@@ -68,6 +68,7 @@ func (expr AggFuncExecExpression) GetExtraConfig() []byte {
 type AggFuncExec interface {
 	marshal() ([]byte, error)
 	unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error
+	getOptResult() *optSplitResult
 
 	AggID() int64
 	IsDistinct() bool

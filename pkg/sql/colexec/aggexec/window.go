@@ -55,6 +55,10 @@ func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Ve
 	return nil
 }
 
+func (exec *singleWindowExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *singleWindowExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

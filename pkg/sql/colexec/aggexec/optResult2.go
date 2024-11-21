@@ -100,13 +100,13 @@ func (r *aggResultWithBytesType) grows(more int) error {
 		return nil
 	}
 
-	for i := y1; i < r.optInformation.eachSplitCapacity; i++ {
+	for i := y1; i < r.optInformation.chunkSize; i++ {
 		if err = vector.SetBytesAt(r.resultList[x1], i, r.InitialValue, r.mp); err != nil {
 			return err
 		}
 	}
 	for x := x1 + 1; x < x2; x++ {
-		for i := 0; i < r.optInformation.eachSplitCapacity; i++ {
+		for i := 0; i < r.optInformation.chunkSize; i++ {
 			if err = vector.SetBytesAt(r.resultList[x], i, r.InitialValue, r.mp); err != nil {
 				return err
 			}

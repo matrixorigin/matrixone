@@ -31,6 +31,10 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	groups []*hll.Sketch
 }
 
+func (exec *approxCountFixedExec[T]) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
@@ -80,6 +84,10 @@ type approxCountVarExec struct {
 	ret aggResultWithFixedType[uint64]
 
 	groups []*hll.Sketch
+}
+
+func (exec *approxCountVarExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
 }
 
 func (exec *approxCountVarExec) marshal() ([]byte, error) {

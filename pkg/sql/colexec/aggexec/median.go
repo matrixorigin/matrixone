@@ -52,6 +52,10 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 	groups []*vector.Vector
 }
 
+func (exec *medianColumnExecSelf[T, R]) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

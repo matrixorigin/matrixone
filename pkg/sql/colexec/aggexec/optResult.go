@@ -50,8 +50,6 @@ var blockCapacityMap = map[int]int{
 	128: blockCapacityFor128Byte,
 }
 
-var _ = optSplitResult{}
-
 // optSplitResult is a more stable version for aggregation basic result.
 //
 // this structure will split the aggregation result as many part of `vector`,
@@ -71,7 +69,7 @@ type optSplitResult struct {
 		shouldSetNullToEmptyGroup bool
 
 		// split opt.
-		eachSplitCapacity int
+		chunkSize int
 	}
 
 	// the column type of result,
@@ -153,10 +151,10 @@ func (r *optSplitResult) init(
 	r.optInformation.doesThisNeedEmptyList = needEmptyList
 	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
 
-	r.optInformation.eachSplitCapacity = blockCapacityForStrType
+	r.optInformation.chunkSize = blockCapacityForStrType
 	if !typ.IsVarlen() {
 		if newCap, ok := blockCapacityMap[typ.TypeSize()]; ok {
-			r.optInformation.eachSplitCapacity = newCap
+			r.optInformation.chunkSize = newCap
 		}
 	}
 
@@ -166,6 +164,14 @@ func (r *optSplitResult) init(
 		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
 	}
 	r.nowIdx1 = 0
+}
+
+func (r *optSplitResult) getChunkSize() int {
+	return r.optInformation.chunkSize
+}
+
+func (r *optSplitResult) modifyChunkSize(n int) {
+	r.optInformation.chunkSize = n
 }
 
 // getNspFromBoolVector generate a nsp bitmap from a bool type vector and return it.
@@ -189,8 +195,8 @@ func (r *optSplitResult) isOnlyOneBlock() bool {
 }
 
 func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
-	x = src / r.optInformation.eachSplitCapacity
-	y = src % r.optInformation.eachSplitCapacity
+	x = src / r.optInformation.chunkSize
+	y = src % r.optInformation.chunkSize
 	return x, y
 }
 
@@ -204,7 +210,7 @@ func (r *optSplitResult) setNextAccessDirectly(x, y int) {
 }
 
 func (r *optSplitResult) totalGroupCount() int {
-	return r.resultList[r.nowIdx1].Length() + (len(r.resultList)-1)*r.optInformation.eachSplitCapacity
+	return r.resultList[r.nowIdx1].Length() + (len(r.resultList)-1)*r.optInformation.chunkSize
 }
 
 func (r *optSplitResult) isGroupEmpty(x, y int) bool {
@@ -220,7 +226,7 @@ func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 }
 
 func (r *optSplitResult) getEachBlockLimitation() int {
-	return r.optInformation.eachSplitCapacity
+	return r.optInformation.chunkSize
 }
 
 func (r *optSplitResult) getEmptyList() [][]bool {
@@ -253,7 +259,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
-	maxToExtendWithinTheUsingPart := r.optInformation.eachSplitCapacity - l1
+	maxToExtendWithinTheUsingPart := r.optInformation.chunkSize - l1
 	if maxToExtendWithinTheUsingPart >= more {
 		if err := r.extendMoreToKthGroup(r.nowIdx1, more); err != nil {
 			return err
@@ -265,20 +271,20 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
 		return err
 	}
-	r.setLengthPartK(r.nowIdx1, r.optInformation.eachSplitCapacity)
+	r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
 	more -= maxToExtendWithinTheUsingPart
 
 	// try to full the allocated part first.
-	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.eachSplitCapacity
+	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.chunkSize
 	if maxToExtendWithoutPartAppend >= more {
 		r.nowIdx1++
 
-		fullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
+		fullPart, rowMore := more/r.optInformation.chunkSize, more%r.optInformation.chunkSize
 		for i, j := r.nowIdx1, r.nowIdx1+fullPart; i < j; i++ {
-			if err := r.extendMoreToKthGroup(i, r.optInformation.eachSplitCapacity); err != nil {
+			if err := r.extendMoreToKthGroup(i, r.optInformation.chunkSize); err != nil {
 				return err
 			}
-			r.setLengthPartK(i, r.optInformation.eachSplitCapacity)
+			r.setLengthPartK(i, r.optInformation.chunkSize)
 		}
 
 		if rowMore > 0 {
@@ -291,21 +297,21 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 		return nil
 	}
 	for i := r.nowIdx1 + 1; i < len(r.resultList); i++ {
-		if err := r.extendMoreToKthGroup(i, r.optInformation.eachSplitCapacity); err != nil {
+		if err := r.extendMoreToKthGroup(i, r.optInformation.chunkSize); err != nil {
 			return err
 		}
-		r.setLengthPartK(i, r.optInformation.eachSplitCapacity)
+		r.setLengthPartK(i, r.optInformation.chunkSize)
 	}
 	more -= maxToExtendWithoutPartAppend
 
 	// append more part.
-	apFullPart, rowMore := more/r.optInformation.eachSplitCapacity, more%r.optInformation.eachSplitCapacity
+	apFullPart, rowMore := more/r.optInformation.chunkSize, more%r.optInformation.chunkSize
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
-		if err := r.extendMoreToKthGroup(k, r.optInformation.eachSplitCapacity); err != nil {
+		if err := r.extendMoreToKthGroup(k, r.optInformation.chunkSize); err != nil {
 			return nil
 		}
-		r.setLengthPartK(k, r.optInformation.eachSplitCapacity)
+		r.setLengthPartK(k, r.optInformation.chunkSize)
 	}
 	if rowMore > 0 {
 		k := r.appendPartK()

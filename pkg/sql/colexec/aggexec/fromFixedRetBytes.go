@@ -213,6 +213,10 @@ type aggregatorFromFixedToBytes[from types.FixedSizeTExceptStrType] struct {
 	flush fixedBytesFlush[from]
 }
 
+func (exec *aggregatorFromFixedToBytes[from]) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

@@ -74,6 +74,10 @@ type clusterCentersExec struct {
 	normalize  bool
 }
 
+func (exec *clusterCentersExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

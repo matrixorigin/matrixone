@@ -35,27 +35,27 @@ func TestExtendResultPurely(t *testing.T) {
 	{
 		osr := optSplitResult{}
 		osr.init(mg, types.T_bool.ToType(), false)
-		osr.optInformation.eachSplitCapacity = blockLimitation
+		osr.optInformation.chunkSize = blockLimitation
 
 		// pre extendResultPurely 130 rows.
 		require.NoError(t, osr.preExtend(130))
 		checkRowDistribution(t, []int{0, 0}, osr.resultList)
-		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
+		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.chunkSize)
 
 		// case 1 : extendResultPurely 50 only use the first block.
 		require.NoError(t, osr.extendResultPurely(50))
 		checkRowDistribution(t, []int{50, 0}, osr.resultList)
-		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
+		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.chunkSize)
 
 		// case 2 : extendResultPurely 75 will full the first block and set 1 row to the second block.
 		require.NoError(t, osr.extendResultPurely(75))
 		checkRowDistribution(t, []int{100, 25}, osr.resultList)
-		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.eachSplitCapacity)
+		checkCapSituation(t, []int{100, 30}, osr.resultList, osr.optInformation.chunkSize)
 
 		// case 3 : extendResultPurely 200 will full the last block and append 2 more blocks.
 		require.NoError(t, osr.extendResultPurely(200))
 		checkRowDistribution(t, []int{100, 100, 100, 25}, osr.resultList)
-		checkCapSituation(t, []int{100, 100, 100, 25}, osr.resultList, osr.optInformation.eachSplitCapacity)
+		checkCapSituation(t, []int{100, 100, 100, 25}, osr.resultList, osr.optInformation.chunkSize)
 	}
 }
 

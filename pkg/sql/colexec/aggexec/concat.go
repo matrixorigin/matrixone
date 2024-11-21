@@ -33,6 +33,10 @@ type groupConcatExec struct {
 	separator []byte
 }
 
+func (exec *groupConcatExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *groupConcatExec) marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

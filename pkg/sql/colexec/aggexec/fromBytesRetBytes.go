@@ -96,6 +96,10 @@ type aggregatorFromBytesToBytes struct {
 	flush bytesBytesFlush
 }
 
+func (exec *aggregatorFromBytesToBytes) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()

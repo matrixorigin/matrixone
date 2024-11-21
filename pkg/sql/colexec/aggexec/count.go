@@ -35,6 +35,10 @@ type countColumnExec struct {
 	ret aggResultWithFixedType[int64]
 }
 
+func (exec *countColumnExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
+}
+
 func (exec *countColumnExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
@@ -258,6 +262,10 @@ type countStarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
 	ret aggResultWithFixedType[int64]
+}
+
+func (exec *countStarExec) getOptResult() *optSplitResult {
+	return &exec.ret.optSplitResult
 }
 
 func (exec *countStarExec) marshal() ([]byte, error) {
