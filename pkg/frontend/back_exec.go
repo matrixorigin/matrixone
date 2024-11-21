@@ -69,6 +69,7 @@ func (back *backExec) Close() {
 	}
 	back.Clear()
 	back.backSes.Close()
+	back.backSes = nil
 }
 
 func (back *backExec) GetExecStatsArray() statistic.StatsArray {

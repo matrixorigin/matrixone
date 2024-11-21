@@ -804,6 +804,9 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	be := &backExec{}
 	be.init(ses, txnOp, db, callBack)
 	be.backSes.upstream = ses
+	if len(opts) > 0 && opts[0] != nil {
+		be.backSes.fromRealUser = opts[0].fromRealUser
+	}
 	return be
 }
 
