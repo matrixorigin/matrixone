@@ -145,9 +145,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	go fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
-
-	return nil
+	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
 }
 
 // prepare
@@ -338,30 +336,28 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
-	mode int64, bat *batch.Batch) {
+	mode int64, bat *batch.Batch) error {
 
 	// parse the search string to []Pattern and create SearchAccum
 	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
 	if err != nil {
-		u.errors <- err
-		return
+		return err
 	}
 
 	// count(*) to get number of records in source table
 	nrow, err := runCountStar(proc, s)
 	if err != nil {
-		u.errors <- err
-		return
+		return err
 	}
 	s.Nrow = nrow
 
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
 	res, err := runWordStats(u, proc, s)
 	if err != nil {
-		u.errors <- err
-		return
+		return err
 	}
 
 	go getResults(u, proc, s, res)
 
+	return nil
 }
