@@ -878,6 +878,7 @@ func logRefWaiter(
 	logger *log.MOLogger,
 	info string,
 	txn []byte,
+	w *waiter,
 ) {
 	if logger == nil {
 		return
@@ -889,6 +890,7 @@ func logRefWaiter(
 			getLogOptions(zap.InfoLevel),
 			zap.String("txn", hex.EncodeToString(txn)),
 			zap.String("info", info),
+			zap.String("waiter", fmt.Sprintf("%p", w)),
 		)
 	}
 }
@@ -897,6 +899,7 @@ func logCloseWaiter(
 	logger *log.MOLogger,
 	info string,
 	txn []byte,
+	w *waiter,
 ) {
 	if logger == nil {
 		return
@@ -908,6 +911,7 @@ func logCloseWaiter(
 			getLogOptions(zap.InfoLevel),
 			zap.String("txn", hex.EncodeToString(txn)),
 			zap.String("info", info),
+			zap.String("waiter", fmt.Sprintf("%p", w)),
 		)
 	}
 }
