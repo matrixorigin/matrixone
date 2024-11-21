@@ -560,40 +560,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ms, nil
 }
 
-func (s *Scope) handleRuntimeFilter(c *Compile) error {
-	var err error
-	var runtimeInExprList []*plan.Expr
-
-	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
-		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
-			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
-			if err != nil {
-				return err
-			}
-			if ctxDone {
-				return nil
-			}
-			for i := range msgs {
-				msg, ok := msgs[i].(message.RuntimeFilterMessage)
-				if !ok {
-					panic("expect runtime filter message, receive unknown message!")
-				}
-				switch msg.Typ {
-				case message.RuntimeFilter_PASS:
-					continue
-				case message.RuntimeFilter_DROP:
-					return nil
-				case message.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
-
-					// TODO: implement BETWEEN expression
-				}
-			}
-		}
-	}
-
+func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) error {
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
@@ -618,7 +585,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err = arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
 		if err != nil {
 			return err
 		}
@@ -634,7 +601,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	for _, e := range s.DataSource.BlockFilterList {
-		err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 		if err != nil {
 			return err
 		}
@@ -708,6 +675,42 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	return nil
+}
+
+func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
+	var runtimeInExprList []*plan.Expr
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
+			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if err != nil {
+				return nil, false, err
+			}
+			if ctxDone {
+				return nil, false, nil
+			}
+			for i := range msgs {
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case message.RuntimeFilter_PASS:
+					continue
+				case message.RuntimeFilter_DROP:
+					return nil, true, nil
+				case message.RuntimeFilter_IN:
+					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					runtimeInExprList = append(runtimeInExprList, inExpr)
+
+					// TODO: implement BETWEEN expression
+				}
+			}
+		}
+	}
+
+	return runtimeInExprList, false, nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -988,8 +991,15 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
-	// receive runtime filter and optimized the datasource.
-	if err = s.handleRuntimeFilter(c); err != nil {
+	// receive runtime filter and optimize the datasource.
+	var runtimeFilterList []*plan.Expr
+	var shouldDrop bool
+	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	if err != nil || shouldDrop {
+		return
+	}
+	err = s.handleBlockList(c, runtimeFilterList)
+	if err != nil {
 		return
 	}
 
