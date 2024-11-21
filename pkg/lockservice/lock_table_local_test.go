@@ -368,14 +368,14 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					}
 					var wg sync.WaitGroup
 					for _, txnID := range c.existsWaiters[i] {
-						w := acquireWaiter(pb.WaitTxn{TxnID: []byte(txnID)})
+						w := acquireWaiter(pb.WaitTxn{TxnID: []byte(txnID)}, "", nil)
 						w.setStatus(blocking)
 						lock.waiters.put(w)
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
 							wg.Done()
 							w.wait(ctx, getLogger(""))
-							w.close()
+							w.close("", nil)
 						}))
 					}
 					wg.Wait()

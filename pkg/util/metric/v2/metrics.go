@@ -91,8 +91,6 @@ func initTaskMetrics() {
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
 	registry.MustRegister(fsCacheBytes)
-	registry.MustRegister(S3ConnectCounter)
-	registry.MustRegister(S3DNSResolveCounter)
 
 	registry.MustRegister(s3IOBytesHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
@@ -102,6 +100,8 @@ func initFileServiceMetrics() {
 	registry.MustRegister(ioMergerDuration)
 	registry.MustRegister(fsReadWriteDuration)
 	registry.MustRegister(FSObjectStorageOperations)
+
+	registry.MustRegister(FSHTTPTraceCounter)
 }
 
 func initLogtailMetrics() {
