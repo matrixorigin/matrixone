@@ -6748,6 +6748,8 @@ func TestSnapshotMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -6810,7 +6812,11 @@ func TestSnapshotMeta(t *testing.T) {
 		data1.Vecs[0].Append(uint64(0), false)
 		data1.Vecs[1].Append(uint64(0), false)
 		data1.Vecs[2].Append(snapshot, false)
-		data1.Vecs[3].Append(types.Enum(1), false)
+		if i == 0 {
+			data1.Vecs[3].Append(types.Enum(2), false)
+		} else {
+			data1.Vecs[3].Append(types.Enum(1), false)
+		}
 		data1.Vecs[4].Append(uint64(0), false)
 		data1.Vecs[5].Append(uint64(0), false)
 		data1.Vecs[6].Append(uint64(0), false)

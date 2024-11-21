@@ -346,6 +346,13 @@ type UpdateBinder struct {
 	cols []*ColDef
 }
 
+type OndupUpdateBinder struct {
+	baseBinder
+	scanTag   int32
+	selectTag int32
+	tableDef  *plan.TableDef
+}
+
 type TableBinder struct {
 	baseBinder
 }
@@ -395,6 +402,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
+var _ Binder = (*OndupUpdateBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 
