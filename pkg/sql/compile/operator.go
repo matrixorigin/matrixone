@@ -840,7 +840,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 
 	for _, col := range n.TableDef.Cols {
 		if !col.Hidden {
-			attrs = append(attrs, col.GetOriginCaseName())
+			attrs = append(attrs, col.Name)
 		}
 	}
 
