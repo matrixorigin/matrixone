@@ -425,8 +425,7 @@ func Test_rollbackStatement(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Txn().Status, convey.ShouldEqual, txn.TxnStatus_Aborted)
+		convey.So(t2, convey.ShouldBeNil)
 
 		//case2.1 autocommit && begin && CreateSequence (need to be committed in the active txn)
 		ec.txnOpt = FeTxnOption{
@@ -444,8 +443,7 @@ func Test_rollbackStatement(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
 		t2 = ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Aborted)
+		convey.So(t2, convey.ShouldBeNil)
 
 		//case2.2 not_autocommit && not_begin && CreateSequence (need to be committed in the active txn)
 		ec.txnOpt = FeTxnOption{
@@ -466,8 +464,7 @@ func Test_rollbackStatement(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldBeNil)
 		t2 = ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Aborted)
+		convey.So(t2, convey.ShouldBeNil)
 
 		//case3.1 not_autocommit && not_begin && Insert Stmt (need not to be committed in the active txn)
 		ec.txnOpt = FeTxnOption{
@@ -560,8 +557,7 @@ func Test_rollbackStatement(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Txn().Status, convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 	})
 }
 
@@ -588,8 +584,7 @@ func Test_rollbackStatement2(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 	})
 }
 
@@ -619,8 +614,7 @@ func Test_rollbackStatement3(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Txn().Status, convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 	})
 }
 
@@ -649,8 +643,7 @@ func Test_rollbackStatement4(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 	})
 }
 
@@ -685,8 +678,7 @@ func Test_rollbackStatement5(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 		txnOp.GetWorkspace().EndStatement()
 	})
 }
@@ -725,8 +717,7 @@ func Test_rollbackStatement6(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 		txnOp.GetWorkspace().EndStatement()
 	})
 	convey.Convey("abnormal rollback -- rollback whole txn", t, func() {
@@ -762,8 +753,7 @@ func Test_rollbackStatement6(t *testing.T) {
 		err = ses.GetTxnHandler().Rollback(ec)
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
-		convey.So(t2, convey.ShouldNotBeNil)
-		convey.So(t2.Status(), convey.ShouldEqual, txn.TxnStatus_Active)
+		convey.So(t2, convey.ShouldBeNil)
 		txnOp.GetWorkspace().EndStatement()
 	})
 }

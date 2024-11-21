@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -187,8 +188,8 @@ func (s *serverConn) HandleHandshake(
 	case <-ch:
 		return r, err
 	case <-ctx.Done():
-		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
-			s.cnServer.addr, timeout, s.connID)
+		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
+			s.cnServer.addr, timeout, s.connID, goid.Get())
 		// Return a retryable error.
 		return nil, newConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
 	}
@@ -327,8 +328,8 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	)
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
-		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
-			timeout, s.connID, s.addr, err)
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
+			timeout, s.connID, s.addr, goid.Get(), err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {

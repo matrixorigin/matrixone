@@ -155,7 +155,7 @@ func (mw *waiterEvents) close() {
 	close(mw.eventC)
 	mw.mu.Lock()
 	for _, w := range mw.mu.blockedWaiters {
-		w.close()
+		w.close("waiterEvents close", mw.logger)
 	}
 	mw.mu.Unlock()
 }
@@ -172,7 +172,7 @@ func (mw *waiterEvents) add(c *lockContext) {
 }
 
 func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
-	w.ref()
+	w.ref("addToLazyCheckDeadlockC", mw.logger)
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
@@ -213,7 +213,7 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
 		if w.getStatus() != blocking {
-			w.close()
+			w.close("waiterEvents check", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue
 		}

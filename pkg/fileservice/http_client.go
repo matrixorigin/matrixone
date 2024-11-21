@@ -37,9 +37,13 @@ var (
 )
 
 var dnsResolver = dns.NewCachingResolver(
-	net.DefaultResolver,
+	nil,
 	dns.MaxCacheEntries(128),
 )
+
+func init() {
+	net.DefaultResolver = dnsResolver
+}
 
 var httpDialer = &net.Dialer{
 	Timeout:  connectTimeout,

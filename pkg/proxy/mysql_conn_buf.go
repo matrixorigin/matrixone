@@ -20,9 +20,11 @@ import (
 	"net"
 	"sync"
 
+	"github.com/petermattis/goid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -208,11 +210,11 @@ func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
 	logger := logutil.GetSkip1Logger()
 	if logger.Core().Enabled(zap.DebugLevel) {
 		if b.name == connClientName {
-			logutil.Debugf("proxy debug: client, conn ID: %d, data left: %d, data: %v",
-				b.cid, dataLeft, data)
+			logutil.Debugf("proxy debug: client, conn ID: %d, data left: %d, data: %v goId: %d",
+				b.cid, dataLeft, data, goid.Get())
 		} else {
-			logutil.Debugf("proxy debug: server, conn ID: %d, data left: %d, data: %v",
-				b.cid, dataLeft, data)
+			logutil.Debugf("proxy debug: server, conn ID: %d, data left: %d, data: %v goId: %d",
+				b.cid, dataLeft, data, goid.Get())
 		}
 	}
 }

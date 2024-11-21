@@ -227,9 +227,9 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		}
 		lock.holders.add(txn)
 		for _, v := range resp.GetTxnLock.WaitingList {
-			w := acquireWaiter(v)
+			w := acquireWaiter(v, "doGetLock", l.logger)
 			lock.addWaiter(l.logger, w)
-			w.close()
+			w.close("doGetLock", l.logger)
 		}
 		return lock, true, nil
 	}
