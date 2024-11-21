@@ -947,6 +947,10 @@ func initFixed1() {
 		{types.T_array_float32, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float32, types.T_text, types.T_array_float32, types.T_array_float32},
+		{types.T_text, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float64, types.T_text, types.T_array_float64, types.T_array_float64},
+		{types.T_text, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
@@ -2065,6 +2069,8 @@ func initFixed3() {
 				{toType: types.T_binary, preferLevel: 2},
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
+				{toType: types.T_array_float32, preferLevel: 2},
+				{toType: types.T_array_float64, preferLevel: 2},
 			},
 		},
 		{
