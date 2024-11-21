@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,15 +35,91 @@ const (
 )
 
 type fulltextState struct {
-	simpleOneBatchState
+	inited      bool
+	result_chan chan map[any]float32
+	errors      chan error
+
+	// holding output batch
+	batch *batch.Batch
+}
+
+func (u *fulltextState) reset(tf *TableFunction, proc *process.Process) {
+	if u.batch != nil {
+		u.batch.CleanOnlyData()
+	}
+}
+
+func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	if u.batch != nil {
+		u.batch.Clean(proc.Mp())
+	}
+}
+
+func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+
+	var scoremap map[any]float32
+	var ok bool
+
+	u.batch.CleanOnlyData()
+
+	select {
+	case err := <-u.errors:
+		return vm.CancelResult, err
+	case scoremap, ok = <-u.result_chan:
+		if !ok {
+			return vm.CancelResult, nil
+		}
+	}
+
+	// return result
+	if u.batch.VectorCount() == 1 {
+		// only doc_id returned
+
+		// write the batch
+		for key := range scoremap {
+			doc_id := key
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+		}
+	} else {
+		// doc_id and score returned
+		for key := range scoremap {
+			doc_id := key
+			if str, ok := doc_id.(string); ok {
+				bytes := []byte(str)
+				doc_id = bytes
+			}
+			// type of id follow primary key column
+			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+
+			// score
+			vector.AppendFixed[float32](u.batch.Vecs[1], scoremap[key], false, proc.Mp())
+		}
+	}
+
+	u.batch.SetRowCount(len(scoremap))
+
+	if u.batch.RowCount() == 0 {
+		return vm.CancelResult, nil
+	}
+
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
 // always return one batch per nthRow.
 func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
-	u.startPreamble(tf, proc, nthRow)
 
-	var err error
+	if !u.inited {
+		u.batch = tf.createResultBatch()
+		u.result_chan = make(chan map[any]float32, 2)
+		u.errors = make(chan error)
+		u.inited = true
+	}
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
@@ -68,9 +145,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
-	err = fulltextIndexMatch(proc, tf, source_table, index_table, pattern, mode, u.batch)
-
-	return err
+	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, u.batch)
 }
 
 // prepare
@@ -104,10 +179,11 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 // run SQL to get the (doc_id, pos) of all patterns (words) in the search string
-func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
+func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	var union []string
 
 	var keywords []string
+
 	for _, p := range s.Pattern {
 		ssNoOp := p.GetLeafText(fulltext.TEXT)
 		for _, w := range ssNoOp {
@@ -127,7 +203,7 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 			// remove the last character which should be '*' for prefix search
 			slen := len(w)
 			if w[slen-1] != '*' {
-				return moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
+				return executor.Result{}, moerr.NewInternalError(proc.Ctx, "wildcard search without character *")
 			}
 			// prefix search
 			prefix := w[0 : slen-1]
@@ -136,18 +212,34 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 	}
 
 	sql := strings.Join(union, " UNION ")
+
+	if len(union) == 1 {
+		sql += " ORDER BY doc_id"
+	} else {
+		sql = fmt.Sprintf("SELECT * FROM (%s) ORDER BY doc_id", sql)
+	}
 	//logutil.Infof("SQL is %s", sql)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return err
+		return executor.Result{}, err
 	}
-	defer res.Close()
 
+	return res, nil
+}
+
+func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, res executor.Result) {
+
+	defer res.Close()
+	defer close(u.result_chan)
+
+	n_doc_id := 0
+	var last_doc_id any = nil
 	for _, bat := range res.Batches {
 
 		if len(bat.Vecs) != 3 {
-			return moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+			u.errors <- moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+			return
 		}
 
 		for i := 0; i < bat.RowCount(); i++ {
@@ -166,7 +258,28 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 
 			// word string
 			word := bat.Vecs[2].GetStringAt(i)
-			//logutil.Infof("ID:%d, DOC_ID:%v, POS:%d, DOC_COUNT:%d, FIRST: %v, LAST: %v", id, doc_id, pos, doc_count, first_doc_id, last_doc_id)
+
+			if last_doc_id == nil {
+				last_doc_id = doc_id
+			} else if last_doc_id != doc_id {
+				// new doc_id
+				last_doc_id = doc_id
+				n_doc_id++
+			}
+
+			//logutil.Infof("WORD:%s, DOC_ID:%v, POS:%d, LAST: %v", word, doc_id, pos, last_doc_id)
+			if n_doc_id >= 8192 {
+				scoremap, err := s.Eval()
+				if err != nil {
+					u.errors <- err
+					return
+				}
+				if len(scoremap) > 0 {
+					u.result_chan <- scoremap
+				}
+				clear(s.WordAccums)
+				n_doc_id = 0
+			}
 
 			w, ok := s.WordAccums[word]
 			if !ok {
@@ -178,15 +291,23 @@ func runWordStats(proc *process.Process, s *fulltext.SearchAccum) error {
 				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
 				w.Words[doc_id].DocCount += 1
 			} else {
-				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: []int32{pos}, DocCount: 1}
+				positions := make([]int32, 0, 128)
+				positions = append(positions, pos)
+				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: positions, DocCount: 1}
 			}
 		}
 
 	}
 
-	// we got all results for all words required.  Evaluate the Pattern against the WordAccums to get answer.
+	scoremap, err := s.Eval()
+	if err != nil {
+		u.errors <- err
+		return
 
-	return nil
+	}
+	if len(scoremap) > 0 {
+		u.result_chan <- scoremap
+	}
 }
 
 // Run SQL to get number of records in source table
@@ -214,7 +335,8 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (int64, error)
 	return nrow, nil
 }
 
-func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string, mode int64, bat *batch.Batch) (err error) {
+func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
+	mode int64, bat *batch.Batch) error {
 
 	// parse the search string to []Pattern and create SearchAccum
 	s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "")
@@ -230,47 +352,12 @@ func fulltextIndexMatch(proc *process.Process, tableFunction *TableFunction, src
 	s.Nrow = nrow
 
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
-	err = runWordStats(proc, s)
+	res, err := runWordStats(u, proc, s)
 	if err != nil {
 		return err
 	}
 
-	// compute the ranking
-	scoremap, err := s.Eval()
-	if err != nil {
-		return err
-	}
+	go getResults(u, proc, s, res)
 
-	// return result
-	if bat.VectorCount() == 1 {
-		// only doc_id returned
-
-		// write the batch
-		for key := range scoremap {
-			doc_id := key
-			if str, ok := doc_id.(string); ok {
-				bytes := []byte(str)
-				doc_id = bytes
-			}
-			// type of id follow primary key column
-			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
-		}
-	} else {
-		// doc_id and score returned
-		for key := range scoremap {
-			doc_id := key
-			if str, ok := doc_id.(string); ok {
-				bytes := []byte(str)
-				doc_id = bytes
-			}
-			// type of id follow primary key column
-			vector.AppendAny(bat.Vecs[0], doc_id, false, proc.Mp())
-
-			// score
-			vector.AppendFixed[float32](bat.Vecs[1], scoremap[key], false, proc.Mp())
-		}
-	}
-
-	bat.SetRowCount(len(scoremap))
 	return nil
 }
