@@ -599,6 +599,8 @@ func NewSession(
 
 // ReserveConnAndClose closes the session with the connection is reserved.
 func (ses *Session) ReserveConnAndClose() {
+	rm := ses.getRoutineManager()
+	rm.sessionManager.RemoveSession(ses)
 	ses.ReserveConn()
 	ses.Close()
 }
