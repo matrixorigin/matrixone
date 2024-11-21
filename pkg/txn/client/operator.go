@@ -619,7 +619,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() {
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
 		tc.logger.Fatal("commit on running txn")
 	}
 
@@ -1465,6 +1465,12 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	for _, flag := range flags {
 		tc.mu.flag |= flag
 	}
+}
+
+func (tc *txnOperator) markAborted() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.markAbortedLocked()
 }
 
 func (tc *txnOperator) markAbortedLocked() bool {
