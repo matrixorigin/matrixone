@@ -508,10 +508,21 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	}
 
 	ses.SetMysqlResultSet(outputRS)
-
-	err = trySaveQueryResult(ctx, ses, outputRS)
+	ses.rs, _, _, err = mysqlColDef2PlanResultColDef(outputRS.Columns)
 	if err != nil {
 		return err
+	}
+
+	if canSaveQueryResult(ctx, ses) {
+		err = saveQueryResult(ctx, ses,
+			func() ([]*batch.Batch, error) {
+				return accInfosBatches, nil
+			},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return err
