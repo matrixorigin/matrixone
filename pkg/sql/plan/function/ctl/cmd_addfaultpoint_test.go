@@ -15,12 +15,16 @@
 package ctl
 
 import (
+	"context"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -81,4 +85,69 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 		Data:   fmt.Sprintf("%v:OK; ", id),
 	})
 
+}
+
+func Test_CanTransferCnFaultInjection(t *testing.T) {
+	var a1 struct {
+		proc      *process.Process
+		service   serviceType
+		parameter string
+		sender    requestSender
+	}
+
+	uuids := []string{
+		uuid.New().String(),
+		uuid.New().String(),
+	}
+	addrs := []string{
+		"127.0.0.1:7777",
+		"127.0.0.1:5555",
+	}
+
+	a1.proc = new(process.Process)
+	a1.proc.Base = &process.BaseProcess{}
+	a1.service = cn
+	a1.parameter = "all.test.:::.echo.0."
+
+	initRuntime(uuids, addrs)
+	trace.InitMOCtledSpan()
+
+	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{})
+	require.Nil(t, err)
+	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{})
+	require.Nil(t, err)
+	qt1, err := qclient.NewQueryClient(uuids[1], morpc.Config{})
+	require.Nil(t, err)
+
+	qs1.AddHandleFunc(query.CmdMethod_FaultInjection, mockHandleFaultInjection, false)
+	qs2.AddHandleFunc(query.CmdMethod_FaultInjection, mockHandleFaultInjection, false)
+
+	a1.proc.Base.QueryClient = qt1
+
+	err = qs1.Start()
+	require.Nil(t, err)
+	err = qs2.Start()
+	require.Nil(t, err)
+
+	defer func() {
+		qs1.Close()
+		qs2.Close()
+	}()
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.enable_fault_injection", a1.sender)
+	require.NoError(t, err)
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, a1.parameter, a1.sender)
+	require.Nil(t, err)
+}
+
+func mockHandleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.TraceSpanResponse = new(query.TraceSpanResponse)
+	resp.TraceSpanResponse.Resp = HandleCnFaultInjection(
+		ctx,
+		req.FaultInjectionRequest.Name,
+		req.FaultInjectionRequest.Freq, req.FaultInjectionRequest.Action,
+		req.FaultInjectionRequest.Iarg, req.FaultInjectionRequest.Sarg,
+	)
+	return nil
 }

@@ -101,14 +101,11 @@ func handleAddFaultPoint(
 	}
 
 	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
-		clusterservice.GetMOCluster(proc.GetService()).GetCNService(
-			clusterservice.Selector{},
-			func(cn metadata.CNService) bool {
-				cns = make([]string, 0)
-				cns = append(cns, cn.ServiceID)
-				return true
-			},
-		)
+		cns = make([]string, 0)
+		clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+			cns = append(cns, cn.ServiceID)
+			return true
+		})
 	}
 
 	info := map[string]string{}
