@@ -209,6 +209,8 @@ func TestDMLInsert(t *testing.T) {
 		//"explain verbose INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
 		"explain INSERT INTO NATION SELECT * FROM NATION2",
 		"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
+		"explain verbose insert ignore into nation select * from nation2",
+		"explain verbose insert into nation select * from nation2 on duplicate key update n_comment = n_name",
 	}
 	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)

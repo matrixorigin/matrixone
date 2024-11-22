@@ -1,9 +1,3 @@
-select enable_fault_injection();
-enable_fault_injection()
-true
-select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
-add_fault_point(fj/debug/19787, :::, echo, 0, )
-true
 use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);
@@ -36,6 +30,3 @@ drop table if exists cluster_table_1;
 drop account if exists acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select disable_fault_injection();
-disable_fault_injection()
-true

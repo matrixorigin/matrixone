@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -248,12 +247,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	var readerSummary *bytes.Buffer
-	if objectio.Debug19787Injected() && !forAlter {
-		readerSummary = new(bytes.Buffer)
-		ctx = context.WithValue(ctx, defines.ReaderSummaryKey{}, readerSummary)
-	}
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), false)
+	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
 	if err != nil {
 		return nil, err
 	}
@@ -264,10 +258,6 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	if len(rowids) != len(colPKs) {
-		var summary string
-		if readerSummary != nil {
-			summary = readerSummary.String()
-		}
 		logutil.Error(
 			"FIND_TABLE deleteTableError",
 			zap.String("bat", stringifySlice(rowids, func(a any) string {
@@ -276,8 +266,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			})),
 			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
-			zap.Uint64("tid", rel.GetTableID(ctx)),
-			zap.String("readerSummary", summary))
+			zap.Uint64("tid", rel.GetTableID(ctx)))
 		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 

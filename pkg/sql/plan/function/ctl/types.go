@@ -80,7 +80,7 @@ var (
 		LabelMethod:              handleSetLabel,
 		WorkStateMethod:          handleSetWorkState,
 		SyncCommitMethod:         handleSyncCommit,
-		AddFaultPointMethod:      handleAddFaultPoint(),
+		AddFaultPointMethod:      handleAddFaultPoint,
 		BackupMethod:             handleBackup(),
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
