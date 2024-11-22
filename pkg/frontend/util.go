@@ -18,7 +18,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -484,19 +486,27 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
-	var stmtStr string
-	stm := ses.GetStmtInfo()
-	if stm == nil {
-		stmtStr = ses.GetSqlOfStmt()
-	} else {
-		stmtStr = stm.Statement
-	}
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
+	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
+// logStatementStringStatus
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// This op is aim to avoid string copy in 'status == success' case.
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
+	var getFormatedSqlStr = func() string {
+		var str = stmtStr
+		if len(stmtStr) == 0 {
+			if stm := ses.GetStmtInfo(); stm == nil {
+				str = ses.GetSqlOfStmt()
+			} else {
+				// case `execute __prepared_stmt_id__;`: this value holds the raw prepare statement and raw args.
+				str = stm.CopyStatementInfo()
+			}
+		}
+		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		return str
+	}
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
@@ -504,15 +514,19 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		if ses.LogDebug() {
+			str := getFormatedSqlStr()
+			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		}
 		err = nil // make sure: it is nil for EndStatement
 	} else {
+		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
 			"query trace status",
 			logutil.StatementField(str),
 			logutil.StatusField(status.String()),
-			logutil.ErrorField(err),
+			zap.Error(err),
 			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
 		)
 	}
@@ -1822,4 +1836,13 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 
 func Slice(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func isDisallowedError(err error) bool {
+	switch {
+	case errors.Is(err, io.EOF):
+		// io.EOF should be handled by the caller, should never be logged
+		return true
+	}
+	return false
 }
