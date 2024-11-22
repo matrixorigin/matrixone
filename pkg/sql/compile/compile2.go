@@ -144,12 +144,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.proc.ResetCloneTxnOperator()
 	c.InitPipelineContextToExecuteQuery()
 
-	// record this query to compile service.
-	GetCompileService().recordRunningCompile(c, txnOperator)
-	defer func() {
-		GetCompileService().removeRunningCompile(c, txnOperator)
-	}()
-
 	// check if there is any action to cancel this query.
 	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
 		return nil, err
@@ -170,6 +164,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		seq = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
+		txnOperator.EnterRunSql()
 	}
 
 	var isExplainPhyPlan = false
@@ -183,6 +178,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
 			runC.Release()
+		}
+		if txnOperator != nil {
+			txnOperator.ExitRunSql()
 		}
 	}()
 

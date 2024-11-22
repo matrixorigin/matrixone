@@ -361,14 +361,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, windowSpecListInfo)
 	}
 
-	if len(ndesc.Node.InsertDeleteCols) > 0 {
-		colsInfo, err := ndesc.GetInsertDeleteColsInfo(ctx, options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, colsInfo)
-	}
-
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
@@ -477,6 +469,9 @@ func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *Exp
 			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
 		}
 	}
+	if ndesc.Node.JoinType == plan.Node_DEDUP {
+		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"
+	}
 	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
 		result += "   hashOnPK"
 	}
@@ -553,33 +548,6 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 	return buf.String(), nil
 }
 
-func (ndesc *NodeDescribeImpl) GetInsertDeleteColsInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 512))
-	if ndesc.Node.NodeType == plan.Node_INSERT {
-		buf.WriteString("Insert Columns: ")
-	} else {
-		buf.WriteString("Delete Columns: ")
-	}
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		first := true
-		for _, v := range ndesc.Node.InsertDeleteCols {
-			if !first {
-				buf.WriteString(", ")
-			}
-			first = false
-			err := describeExpr(ctx, v, options, buf)
-			if err != nil {
-				return "", err
-			}
-		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return "", moerr.NewNYI(ctx, "explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI(ctx, "explain format dot")
-	}
-	return buf.String(), nil
-}
-
 func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	var lines []string
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -618,6 +586,49 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 	return lines, nil
 }
 
+func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
+	var lines []string
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		dedupJoinCtx := ndesc.Node.DedupJoinCtx
+		buf := bytes.NewBuffer(make([]byte, 0, 512))
+		buf.WriteString("Old columns: ")
+		first := true
+		for i := range dedupJoinCtx.OldColList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeColRef(&dedupJoinCtx.OldColList[i], buf)
+		}
+
+		buf.WriteString(" Update index list: ")
+		first = true
+		for i := range dedupJoinCtx.UpdateColIdxList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			buf.WriteString(strconv.Itoa(int(dedupJoinCtx.UpdateColIdxList[i])))
+		}
+
+		buf.WriteString(" Update expr list: ")
+		first = true
+		for i := range dedupJoinCtx.UpdateColIdxList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeExpr(ctx, dedupJoinCtx.UpdateColExprList[i], options, buf)
+		}
+
+		lines = append(lines, buf.String())
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return nil, moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return nil, moerr.NewNYI(ctx, "explain format dot")
+	}
+	return lines, nil
+}
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
 	buf.WriteString("Filter Cond: ")
