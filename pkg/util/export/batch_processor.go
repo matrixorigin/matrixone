@@ -242,7 +242,9 @@ func (b *bufferHolder) getGenerateReq() (req generateReq) {
 		if err := recover(); err != nil {
 			_ = moerr.ConvertPanicError(b.ctx, err)
 			logutil.Error("catch panic #19755")
-			b.putBuffer(b.buffer)
+			if b.buffer != nil {
+				b.putBuffer(b.buffer)
+			}
 			b.buffer = nil
 			req = nil
 		}
