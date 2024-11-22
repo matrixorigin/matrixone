@@ -1,0 +1,37 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(c1 int primary key, c2 int , c3 int);
+create table t2(c1 int primary key, c2 int , c3 int);
+insert into t1 select *,*,* from generate_series(1000000) g;
+insert into t2 select *,*,* from generate_series(100000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t2');
+select Sleep(1);
+-- @separator:table
+explain select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);
+select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);
+delete from t1 where c1<100;
+delete from t2 where c2=1000;
+insert into t1 values(1,null,null);
+insert into t2 values(1000,null,null);
+-- @separator:table
+explain select * from t1 right join t2 on t1.c1=t2.c1 where t2.c2 is null;
+select * from t1 right join t2 on t1.c1=t2.c1 where t2.c2 is null;
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 is null;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 is null;
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 = 10;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 = 10;
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 in (1,10,100,1000,10000,20000);
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 in (1,10,100,1000,10000,20000);
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
+drop database d1;

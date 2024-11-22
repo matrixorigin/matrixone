@@ -19,6 +19,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"hash/crc64"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -443,6 +444,8 @@ func TestRangeLockWithConflict(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+					err := os.Setenv("mo_reuse_enable_checker", "true")
+					require.NoError(t, err)
 					option := newTestRangeExclusiveOptions()
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
@@ -454,7 +457,7 @@ func TestRangeLockWithConflict(t *testing.T) {
 					}
 
 					// txn1 hold the lock
-					_, err := s.Lock(ctx, table, rows, txn1, option)
+					_, err = s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
 					// txn2 blocked by txn1
