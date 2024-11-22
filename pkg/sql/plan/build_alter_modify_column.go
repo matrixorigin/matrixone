@@ -134,16 +134,6 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 		if supported := function.IfTypeCastSupported(types.T(origin.GetId()), types.T(to.GetId())); !supported {
 			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", types.T(origin.Id).String(), types.T(to.Id).String())
 		}
-
-		//if (origin.Id == int32(types.T_time) || origin.Id == int32(types.T_timestamp) || origin.Id == int32(types.T_date) || origin.Id == int32(types.T_datetime) || origin.Id == int32(types.T_char) || origin.Id == int32(types.T_varchar) || origin.Id == int32(types.T_json) || origin.Id == int32(types.T_uuid)) &&
-		//	to.Id == int32(types.T_binary) {
-		//	return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
-		//}
-		//
-		//if (origin.Id == int32(types.T_binary) || origin.Id == int32(types.T_decimal64) || origin.Id == int32(types.T_decimal128) || origin.Id == int32(types.T_float32) || origin.Id == int32(types.T_float64)) &&
-		//	(to.Id == int32(types.T_time) || to.Id == int32(types.T_timestamp) || to.Id == int32(types.T_date) || to.Id == int32(types.T_datetime)) {
-		//	return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
-		//}
 	}
 	return nil
 }
