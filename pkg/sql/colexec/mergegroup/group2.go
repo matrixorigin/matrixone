@@ -40,7 +40,7 @@ func (mergeGroup *MergeGroup) getInputBatch(proc *process.Process) (*batch.Batch
 
 // consumeInputBatch
 // 1. put batch into hashtable, and get a group list.
-// 2. union the new rows and update the aggList.
+// 2. use group list to union new row and do the agg merge work.
 func (mergeGroup *MergeGroup) consumeInputBatch(
 	proc *process.Process,
 	bat *batch.Batch, res *thisResult) (err error) {
@@ -48,6 +48,7 @@ func (mergeGroup *MergeGroup) consumeInputBatch(
 		return nil
 	}
 
+	// first time.
 	if len(res.aggList) == 0 {
 		res.aggList, bat.Aggs = bat.Aggs, nil
 		res.chunkSize = aggexec.GetChunkSizeOfAggregator(res.aggList[0])
@@ -159,6 +160,9 @@ func (r *thisResult) popOneResult() (*batch.Batch, error) {
 			}
 		}
 
+		for i := range r.aggList {
+			r.aggList[i].Free()
+		}
 		r.aggList = nil
 	}
 
