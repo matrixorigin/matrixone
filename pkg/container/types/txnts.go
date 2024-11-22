@@ -107,8 +107,15 @@ func BuildTSForTest(p int64, l uint32) *TS {
 	return &ts
 }
 
+var maxTS = BuildTS(math.MaxInt64, math.MaxUint32)
+var minTS = TS{}
+
 func MaxTs() TS {
-	return BuildTS(math.MaxInt64, math.MaxUint32)
+	return maxTS
+}
+
+func MinTs() TS {
+	return minTS
 }
 
 // Who use this function?
