@@ -48,9 +48,6 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if obj.IsTombstone {
 		return false
 	}
-	if obj.OriginSize() < config.ObjectMinOsize {
-		return false
-	}
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
@@ -148,7 +145,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 		objs = objs[:levels[3]]
 	}
 
-	return objs, taskHostDN
+	return objs, taskHostCN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {

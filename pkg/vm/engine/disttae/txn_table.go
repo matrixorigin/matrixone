@@ -739,10 +739,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
+	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
@@ -2162,13 +2162,17 @@ func (tbl *txnTable) MergeObjects(
 
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
 
-	// check object visibility
-	for _, objstat := range objStats {
+	// check object visibility and set object stats.
+	fullObjStats := make([]objectio.ObjectStats, len(objStats))
+	for i, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
+		fmt.Println(info.ObjectStats.String())
+		objectio.SetObjectStats(&objstat, &info.ObjectStats)
+		fullObjStats[i] = objstat
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
@@ -2176,7 +2180,7 @@ func (tbl *txnTable) MergeObjects(
 	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, // context
 		sortKeyPos, sortKeyIsPK, // schema
-		objStats, // targets
+		fullObjStats, // targets
 		targetObjSize)
 	if err != nil {
 		return nil, err
