@@ -552,6 +552,7 @@ type SessionLogger interface {
 	Warnf(ctx context.Context, msg string, args ...any)
 	Fatalf(ctx context.Context, msg string, args ...any)
 	Debugf(ctx context.Context, msg string, args ...any)
+	LogDebug() bool
 	GetLogger() SessionLogger
 }
 

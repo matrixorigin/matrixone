@@ -1,5 +1,3 @@
-select enable_fault_injection();
-select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
 
 drop database if exists snapshot_read;
 create database if not exists snapshot_read;
@@ -363,4 +361,3 @@ drop snapshot sp_01;
 drop account test_account;
 drop account acc02;
 
-select disable_fault_injection();

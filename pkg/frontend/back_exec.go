@@ -47,17 +47,11 @@ import (
 
 type backExec struct {
 	backSes    *backSession
-	inUse      bool
 	statsArray *statistic.StatsArray
 }
 
 func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
-	if back.backSes == nil {
-		back.backSes = newBackSession(ses, txnOp, db, callBack)
-	} else {
-		back.backSes.reInit(ses, txnOp, db, callBack)
-	}
-
+	back.backSes = newBackSession(ses, txnOp, db, callBack)
 	if back.statsArray != nil {
 		back.statsArray.Reset()
 	} else {
@@ -73,11 +67,9 @@ func (back *backExec) Close() {
 	if back == nil {
 		return
 	}
-	defer func() {
-		back.inUse = false
-	}()
 	back.Clear()
 	back.backSes.Close()
+	back.backSes = nil
 }
 
 func (back *backExec) GetExecStatsArray() statistic.StatsArray {
@@ -718,8 +710,6 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	txnOpReused            TxnOperator
-	shareTxnBackExecReused *backExec
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -728,19 +718,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
 	backSes.uuid, _ = uuid.NewV7()
-	return backSes
-}
-
-func (backSes *backSession) reInit(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
-	service := ses.GetService()
-	var txnHandler *TxnHandler
-	if txnOp != nil {
-		txnHandler = InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
-	} else {
-		txnHandler = InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), nil)
-		txnHandler.txnOp = backSes.txnOpReused
-	}
-	backSes.initFeSes(ses, txnHandler, db, callBack)
 	return backSes
 }
 
@@ -769,14 +746,9 @@ func (backSes *backSession) initFeSes(
 
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
-		if backSes.shareTxnBackExecReused == nil {
-			backSes.shareTxnBackExecReused = &backExec{}
-		} else if backSes.shareTxnBackExecReused.inUse {
-			panic("backSession.ShareTxnBackExec already in use")
-		}
-		backSes.shareTxnBackExecReused.init(backSes, txnOp, db, callBack)
-		backSes.shareTxnBackExecReused.inUse = true
-		return backSes.shareTxnBackExecReused
+		be := &backExec{}
+		be.init(backSes, txnOp, db, callBack)
+		return be
 	} else {
 		panic("backSession does not support non-txn-shared backExec recursively")
 	}
@@ -803,15 +775,6 @@ func (backSes *backSession) Close() {
 				"Failed to rollback txn in back session",
 				zap.Error(err))
 		}
-
-		//record txnOp
-		if backSes.txnOpReused == nil &&
-			!txnHandler.IsShareTxn() {
-			txnOp := txnHandler.GetTxn()
-			if txnOp != nil {
-				backSes.txnOpReused = txnOp
-			}
-		}
 	}
 
 	//if the txn is not shared outside, we clean feSessionImpl.
@@ -822,7 +785,6 @@ func (backSes *backSession) Close() {
 		backSes.feSessionImpl.Reset()
 	}
 	backSes.upstream = nil
-	backSes.shareTxnBackExecReused.Close()
 }
 
 func (backSes *backSession) Clear() {
@@ -995,10 +957,10 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	backSes.InitBackExec(txnOp, "", fakeDataSetFetcher2)
+	be := backSes.InitBackExec(txnOp, "", fakeDataSetFetcher2)
 	//the derived statement execute in a shared transaction in background session
-	backSes.shareTxnBackExecReused.backSes.ReplaceDerivedStmt(true)
-	return backSes.shareTxnBackExecReused
+	be.(*backExec).backSes.ReplaceDerivedStmt(true)
+	return be
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
@@ -1092,6 +1054,10 @@ func (backSes *backSession) Fatal(ctx context.Context, msg string, fields ...zap
 
 func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	backSes.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (backSes *backSession) LogDebug() bool {
+	return backSes.getMOLogger().Enabled(zap.DebugLevel)
 }
 
 func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {

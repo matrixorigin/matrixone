@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -84,7 +83,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
-		name2ColIndex[strings.ToLower(cols[i].Name)] = int32(i)
+		name2ColIndex[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
 		Name:          uuid.String(),
