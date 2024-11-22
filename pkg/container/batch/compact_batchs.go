@@ -101,7 +101,7 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 		return nil
 	}
 
-	copyBat, err = dupAndExtend(mpool, inBatch)
+	copyBat, err = dupAndExpand(mpool, inBatch)
 	if err != nil {
 		return err
 	}
@@ -213,7 +213,7 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 	return nil
 }
 
-func dupAndExtend(mpool *mpool.MPool, inBatch *Batch) (*Batch, error) {
+func dupAndExpand(mpool *mpool.MPool, inBatch *Batch) (*Batch, error) {
 	tmpBat, err := inBatch.Dup(mpool)
 	if err != nil {
 		return nil, err
