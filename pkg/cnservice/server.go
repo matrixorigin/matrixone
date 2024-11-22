@@ -1027,3 +1027,7 @@ func (s *service) initProcessCodecService() {
 		),
 	)
 }
+
+func (s *service) GetTxnClient() client.TxnClient {
+	return s._txnClient
+}

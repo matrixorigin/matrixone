@@ -1006,7 +1006,7 @@ func TestSerializePlanToJson(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		uid, _ := uuid.NewV7()
-		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: []byte(sql), RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan, nil)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
