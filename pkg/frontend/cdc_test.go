@@ -2717,6 +2717,7 @@ func TestCdcTask_Pause(t *testing.T) {
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
+		isRunning: true,
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")
@@ -2746,7 +2747,8 @@ func TestCdcTask_Cancel(t *testing.T) {
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
-		holdCh: ch,
+		holdCh:    ch,
+		isRunning: true,
 	}
 	err = cdc.Cancel()
 	assert.NoErrorf(t, err, "Pause()")

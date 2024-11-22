@@ -1141,7 +1141,7 @@ func (cdc *CdcTask) Restart() (err error) {
 	}()
 
 	// delete previous records
-	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err == nil {
+	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return
 	}
 	// closed in Pause, need renew
