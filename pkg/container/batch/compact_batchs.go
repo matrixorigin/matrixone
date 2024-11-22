@@ -94,34 +94,44 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 	batLen := bats.Length()
 	var err error
-	var tmpBat *Batch
+	var copyBat *Batch
 
 	// empty input
 	if inBatch.rowCount == 0 {
 		return nil
 	}
 
+	copyBat, err = dupAndExtend(mpool, inBatch)
+	if err != nil {
+		return err
+	}
+
 	// empty bats
 	if batLen == 0 {
-		tmpBat, err = inBatch.Dup(mpool)
-		if err != nil {
-			return err
-		}
-		bats.batchs = append(bats.batchs, tmpBat)
+		bats.batchs = append(bats.batchs, copyBat)
 		return nil
 	}
 
-	lastBatRowCount := bats.batchs[batLen-1].rowCount
-	if lastBatRowCount == DefaultBatchMaxRow {
-		tmpBat, err = inBatch.Dup(mpool)
-		if err != nil {
-			return err
-		}
-		bats.batchs = append(bats.batchs, tmpBat)
+	// fast path 1
+	lastIdx := batLen - 1
+	if bats.batchs[lastIdx].rowCount == DefaultBatchMaxRow {
+		bats.batchs = append(bats.batchs, copyBat)
 		return nil
 	}
 
-	return bats.fillData(mpool, inBatch)
+	// fast path 2
+	if copyBat.rowCount == DefaultBatchMaxRow {
+		lastBat := bats.batchs[lastIdx]
+		bats.batchs[lastIdx] = copyBat
+		bats.batchs = append(bats.batchs, lastBat)
+		return nil
+	}
+
+	defer func() {
+		copyBat.Clean(mpool)
+	}()
+
+	return bats.fillData(mpool, copyBat)
 }
 
 func (bats *CompactBatchs) RowCount() int {
@@ -201,4 +211,24 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 	}
 
 	return nil
+}
+
+func dupAndExtend(mpool *mpool.MPool, inBatch *Batch) (*Batch, error) {
+	tmpBat, err := inBatch.Dup(mpool)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tmpBat.Vecs {
+		oldVec := tmpBat.Vecs[i]
+		if oldVec.IsConst() {
+			newVec := vector.NewVec(*oldVec.GetType())
+			err := vector.GetUnionAllFunction(*oldVec.GetType(), mpool)(newVec, oldVec)
+			if err != nil {
+				return nil, err
+			}
+			tmpBat.ReplaceVector(oldVec, newVec, 0)
+			tmpBat.Vecs[i] = newVec
+		}
+	}
+	return tmpBat, nil
 }
