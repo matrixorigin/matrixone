@@ -257,7 +257,6 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 
 	defer res.Close()
 	defer close(u.result_chan)
-	defer close(u.errors)
 	var n_result uint64 = 0
 	n_doc_id := 0
 	var last_doc_id any = nil
