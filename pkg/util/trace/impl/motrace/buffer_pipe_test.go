@@ -337,6 +337,60 @@ var genFactory = func() table.WriterFactory {
 	)
 }
 
+var message66bytes = "123456789-223456789-323456789-423456789-523456789-623456789-123456"
+
+// Test_genCsvData_long_log ut for https://github.com/matrixorigin/MO-Cloud/issues/4235
+func Test_genCsvData_long_log(t *testing.T) {
+	// for case 'single_zap_long_long'
+	GetTracerProvider().MaxLogMessageSize = 64
+
+	errorFormatter.Store("%v")
+	logStackFormatter.Store("%n")
+	type args struct {
+		in  []IBuffer2SqlItem
+		buf *bytes.Buffer
+	}
+	sc := trace.SpanContextWithIDs(_1TraceID, _1SpanID)
+	tests := []struct {
+		name string
+		args args
+		want any
+	}{
+		{
+			name: "single_zap_long_long",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZapLog{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   dummyBaseTime,
+						Caller:      "trace/buffer_pipe_sql_test.go:912",
+						Message:     message66bytes,
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,123456789-223456789-323456789-423456789-523456789-623456789-1234,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal,,
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := genETLData(context.TODO(), tt.args.in, tt.args.buf, genFactory())
+			require.NotEqual(t, nil, got)
+			req, ok := got.(table.ExportRequests)
+			require.Equal(t, true, ok)
+			require.Equal(t, 1, len(req))
+			batch := req[0].(*table.RowRequest)
+			content := batch.GetContent()
+			assert.Equalf(t, tt.want, content, "genETLData(%v, %v)", content, tt.args.buf)
+			t.Logf("%s", tt.want)
+		})
+	}
+}
+
 func Test_genCsvData(t *testing.T) {
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
@@ -461,7 +515,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
@@ -485,7 +539,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
@@ -499,7 +553,7 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show databases",
+						Statement:            []byte("show databases"),
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            dummyBaseTime.Add(time.Microsecond),
@@ -579,7 +633,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
@@ -604,7 +658,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
@@ -618,7 +672,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						Account:              "sys",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show databases",
+						Statement:            []byte("show databases"),
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            dummyBaseTime.Add(time.Microsecond),
@@ -691,7 +745,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
@@ -705,7 +759,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show tables",
+						Statement:            []byte("show tables"),
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             NewDummySerializableExecPlan(nil, dummySerializeExecPlan, uuid.UUID(_1TraceID)),
@@ -721,7 +775,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
-						Statement:            "show databases",
+						Statement:            []byte("show databases"),
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            dummyBaseTime.Add(time.Microsecond),
