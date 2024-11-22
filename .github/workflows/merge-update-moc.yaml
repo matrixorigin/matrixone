@@ -7,5 +7,6 @@ on:
 
 jobs:
   merge-update-moc:
+    if: ${{ github.event.pull_request.merged == true }}
     uses: matrixorigin/CI/.github/workflows/merge-update-moc.yaml@main
     secrets: inherit
