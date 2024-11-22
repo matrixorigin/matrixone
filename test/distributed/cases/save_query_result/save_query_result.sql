@@ -157,5 +157,22 @@ show subscriptions all;
 drop publication publication02;
 drop database if exists database02;
 drop account acc_save;
+
+create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set save_query_result = on;
+-- @ignore:2,5,6,7
+show accounts;
+-- @ignore:2,5,6,7
+select * from result_scan(last_query_id()) as t;
+set save_query_result = off;
+-- @session:id=2&user=acc_save:admin&password=123456
+set save_query_result = on;
+-- @ignore:2,5,6,7
+show accounts;
+-- @ignore:2,5,6,7
+select * from result_scan(last_query_id()) as t;
+set save_query_result = off;
+-- @session
+drop account acc_save;
 # reset to default(off)
 set save_query_result = off;

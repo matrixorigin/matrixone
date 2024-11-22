@@ -1,5 +1,3 @@
-select enable_fault_injection();
-select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
 -- sys restore itself
 set global enable_privilege_cache = off;
 -- udf
@@ -620,4 +618,3 @@ drop database if exists procedure_test;
 -- @ignore:1
 show snapshots;
 
-select disable_fault_injection();
