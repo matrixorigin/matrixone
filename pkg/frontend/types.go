@@ -337,6 +337,10 @@ func execResultArrayHasData(arr []ExecResult) bool {
 	return len(arr) != 0 && arr[0].GetRowCount() != 0
 }
 
+type BackgroundExecOption struct {
+	fromRealUser bool
+}
+
 // BackgroundExec executes the sql in background session without network output.
 type BackgroundExec interface {
 	Close()
@@ -463,7 +467,7 @@ type FeSession interface {
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
 	GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error)
-	GetBackgroundExec(ctx context.Context) BackgroundExec
+	GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSysVars() *SystemVariables
 	GetGlobalSysVar(name string) (interface{}, error)
@@ -532,7 +536,7 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
-	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
+	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
 	SessionLogger
 }
 
@@ -548,6 +552,7 @@ type SessionLogger interface {
 	Warnf(ctx context.Context, msg string, args ...any)
 	Fatalf(ctx context.Context, msg string, args ...any)
 	Debugf(ctx context.Context, msg string, args ...any)
+	LogDebug() bool
 	GetLogger() SessionLogger
 }
 
@@ -678,6 +683,10 @@ type feSessionImpl struct {
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
 	service     string
+
+	//fromRealUser distinguish the sql that the user inputs from the one
+	//that the internal or background program executes
+	fromRealUser bool
 }
 
 func (ses *feSessionImpl) GetService() string {
@@ -763,6 +772,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.buf = nil
 	}
 	ses.upstream = nil
+	ses.fromRealUser = false
 }
 
 // Clear clean result only
