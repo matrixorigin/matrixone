@@ -116,7 +116,6 @@ create table a(b int);
 use mo_catalog;
 select user_name,authentication_string,owner from mo_user where user_name ='account_1_user';
 
-select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 --8.CREATE-DROP-CREATE,CREATE-ALTER-CREATE场景
 create account accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
