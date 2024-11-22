@@ -77,6 +77,8 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 }
 
 type container struct {
+	hret groupHashRelated
+
 	// if skipInitReusableMem is true, we will skip some initialization of reusable.
 	skipInitReusableMem bool
 	itr                 hashmap.Iterator
