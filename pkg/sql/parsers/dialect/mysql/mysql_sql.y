@@ -12627,6 +12627,7 @@ non_reserved_keyword:
 |   GROUPING
 |   SETS
 |   CUBE
+|   RETRY
 
 
 func_not_keyword:
