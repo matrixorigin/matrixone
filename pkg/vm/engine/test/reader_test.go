@@ -39,6 +39,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
@@ -1086,6 +1087,21 @@ func Test_ShardingLocalReader(t *testing.T) {
 		rpcAgent      *testutil.MockRPCAgent
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFault1, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
+	require.NoError(t, err)
+	defer rmFault1()
+	rmFault2, err := objectio.InjectLogRanges(catalog.MO_CATALOG, objectio.MO_TABLES, 0)
+	require.NoError(t, err)
+	defer rmFault2()
+	rmFault3, err := objectio.InjectLogReader(catalog.FJ_EmptyTBL, objectio.MO_TABLES, 1)
+	require.NoError(t, err)
+	defer rmFault3()
+	rmFault4, err := objectio.InjectLogWorkspace(catalog.MO_CATALOG, objectio.MO_TABLES, 0)
+	require.NoError(t, err)
+	defer rmFault4()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
