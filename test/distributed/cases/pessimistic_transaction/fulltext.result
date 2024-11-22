@@ -8,6 +8,7 @@ primary key(a, b)
 insert into t0 select result, result, result || 'test' from generate_series(1, 100) g;
 create fulltext index ftidx on t0 (c);
 internal error: FullText index is not enabled
+set experimental_fulltext_index=1;
 drop table if exists t1;
 create table t1 (
 a int,
@@ -16,7 +17,6 @@ c varchar(20),
 primary key(a, b)
 );
 create fulltext index ftidx on t1 (c);
-internal error: FullText index is not enabled
 insert into t1 select * from t0 where a = 1 and b = 1;
 insert into t1 select * from t0 where a = 1 and b = 1;
-Duplicate entry '(1,1)' for key '(a,b)'
+Duplicate entry '(1,1)' for key '__mo_cpkey_col'
