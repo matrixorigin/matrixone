@@ -169,6 +169,15 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if node.DedupJoinCtx != nil {
+		for i := range node.DedupJoinCtx.UpdateColExprList {
+			node.DedupJoinCtx.UpdateColExprList[i], err = applyAndResetType(node.DedupJoinCtx.UpdateColExprList[i])
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	for i := range node.ProjectList {
 		if vq.isUpdatePlan {
 			node.ProjectList[i], err = applyAndResetType(node.ProjectList[i])

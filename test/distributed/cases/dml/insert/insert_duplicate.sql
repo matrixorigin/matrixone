@@ -232,6 +232,4 @@ UNIQUE KEY `unq_biz_ns` (`biz_type`,`namespace`));
 insert into `serial_numbers` (`biz_type`, `namespace`, `sn`) select result,result||"lijofw;ok",result from generate_series(1,100000) g;
 INSERT INTO `serial_numbers` (`biz_type`, `namespace`, `sn`) VALUES (4, '2024091117', 1) ON DUPLICATE KEY UPDATE `sn` = `sn` + 1;
 SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 ;
--- @bvt:issue#18710
 SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '2024091117';
--- @bvt:issue
