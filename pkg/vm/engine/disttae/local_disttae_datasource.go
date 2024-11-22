@@ -1208,11 +1208,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		}
 	}
 
-	// if more than one tombstone have applied any delete,
-	// the unsorted input rowIds slice may lead the deleted slice unsorted as well.
-	if checkedObjCnt >= 2 {
-		slices.Sort(deleted)
-	}
+	slices.Sort(deleted)
 
 	return deleted, nil
 }
