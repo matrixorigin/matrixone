@@ -3996,7 +3996,7 @@ func collectTombstones(
 
 func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
-	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy) (engine.RelData, error) {
+	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
 	if policy&engine.Policy_CollectCommittedData != 0 {
@@ -4016,6 +4016,7 @@ func (c *Compile) expandRanges(
 		PreAllocBlocks: preAllocBlocks,
 		TxnOffset:      c.TxnOffset,
 		Policy:         policy,
+		Rsp:            rsp,
 	}
 	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
@@ -4534,74 +4535,6 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 		}
 	}
 	return nil
-}
-
-func shuffleBlocksByHash(relData engine.RelData, newRelData engine.RelData, cncnt int32, cnidx int32) {
-	engine.ForRangeBlockInfo(0, relData.DataCnt(), relData,
-		func(blk *objectio.BlockInfo) (bool, error) {
-			objID := blk.MetaLocation().ObjectId()
-			index := plan2.SimpleCharHashToRange(objID[:], uint64(cncnt))
-			if cnidx == int32(index) {
-				newRelData.AppendBlockInfo(blk)
-			}
-			return true, nil
-		})
-}
-
-func shuffleBlocksByRange(proc *process.Process, relData engine.RelData, newRelData engine.RelData, n *plan.Node, cncnt int32, cnidx int32) error {
-	var objDataMeta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
-
-	var shuffleRangeUint64 []uint64
-	var shuffleRangeInt64 []int64
-	var init bool
-	var index uint64
-
-	err := engine.ForRangeBlockInfo(0, relData.DataCnt(), relData,
-		func(blk *objectio.BlockInfo) (bool, error) {
-			location := blk.MetaLocation()
-			fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
-			if err != nil {
-				return false, err
-			}
-			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				if objMeta, err = objectio.FastLoadObjectMeta(proc.Ctx, &location, false, fs); err != nil {
-					return false, err
-				}
-				objDataMeta = objMeta.MustDataMeta()
-			}
-			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-			zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-			if !zm.IsInited() {
-				// a block with all null will send to first CN
-				if cnidx == 0 {
-					newRelData.AppendBlockInfo(blk)
-				}
-				return true, nil
-			}
-			if !init {
-				init = true
-				switch zm.GetType() {
-				case types.T_int64, types.T_int32, types.T_int16:
-					shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, int(cncnt), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-				case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-					shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, int(cncnt), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-				}
-			}
-			if shuffleRangeUint64 != nil {
-				index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
-			} else if shuffleRangeInt64 != nil {
-				index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
-			} else {
-				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(cncnt))
-			}
-			if cnidx == int32(index) {
-				newRelData.AppendBlockInfo(blk)
-			}
-			return true, nil
-		})
-
-	return err
 }
 
 func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) engine.Nodes {

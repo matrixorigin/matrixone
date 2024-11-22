@@ -799,6 +799,12 @@ func (tbl *txnTable) rangesOnePart(
 				}
 
 				meta = objMeta.MustDataMeta()
+
+				//if need to shuffle objects
+				if plan2.ShouldSkipObjByShuffle(&rangesParam, meta, location.ObjectId()) {
+					return
+				}
+
 				// here we only eval expr on the object meta if it has more than one blocks
 				if meta.BlockCount() > 2 {
 					for _, expr := range rangesParam.BlockFilters {

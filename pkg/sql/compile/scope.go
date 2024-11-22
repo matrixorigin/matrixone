@@ -618,7 +618,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	}
 
 	if s.NodeInfo.CNCNT == 1 {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData)
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
 		if err != nil {
 			return err
 		}
@@ -631,7 +631,13 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 
 	//need to shuffle blocks when cncnt>1
 	var commited engine.RelData
-	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData)
+	rsp := &engine.RangesShuffleParam{
+		Node:  s.DataSource.node,
+		CNCNT: s.NodeInfo.CNCNT,
+		CNIDX: s.NodeInfo.CNIDX,
+		Init:  false,
+	}
+	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
 	if err != nil {
 		return err
 	}
@@ -640,40 +646,21 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 			s.DataSource.TableDef.Name, commited.DataCnt(), s.DataSource.node.Stats.BlockNum)
 	}
 
-	//need to shuffle blocks
-	//todo: optimize this, shuffle blocks in expand ranges
-	averageSize := commited.DataCnt() / int(s.NodeInfo.CNCNT)
-	newRelData := commited.BuildEmptyRelData(averageSize)
-	if s.DataSource.node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		err = shuffleBlocksByRange(c.proc, commited, newRelData, s.DataSource.node, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
-		if err != nil {
-			return err
-		}
-	} else {
-		shuffleBlocksByHash(commited, newRelData, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
-	}
-
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData)
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
 		if err != nil {
 			return err
 		}
-		s.NodeInfo.Data.AppendBlockInfoSlice(newRelData.GetBlockInfoSlice())
+		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
 		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
 		if err != nil {
 			return err
 		}
-		newRelData.AttachTombstones(tombstones)
-		s.NodeInfo.Data = newRelData
+		commited.AttachTombstones(tombstones)
+		s.NodeInfo.Data = commited
 	}
-
-	if newRelData.DataCnt() > averageSize+averageSize/2 || newRelData.DataCnt() < averageSize/2 {
-		logutil.Warnf("workload distribution for table %v maybe not balanced! total blocks %v average blocks %v current addr %v currnet blocks %v",
-			s.DataSource.TableDef.Name, commited.DataCnt(), averageSize, c.addr, s.NodeInfo.Data.DataCnt())
-	}
-
 	return nil
 }
 

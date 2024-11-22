@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math"
 	"math/bits"
 	"unsafe"
@@ -97,6 +98,44 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
+}
+
+func ShouldSkipObjByShuffle(rp *engine.RangesParam, objMeta objectio.ObjectDataMeta, objID objectio.ObjectId) bool {
+	rsp := rp.Rsp
+	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
+		return false
+	}
+	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+		zm := objMeta.MustGetColumn(uint16(rsp.Node.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		if !zm.IsInited() {
+			// an object with all null will send to first CN
+			return rsp.CNIDX != 0
+		}
+		if !rsp.Init {
+			rsp.Init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+				rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			}
+		}
+
+		var index uint64
+		if rsp.ShuffleRangeUint64 != nil {
+			index = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
+		} else if rsp.ShuffleRangeInt64 != nil {
+			index = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
+		} else {
+			index = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
+		}
+		return index != uint64(rsp.CNIDX)
+
+	}
+
+	//shuffle by hash
+	index := SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT))
+	return index != uint64(rsp.CNIDX)
 }
 
 func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {

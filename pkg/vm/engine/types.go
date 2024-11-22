@@ -821,11 +821,22 @@ type ChangesHandle interface {
 	Close() error
 }
 
+type RangesShuffleParam struct {
+	// these are for shuffle objects
+	Node               *plan.Node
+	CNCNT              int32 // number of all cns
+	CNIDX              int32 // cn index , starts from 0
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
+}
+
 type RangesParam struct {
 	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
 	PreAllocBlocks int          //estimated count of blocks
 	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
 	Policy         DataCollectPolicy
+	Rsp            *RangesShuffleParam
 }
 
 var DefaultRangesParam RangesParam = RangesParam{
