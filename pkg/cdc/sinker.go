@@ -39,7 +39,7 @@ const (
 	// sqlBufReserved leave 5 bytes for mysql driver
 	sqlBufReserved       = 5
 	DefaultRetryTimes    = -1
-	DefaultRetryDuration = 30 * time.Minute
+	DefaultRetryDuration = 30 * time.Second
 	sqlPrintLen          = 200
 	fakeSql              = "fakeSql"
 )
@@ -723,7 +723,7 @@ func (s *mysqlSink) Close() {
 }
 
 func (s *mysqlSink) connect() (err error) {
-	s.conn, err = openDbConn(s.user, s.password, s.ip, s.port)
+	s.conn, err = OpenDbConn(s.user, s.password, s.ip, s.port)
 	return err
 }
 

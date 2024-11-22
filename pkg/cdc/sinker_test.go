@@ -231,7 +231,7 @@ func TestNewMysqlSink(t *testing.T) {
 		},
 	}
 
-	stub := gostub.Stub(&openDbConn, func(_, _, _ string, _ int) (_ *sql.DB, _ error) {
+	stub := gostub.Stub(&OpenDbConn, func(_, _, _ string, _ int) (_ *sql.DB, _ error) {
 		return nil, nil
 	})
 	defer stub.Reset()
