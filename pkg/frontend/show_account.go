@@ -494,7 +494,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	backSes := bh.(*backExec)
 	resultSet := backSes.backSes.allResultSet[0]
-	columnDef := backSes.backSes.rs
 	bh.ClearExecResultSet()
 
 	outputRS := &MysqlResultSet{}
@@ -509,8 +508,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	}
 
 	ses.SetMysqlResultSet(outputRS)
-
-	ses.rs = columnDef
+	ses.rs, _, _, err = mysqlColDef2PlanResultColDef(outputRS.Columns)
+	if err != nil {
+		return err
+	}
 
 	if canSaveQueryResult(ctx, ses) {
 		err = saveQueryResult(ctx, ses,

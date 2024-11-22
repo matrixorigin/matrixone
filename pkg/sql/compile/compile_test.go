@@ -330,7 +330,10 @@ func TestShuffleBlocksToMultiCN(t *testing.T) {
 	}
 	reldata := &engine_util.BlockListRelData{}
 	reldata.SetBlockList(s)
-	n := &plan.Node{Stats: plan2.DefaultStats()}
+	n := &plan.Node{
+		Stats:    plan2.DefaultStats(),
+		TableDef: &plan.TableDef{Name: "test"},
+	}
 	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
 	require.NoError(t, err)
 }

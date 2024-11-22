@@ -782,6 +782,7 @@ func (s *service) initShardService() {
 			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
 			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
+			shardservice.ReadPrimaryKeysMayBeUpserted: disttae.HandleShardingReadPrimaryKeysMayBeUpserted,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
 			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
@@ -1025,4 +1026,8 @@ func (s *service) initProcessCodecService() {
 			s.storeEngine,
 		),
 	)
+}
+
+func (s *service) GetTxnClient() client.TxnClient {
+	return s._txnClient
 }
