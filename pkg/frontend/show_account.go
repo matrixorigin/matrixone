@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
@@ -381,6 +382,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var eachAccountInfo []*batch.Batch
 	var tempBatch *batch.Batch
 	var specialTableCnt, specialDBCnt int64
+	var planCols *plan.ResultColDef
 
 	mp := ses.GetMemPool()
 
@@ -431,7 +433,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	if account.IsSysTenant() {
 		sql = getSqlForAccountInfo(sa.Like, -1, needUpdateObjectCountMetric)
-		if accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp); err != nil {
+		accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp)
+		if err != nil {
 			return err
 		}
 
@@ -443,7 +446,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		// switch to the sys account to get account info
 		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
 		sql = getSqlForAccountInfo(nil, int64(account.GetTenantID()), needUpdateObjectCountMetric)
-		if accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp); err != nil {
+		accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp)
+		if err != nil {
 			return err
 		}
 
@@ -494,23 +498,28 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	backSes := bh.(*backExec)
 	resultSet := backSes.backSes.allResultSet[0]
-	columnDef := backSes.backSes.rs
 	bh.ClearExecResultSet()
 
 	outputRS := &MysqlResultSet{}
-	if err = initOutputRs(outputRS, resultSet, ctx); err != nil {
+	err = initOutputRs(outputRS, resultSet, ctx)
+	if err != nil {
 		return err
 	}
 
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
+		err = fillResultSet(ctx, b, ses, outputRS)
+		if err != nil {
 			return err
 		}
 	}
 
 	ses.SetMysqlResultSet(outputRS)
-
-	ses.rs = columnDef
+	outCols := outputRS.Columns
+	planCols, _, _, err = mysqlColDef2PlanResultColDef(outCols)
+	ses.rs = planCols
+	if err != nil {
+		return err
+	}
 
 	if canSaveQueryResult(ctx, ses) {
 		err = saveQueryResult(ctx, ses,
