@@ -119,11 +119,6 @@ func Debug19524Injected() bool {
 	return injected
 }
 
-func Debug19787Injected() bool {
-	_, _, injected := fault.TriggerFault(FJ_Debug19787)
-	return injected
-}
-
 func RangesInjected(name string) bool {
 	_, sarg, injected := fault.TriggerFault(FJ_TraceRanges)
 	if !injected {
