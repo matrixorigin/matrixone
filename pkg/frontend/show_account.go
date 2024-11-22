@@ -433,7 +433,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	if account.IsSysTenant() {
 		sql = getSqlForAccountInfo(sa.Like, -1, needUpdateObjectCountMetric)
-		if accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp); err != nil {
+		accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp)
+		if err != nil {
 			return err
 		}
 
@@ -445,7 +446,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		// switch to the sys account to get account info
 		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
 		sql = getSqlForAccountInfo(nil, int64(account.GetTenantID()), needUpdateObjectCountMetric)
-		if accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp); err != nil {
+		accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp)
+		if err != nil {
 			return err
 		}
 
@@ -499,12 +501,14 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	bh.ClearExecResultSet()
 
 	outputRS := &MysqlResultSet{}
-	if err = initOutputRs(outputRS, resultSet, ctx); err != nil {
+	err = initOutputRs(outputRS, resultSet, ctx)
+	if err != nil {
 		return err
 	}
 
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
+		err = fillResultSet(ctx, b, ses, outputRS)
+		if err != nil {
 			return err
 		}
 	}
