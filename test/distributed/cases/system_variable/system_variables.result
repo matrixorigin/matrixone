@@ -498,3 +498,20 @@ show variables like 'profiling_history_size';
 Variable_name    Value
 profiling_history_size    15
 SET profiling_history_size = default;
+select @@optimizer_switch;
+@@optimizer_switch
+index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=off,index_condition_pushdown=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on
+select @@global.optimizer_switch;
+@@optimizer_switch
+index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=off,index_condition_pushdown=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on
+show variables like 'optimizer_switch';
+Variable_name    Value
+optimizer_switch    index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=off,index_condition_pushdown=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on
+set optimizer_switch='semijoin=off';
+select @@optimizer_switch;
+@@optimizer_switch
+semijoin=off
+show variables like 'optimizer_switch';
+Variable_name    Value
+optimizer_switch    semijoin=off
+SET profiling_history_size = default;
