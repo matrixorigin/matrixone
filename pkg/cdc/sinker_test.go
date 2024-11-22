@@ -669,7 +669,6 @@ func Test_mysqlSinker_sinkDelete(t *testing.T) {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
 		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
@@ -722,7 +721,6 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
 		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
