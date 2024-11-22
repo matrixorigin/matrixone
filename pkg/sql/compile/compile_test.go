@@ -330,7 +330,10 @@ func TestShuffleBlocksToMultiCN(t *testing.T) {
 	}
 	reldata := &engine_util.BlockListRelData{}
 	reldata.SetBlockList(s)
-	n := &plan.Node{Stats: plan2.DefaultStats()}
+	n := &plan.Node{
+		Stats:    plan2.DefaultStats(),
+		TableDef: &plan.TableDef{Name: "test"},
+	}
 	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
 	require.NoError(t, err)
 }
@@ -369,4 +372,42 @@ func Test_isAvailable(t *testing.T) {
 	rpcClient := &testRpcClient{}
 	ret := isAvailable(rpcClient, "127.0.0.1:6001")
 	assert.False(t, ret)
+}
+
+func TestDebugLogFor19288(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		bsql      string
+		originSQL string
+	}{
+		{
+			name:      "Retry Error",
+			err:       moerr.NewTxnNeedRetryNoCtx(),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+		{
+			name:      "Non-Retry Error",
+			err:       moerr.NewInternalErrorNoCtx("internal error"),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			c := NewMockCompile()
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOperator
+			c.originSQL = tt.originSQL
+			c.debugLogFor19288(tt.err, tt.bsql)
+		})
+	}
 }

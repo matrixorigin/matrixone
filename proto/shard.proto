@@ -254,6 +254,9 @@ message SizeParam {
 
 message RangesParam {
     repeated plan.Expr Exprs = 1;
+    uint32 preAllocSize = 2;
+    uint32 dataCollectPolicy = 3;
+    uint32 txnOffset = 4;
 }
 
 message CollectTombstonesParam {

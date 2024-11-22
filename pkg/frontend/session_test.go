@@ -349,7 +349,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -747,4 +747,18 @@ func Test_OperatorLock(t *testing.T) {
 	// unlock
 	err = setUserLock(ctx, "user1", bh)
 	assert.NoError(t, err)
+}
+
+func TestReserveConnAndClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	rm, _ := NewRoutineManager(context.Background(), "")
+	ses.rm = rm
+	rm = ses.getRoutineManager()
+	rm.sessionManager.AddSession(ses)
+
+	ses.ReserveConnAndClose()
+	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
 }

@@ -258,6 +258,15 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	if len(rowids) != len(colPKs) {
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
+			zap.String("bat", stringifySlice(rowids, func(a any) string {
+				r := a.(types.Rowid)
+				return r.ShortStringEx()
+			})),
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.Uint64("did", db.databaseId),
+			zap.Uint64("tid", rel.GetTableID(ctx)))
 		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 

@@ -106,7 +106,9 @@ func MockTableDelegate(
 	}
 	tbl.shard.service = service
 	tbl.shard.is = false
-	tbl.isLocal = tbl.isLocalFunc
+	tbl.isLocal = func() (bool, error) {
+		return false, nil
+	}
 
 	if service.Config().Enable &&
 		tbl.origin.db.databaseId != catalog.MO_CATALOG_ID {
@@ -272,6 +274,7 @@ func (tbl *txnTableDelegate) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
@@ -283,11 +286,15 @@ func (tbl *txnTableDelegate) Ranges(
 			exprs,
 			preAllocSize,
 			txnOffset,
+			policy,
 		)
 	}
 
 	var blocks objectio.BlockInfoSlice
-	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	var uncommitted []objectio.ObjectStats
+	if policy != engine.Policy_CheckCommittedOnly {
+		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
 		nil,
@@ -307,6 +314,10 @@ func (tbl *txnTableDelegate) Ranges(
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
+			param.RangesParam.PreAllocSize = 2
+			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
+			param.RangesParam.TxnOffset = 0
+
 		},
 		func(resp []byte) {
 			data, err := engine_util.UnmarshalRelationData(resp)
@@ -801,6 +812,58 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	return modify, nil
 }
 
+func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keyVector *vector.Vector,
+) (bool, error) {
+	is, err := tbl.isLocal()
+	if err != nil {
+		return false, err
+	}
+	if is {
+		return tbl.origin.PrimaryKeysMayBeUpserted(
+			ctx,
+			from,
+			to,
+			keyVector,
+		)
+	}
+
+	modify := false
+	err = tbl.forwardRead(
+		ctx,
+		shardservice.ReadPrimaryKeysMayBeUpserted,
+		func(param *shard.ReadParam) {
+			f, err := from.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			t, err := to.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			v, err := keyVector.MarshalBinary()
+			if err != nil {
+				panic(err)
+			}
+			param.PrimaryKeysMayBeModifiedParam.From = f
+			param.PrimaryKeysMayBeModifiedParam.To = t
+			param.PrimaryKeysMayBeModifiedParam.KeyVector = v
+		},
+		func(resp []byte) {
+			if buf.Byte2Uint16(resp) > 0 {
+				modify = true
+			}
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	return modify, nil
+}
+
 func (tbl *txnTableDelegate) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
@@ -1060,6 +1123,7 @@ func (tbl *txnTableDelegate) mockForwardRead(
 		shardservice.ReadGetColumMetadataScanInfo: HandleShardingReadGetColumMetadataScanInfo,
 		shardservice.ReadBuildReader:              HandleShardingReadBuildReader,
 		shardservice.ReadPrimaryKeysMayBeModified: HandleShardingReadPrimaryKeysMayBeModified,
+		shardservice.ReadPrimaryKeysMayBeUpserted: HandleShardingReadPrimaryKeysMayBeUpserted,
 		shardservice.ReadMergeObjects:             HandleShardingReadMergeObjects,
 		shardservice.ReadVisibleObjectStats:       HandleShardingReadVisibleObjectStats,
 		shardservice.ReadClose:                    HandleShardingReadClose,

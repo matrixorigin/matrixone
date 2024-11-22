@@ -85,7 +85,7 @@ func TombstoneRangeScanByObject(
 	it := tableEntry.MakeTombstoneObjectIt()
 	for it.Next() {
 		tombstone := it.Item()
-		if tombstone.IsAppendable() {
+		if tombstone.IsAppendable() || tombstone.ObjectStats.GetCNCreated() {
 			needWait, txnToWait := tombstone.CreateNode.NeedWaitCommitting(end)
 			if needWait {
 				txnToWait.GetTxnState(true)

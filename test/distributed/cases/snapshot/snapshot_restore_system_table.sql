@@ -617,3 +617,4 @@ drop table if exists cluster_table_2;
 drop database if exists procedure_test;
 -- @ignore:1
 show snapshots;
+

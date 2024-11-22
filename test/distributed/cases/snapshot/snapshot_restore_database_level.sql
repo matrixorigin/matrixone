@@ -1,3 +1,4 @@
+
 drop database if exists snapshot_read;
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -359,3 +360,4 @@ select count(*) from snapshot_read.users;
 drop snapshot sp_01;
 drop account test_account;
 drop account acc02;
+

@@ -66,7 +66,7 @@ func (js *JoinSels) GetSels(k int32) []int32 {
 type JoinMap struct {
 	runtimeFilter_In bool
 	valid            bool
-	rowcnt           int64 // for debug purpose
+	rowCnt           int64 // for debug purpose
 	refCnt           int64
 	shm              *hashmap.StrHashMap
 	ihm              *hashmap.IntHashMap
@@ -95,7 +95,7 @@ func (jm *JoinMap) GetBatches() []*batch.Batch {
 }
 
 func (jm *JoinMap) SetRowCount(cnt int64) {
-	jm.rowcnt = cnt
+	jm.rowCnt = cnt
 }
 
 func (jm *JoinMap) GetRefCount() int64 {
@@ -109,7 +109,14 @@ func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
 	}
-	return jm.rowcnt
+	return jm.rowCnt
+}
+
+func (jm *JoinMap) GetGroupCount() uint64 {
+	if jm.ihm != nil {
+		return jm.ihm.GroupCount()
+	}
+	return jm.shm.GroupCount()
 }
 
 func (jm *JoinMap) SetPushedRuntimeFilterIn(b bool) {
@@ -223,7 +230,7 @@ func (t JoinMapMsg) DebugString() string {
 		buf.WriteString("shuffle index " + strconv.Itoa(int(t.ShuffleIdx)) + "\n")
 	}
 	if t.JoinMapPtr != nil {
-		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowcnt)) + "\n")
+		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowCnt)) + "\n")
 		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
 	} else {
 		buf.WriteString("joinmapPtr is nil \n")

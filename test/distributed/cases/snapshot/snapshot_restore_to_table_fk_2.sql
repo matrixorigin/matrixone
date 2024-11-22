@@ -870,3 +870,4 @@ drop database if exists acc_test02;
 drop snapshot if exists snapshot_01;
 -- @ignore:1
 show snapshots;
+

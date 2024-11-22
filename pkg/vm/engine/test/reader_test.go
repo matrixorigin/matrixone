@@ -385,7 +385,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(
 			t,
 			testutil.WriteToRelation(
-				ctx, txn, relation, containers.ToCNBatch(bat), true,
+				ctx, txn, relation, containers.ToCNBatch(bat), false, true,
 			),
 		)
 
@@ -788,7 +788,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 2, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -1053,12 +1053,15 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 2, 0)
+	relData, err := delegate.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
 	require.NoError(t, err)
 	require.True(t, tomb.HasAnyInMemoryTombstone())
+
+	_, err = delegate.PrimaryKeysMayBeUpserted(ctx, types.TS{}, types.MaxTs(), vector.NewVec(types.T_int64.ToType()))
+	require.NoError(t, err)
 
 	_, err = delegate.BuildReaders(
 		ctx,
@@ -1218,7 +1221,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 2, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()

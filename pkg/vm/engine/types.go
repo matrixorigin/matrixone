@@ -585,6 +585,14 @@ const (
 	TombstoneData
 )
 
+type DataCollectPolicy uint64
+
+const (
+	Policy_CollectCommittedData = 1 << iota
+	Policy_CollectUncommittedData
+	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+)
+
 type TombstoneCollectPolicy uint64
 
 const (
@@ -817,7 +825,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -899,6 +907,8 @@ type Relation interface {
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
