@@ -96,6 +96,8 @@ enum CmdMethod {
   MetadataCache = 30;
   // GOGCPercent calling debug.SetGCPercent()
   GOGCPercent = 31;
+  // FaultInjection handle fault injection request
+  FaultInjection = 32;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -232,6 +234,7 @@ message Request {
   FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
   GoGCPercentRequest GoGCPercentRequest = 34 [ (gogoproto.nullable) = false ];
+  FaultInjectionRequest FaultInjectionRequest = 35;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -292,6 +295,7 @@ message Response {
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
   GoGCPercentResponse GoGCPercentResponse = 34 [ (gogoproto.nullable) = false ];
+  FaultInjectionResponse FaultInjectionResponse = 35;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -614,4 +618,16 @@ message GoGCPercentRequest {
 // Same meaning as calling debug.SetGCPercent
 message GoGCPercentResponse {
   int32 Percent = 1;
+}
+
+message FaultInjectionRequest {
+  string Name = 1;
+  string Freq = 2;
+  string Action = 3;
+  int64 Iarg = 4;
+  string Sarg = 5;
+}
+
+message FaultInjectionResponse {
+  string Resp = 1;
 }
