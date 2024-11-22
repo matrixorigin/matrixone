@@ -242,14 +242,6 @@ func (a *AliyunSDK) Write(
 ) {
 	defer wrapSizeMismatchErr(&err)
 
-	var n atomic.Int64
-	if sizeHint != nil {
-		r = &countingReader{
-			R: r,
-			C: &n,
-		}
-	}
-
 	err = a.putObject(
 		ctx,
 		key,
@@ -259,10 +251,6 @@ func (a *AliyunSDK) Write(
 	)
 	if err != nil {
 		return err
-	}
-
-	if sizeHint != nil && n.Load() != *sizeHint {
-		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
 	return

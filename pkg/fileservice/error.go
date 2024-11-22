@@ -97,9 +97,6 @@ func isDiskFull(err error) bool {
 var httpBadLengthPattern = regexp.MustCompile(`transport connection broken: http: ContentLength=[0-9]* with Body length [0-9]*`)
 
 func wrapSizeMismatchErr(p *error) {
-	if p == nil {
-		return
-	}
 	if *p == nil {
 		return
 	}
