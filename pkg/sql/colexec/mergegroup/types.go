@@ -15,10 +15,7 @@
 package mergegroup
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -40,7 +37,10 @@ const (
 
 type container struct {
 	state int
-	itr   hashmap.Iterator
+
+	// mergeGroup operator result.
+	res GroupResult
+
 	// should use hash map or not and the hash map type.
 	typ int
 
@@ -48,12 +48,6 @@ type container struct {
 	hashKeyWidth   int
 	groupByCol     int
 	keyNullability bool
-	intHashMap     *hashmap.IntHashMap
-	strHashMap     *hashmap.StrHashMap
-	inserted       []uint8
-	zInserted      []uint8
-
-	bat *batch.Batch
 }
 
 type MergeGroup struct {
@@ -85,22 +79,4 @@ func init() {
 
 func (mergeGroup MergeGroup) TypeName() string {
 	return opName
-}
-
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
-}
-
-func (ctr *container) cleanHashMap() {
-	if ctr.intHashMap != nil {
-		ctr.intHashMap.Free()
-		ctr.intHashMap = nil
-	}
-	if ctr.strHashMap != nil {
-		ctr.strHashMap.Free()
-		ctr.strHashMap = nil
-	}
 }

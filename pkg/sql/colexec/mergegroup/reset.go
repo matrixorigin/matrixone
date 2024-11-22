@@ -16,8 +16,6 @@ package mergegroup
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,44 +33,13 @@ func NewArgument() *MergeGroup {
 func (mergeGroup *MergeGroup) Reset(
 	proc *process.Process, isPipelineFail bool, pipelineErr error) {
 
-	mergeGroup.ctr.itr = nil
+	mergeGroup.ctr.state = Build
 
 	if isPipelineFail {
 		mergeGroup.Free(proc, isPipelineFail, pipelineErr)
 		return
 	}
-
-	mergeGroup.ctr.state = Build
-	// reuse the batch except its agg fields.
-	if bat := mergeGroup.ctr.bat; bat != nil {
-		for _, agg := range bat.Aggs {
-			if agg != nil {
-				agg.Free()
-			}
-		}
-		bat.Aggs = nil
-
-		// reset the group-by vectors.
-		for i := mergeGroup.ctr.groupByCol; i < len(bat.Vecs); i++ {
-			if bat.Vecs[i] != nil {
-				bat.Vecs[i].Free(proc.Mp())
-				bat.Vecs[i] = nil
-			}
-		}
-		bat.Vecs = bat.Vecs[:mergeGroup.ctr.groupByCol]
-
-		for i := 0; i < len(bat.Vecs); i++ {
-			if bat.Vecs[i] != nil {
-				bat.Vecs[i].CleanOnlyData()
-			}
-		}
-
-		// reset the vectors.
-		bat.SetRowCount(0)
-	}
-
-	// cannot reuse the hash map.
-	mergeGroup.ctr.cleanHashMap()
+	mergeGroup.ctr.res.reset(proc.Mp())
 
 	// cannot reuse the projection.
 	if mergeGroup.ProjectList != nil {
@@ -84,27 +51,13 @@ func (mergeGroup *MergeGroup) Reset(
 }
 
 func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	mergeGroup.ctr.cleanBatch(mp)
-	mergeGroup.ctr.cleanHashMap()
+	mergeGroup.ctr.res.free(proc.Mp())
 	mergeGroup.ctr.hashKeyWidth = NeedCalculationForKeyWidth
-
 	mergeGroup.FreeProjection(proc)
 }
 
 func (mergeGroup *MergeGroup) Release() {
 	if mergeGroup != nil {
 		reuse.Free[MergeGroup](mergeGroup, nil)
-	}
-}
-
-func (ctr *container) initEmptyBatchFromInput(bat *batch.Batch) {
-	if ctr.bat != nil {
-		return
-	}
-
-	ctr.bat = batch.NewWithSize(len(bat.Vecs))
-	for i := range bat.Vecs {
-		ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 	}
 }

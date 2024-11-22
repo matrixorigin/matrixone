@@ -16,9 +16,6 @@ package mergegroup
 
 import (
 	"bytes"
-	"runtime"
-
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -61,64 +58,44 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 	defer analyzer.Stop()
 
 	ctr := &mergeGroup.ctr
-	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				result, err := vm.ChildrenCall(mergeGroup.GetChildren(0), proc, analyzer)
+				b, err := mergeGroup.getInputBatch(proc)
 				if err != nil {
-					return result, err
+					return vm.CancelResult, err
 				}
-
-				if result.Batch == nil {
+				if b == nil {
 					break
 				}
 
-				bat := result.Batch
-				if err = ctr.process(bat, proc); err != nil {
-					return result, err
+				if err = ctr.process(b, proc); err != nil {
+					return vm.CancelResult, err
 				}
+			}
+			if err := ctr.res.dealPartialResult(mergeGroup.PartialResults); err != nil {
+				return vm.CancelResult, err
 			}
 			ctr.state = Eval
 
 		case Eval:
-			if ctr.bat != nil && !ctr.bat.IsEmpty() {
-				for i, agg := range ctr.bat.Aggs {
-					if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
-						if err := agg.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
-							return result, err
-						}
-					}
-					vec, err := agg.Flush()
-					if err != nil {
-						ctr.state = End
-						return result, err
-					}
-					ctr.bat.Aggs[i] = nil
-					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
-					if vec != nil {
-						analyzer.Alloc(int64(vec.Size()))
-					}
-
-					agg.Free()
-				}
-				ctr.bat.Aggs = nil
-
-				result.Batch = ctr.bat
-				if mergeGroup.ProjectList != nil {
-					var err error
-					result.Batch, err = mergeGroup.EvalProjection(result.Batch, proc)
-					if err != nil {
-						return result, err
-					}
-				}
+			if !ctr.res.hasMoreResult() {
+				ctr.state = End
+				continue
 			}
-			ctr.state = End
+
+			result := vm.NewCallResult()
+			b, err := ctr.res.popOneResult()
+			if err != nil {
+				return result, err
+			}
+			result.Batch = b
 			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:
+			result := vm.NewCallResult()
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -174,170 +151,18 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			ctr.typ = H0
 
 		case ctr.hashKeyWidth <= 8:
-			ctr.inserted = make([]uint8, hashmap.UnitLimit)
-			ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 			ctr.typ = H8
 
 		default:
-			ctr.inserted = make([]uint8, hashmap.UnitLimit)
-			ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 			ctr.typ = HStr
 		}
 	}
 
-	switch ctr.typ {
-	case H0:
-		return ctr.processH0(bat, proc)
-
-	case H8:
-		if ctr.intHashMap == nil {
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.keyNullability); err != nil {
-				return err
-			}
-		}
-		return ctr.processH8(bat, proc)
-
-	default:
-		if ctr.strHashMap == nil {
-			if ctr.strHashMap, err = hashmap.NewStrMap(ctr.keyNullability); err != nil {
-				return err
-			}
-		}
-		return ctr.processHStr(bat, proc)
+	if ctr.typ == H0 {
+		return ctr.res.consumeInputBatchOnlyAgg(bat)
 	}
-}
-
-func (ctr *container) processH0(bat *batch.Batch, _ *process.Process) error {
-	ctr.initEmptyBatchFromInput(bat)
-	if ctr.bat.IsEmpty() {
-		ctr.bat.Aggs = bat.Aggs
-		bat.Aggs = nil
-		ctr.bat.SetRowCount(1)
-		return nil
+	if err = ctr.res.tryToInitHashTable(ctr.typ == HStr, ctr.keyNullability); err != nil {
+		return err
 	}
-
-	for i, agg := range ctr.bat.Aggs {
-		err := agg.Merge(bat.Aggs[i], 0, 0)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
-	count := bat.RowCount()
-	if ctr.itr == nil {
-		ctr.itr = ctr.intHashMap.NewIterator()
-	}
-	itr := ctr.itr
-
-	ctr.initEmptyBatchFromInput(bat)
-	noNeedToFill := ctr.bat.IsEmpty()
-	if noNeedToFill {
-		var err error
-		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
-			return err
-		}
-
-		ctr.bat.Aggs = bat.Aggs
-		bat.Aggs = nil
-	}
-
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		if i%(hashmap.UnitLimit*32) == 0 {
-			runtime.Gosched()
-		}
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		rowCount := ctr.intHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, bat.Vecs)
-		if err != nil {
-			return err
-		}
-
-		if noNeedToFill {
-			continue
-		}
-		if err = ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
-	count := bat.RowCount()
-	if ctr.itr == nil {
-		ctr.itr = ctr.strHashMap.NewIterator()
-	}
-	itr := ctr.itr
-
-	ctr.initEmptyBatchFromInput(bat)
-	noNeedToFill := ctr.bat.IsEmpty()
-	if noNeedToFill {
-		var err error
-		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
-			return err
-		}
-
-		ctr.bat.Aggs = bat.Aggs
-		bat.Aggs = nil
-	}
-
-	for i := 0; i < count; i += hashmap.UnitLimit { // batch
-		if i%(hashmap.UnitLimit*32) == 0 {
-			runtime.Gosched()
-		}
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		rowCount := ctr.strHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, bat.Vecs)
-		if err != nil {
-			return err
-		}
-		if noNeedToFill {
-			continue
-		}
-		if err = ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
-	cnt := 0
-	copy(ctr.inserted[:n], ctr.zInserted[:n])
-	for k, v := range vals {
-		if v > hashRows {
-			ctr.inserted[k] = 1
-			hashRows++
-			cnt++
-		}
-	}
-	ctr.bat.AddRowCount(cnt)
-
-	if cnt > 0 {
-		for j, vec := range ctr.bat.Vecs {
-			if err := vec.UnionBatch(bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
-				return err
-			}
-		}
-		for _, agg := range ctr.bat.Aggs {
-			if err := agg.GroupGrow(cnt); err != nil {
-				return err
-			}
-		}
-	}
-	for j, agg := range ctr.bat.Aggs {
-		if err := agg.BatchMerge(bat.Aggs[j], i, vals[:n]); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ctr.res.consumeInputBatch(proc, bat)
 }

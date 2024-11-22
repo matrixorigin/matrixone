@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 // getInputBatch return the received data from its last operator.
@@ -41,18 +42,18 @@ func (mergeGroup *MergeGroup) getInputBatch(proc *process.Process) (*batch.Batch
 // consumeInputBatch
 // 1. put batch into hashtable, and get a group list.
 // 2. use group list to union new row and do the agg merge work.
-func (mergeGroup *MergeGroup) consumeInputBatch(
+func (r *GroupResult) consumeInputBatch(
 	proc *process.Process,
-	bat *batch.Batch, res *thisResult) (err error) {
+	bat *batch.Batch) (err error) {
 	if bat.IsEmpty() {
 		return nil
 	}
 
 	// first time.
-	if len(res.aggList) == 0 {
-		res.aggList, bat.Aggs = bat.Aggs, nil
-		res.chunkSize = aggexec.GetChunkSizeOfAggregator(res.aggList[0])
-		res.toNext = append(res.toNext, getInitialBatchWithSameType(bat))
+	if len(r.aggList) == 0 {
+		r.aggList, bat.Aggs = bat.Aggs, nil
+		r.chunkSize = aggexec.GetChunkSizeOfAggregator(r.aggList[0])
+		r.toNext = append(r.toNext, getInitialBatchWithSameType(bat))
 	}
 
 	// put into hash table.
@@ -65,17 +66,17 @@ func (mergeGroup *MergeGroup) consumeInputBatch(
 			n = hashmap.UnitLimit
 		}
 
-		rowCount := res.hash.GroupCount()
-		vals, _, err = res.itr.Insert(i, n, bat.Vecs)
+		rowCount := r.hash.GroupCount()
+		vals, _, err = r.itr.Insert(i, n, bat.Vecs)
 		if err != nil {
 			return err
 		}
-		res.updateInserted(vals, rowCount)
-		more, err = res.appendBatch(proc.Mp(), bat, i, res.inserted)
+		r.updateInserted(vals, rowCount)
+		more, err = r.appendBatch(proc.Mp(), bat, i, r.inserted)
 		if err != nil {
 			return err
 		}
-		if err = res.updateAgg(bat, vals, i, len(res.inserted), more); err != nil {
+		if err = r.updateAgg(bat, vals, i, len(r.inserted), more); err != nil {
 			return err
 		}
 	}
@@ -83,7 +84,28 @@ func (mergeGroup *MergeGroup) consumeInputBatch(
 	return nil
 }
 
-type thisResult struct {
+func (r *GroupResult) consumeInputBatchOnlyAgg(
+	bat *batch.Batch) error {
+	if bat.IsEmpty() {
+		return nil
+	}
+
+	if len(r.aggList) == 0 {
+		r.aggList, bat.Aggs = bat.Aggs, nil
+		r.chunkSize = math.MaxInt32
+		r.toNext = append(r.toNext, getInitialBatchWithSameType(bat))
+		r.toNext[0].SetRowCount(1)
+	}
+
+	for i, agg := range r.aggList {
+		if err := agg.Merge(bat.Aggs[i], 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type GroupResult struct {
 	chunkSize int
 
 	// hashmap related structure.
@@ -97,7 +119,7 @@ type thisResult struct {
 	aggList []aggexec.AggFuncExec
 }
 
-func (r *thisResult) tryToInitHashTable(isStrHash bool, hashKeyNullable bool) error {
+func (r *GroupResult) tryToInitHashTable(isStrHash bool, hashKeyNullable bool) error {
 	if r.hash != nil {
 		return nil
 	}
@@ -120,11 +142,11 @@ func (r *thisResult) tryToInitHashTable(isStrHash bool, hashKeyNullable bool) er
 	return nil
 }
 
-func (r *thisResult) reset(m *mpool.MPool) {
+func (r *GroupResult) reset(m *mpool.MPool) {
 	r.free(m)
 }
 
-func (r *thisResult) free(m *mpool.MPool) {
+func (r *GroupResult) free(m *mpool.MPool) {
 	if r.hash != nil {
 		r.hash.Free()
 		r.hash = nil
@@ -143,7 +165,18 @@ func (r *thisResult) free(m *mpool.MPool) {
 	r.toNext, r.aggList = nil, nil
 }
 
-func (r *thisResult) popOneResult() (*batch.Batch, error) {
+func (r *GroupResult) dealPartialResult(partials []any) error {
+	for i, agg := range r.aggList {
+		if len(partials) > i && partials[i] != nil {
+			if err := agg.SetExtraInformation(partials[i], 0); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *GroupResult) popOneResult() (*batch.Batch, error) {
 	if len(r.toNext) == 0 {
 		return nil, nil
 	}
@@ -171,7 +204,11 @@ func (r *thisResult) popOneResult() (*batch.Batch, error) {
 	return first, nil
 }
 
-func (r *thisResult) updateInserted(vals []uint64, groupCountBefore uint64) {
+func (r *GroupResult) hasMoreResult() bool {
+	return len(r.toNext) > 0
+}
+
+func (r *GroupResult) updateInserted(vals []uint64, groupCountBefore uint64) {
 	if cap(r.inserted) < len(vals) {
 		r.inserted = make([]uint8, len(vals))
 	} else {
@@ -188,7 +225,7 @@ func (r *thisResult) updateInserted(vals []uint64, groupCountBefore uint64) {
 	}
 }
 
-func (r *thisResult) appendBatch(
+func (r *GroupResult) appendBatch(
 	mp *mpool.MPool,
 	bat *batch.Batch, offset int, insertList []uint8) (count int, err error) {
 
@@ -219,7 +256,7 @@ func (r *thisResult) appendBatch(
 	return more, err
 }
 
-func (r *thisResult) updateAgg(
+func (r *GroupResult) updateAgg(
 	bat *batch.Batch,
 	vals []uint64, offset int, length int,
 	moreGroup int) error {
@@ -266,7 +303,7 @@ func countNonZeroAndFindKth(values []uint8, k int) (int, int) {
 	return count, kth
 }
 
-func (r *thisResult) unionToSpecificBatch(
+func (r *GroupResult) unionToSpecificBatch(
 	mp *mpool.MPool,
 	idx int, bat *batch.Batch, offset int64, insertList []uint8, rowIncrease int) error {
 	for i, vec := range r.toNext[idx].Vecs {
