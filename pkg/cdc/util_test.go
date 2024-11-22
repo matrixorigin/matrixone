@@ -796,6 +796,17 @@ func Test_openDbConn(t *testing.T) {
 	assert.Nil(t, conn)
 }
 
+func Test_openDbConnFailed(t *testing.T) {
+	stub := gostub.Stub(&tryConn, func(_ string) (*sql.DB, error) {
+		return nil, moerr.NewInternalErrorNoCtx("")
+	})
+	defer stub.Reset()
+
+	conn, err := OpenDbConn("user", "password", "host", 1234)
+	assert.Error(t, err)
+	assert.Nil(t, conn)
+}
+
 func Test_tryConn(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)

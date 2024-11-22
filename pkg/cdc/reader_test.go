@@ -269,7 +269,7 @@ func Test_tableReader_Run_NonStaleReadErr(t *testing.T) {
 
 	stub := gostub.Stub(&GetTxnOp,
 		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-			return nil, moerr.NewInternalErrorNoCtx("")
+			return nil, moerr.NewInternalErrorNoCtx("this is a long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long error message")
 		})
 	defer stub.Reset()
 
