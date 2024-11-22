@@ -4005,6 +4005,9 @@ func (c *Compile) expandRanges(
 				preAllocBlocks = 64
 			} else {
 				preAllocBlocks = int(node.Stats.BlockNum)
+				if rsp != nil {
+					preAllocBlocks = preAllocBlocks / int(rsp.CNCNT)
+				}
 			}
 		}
 	}
@@ -4028,6 +4031,7 @@ func (c *Compile) expandRanges(
 		if policy&engine.Policy_CollectUncommittedData != 0 {
 			begin = 1 //skip empty block info
 		}
+		rangesParam.PreAllocBlocks = 2
 
 		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
 			for i, partitionItem := range node.PartitionPrune.SelectedPartitions {
@@ -4036,7 +4040,6 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				rangesParam.PreAllocBlocks = 2
 				subRelData, err := subrelation.Ranges(newCtx, rangesParam)
 				if err != nil {
 					return nil, err
