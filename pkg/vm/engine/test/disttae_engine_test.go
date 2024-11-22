@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -602,6 +603,29 @@ func TestInProgressTransfer(t *testing.T) {
 	worker.Start()
 	defer worker.Stop()
 
+	fault.Enable()
+	defer fault.Disable()
+	err1 := fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitDelete,
+		":::",
+		"echo",
+		0,
+		"trace delete",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
+	err1 = fault.AddFaultPoint(
+		p.Ctx,
+		objectio.FJ_CommitSlowLog,
+		":::",
+		"echo",
+		0,
+		"trace slowlog",
+	)
+	require.NoError(t, err1)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)
+
 	var did, tid uint64
 	var theRow *batch.Batch
 	{
@@ -782,8 +806,8 @@ func TestCacheGC(t *testing.T) {
 	// gc
 	cc := p.D.Engine.GetLatestCatalogCache()
 	r := cc.GC(gcTime)
-	require.Equal(t, 7 /*because of three tables inserted at 0 time*/, r.TStaleItem)
-	require.Equal(t, 2 /*test2 & test 4*/, r.TDelCpk)
+	require.Equal(t, 4, r.TStaleItem)
+	require.Equal(t, 2 /*test2 & test 4*/, r.TStaleCpk)
 
 }
 
@@ -1028,6 +1052,14 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(
+		"mo_account",
+		2,
+	)
+	require.NoError(t, err)
+	defer rmFault()
 
 	schema := catalog2.MockSchemaAll(5, 1)
 	schema.Name = "mo_account"
@@ -1048,7 +1080,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	exec := v.(executor.SQLExecutor)
 
 	txnop = p.StartCNTxn()
-	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	_, err = exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
@@ -1091,4 +1123,95 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
+}
+
+func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(8189, 1)
+	schema.Name = "padding"
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	schema2 := catalog2.MockSchemaAll(4, 1)
+	schema2.Name = "table2"
+	p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	p.DeleteTableInDB(txnop, "db", schema.Name)
+	p.DeleteTableInDB(txnop, "db", schema2.Name)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	rel := p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, "db", "table2", rel.GetTableID(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	utbl, _ := udb.GetRelationByID(catalog.MO_COLUMNS_ID)
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+	// flusht tombstone ahead of data insert
+	it := utbl.MakeObjectIt(true)
+	require.True(t, it.Next())
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	require.True(t, it.Next())
+	secondEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		nil,
+		[]*catalog2.ObjectEntry{firstEntry, secondEntry},
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+	txnop = p.StartCNTxn()
+	buf := new(bytes.Buffer)
+	ctx := context.WithValue(p.Ctx, defines.ReaderSummaryKey{}, buf)
+	result, err := exec.Exec(ctx, querySql, executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	t.Log("readerSummary", buf.String())
+	require.Equal(t, 1, len(result.Batches))
+	require.Equal(t, 5, result.Batches[0].RowCount())
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
+func TestCache3Tables(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	dbname, tname, rel, err := p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_DATABASE_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_DATABASE, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_TABLES_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_TABLES, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_COLUMNS_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_COLUMNS, tname)
+	require.NotNil(t, rel)
 }

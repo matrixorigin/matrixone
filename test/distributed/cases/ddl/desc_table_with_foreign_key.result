@@ -14,6 +14,7 @@ salary    FLOAT(0)    YES        null
 show create table tb_emp6;
 Table    Create Table
 tb_emp6    CREATE TABLE `tb_emp6` (\n  `id` int NOT NULL,\n  `name` varchar(25) DEFAULT NULL,\n  `deptId` int DEFAULT NULL,\n  `salary` float DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_emp_dept1` FOREIGN KEY (`deptId`) REFERENCES `tb_dept1` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+drop database db1;
 drop database if exists db2;
 create database db2;
 use db2;
@@ -29,3 +30,4 @@ c    INT(32)    YES    MUL    null
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` int DEFAULT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+drop database db2;

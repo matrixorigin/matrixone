@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"io"
 	"os"
 	"sync"
 	"testing"
@@ -134,7 +135,7 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 		defer f.Close()
 		_, err = f.Get()
 		assert.Error(t, err)
-		assert.Equal(t, backendClosed, err)
+		assert.Equal(t, io.EOF, err)
 	})
 }
 

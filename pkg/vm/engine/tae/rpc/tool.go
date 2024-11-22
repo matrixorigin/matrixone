@@ -23,6 +23,8 @@ import (
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
+	"github.com/spf13/cobra"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -748,9 +749,10 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
 		return
 	}
-	ctx1, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx1, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseObjGetArgGetData)
 	defer cancel()
 	if meta, err = c.reader.ReadAllMeta(ctx1, m); err != nil {
+		err = moerr.AttachCause(ctx1, err)
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}
@@ -785,7 +787,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		typs = append(typs, tp)
 	}
 
-	ctx2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	ctx2, cancel2 := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseObjGetArgGetData2)
 	defer cancel2()
 	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
 	defer v.Release()

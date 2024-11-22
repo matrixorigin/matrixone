@@ -33,12 +33,15 @@ type RunnerReader interface {
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	MaxGlobalCheckpoint() *CheckpointEntry
-	GetStage() types.TS
+	GetLowWaterMark() types.TS
 	MaxLSN() uint64
 	GetCatalog() *catalog.Catalog
 	GetCheckpointMetaFiles() map[string]struct{}
 	RemoveCheckpointMetaFile(string)
 	AddCheckpointMetaFile(string)
+	ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry
+	GetCompacted() *CheckpointEntry
+	UpdateCompacted(entry *CheckpointEntry)
 	GetDriver() wal.Driver
 }
 
@@ -78,10 +81,11 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 }
 func (r *runner) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	r.storage.Lock()
-	snapshot := r.storage.entries.Copy()
+	snapshot := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	return snapshot.Items()
 }
+
 func (r *runner) GetAllGlobalCheckpoints() []*CheckpointEntry {
 	r.storage.Lock()
 	snapshot := r.storage.globals.Copy()
@@ -103,10 +107,10 @@ func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
 	return global
 }
 
-func (r *runner) MaxCheckpoint() *CheckpointEntry {
+func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
-	entry, _ := r.storage.entries.Max()
+	entry, _ := r.storage.incrementals.Max()
 	return entry
 }
 
@@ -116,7 +120,7 @@ func (r *runner) GetCatalog() *catalog.Catalog {
 
 func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	r.storage.Lock()
-	tree := r.storage.entries.Copy()
+	tree := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	it := tree.Iter()
 	ok := it.Seek(NewCheckpointEntry(r.rt.SID(), ts, ts, ET_Incremental))
@@ -142,11 +146,49 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 	return incrementals
 }
 
-func (r *runner) GetStage() types.TS {
+func (r *runner) ICKPRange(start, end *types.TS, cnt int) []*CheckpointEntry {
+	r.storage.Lock()
+	tree := r.storage.incrementals.Copy()
+	r.storage.Unlock()
+	it := tree.Iter()
+	ok := it.Seek(NewCheckpointEntry(r.rt.SID(), *start, *start, ET_Incremental))
+	incrementals := make([]*CheckpointEntry, 0)
+	if ok {
+		for len(incrementals) < cnt {
+			e := it.Item()
+			if !e.IsFinished() {
+				break
+			}
+			if e.start.GE(start) && e.start.LT(end) {
+				incrementals = append(incrementals, e)
+			}
+			if !it.Next() {
+				break
+			}
+		}
+	}
+	return incrementals
+}
+
+func (r *runner) GetCompacted() *CheckpointEntry {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	return r.storage.compacted.Load()
+}
+
+func (r *runner) UpdateCompacted(entry *CheckpointEntry) {
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	r.storage.compacted.Store(entry)
+}
+
+// this API returns the min ts of all checkpoints
+// the start of global checkpoint is always 0
+func (r *runner) GetLowWaterMark() types.TS {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	global, okG := r.storage.globals.Min()
-	incremental, okI := r.storage.entries.Min()
+	incremental, okI := r.storage.incrementals.Min()
 	if !okG && !okI {
 		return types.TS{}
 	}
@@ -207,7 +249,7 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 	var ts types.TS
 	r.storage.Lock()
 	g := r.getLastFinishedGlobalCheckpointLocked()
-	tree := r.storage.entries.Copy()
+	tree := r.storage.incrementals.Copy()
 	r.storage.Unlock()
 	if g != nil {
 		ts = g.GetEnd()
@@ -229,6 +271,42 @@ func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
 		}
 	}
 	return ckps
+}
+
+func (r *runner) GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry {
+	ckps := make([]*CheckpointEntry, 0)
+	var ts types.TS
+	if compact != nil {
+		ts = compact.GetEnd()
+		ckps = append(ckps, compact)
+	}
+	r.storage.Lock()
+	g := r.getLastFinishedGlobalCheckpointLocked()
+	tree := r.storage.incrementals.Copy()
+	r.storage.Unlock()
+	if g != nil {
+		if ts.IsEmpty() {
+			ts = g.GetEnd()
+		}
+		ckps = append(ckps, g)
+	}
+	pivot := NewCheckpointEntry(r.rt.SID(), ts.Next(), ts.Next(), ET_Incremental)
+	iter := tree.Iter()
+	defer iter.Release()
+	if ok := iter.Seek(pivot); ok {
+		for {
+			e := iter.Item()
+			if !e.IsFinished() {
+				break
+			}
+			ckps = append(ckps, e)
+			if !iter.Next() {
+				break
+			}
+		}
+	}
+	return ckps
+
 }
 
 func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
@@ -257,7 +335,7 @@ func (r *runner) getGCTS() types.TS {
 func (r *runner) getGCedTS() types.TS {
 	r.storage.RLock()
 	minGlobal, _ := r.storage.globals.Min()
-	minIncremental, _ := r.storage.entries.Min()
+	minIncremental, _ := r.storage.incrementals.Min()
 	r.storage.RUnlock()
 	if minGlobal == nil {
 		return types.TS{}

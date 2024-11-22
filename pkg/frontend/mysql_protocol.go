@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -290,6 +291,8 @@ func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {
 		return mp.GetDatabaseName()
 	case AuthString:
 		return string(mp.GetAuthString())
+	case PEER:
+		return mp.Peer()
 	}
 	return ""
 }
@@ -357,7 +360,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 	return false
 }
 
-func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	const countOfResultSet = 1
 	n := bat.Vecs[0].Length()
 	//TODO: remove this MRS here
@@ -539,15 +542,25 @@ func (mp *MysqlProtocolImpl) SetUserName(s string) {
 	mp.username = s
 }
 
-const bit4TcpWriteCopy = 12 // 1<<12 == 4096
+const defaultTcp4PackageSize = 1<<14 - 66
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
 // return 0 value, if the connection is closed.
-// return -1 value, if the session is nil unexpected.
 //
 // packet cnt has 3 part:
 // 1st part: flush op cnt.
 // 2nd part: upload part, calculation = payload / 16KiB
+//
+// 3rd part
+// [mo 2.0]
+// 3.1: response part, calculation = sendByte / (16KiB - 66B)
+//   - use net.Listener raw api.
+//   - discard ioCopyBufferSize logic.
+//
+// 3.2: output csv
+//   - fill with ExportDataDefaultFlushSize size, do once flush.
+//
+// [mo 1.2, 1.1.*]
 // 3rd part: response part, calculation = sendByte / 4KiB
 //   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
 //     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do Conn.Flush().
@@ -555,21 +568,20 @@ const bit4TcpWriteCopy = 12 // 1<<12 == 4096
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	if ses == nil {
-		if mp.quit.Load() {
-			return 0, 0
-		} else {
-			return -1, -1
-		}
+		return 0, 0
 	}
 	// Case 1: send data as ResultSet
-	resultSetPart := int64(mp.writeBytes)
+	resultSetPart := int64(ses.GetOutputBytes())
 	// Case 2: send data as CSV
 	csvPart := ses.writeCsvBytes.Load()
 	bytes = resultSetPart + csvPart
-	tcpPkgCnt := ses.GetPacketCnt()
+	tcpPkgCnt := ses.GetFlushPacketCnt()
 	packets = tcpPkgCnt /*1st part*/ +
 		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
-		resultSetPart>>bit4TcpWriteCopy + int64((csvPart>>20)/getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part*/
+		resultSetPart/defaultTcp4PackageSize /*3rd part(3.1)*/
+	if csvPart > 0 {
+		packets += int64((csvPart >> 20) / getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part (3.2)*/
+	}
 	if reset {
 		ses.ResetPacketCounter()
 	}
@@ -606,14 +618,14 @@ func (mp *MysqlProtocolImpl) Close() {
 		mp.binaryNullBuffer = nil
 	}
 	mp.ses = nil
-	mp.tcpConn.ses = nil
+	mp.tcpConn.SetSession(nil)
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.ses = ses
-	mp.tcpConn.ses = ses
+	mp.tcpConn.SetSession(ses)
 }
 
 // handshake response 41
@@ -1422,7 +1434,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
-			if err = ses.InitSystemVariables(ctx); err != nil {
+			bh := ses.GetBackgroundExec(ctx)
+			defer bh.Close()
+			if err = ses.InitSystemVariables(ctx, bh); err != nil {
 				return err
 			}
 		} else {

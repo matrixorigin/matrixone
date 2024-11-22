@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -61,6 +63,38 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 		t.Errorf("expected %d, got %d", len(records), cnt)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func Test_WriteRowRecords2(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
+	db_holder.SetDBConn(db)
+
+	// set up your DefaultSqlWriter and records
+	var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
+
+	tbl := &table.Table{
+		Database: "testDB",
+		Table:    "testTable",
+		Columns:  []table.Column{dummyStrColumn},
+	}
+	records := [][]string{
+		{"record1"},
+		// {"record2"},
+		// add more records as needed
+	}
+
+	// call the function to test
+	_, err = db_holder.WriteRowRecords(records, tbl, 1*time.Second)
+	assert.Error(t, err)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}

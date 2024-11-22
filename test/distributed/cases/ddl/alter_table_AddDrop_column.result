@@ -353,14 +353,14 @@ show create table transaction03;
 Table    Create Table
 transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
 use isolation;
-invalid database isolation
+Unknown database isolation
 show create table transaction03;
-not connect to a database
+No database selected
 commit;
 alter table transaction03 drop column d;
 no such table .transaction03
 show create table transaction03;
-not connect to a database
+No database selected
 show create table transaction03;
 Table    Create Table
 transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
@@ -378,7 +378,7 @@ insert into transaction05(b,c) values ('aaaa','2020-09-08');
 begin;
 alter table transaction05 rename to `conflict_test`;
 use ww_conflict;
-invalid database ww_conflict
+Unknown database ww_conflict
 begin;
 alter table conflict_test drop column b;
 no such table .conflict_test
@@ -531,9 +531,9 @@ c    d
 1    1
 2    2
 use isolation;
-invalid database isolation
+Unknown database isolation
 select * from transaction04;
-not connect to a database
+No database selected
 commit;
 select * from transaction04;
 c    d
@@ -549,7 +549,7 @@ insert into transaction05(b,c) values ('aaaa','2020-09-08');
 begin;
 alter table transaction05 rename to `conflict_test`;
 use ww_conflict;
-invalid database ww_conflict
+Unknown database ww_conflict
 begin;
 alter table conflict_test add column colf int first;
 no such table .conflict_test

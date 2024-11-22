@@ -78,7 +78,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
@@ -139,21 +139,21 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[1] = 2
 	idxs[2] = 3
 	typs := []types.Type{types.T_int8.ToType(), types.T_int32.ToType(), types.T_int64.ToType()}
-	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
+	vec1, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
-	defer vec.Release()
+	defer vec1.Release()
 
-	obj, err := Decode(vec.Entries[0].CachedData.Bytes())
+	obj, err := Decode(vec1.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector1 := obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
-	obj, err = Decode(vec.Entries[1].CachedData.Bytes())
+	obj, err = Decode(vec1.Entries[1].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector2 := obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
-	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
+	obj, err = Decode(vec1.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector3 := obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
@@ -165,7 +165,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
-	dirs, err := fs.ListDir("")
+	dirs, err := fileservice.SortedList(fs.ListDir(""))
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
@@ -180,21 +180,21 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
+	vec2, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
-	defer vec.Release()
+	defer vec2.Release()
 
-	obj, err = Decode(vec.Entries[0].CachedData.Bytes())
+	obj, err = Decode(vec2.Entries[0].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector1 = obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
-	obj, err = Decode(vec.Entries[1].CachedData.Bytes())
+	obj, err = Decode(vec2.Entries[1].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector2 = obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
-	obj, err = Decode(vec.Entries[2].CachedData.Bytes())
+	obj, err = Decode(vec2.Entries[2].CachedData.Bytes())
 	assert.Nil(t, err)
 	vector3 = obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
@@ -299,7 +299,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)

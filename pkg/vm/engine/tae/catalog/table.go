@@ -100,7 +100,10 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
-	e.CreateWithTSLocked(types.SystemDBTS, &TableMVCCNode{Schema: schema})
+	e.CreateWithTSLocked(types.SystemDBTS,
+		&TableMVCCNode{
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema)})
 
 	if DefaultTableDataFactory != nil {
 		e.tableData = DefaultTableDataFactory(e)
@@ -132,7 +135,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	}
 }
 
-func (entry *TableEntry) GetSoftdeleteObjects(txnStartTS, dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
+func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
 	iter1 := entry.MakeDataObjectIt()
 	defer iter1.Release()
 	for iter1.Next() {
@@ -681,7 +684,8 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			Schema: schema,
+			Schema:          schema,
+			TombstoneSchema: GetTombstoneSchema(schema),
 		},
 	}
 	entry.InsertLocked(node)

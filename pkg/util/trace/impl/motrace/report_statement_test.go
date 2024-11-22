@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +45,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		User                 string
 		Host                 string
 		Database             string
-		Statement            string
+		Statement            []byte
 		StatementFingerprint string
 		StatementTag         string
 		RequestAt            time.Time
@@ -327,18 +329,20 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[4,228295,3600.000,1,0,0,1,3,0]")
+	wantBytes := []byte("[5,228295,3600.000,1,0,0,1,3,0,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
-	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10).WithCU(1.1234)
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10).WithCU(1.1234).
+		WithS3IOListCount(1).
+		WithS3IODeleteCount(1)
 
 	err = mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[4,228296,3601.000,1,0,0,1,13,1.1234]")
+	wantBytes = []byte("[5,228296,3601.000,1,0,0,1,13,1.1234,1,1]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }
@@ -478,4 +482,85 @@ func TestStatementInfo_Key(t *testing.T) {
 			t.Logf("error: %v", tt.want.(Key).Error)
 		})
 	}
+}
+
+// Benchmark_Bytes2String
+// goos: darwin
+// goarch: amd64
+// pkg: github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace
+// cpu: Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
+//
+//	report_statement_test.go:505: str length: 5155
+//
+// Benchmark_Bytes2String/byte2string
+// Benchmark_Bytes2String/byte2string-12         	  620806	      1721 ns/op
+// Benchmark_Bytes2String/byte2stringNoTurn
+// Benchmark_Bytes2String/byte2stringNoTurn-12   	 1437241	       829.6 ns/op
+// Benchmark_Bytes2String/byte2StringBuilder
+// Benchmark_Bytes2String/byte2StringBuilder-12  	 1354514	       852.2 ns/op
+// Benchmark_Bytes2String/nil2StringBuilder
+// Benchmark_Bytes2String/nil2StringBuilder-12   	350804308	         3.371 ns/op
+// PASS
+func Benchmark_Bytes2String(b *testing.B) {
+	str := []byte("iam a new string sql with 5120 char")
+	for i := 0; i < 5120; i++ {
+		str = append(str, byte(i))
+	}
+	b.Logf("str length: %d\n", len(str))
+	b.Run("byte2string", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			buf := make([]byte, len(str))
+			copy(buf, str)
+			_ = string(buf[:])
+		}
+	})
+	b.Run("byte2stringNoTurn", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			buf := make([]byte, 0, len(str))
+			_ = append(buf, str...)
+		}
+	})
+	b.Run("byte2StringBuilder", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			builder := strings.Builder{}
+			builder.Grow(len(str))
+			builder.Write(str)
+			_ = builder.String()
+		}
+	})
+	b.Run("nil2StringBuilder", func(b *testing.B) {
+		var nilStr []byte = nil
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			builder := strings.Builder{}
+			builder.Grow(len(nilStr))
+			builder.Write(nilStr)
+			_ = builder.String()
+		}
+	})
+}
+
+func Test_StringBuilder(t *testing.T) {
+
+	var builder strings.Builder
+	builder.Grow(1024)
+
+	builder.WriteString("hello world!")
+	str1 := builder.String()
+
+	builder.Reset()
+	builder.WriteString("hello kitty!")
+	str2 := builder.String()
+
+	runtime.GC()
+	builder.Reset()
+	builder.WriteString("hello after gc.")
+	str3 := builder.String()
+
+	t.Logf("str1: %s", str1)
+	t.Logf("str2: %s", str2)
+	t.Logf("str3: %s", str3)
 }

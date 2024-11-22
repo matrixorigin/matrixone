@@ -1778,3 +1778,85 @@ func NewSamplePercentFuncExpression2(percent float64, isStar bool, columns Exprs
 		columns: columns,
 	}, nil
 }
+
+type FullTextSearchType int
+
+const (
+	FULLTEXT_DEFAULT FullTextSearchType = iota
+	FULLTEXT_NL
+	FULLTEXT_NL_QUERY_EXPANSION
+	FULLTEXT_BOOLEAN
+	FULLTEXT_QUERY_EXPANSION
+)
+
+type FullTextMatchExpr struct {
+	exprImpl
+	// columns.
+	KeyParts []*KeyPart
+
+	// pattern
+	Pattern string
+
+	Mode FullTextSearchType
+}
+
+func (node *FullTextSearchType) ToString() string {
+	switch *node {
+	case FULLTEXT_DEFAULT:
+		return ""
+	case FULLTEXT_NL:
+		return "IN NATURAL LANGUAGE MODE"
+	case FULLTEXT_NL_QUERY_EXPANSION:
+		return "IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION"
+	case FULLTEXT_BOOLEAN:
+		return "IN BOOLEAN MODE"
+	case FULLTEXT_QUERY_EXPANSION:
+		return "WITH QUERY EXPANSION"
+
+	default:
+		return "Unknown FullSearchType"
+	}
+}
+
+// Accept implements NodeChecker Accept interface.
+func (node *FullTextMatchExpr) Accept(v Visitor) (Expr, bool) {
+	panic("unimplement FullTextMatchExpr Accept")
+}
+
+func (node *FullTextMatchExpr) Valid() error {
+	if len(node.KeyParts) == 0 {
+		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
+	}
+	if len(node.Pattern) == 0 {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	return nil
+}
+
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
+
+	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
+	if err := e.Valid(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("MATCH (")
+	for i, k := range node.KeyParts {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		k.Format(ctx)
+	}
+	ctx.WriteString(") ")
+	ctx.WriteString("AGAINST (")
+	ctx.WriteString(node.Pattern)
+
+	if node.Mode != FULLTEXT_DEFAULT {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.Mode.ToString())
+	}
+	ctx.WriteString(")")
+}

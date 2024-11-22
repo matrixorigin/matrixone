@@ -15,7 +15,9 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"context"
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -561,4 +563,67 @@ func TestPrefixIn(t *testing.T) {
 	require.Equal(t, []byte{2}, pkIter.iter.Item().Bytes)
 	spec.Move(pkIter)
 	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
+}
+
+func BenchmarkPrimaryKeyIter(b *testing.B) {
+	tree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less,
+		btree.Options{
+			Degree: 64,
+		})
+
+	itemCnt := 1000 * 10
+
+	for i := 0; i < itemCnt; i++ {
+		xx := rand.Intn(itemCnt / 10)
+		ts := types.BuildTS(rand.Int63n(int64(itemCnt)), 0)
+
+		tree.Set(&PrimaryIndexEntry{
+			Time:       ts,
+			RowEntryID: int64(i),
+			Bytes:      types.EncodeFixed[int](xx),
+		})
+	}
+
+	iter1 := tree.Copy().Iter()
+	iter2 := tree.Copy().Iter()
+
+	b.Run("Seek", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			xx := rand.Intn(itemCnt / 10)
+			ts := types.BuildTS(rand.Int63n(int64(itemCnt)), 0)
+			iter1.Seek(&PrimaryIndexEntry{
+				Time:       ts,
+				RowEntryID: rand.Int63n(int64(itemCnt)),
+				Bytes:      types.EncodeFixed[int](xx),
+			})
+		}
+	})
+
+	b.Run("Comparison Item", func(b *testing.B) {
+		items := tree.Items()
+		for i := 0; i < b.N; i++ {
+			x := rand.Intn(tree.Len())
+			y := rand.Intn(tree.Len())
+
+			items[x].Less(items[y])
+		}
+	})
+
+	b.Run("Comparison Bytes", func(b *testing.B) {
+		items := tree.Items()
+		for i := 0; i < b.N; i++ {
+			x := rand.Intn(tree.Len())
+			y := rand.Intn(tree.Len())
+
+			bytes.Compare(items[x].Bytes, items[y].Bytes)
+		}
+	})
+
+	b.Run("Next", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if !iter2.Next() {
+				iter2.First()
+			}
+		}
+	})
 }

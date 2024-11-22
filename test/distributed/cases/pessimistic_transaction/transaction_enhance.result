@@ -285,7 +285,7 @@ SQL parser error: table "atomic_table_17" does not exist
 start transaction ;
 create database tdb;
 use tdb;
-invalid database tdb
+Unknown database tdb
 drop database tdb;
 commit;
 begin;

@@ -55,6 +55,10 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 	gcHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.GCTask, gcHandler)
 
+	flushHandler := tasks.NewPoolHandler(db.Opts.Ctx, asyncWorkers)
+	flushHandler.Start()
+	jobDispatcher.RegisterHandler(tasks.FlushTableTailTask, flushHandler)
+
 	ckpDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
 	for i := 0; i < 4; i++ {
 		handler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, fmt.Sprintf("[ckpworker-%d]", i))
@@ -155,8 +159,8 @@ func (s *taskScheduler) ScheduleScopedFn(ctx *tasks.Context, taskType tasks.Task
 func (s *taskScheduler) Schedule(task tasks.Task) (err error) {
 	taskType := task.Type()
 	// if taskType == tasks.DataCompactionTask || taskType == tasks.GCTask {
-	if taskType == tasks.DataCompactionTask {
-		dispatcher := s.Dispatchers[task.Type()].(*asyncJobDispatcher)
+	if taskType == tasks.DataCompactionTask || taskType == tasks.FlushTableTailTask {
+		dispatcher := s.Dispatchers[tasks.DataCompactionTask].(*asyncJobDispatcher)
 		return dispatcher.TryDispatch(task)
 	}
 	return s.BaseScheduler.Schedule(task)

@@ -55,14 +55,15 @@ var (
 		moerr.ErrTxnNotActive: {},
 	}
 	commitTxnErrors = map[uint16]struct{}{
-		moerr.ErrTAECommit:            {},
-		moerr.ErrTAERollback:          {},
-		moerr.ErrTAEPrepare:           {},
-		moerr.ErrRpcError:             {},
-		moerr.ErrTxnNotFound:          {},
-		moerr.ErrTxnNotActive:         {},
-		moerr.ErrLockTableBindChanged: {},
-		moerr.ErrCannotCommitOrphan:   {},
+		moerr.ErrTAECommit:               {},
+		moerr.ErrTAERollback:             {},
+		moerr.ErrTAEPrepare:              {},
+		moerr.ErrRpcError:                {},
+		moerr.ErrTxnNotFound:             {},
+		moerr.ErrTxnNotActive:            {},
+		moerr.ErrLockTableBindChanged:    {},
+		moerr.ErrCannotCommitOrphan:      {},
+		moerr.ErrCannotCommitOnInvalidCN: {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
@@ -188,6 +189,12 @@ func WithDisableTrace(value bool) TxnOption {
 	}
 }
 
+func WithDisableWaitPaused() TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options = tc.opts.options.WithDisableWaitPaused()
+	}
+}
+
 func WithSessionInfo(info string) TxnOption {
 	return func(tc *txnOperator) {
 		tc.opts.options.SessionInfo = info
@@ -207,6 +214,13 @@ func WithSkipPushClientReady() TxnOption {
 	}
 }
 
+// WithTxnMode set txn mode
+func WithWaitActiveHandle(fn func()) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.waitActiveHandle = fn
+	}
+}
+
 type txnOperator struct {
 	sid             string
 	logger          *log.MOLogger
@@ -217,17 +231,19 @@ type txnOperator struct {
 
 	mu struct {
 		sync.RWMutex
-		waitActive   bool
-		closed       bool
-		txn          txn.TxnMeta
-		cachedWrites map[uint64][]txn.TxnRequest
-		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(TxnEvent)
-		retry        bool
-		lockSeq      uint64
-		waitLocks    map[uint64]Lock
+		waitActive       bool
+		waitActiveHandle func()
+		closed           bool
+		txn              txn.TxnMeta
+		cachedWrites     map[uint64][]txn.TxnRequest
+		lockTables       []lock.LockTable
+		callbacks        map[EventType][]func(TxnEvent)
+		retry            bool
+		lockSeq          uint64
+		waitLocks        map[uint64]Lock
 		//read-only txn operators for supporting snapshot read feature.
 		children []*txnOperator
+		flag     uint32
 	}
 
 	reset struct {
@@ -249,6 +265,7 @@ type txnOperator struct {
 		rollbackStmtCounter  counter
 		fprints              footPrints
 		runningSQL           atomic.Bool
+		commitErr            error
 	}
 
 	opts struct {
@@ -280,6 +297,9 @@ func (tc *txnOperator) init(
 	txnMeta txn.TxnMeta,
 	options ...TxnOption,
 ) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
 	tc.initReset()
 	tc.initProtectedFields()
 
@@ -319,10 +339,12 @@ func (tc *txnOperator) initReset() {
 	tc.reset.rollbackStmtCounter = counter{}
 	tc.reset.fprints = footPrints{}
 	tc.reset.runningSQL.Store(false)
+	tc.reset.commitErr = nil
 }
 
 func (tc *txnOperator) initProtectedFields() {
 	tc.mu.waitActive = false
+	tc.mu.waitActiveHandle = nil
 	tc.mu.closed = false
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
@@ -361,6 +383,9 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 
 	op.reset.workspace = tc.reset.workspace.CloneSnapshotWS()
 	op.reset.workspace.BindTxnOp(op)
+	op.logger = tc.logger
+	op.sender = tc.sender
+	op.timestampWaiter = tc.timestampWaiter
 
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -381,16 +406,11 @@ func newTxnOperatorWithSnapshot(
 	tc.mu.txn = snapshot.Txn
 	tc.mu.txn.Mirror = true
 	tc.mu.lockTables = snapshot.LockTables
+	tc.mu.flag = snapshot.Flag
 
 	tc.adjust()
 	util.LogTxnCreated(tc.logger, tc.mu.txn)
 	return tc
-}
-
-func (tc *txnOperator) setWaitActive(v bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.waitActive = v
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
@@ -398,10 +418,17 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 		return nil
 	}
 
-	tc.setWaitActive(true)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	tc.mu.waitActive = true
+	if tc.mu.waitActiveHandle != nil {
+		tc.mu.waitActiveHandle()
+	}
+
 	defer func() {
 		tc.reset.waiter.close()
-		tc.setWaitActive(false)
+		tc.mu.waitActive = false
 	}()
 
 	cost, err := tc.doCostAction(
@@ -410,7 +437,7 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 		func() error {
 			return tc.reset.waiter.wait(ctx)
 		},
-		false)
+		true)
 	tc.reset.waitActiveCost = cost
 	v2.TxnWaitActiveDurationHistogram.Observe(cost.Seconds())
 	return err
@@ -485,6 +512,7 @@ func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 		Txn:        tc.mu.txn,
 		LockTables: tc.mu.lockTables,
 		Options:    tc.opts.options,
+		Flag:       tc.mu.flag,
 	}, nil
 }
 
@@ -591,21 +619,22 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() {
-		tc.logger.Fatal("commit on running txn")
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
 	}
 
 	tc.reset.commitCounter.addEnter()
 	defer tc.reset.commitCounter.addExit()
-	txn := tc.getTxnMeta(false)
-	util.LogTxnCommit(tc.logger, txn)
+	txnMeta := tc.getTxnMeta(false)
+	util.LogTxnCommit(tc.logger, txnMeta)
 
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
 		tc.reset.commitSeq = tc.NextSequence()
 		tc.reset.commitAt = time.Now()
 
-		tc.triggerEvent(newEvent(CommitEvent, txn, tc.reset.commitSeq, nil))
+		tc.triggerEvent(newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
 		defer func() {
 			cost := time.Since(tc.reset.commitAt)
 			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
@@ -616,6 +645,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if tc.opts.options.ReadOnly() {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
+		tc.mu.txn.Status = txn.TxnStatus_Committed
 		tc.closeLocked()
 		return
 	}
@@ -792,7 +822,8 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			tc.mu.Unlock()
 		}()
 		if tc.mu.closed {
-			return nil, moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+			tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+			return nil, tc.reset.commitErr
 		}
 
 		if tc.needUnlockLocked() {
@@ -837,7 +868,16 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 				Disable1PCOpt: tc.opts.options.Is1PCDisabled(),
 			}})
 	}
-	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
+	if commit && tc.markAbortedLocked() {
+		tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+		return nil, tc.reset.commitErr
+	}
+
+	resp, err := tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
+	if err != nil && commit {
+		tc.reset.commitErr = err
+	}
+	return resp, err
 }
 
 func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked bool) {
@@ -962,8 +1002,12 @@ func (tc *txnOperator) getTxnMeta(locked bool) txn.TxnMeta {
 	return tc.mu.txn
 }
 
-func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, locked bool) (*rpc.SendResult, error) {
-	txnMeta := tc.getTxnMeta(locked)
+func (tc *txnOperator) doSend(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+	commit bool,
+) (*rpc.SendResult, error) {
+	txnMeta := tc.getTxnMeta(commit)
 	for idx := range requests {
 		requests[idx].Txn = txnMeta
 	}
@@ -985,7 +1029,7 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 	if resp.Txn == nil {
 		return result, nil
 	}
-	if !locked {
+	if !commit {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 	}
@@ -1229,10 +1273,14 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked() {
 	if !tc.mu.closed {
 		tc.mu.closed = true
+		if tc.reset.commitErr != nil {
+			tc.mu.txn.Status = txn.TxnStatus_Aborted
+		}
 		tc.triggerEventLocked(
 			TxnEvent{
 				Event: ClosedEvent,
 				Txn:   tc.mu.txn,
+				Err:   tc.reset.commitErr,
 			})
 	}
 }
@@ -1398,15 +1446,34 @@ func (tc *txnOperator) inRollbackStmt() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
 		tc.reset.runSqlCounter.String(),
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
+		tc.Txn().DebugString(),
 		tc.reset.fprints.String())
 }
 
 func (tc *txnOperator) SetFootPrints(id int, enter bool) {
 	tc.reset.fprints.add(id, enter)
+}
+
+func (tc *txnOperator) addFlag(flags ...uint32) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	for _, flag := range flags {
+		tc.mu.flag |= flag
+	}
+}
+
+func (tc *txnOperator) markAborted() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.markAbortedLocked()
+}
+
+func (tc *txnOperator) markAbortedLocked() bool {
+	return tc.mu.flag&AbortedFlag != 0
 }

@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -391,20 +390,6 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		}
 		return sels
 	}
-}
-
-func getNonSortedPKSearchFuncByPKVec(
-	vec *vector.Vector,
-) objectio.ReadFilterSearchFuncType {
-
-	searchPKFunc := LinearSearchOffsetByValFactory(vec)
-
-	if searchPKFunc != nil {
-		return func(vecs []*vector.Vector) []int64 {
-			return searchPKFunc(vecs[0])
-		}
-	}
-	return nil
 }
 
 // ListTnService gets all tn service in the cluster
@@ -778,8 +763,8 @@ func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPoo
 }
 
 func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
-	tidIdx := cache.MO_OFF + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
-	if len(bs) == 1 {
+	tidIdx := 1 /*rowid*/ + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
+	if len(bs) <= 1 {
 		return true
 	}
 	prevTableId := vector.GetFixedAtNoTypeCheck[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)

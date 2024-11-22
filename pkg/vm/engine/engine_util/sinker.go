@@ -493,6 +493,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			buffer,
 			innersinker,
 			sinker.mp,
+			true,
 		); err != nil {
 			return err
 		}
@@ -568,7 +569,7 @@ func (sinker *Sinker) Write(
 		if currPos+toAdd > objectio.BlockMaxRows {
 			toAdd = objectio.BlockMaxRows - currPos
 		}
-		if err = curr.Union(data, offset, toAdd, sinker.mp); err != nil {
+		if err = curr.UnionWindow(data, offset, toAdd, sinker.mp); err != nil {
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
@@ -593,7 +594,8 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 	// spill the remaining data
-	if sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
+	if sinker.staged.inMemorySize > 0 &&
+		sinker.staged.inMemorySize >= sinker.config.tailSizeCap {
 		if err := sinker.trySpill(ctx); err != nil {
 			return err
 		}

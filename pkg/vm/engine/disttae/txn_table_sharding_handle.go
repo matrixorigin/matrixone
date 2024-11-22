@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,7 +50,7 @@ func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef)
 		sr.colTypes = make([]types.Type, len(cols))
 		for i, column := range cols {
 			column = strings.ToLower(column)
-			if column == catalog.Row_ID {
+			if objectio.IsPhysicalAddr(column) {
 				sr.colTypes[i] = objectio.RowidType
 			} else {
 				colIdx := tblDef.Name2ColIndex[column]
@@ -210,7 +209,7 @@ func HandleShardingReadApproxObjectsNum(
 func HandleShardingReadRanges(
 	ctx context.Context,
 	shard shard.TableShard,
-	engine engine.Engine,
+	eng engine.Engine,
 	param shard.ReadParam,
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
@@ -218,17 +217,17 @@ func HandleShardingReadRanges(
 	tbl, err := getTxnTable(
 		ctx,
 		param,
-		engine,
+		eng,
 	)
 	if err != nil {
 		return nil, err
 	}
-
 	ranges, err := tbl.doRanges(
 		ctx,
 		param.RangesParam.Exprs,
-		2,
-		nil,
+		int(param.RangesParam.PreAllocSize),
+		engine.DataCollectPolicy(param.RangesParam.DataCollectPolicy),
+		int(param.RangesParam.TxnOffset),
 	)
 	if err != nil {
 		return nil, err
@@ -285,6 +284,8 @@ func HandleShardingReadBuildReader(
 		tbl.db.op.SnapshotTS(),
 		param.ReaderBuildParam.Expr,
 		ds,
+		engine_util.GetThresholdForReader(1),
+		engine.FilterHint{},
 	)
 	if err != nil {
 		return nil, err
@@ -512,6 +513,56 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 	}
 
 	modify, err := tbl.PrimaryKeysMayBeModified(
+		ctx,
+		from,
+		to,
+		keyVector,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var r uint16
+	if modify {
+		r = 1
+	}
+	return buffer.EncodeUint16(r), nil
+}
+
+func HandleShardingReadPrimaryKeysMayBeUpserted(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		engine,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var from, to types.TS
+	err = from.Unmarshal(param.PrimaryKeysMayBeModifiedParam.From)
+	if err != nil {
+		return nil, err
+	}
+
+	err = to.Unmarshal(param.PrimaryKeysMayBeModifiedParam.To)
+	if err != nil {
+		return nil, err
+	}
+
+	keyVector := vector.NewVecFromReuse()
+	err = keyVector.UnmarshalBinary(param.PrimaryKeysMayBeModifiedParam.KeyVector)
+	if err != nil {
+		return nil, err
+	}
+
+	modify, err := tbl.PrimaryKeysMayBeUpserted(
 		ctx,
 		from,
 		to,

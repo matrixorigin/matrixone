@@ -21,10 +21,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -89,7 +97,7 @@ func init() {
 	}
 }
 
-func testPrint(_ *batch.Batch) error {
+func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 	return nil
 }
 
@@ -97,6 +105,10 @@ type Ws struct {
 }
 
 func (w *Ws) Readonly() bool {
+	return false
+}
+
+func (w *Ws) Snapshot() bool {
 	return false
 }
 
@@ -148,6 +160,13 @@ func (w *Ws) GetHaveDDL() bool {
 
 func (w *Ws) PPString() string {
 	return ""
+}
+
+func NewMockCompile() *Compile {
+	return &Compile{
+		proc: testutil.NewProcess(),
+		ncpu: system.GoMaxProcs(),
+	}
 }
 
 func TestCompile(t *testing.T) {
@@ -218,6 +237,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -251,4 +271,143 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func GetFilePath() string {
 	dir, _ := os.Getwd()
 	return dir
+}
+
+func TestShuffleBlocksByHash(t *testing.T) {
+	testCompile := NewMockCompile()
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	shuffleBlocksByHash(testCompile, reldata, testCompile.cnList)
+}
+
+func TestShuffleBlocksByMoCtl(t *testing.T) {
+	testCompile := NewMockCompile()
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	require.NoError(t, shuffleBlocksByMoCtl(reldata, 2, testCompile.cnList))
+}
+
+func TestPutBlocksInCurrentCN(t *testing.T) {
+	testCompile := NewMockCompile()
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	putBlocksInCurrentCN(testCompile, reldata, true)
+}
+
+func TestShuffleBlocksToMultiCN(t *testing.T) {
+	testCompile := NewMockCompile()
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
+	s := objectio.BlockInfoSlice{}
+	stats := objectio.NewObjectStats()
+	for i := 0; i < 100; i++ {
+		var blk objectio.BlockInfo
+		stats.ConstructBlockInfoTo(uint16(0), &blk)
+		s.AppendBlockInfo(&blk)
+	}
+	reldata := &engine_util.BlockListRelData{}
+	reldata.SetBlockList(s)
+	n := &plan.Node{
+		Stats:    plan2.DefaultStats(),
+		TableDef: &plan.TableDef{Name: "test"},
+	}
+	_, err := shuffleBlocksToMultiCN(testCompile, nil, reldata, n)
+	require.NoError(t, err)
+}
+
+var _ morpc.RPCClient = new(testRpcClient)
+
+type testRpcClient struct {
+}
+
+func (tRpcClient *testRpcClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) Ping(ctx context.Context, backend string) error {
+	time.Sleep(time.Second)
+	return moerr.NewInternalErrorNoCtx("return err")
+}
+
+func (tRpcClient *testRpcClient) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tRpcClient *testRpcClient) CloseBackend() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_isAvailable(t *testing.T) {
+	rpcClient := &testRpcClient{}
+	ret := isAvailable(rpcClient, "127.0.0.1:6001")
+	assert.False(t, ret)
+}
+
+func TestDebugLogFor19288(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		bsql      string
+		originSQL string
+	}{
+		{
+			name:      "Retry Error",
+			err:       moerr.NewTxnNeedRetryNoCtx(),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+		{
+			name:      "Non-Retry Error",
+			err:       moerr.NewInternalErrorNoCtx("internal error"),
+			bsql:      "SELECT * FROM test_table",
+			originSQL: "INSERT INTO test_table VALUES (1, 'test')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			c := NewMockCompile()
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOperator
+			c.originSQL = tt.originSQL
+			c.debugLogFor19288(tt.err, tt.bsql)
+		})
+	}
 }

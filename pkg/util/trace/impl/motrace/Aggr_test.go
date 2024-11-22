@@ -102,7 +102,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId,
-			Statement:     "SELECT 11",
+			Statement:     []byte("SELECT 11"),
 			ResponseAt:    fixedTime,
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
@@ -124,7 +124,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
-			Statement:     "SELECT 11",
+			Statement:     []byte("SELECT 11"),
 			ResponseAt:    fixedTime,
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
@@ -146,7 +146,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
-			Statement:     "SELECT 11",
+			Statement:     []byte("SELECT 11"),
 			ResponseAt:    fixedTime.Add(6 * time.Second),
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
@@ -169,7 +169,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId2,
-			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
+			Statement:     []byte("SELECT 11"), // make it longer than 200ms to pass filter
 			ResponseAt:    fixedTime.Add(6 * time.Second),
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
@@ -197,13 +197,13 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
 	for idx := 0; idx < 4; idx++ {
 	}
-	targetBytes := []byte(`[4,5,10.000,15,20,25,2,0,220.0803]`)
+	targetBytes := []byte(`[5,5,10.000,15,20,25,2,0,220.0803,0,0]`)
 	for idx := 0; idx < 4; idx++ {
 		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
 	}
 	item, _ := results[0].(*StatementInfo)
 	row := item.GetTable().GetRow(ctx)
-	targetBytes = []byte(`[4,5,2.000,15,20,25,2,0,220.0803]`) // re-calculate memory usage in FillRow
+	targetBytes = []byte(`[5,5,2.000,15,20,25,2,0,220.0803,0,0]`) // re-calculate memory usage in FillRow
 	for idx := 0; idx < 4; idx++ {
 		results[idx].(*StatementInfo).FillRow(ctx, row)
 		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
@@ -229,7 +229,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Update",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId2,
-			Statement:     "Update 11",
+			Statement:     []byte("Update 11"),
 			ResponseAt:    fixedTime.Add(6 * time.Second),
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      time.Duration(10+i) * time.Millisecond,
@@ -249,7 +249,7 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Update",
 			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
-			Statement:     "Update 11",
+			Statement:     []byte("Update 11"),
 			ResponseAt:    fixedTime.Add(6 * time.Second),
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      time.Duration(10+i) * time.Millisecond,
@@ -272,9 +272,9 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
 	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
+	require.Equal(t, []byte(`[5,5,10.000,15,20,25,0,0,220.0803,0,0]`), results[0].(*StatementInfo).GetStatsArrayBytes())
 	results[0].(*StatementInfo).FillRow(ctx, row) // re-calculate memory usage in FillRow
-	require.Equal(t, []byte(`[4,5,2.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
+	require.Equal(t, []byte(`[5,5,2.000,15,20,25,0,0,220.0803,0,0]`), results[0].(*StatementInfo).GetStatsArrayBytes())
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		Account:       "MO",
@@ -283,7 +283,7 @@ func TestAggregator(t *testing.T) {
 		StatementType: "Update",
 		SqlSourceType: "external_sql",
 		SessionID:     sessionId2,
-		Statement:     "Update 11",
+		Statement:     []byte("Update 11"),
 		ResponseAt:    fixedTime.Add(6 * time.Second),
 		RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 		Duration:      203 * time.Millisecond,
@@ -324,7 +324,7 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId,
-			Statement:     "SELECT 11",
+			Statement:     []byte("SELECT 11"),
 			ResponseAt:    fixedTime,
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
@@ -404,7 +404,7 @@ func TestAggregator_DisableAgg(t *testing.T) {
 					StatementType: "Select",
 					SqlSourceType: "external_sql",
 					SessionID:     sessionId,
-					Statement:     "SELECT 11",
+					Statement:     []byte("SELECT 11"),
 					ResponseAt:    fixedTime,
 					RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 					Duration:      10 * time.Millisecond,
@@ -480,7 +480,7 @@ func TestAggregator_MarkExported(t *testing.T) {
 					StatementType: "Select",
 					SqlSourceType: "external_sql",
 					SessionID:     sessionId,
-					Statement:     "SELECT 11",
+					Statement:     []byte("SELECT 11"),
 					ResponseAt:    fixedTime,
 					RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 					Duration:      10 * time.Millisecond,
@@ -535,7 +535,7 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId,
-			Statement:     "SELECT 11",
+			Statement:     []byte("SELECT 11"),
 			ResponseAt:    fixedTime,
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,

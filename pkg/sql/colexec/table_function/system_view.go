@@ -101,7 +101,7 @@ func moLocksPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 	return &moLocksState{}, nil
 }
 
-func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 
@@ -268,7 +268,7 @@ func moConfigurationsPrepare(proc *process.Process, tf *TableFunction) (tvfState
 	return &moConfigurationState{}, nil
 }
 
-func (s *moConfigurationState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *moConfigurationState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 	mp := proc.GetMPool()
@@ -413,7 +413,7 @@ func getPointContent(li *query.TxnLockInfo) []byte {
 	return []byte{}
 }
 
-func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 
@@ -593,7 +593,7 @@ func moCachePrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 	return &moCacheState{}, nil
 }
 
-func (s *moCacheState) start(tf *TableFunction, proc *process.Process, nthRow int) error {
+func (s *moCacheState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 	bat := s.batch
 

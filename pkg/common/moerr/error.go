@@ -86,6 +86,7 @@ const (
 	ErrWrongDatetimeSpec    uint16 = 20310
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
+	ErrUnsupportedDML       uint16 = 20313
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -238,6 +239,10 @@ const (
 	ErrCannotCommitOrphan uint16 = 20705
 	// ErrLockConflict lock operation conflict
 	ErrLockConflict uint16 = 20706
+	// ErrLockNeedUpgrade row level lock is too large that need upgrade to table level lock
+	ErrLockNeedUpgrade uint16 = 20707
+	// ErrCannotCommitOnInvalidCN cannot commit transaction on invalid CN
+	ErrCannotCommitOnInvalidCN uint16 = 20708
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -337,11 +342,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
+	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
 	ErrLogServiceNotReady:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
-	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
+	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "Unknown database %s"},
 	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
 	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
 	ErrEmptyVector:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
@@ -355,7 +361,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrShortWrite:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
 	ErrInvalidWrite:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
 	ErrShortBuffer:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
-	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "not connect to a database"},
+	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
 	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
@@ -464,12 +470,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
-	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
-	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
-	ErrCannotCommitOrphan:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
-	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
+	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrCannotCommitOrphan:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
+	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -846,6 +854,11 @@ func NewConstraintViolationf(ctx context.Context, format string, args ...any) *E
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
+}
+
+func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
+	xmsg := fmt.Sprintf(msg, args...)
+	return newError(ctx, ErrUnsupportedDML, xmsg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -1261,6 +1274,10 @@ func NewDeadlockCheckBusy(ctx context.Context) *Error {
 
 func NewCannotCommitOrphan(ctx context.Context) *Error {
 	return newError(ctx, ErrCannotCommitOrphan)
+}
+
+func NewCannotCommitOnInvalidCN(ctx context.Context) *Error {
+	return newError(ctx, ErrCannotCommitOnInvalidCN)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {

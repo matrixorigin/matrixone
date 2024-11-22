@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/petermattis/goid"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -124,7 +126,7 @@ func newRouter(
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	cn, err := r.sqlRouter.GetCNServerByConnID(connID)
 	if err != nil {
-		logutil.Errorf("failed to get cn server by conn id %d: %v", connID, err)
+		logutil.Errorf("failed to get cn server by conn id %d goId %d: %v", connID, goid.Get(), err)
 		return nil, err
 	}
 	if cn == nil {
@@ -225,17 +227,12 @@ func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter fun
 // Connect implements the CNConnector interface.
 func (r *router) Connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
-) (_ ServerConn, _ []byte, e error) {
+) (ServerConn, []byte, error) {
 	// Creates a server connection.
 	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() {
-		if e != nil {
-			_ = sc.Close()
-		}
-	}()
 
 	// For test, ignore handshake phase.
 	if r.test {
@@ -248,7 +245,7 @@ func (r *router) Connect(
 	// with CN server.
 	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
 	if err != nil {
-		r.rebalancer.connManager.disconnect(cn, t)
+		_ = sc.RawConn().Close()
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -181,6 +182,57 @@ func (p *PitrInfo) IsEmpty() bool {
 		len(p.tables) == 0
 }
 
+func (p *PitrInfo) GetTS(
+	accountID uint32,
+	dbID uint64,
+	tableID uint64,
+) (ts types.TS) {
+	ts = p.cluster
+	accountTS := p.account[accountID]
+	if !accountTS.IsEmpty() && (ts.IsEmpty() || accountTS.LT(&ts)) {
+		ts = accountTS
+	}
+
+	dbTS := p.database[dbID]
+	if !dbTS.IsEmpty() && (ts.IsEmpty() || dbTS.LT(&ts)) {
+		ts = dbTS
+	}
+
+	tableTS := p.tables[tableID]
+	if !tableTS.IsEmpty() && (ts.IsEmpty() || tableTS.LT(&ts)) {
+		ts = tableTS
+	}
+	return
+}
+
+func (p *PitrInfo) MinTS() (ts types.TS) {
+	if !p.cluster.IsEmpty() {
+		ts = p.cluster
+	}
+
+	// find the minimum account ts
+	for _, p := range p.account {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+
+	// find the minimum database ts
+	for _, p := range p.database {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+
+	// find the minimum table ts
+	for _, p := range p.tables {
+		if ts.IsEmpty() || p.LT(&ts) {
+			ts = p
+		}
+	}
+	return
+}
+
 func (p *PitrInfo) ToTsList() []types.TS {
 	tsList := make([]types.TS, 0, len(p.account)+len(p.database)+len(p.tables)+1)
 	for _, ts := range p.account {
@@ -221,27 +273,28 @@ type SnapshotMeta struct {
 	// all table information under the account.
 	tables map[uint32]map[uint64]*tableInfo
 
-	// acctIndexes records all the index information of mo, the key is
-	// account id, and the value is the index information.
-	acctIndexes map[uint64]*tableInfo
+	// tableIDIndex records all the index information of mo, the key is
+	// account id, and the value is the tableInfo
+	tableIDIndex map[uint64]*tableInfo
 
-	// pkIndexes records all the index information of mo, the key is
-	// the mo_table pk, and the value is the index information.
-	pkIndexes map[string][]*tableInfo
+	// tablePKIndex records all the index information of mo, the key is
+	// the mo_table pk, and the value is the tableInfo
+	tablePKIndex map[string][]*tableInfo
 
-	// tides is used to consume the object and tombstone of the checkpoint.
-	tides map[uint64]struct{}
+	// the key of snapshotTableIDs is the table id of a snapshot table
+	// each account has one dedicated snapshot table
+	snapshotTableIDs map[uint64]struct{}
 }
 
 func NewSnapshotMeta() *SnapshotMeta {
 	meta := &SnapshotMeta{
-		objects:      make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		tombstones:   make(map[uint64]map[objectio.Segmentid]*objectInfo),
-		aobjDelTsMap: make(map[types.TS]struct{}),
-		tables:       make(map[uint32]map[uint64]*tableInfo),
-		acctIndexes:  make(map[uint64]*tableInfo),
-		tides:        make(map[uint64]struct{}),
-		pkIndexes:    make(map[string][]*tableInfo),
+		objects:          make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		tombstones:       make(map[uint64]map[objectio.Segmentid]*objectInfo),
+		aobjDelTsMap:     make(map[types.TS]struct{}),
+		tables:           make(map[uint32]map[uint64]*tableInfo),
+		tableIDIndex:     make(map[uint64]*tableInfo),
+		snapshotTableIDs: make(map[uint64]struct{}),
+		tablePKIndex:     make(map[string][]*tableInfo),
 	}
 	meta.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
 	meta.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
@@ -272,21 +325,14 @@ func (sm *SnapshotMeta) copyTablesLocked() map[uint32]map[uint64]*tableInfo {
 	return tables
 }
 
-func isMoTable(tid uint64) bool {
+func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
-func isMoDB(tid uint64) bool {
-	return tid == catalog2.MO_DATABASE_ID
-}
-
-func isMoCol(tid uint64) bool {
-	return tid == catalog2.MO_COLUMNS_ID
-}
-
 type tombstone struct {
-	pk types.Tuple
-	ts types.TS
+	rowid types.Rowid
+	pk    types.Tuple
+	ts    types.TS
 }
 
 func (sm *SnapshotMeta) updateTableInfo(
@@ -307,7 +353,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
-		if !isMoTable(tid) {
+		if !IsMoTable(tid) {
 			return
 		}
 		if !stats.GetAppendable() {
@@ -379,11 +425,13 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			pk := tuple.ErrString(nil)
 			if name == catalog2.MO_SNAPSHOTS {
-				sm.tides[tid] = struct{}{}
-				logutil.Info("[UpdateSnapTable]",
+				sm.snapshotTableIDs[tid] = struct{}{}
+				logutil.Info(
+					"UpdateSnapTable-P1",
 					zap.Uint64("tid", tid),
-					zap.Uint32("account id", account),
-					zap.String("create at", createAt.ToString()))
+					zap.Uint32("account", account),
+					zap.String("create-at", createAt.ToString()),
+				)
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
@@ -400,8 +448,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
 						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
 				}
-				sm.pkIndexes[pk] = append(sm.pkIndexes[pk], table)
-				continue
+				if table.pk == pk {
+					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+					continue
+				}
+				createAt = table.createAt
 			}
 			table = &tableInfo{
 				accountID: account,
@@ -411,15 +462,15 @@ func (sm *SnapshotMeta) updateTableInfo(
 				pk:        pk,
 			}
 			sm.tables[account][tid] = table
-			sm.acctIndexes[tid] = table
-			if sm.pkIndexes[pk] == nil {
-				sm.pkIndexes[pk] = make([]*tableInfo, 0)
+			sm.tableIDIndex[tid] = table
+			if sm.tablePKIndex[pk] == nil {
+				sm.tablePKIndex[pk] = make([]*tableInfo, 0)
 			}
-			sm.pkIndexes[pk] = append(sm.pkIndexes[pk], table)
+			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
 		}
 	}
 
-	deletes := make([]tombstone, 0)
+	deleteRows := make([]tombstone, 0)
 	for _, info := range tTombstones {
 		if info.stats.BlkCnt() != 1 {
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
@@ -436,6 +487,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 
 		commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
@@ -446,44 +498,58 @@ func (sm *SnapshotMeta) updateTableInfo(
 				logutil.Infof("yyyy skip table %v @ %v", pk.ErrString(nil), commitTs.ToString())
 				continue
 			}
-			deletes = append(deletes, tombstone{
-				pk: pk,
-				ts: commitTs,
+			deleteRows = append(deleteRows, tombstone{
+				rowid: rowIDVec[i],
+				pk:    pk,
+				ts:    commitTs,
 			})
 		}
 	}
-	sort.Slice(deletes, func(i, j int) bool {
-		ts2 := deletes[j].ts
-		return deletes[i].ts.LT(&ts2)
+	sort.Slice(deleteRows, func(i, j int) bool {
+		ts2 := deleteRows[j].ts
+		return deleteRows[i].ts.LT(&ts2)
 	})
 
-	for _, del := range deletes {
+	for _, del := range deleteRows {
 		pk := del.pk.ErrString(nil)
-		if sm.pkIndexes[pk] == nil {
+		if sm.tablePKIndex[pk] == nil {
 			continue
 		}
-		if len(sm.pkIndexes[pk]) == 0 {
-			panic(fmt.Sprintf("delete table %v not found @ %v, start is %v, end is %v", del.pk.ErrString(nil), del.ts.ToString(), startts.ToString(), endts.ToString()))
+		if len(sm.tablePKIndex[pk]) == 0 {
+			logutil.Warnf("[UpdateTableInfoWarn] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
+				del.pk.ErrString(nil), del.rowid.String(), del.ts.ToString(), startts.ToString(), endts.ToString())
+			continue
 		}
-		table := sm.pkIndexes[pk][0]
+		table := sm.tablePKIndex[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
 			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
 		}
 		table.deleteAt = del.ts
-		sm.pkIndexes[pk] = sm.pkIndexes[pk][1:]
+		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
+		if len(sm.tablePKIndex[pk]) != 0 {
+			continue
+		}
 
-		if sm.acctIndexes[table.tid] == nil {
+		if sm.tableIDIndex[table.tid] == nil {
 			//In the upgraded cluster, because the inc checkpoint is consumed halfway,
 			// there may be no record of the create table entry, only the delete entry
 			continue
 		}
-		sm.acctIndexes[table.tid] = table
+		if len(sm.tablePKIndex[pk]) == 0 {
+			if sm.tableIDIndex[table.tid] != nil && table.pk != sm.tableIDIndex[table.tid].pk {
+				continue
+			}
+		}
+		sm.tableIDIndex[table.tid] = table
 		sm.tables[table.accountID][table.tid] = table
 	}
 
-	for pk, tables := range sm.pkIndexes {
+	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
-			panic(fmt.Sprintf("table %v has more than one entry, tables len %d", pk, len(tables)))
+			logutil.Warn("UpdateSnapTable-Error",
+				zap.String("table", pk),
+				zap.Int("len", len(tables)),
+			)
 		}
 		if len(tables) == 0 {
 			continue
@@ -525,76 +591,121 @@ func collectObjects(
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData, startts, endts types.TS,
-) (*SnapshotMeta, error) {
+	data *CheckpointData,
+	startts, endts types.TS,
+	taskName string,
+) (err error) {
 	sm.Lock()
 	defer sm.Unlock()
+
 	now := time.Now()
 	defer func() {
-		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"GC-SnapshotMeta-Update",
+			zap.Error(err),
+			zap.Duration("cost", time.Since(now)),
+			zap.String("start-ts", startts.ToString()),
+			zap.String("end-ts", endts.ToString()),
+			zap.String("task", taskName),
+		)
 	}()
-	err := sm.updateTableInfo(ctx, fs, data, startts, endts)
-	if err != nil {
-		logutil.Errorf("[UpdateSnapshot] updateTableInfo failed %v", err)
-		return sm, err
+
+	if err = sm.updateTableInfo(
+		ctx,
+		fs,
+		data,
+		startts,
+		endts,
+	); err != nil {
+		return
 	}
-	if len(sm.tides) == 0 && sm.pitr.tid == 0 {
-		return sm, nil
+
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
+		return
 	}
 
 	collector := func(
-		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
 	) {
 		mapFun := func(
-			objects map[objectio.Segmentid]*objectInfo,
+			objects1 map[objectio.Segmentid]*objectInfo,
 		) {
-			if objects == nil {
-				objects = make(map[objectio.Segmentid]*objectInfo)
+			if objects1 == nil {
+				objects1 = make(map[objectio.Segmentid]*objectInfo)
 			}
 			id := stats.ObjectName().SegmentId()
-			if objects[id] == nil {
+			if objects1[id] == nil {
 				if !deleteTS.IsEmpty() {
 					return
 				}
-				objects[id] = &objectInfo{
+				objects1[id] = &objectInfo{
 					stats:    stats,
 					createAt: createTS,
 				}
-				logutil.Info("[UpdateSnapshot] Add object",
-					zap.Uint64("table id", tid),
-					zap.String("object name", id.String()),
-					zap.String("create at", createTS.ToString()))
+				logutil.Info(
+					"GC-SnapshotMeta-Update-Collector",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", id.String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+				)
 
 				return
 			}
 			if deleteTS.IsEmpty() {
-				panic(any("deleteTS is empty"))
+				// Compatible with the cluster restored by backup
+				logutil.Warn(
+					"GC-SnapshotMeta-Update-Collector-Skip",
+					zap.Uint64("table-id", tid),
+					zap.String("object-name", stats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+					zap.String("task", taskName),
+					zap.String("start", startts.ToString()),
+					zap.String("end", endts.ToString()),
+				)
+				return
 			}
-			logutil.Info("[UpdateSnapshot] Delete object",
-				zap.Uint64("table id", tid),
-				zap.String("object name", id.String()),
-				zap.String("delete at", deleteTS.ToString()))
+			logutil.Info(
+				"GC-SnapshotMeta-Update-Collector",
+				zap.Uint64("table-id", tid),
+				zap.String("object-name", id.String()),
+				zap.String("delete-at", deleteTS.ToString()),
+			)
 
-			delete(objects, id)
+			delete(objects1, id)
 		}
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
 		}
-		if _, ok := sm.tides[tid]; !ok {
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
-		if (*objects)[tid] == nil {
-			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
+		if (*objects1)[tid] == nil {
+			(*objects1)[tid] = make(map[objectio.Segmentid]*objectInfo)
 		}
-		mapFun((*objects)[tid])
+		mapFun((*objects1)[tid])
 	}
-	collectObjects(&sm.objects, &sm.pitr.objects, data.GetObjectBatchs(), collector)
-	collectObjects(&sm.tombstones, &sm.pitr.tombstones, data.GetTombstoneObjectBatchs(), collector)
-	return nil, nil
+	collectObjects(
+		&sm.objects,
+		&sm.pitr.objects,
+		data.GetObjectBatchs(),
+		collector,
+	)
+	collectObjects(
+		&sm.tombstones,
+		&sm.pitr.tombstones,
+		data.GetTombstoneObjectBatchs(),
+		collector,
+	)
+	return
 }
 
 func NewSnapshotDataSource(
@@ -620,10 +731,21 @@ func (sm *SnapshotMeta) GetSnapshot(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (map[uint32]containers.Vector, error) {
+	var err error
+
 	now := time.Now()
 	defer func() {
-		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"GetSnapshot",
+			zap.Error(err),
+			zap.Duration("cost", time.Since(now)),
+		)
 	}()
+
 	sm.RLock()
 	objects := copyObjectsLocked(sm.objects)
 	tombstones := copyObjectsLocked(sm.tombstones)
@@ -662,8 +784,9 @@ func (sm *SnapshotMeta) GetSnapshot(
 
 				bat := buildBatch()
 				defer bat.Clean(mp)
-				bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
-				if err != nil {
+				if bat, _, err = blockio.BlockDataReadBackup(
+					ctx, &blk, ds, idxes, types.TS{}, fs,
+				); err != nil {
 					return nil, err
 				}
 				tsList := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
@@ -679,13 +802,17 @@ func (sm *SnapshotMeta) GetSnapshot(
 							if snapshotList[account] == nil {
 								snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 							}
-							err = vector.AppendFixed[types.TS](snapshotList[account].GetDownstreamVector(), snapTs, false, mp)
-							if err != nil {
+							if err = vector.AppendFixed[types.TS](
+								snapshotList[account].GetDownstreamVector(), snapTs, false, mp,
+							); err != nil {
 								return nil, err
 							}
 							// TODO: info to debug
-							logutil.Info("[GetSnapshot] cluster snapshot",
-								common.OperationField(snapTs.ToString()))
+							logutil.Info(
+								"GetSnapshot-P1",
+								zap.String("ts", snapTs.ToString()),
+								zap.Uint32("account", account),
+							)
 						}
 						continue
 					}
@@ -694,11 +821,15 @@ func (sm *SnapshotMeta) GetSnapshot(
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
 					// TODO: info to debug
-					logutil.Info("[GetSnapshot] snapshot",
+					logutil.Info(
+						"GetSnapshot-P2",
+						zap.String("ts", snapTs.ToString()),
 						zap.Uint32("account", id),
-						zap.String("snap ts", snapTs.ToString()))
-					err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
-					if err != nil {
+					)
+
+					if err = vector.AppendFixed[types.TS](
+						snapshotList[id].GetDownstreamVector(), snapTs, false, mp,
+					); err != nil {
 						return nil, err
 					}
 				}
@@ -806,10 +937,12 @@ func (sm *SnapshotMeta) GetPITR(
 					pitr.tables[id] = pitrTs
 				}
 				// TODO: info to debug
-				logutil.Info("[GetPITR] pitr",
+				logutil.Info(
+					"GC-GetPITR",
 					zap.String("level", level),
 					zap.Uint64("id", account),
-					zap.String("snap ts", pitrTs.ToString()))
+					zap.String("ts", pitrTs.ToString()),
+				)
 			}
 		}
 	}
@@ -817,7 +950,7 @@ func (sm *SnapshotMeta) GetPITR(
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
-	sm.tides[tid] = struct{}{}
+	sm.snapshotTableIDs[tid] = struct{}{}
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
@@ -924,7 +1057,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				continue
 			}
 
-			if _, ok := sm.tides[table.tid]; ok {
+			if _, ok := sm.snapshotTableIDs[table.tid]; ok {
 				appendBat(snapTableBat, table)
 			}
 		}
@@ -1005,15 +1138,17 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			pk:        pk,
 		}
 		sm.tables[accid][tid] = table
-		sm.acctIndexes[tid] = table
+		sm.tableIDIndex[tid] = table
 		if !table.deleteAt.IsEmpty() {
 			continue
 		}
-		if len(sm.pkIndexes[pk]) > 0 {
-			panic(fmt.Sprintf("pk %s already exists, table: %d", pk, tid))
+		if len(sm.tablePKIndex[pk]) > 0 {
+			logutil.Warn("RebuildTableInfo-PK-Exists",
+				zap.String("pk", pk),
+				zap.Uint64("table", tid))
 		}
-		sm.pkIndexes[pk] = make([]*tableInfo, 1)
-		sm.pkIndexes[pk][0] = table
+		sm.tablePKIndex[pk] = make([]*tableInfo, 1)
+		sm.tablePKIndex[pk][0] = table
 	}
 }
 
@@ -1032,8 +1167,8 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		accid := accIDs[i]
-		if _, ok := sm.tides[tid]; !ok {
-			sm.tides[tid] = struct{}{}
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
+			sm.snapshotTableIDs[tid] = struct{}{}
 			logutil.Info("[RebuildSnapshotTid]", zap.Uint64("tid", tid), zap.Uint32("account id", accid))
 		}
 	}
@@ -1067,7 +1202,7 @@ func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		commitTs := commitTsVec[i]
 		if _, ok := sm.aobjDelTsMap[commitTs]; ok {
-			panic(fmt.Sprintf("commitTs %v already exists", commitTs.ToString()))
+			logutil.Warn("RebuildAObjectDel-Exists", zap.Any("commitTs", commitTs))
 		}
 		sm.aobjDelTsMap[commitTs] = struct{}{}
 	}
@@ -1094,15 +1229,20 @@ func (sm *SnapshotMeta) Rebuild(
 					stats:    objectStats,
 					createAt: createTS,
 				}
-				logutil.Info("[RebuildPITR] Add object2",
-					zap.String("object name", objectStats.ObjectName().String()),
-					zap.String("create at", createTS.ToString()))
+				logutil.Info(
+					"GC-Rebuild-P1",
+					zap.String("object-name", objectStats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+				)
 			}
 			continue
 		}
-		if _, ok := sm.tides[tid]; !ok {
-			sm.tides[tid] = struct{}{}
-			logutil.Info("[RebuildSnapTable]", zap.Uint64("tid", tid))
+		if _, ok := sm.snapshotTableIDs[tid]; !ok {
+			sm.snapshotTableIDs[tid] = struct{}{}
+			logutil.Info(
+				"GC-RebuildT-P2",
+				zap.Uint64("tid", tid),
+			)
 		}
 		if (*objects)[tid] == nil {
 			(*objects)[tid] = make(map[objectio.Segmentid]*objectInfo)
@@ -1113,10 +1253,12 @@ func (sm *SnapshotMeta) Rebuild(
 				stats:    objectStats,
 				createAt: createTS,
 			}
-			logutil.Info("[RebuildSnapshot] Add object",
-				zap.Uint64("table id", tid),
-				zap.String("object name", objectStats.ObjectName().String()),
-				zap.String("create at", createTS.ToString()))
+			logutil.Info(
+				"GC-Rebuild-P3",
+				zap.Uint64("table-id", tid),
+				zap.String("object-name", objectStats.ObjectName().String()),
+				zap.String("create-at", createTS.ToString()),
+			)
 			continue
 		}
 	}
@@ -1273,86 +1415,88 @@ func (sm *SnapshotMeta) TableInfoString() string {
 	return buf.String()
 }
 
-func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	sm.RLock()
-	defer sm.RUnlock()
-	if sm.acctIndexes[tid] == nil {
+func (sm *SnapshotMeta) GetSnapshotListLocked(snapshotList map[uint32][]types.TS, tid uint64) []types.TS {
+	if sm.tableIDIndex[tid] == nil {
 		return nil
 	}
-	accID := sm.acctIndexes[tid].accountID
-	return SnapshotList[accID]
+	accID := sm.tableIDIndex[tid].accountID
+	return snapshotList[accID]
 }
 
-func (sm *SnapshotMeta) GetSnapshotListLocked(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
-	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
-		allSnapshot := make(map[types.TS]struct{}, 0)
-		snapshotList := make([]types.TS, 0)
-		for _, snapshots := range SnapshotList {
-			for _, snapshot := range snapshots {
-				allSnapshot[snapshot] = struct{}{}
-			}
-		}
+// AccountToTableSnapshots returns a map from table id to its snapshots.
+// The snapshotList is a map from account id to its snapshots.
+// The pitr is the pitr info.
+func (sm *SnapshotMeta) AccountToTableSnapshots(
+	accountSnapshots map[uint32][]types.TS,
+	pitr *PitrInfo,
+) (
+	tableSnapshots map[uint64][]types.TS,
+	tablePitrs map[uint64]*types.TS,
+) {
+	tableSnapshots = make(map[uint64][]types.TS, 100)
+	tablePitrs = make(map[uint64]*types.TS, 100)
 
-		for snapshot := range allSnapshot {
-			snapshotList = append(snapshotList, snapshot)
+	// 1. for system tables, flatten the accountSnapshots to tableSnapshots
+	var flattenSnapshots []types.TS
+	{
+		var cnt int
+		for _, tss := range accountSnapshots {
+			cnt += len(tss)
 		}
-		sort.Slice(snapshotList, func(i, j int) bool {
-			return snapshotList[i].LT(&snapshotList[j])
-		})
-		return snapshotList
+		flattenSnapshots = make([]types.TS, 0, cnt)
+
+		for _, tss := range accountSnapshots {
+			flattenSnapshots = append(flattenSnapshots, tss...)
+		}
+		flattenSnapshots = compute.SortAndDedup(
+			flattenSnapshots,
+			func(a, b *types.TS) bool {
+				return a.LT(b)
+			},
+			func(a, b *types.TS) bool {
+				return a.EQ(b)
+			},
+		)
 	}
-	if sm.acctIndexes[tid] == nil {
-		return nil
+
+	// 2. get the pitr.MinTS as the pitr for system tables
+	sysPitr := pitr.MinTS()
+
+	tableSnapshots[catalog2.MO_DATABASE_ID] = flattenSnapshots
+	tableSnapshots[catalog2.MO_TABLES_ID] = flattenSnapshots
+	tableSnapshots[catalog2.MO_COLUMNS_ID] = flattenSnapshots
+	tablePitrs[catalog2.MO_DATABASE_ID] = &sysPitr
+	tablePitrs[catalog2.MO_TABLES_ID] = &sysPitr
+	tablePitrs[catalog2.MO_COLUMNS_ID] = &sysPitr
+
+	for tid, info := range sm.tableIDIndex {
+		if catalog2.IsSystemTable(tid) {
+			continue
+		}
+		// use the account snapshots as the table snapshots
+		accountID := info.accountID
+		tableSnapshots[tid] = accountSnapshots[accountID]
+
+		// get the pitr for the table
+		ts := pitr.GetTS(accountID, info.dbID, tid)
+		tablePitrs[tid] = &ts
 	}
-	accID := sm.acctIndexes[tid].accountID
-	return SnapshotList[accID]
+	return
 }
 
-func (sm *SnapshotMeta) GetPitrLocked(pitr *PitrInfo, db, tid uint64) types.TS {
-	var ts types.TS
-	if !pitr.cluster.IsEmpty() {
-		ts = pitr.cluster
+func (sm *SnapshotMeta) GetPitrByTable(
+	pitr *PitrInfo, dbID, tableID uint64,
+) *types.TS {
+	var accountID uint32
+	if tableInfo := sm.tableIDIndex[tableID]; tableInfo != nil {
+		accountID = tableInfo.accountID
 	}
-	if isMoTable(tid) || isMoDB(tid) || isMoCol(tid) {
-		for _, p := range pitr.account {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
-		}
-		for _, p := range pitr.database {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
-		}
-
-		for _, p := range pitr.tables {
-			if ts.IsEmpty() || p.LT(&ts) {
-				ts = p
-			}
-		}
-		return ts
-	}
-	if sm.acctIndexes[tid] != nil {
-		account := sm.acctIndexes[tid].accountID
-		p := pitr.account[account]
-		if !p.IsEmpty() {
-			ts = p
-		}
-	}
-	p := pitr.database[db]
-	if !p.IsEmpty() && (ts.IsEmpty() || p.LT(&ts)) {
-		ts = p
-	}
-	p = pitr.tables[tid]
-	if !p.IsEmpty() && (ts.IsEmpty() || p.LT(&ts)) {
-		ts = p
-	}
-	return ts
-
+	ts := pitr.GetTS(accountID, dbID, tableID)
+	return &ts
 }
 
 func (sm *SnapshotMeta) MergeTableInfo(
-	SnapshotList map[uint32][]types.TS,
+	accountSnapshots map[uint32][]types.TS,
 	pitr *PitrInfo,
 ) error {
 	sm.Lock()
@@ -1361,11 +1505,11 @@ func (sm *SnapshotMeta) MergeTableInfo(
 		return nil
 	}
 	for accID, tables := range sm.tables {
-		if SnapshotList[accID] == nil && pitr.IsEmpty() {
+		if accountSnapshots[accID] == nil && pitr.IsEmpty() {
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
-					delete(sm.acctIndexes, table.tid)
+					delete(sm.tableIDIndex, table.tid)
 					if sm.objects[table.tid] != nil {
 						delete(sm.objects, table.tid)
 					}
@@ -1374,11 +1518,11 @@ func (sm *SnapshotMeta) MergeTableInfo(
 			continue
 		}
 		for _, table := range tables {
-			ts := sm.GetPitrLocked(pitr, table.dbID, table.tid)
+			ts := sm.GetPitrByTable(pitr, table.dbID, table.tid)
 			if !table.deleteAt.IsEmpty() &&
-				!isSnapshotRefers(table, SnapshotList[accID], ts) {
+				!isSnapshotRefers(table, accountSnapshots[accID], ts) {
 				delete(sm.tables[accID], table.tid)
-				delete(sm.acctIndexes, table.tid)
+				delete(sm.tableIDIndex, table.tid)
 				if sm.objects[table.tid] != nil {
 					delete(sm.objects, table.tid)
 				}
@@ -1394,16 +1538,41 @@ func (sm *SnapshotMeta) MergeTableInfo(
 	return nil
 }
 
+func (sm *SnapshotMeta) GetTableDropAt(tid uint64) (types.TS, bool) {
+	sm.RLock()
+	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return types.TS{}, false
+	}
+	return sm.tableIDIndex[tid].deleteAt, true
+}
+
+func (sm *SnapshotMeta) GetAccountId(tid uint64) (uint32, bool) {
+	sm.RLock()
+	defer sm.RUnlock()
+	if sm.tableIDIndex[tid] == nil {
+		return 0, false
+	}
+	return sm.tableIDIndex[tid].accountID, true
+}
+
+// for test
+func (sm *SnapshotMeta) GetTablePK(tid uint64) string {
+	sm.RLock()
+	defer sm.RUnlock()
+	return sm.tableIDIndex[tid].pk
+}
+
 func (sm *SnapshotMeta) String() string {
 	sm.RLock()
 	defer sm.RUnlock()
 	return fmt.Sprintf("account count: %d, table count: %d, object count: %d",
-		len(sm.tables), len(sm.acctIndexes), len(sm.objects))
+		len(sm.tables), len(sm.tableIDIndex), len(sm.objects))
 }
 
-func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool {
+func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool {
 	if !pitr.IsEmpty() {
-		if table.deleteAt.GT(&pitr) {
+		if table.deleteAt.GT(pitr) {
 			return true
 		}
 	}
@@ -1415,10 +1584,78 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr types.TS) bool 
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
-				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
+			logutil.Info(
+				"isSnapshotRefers",
+				zap.String("snap-ts", snapTS.ToString()),
+				zap.String("create-ts", table.createAt.ToString()),
+				zap.String("drop-ts", table.deleteAt.ToString()),
+				zap.Uint64("tid", table.tid),
+			)
 			return true
 		} else if snapTS.LT(&table.createAt) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
+}
+
+func ObjectIsSnapshotRefers(
+	obj *objectio.ObjectStats,
+	pitr, createTS, dropTS *types.TS,
+	snapshots []types.TS,
+) bool {
+	// no snapshot and no pitr
+	if len(snapshots) == 0 && (pitr == nil || pitr.IsEmpty()) {
+		return false
+	}
+
+	// if dropTS is empty, it means the object is not dropped
+	if dropTS.IsEmpty() {
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"GCJOB-DEBUG-1",
+				zap.String("obj", obj.ObjectName().String()),
+				zap.String("create-ts", createTS.ToString()),
+				zap.String("drop-ts", createTS.ToString()),
+			)
+		})
+		return true
+	}
+
+	// if pitr is not empty, and pitr is greater than dropTS, it means the object is not dropped
+	if pitr != nil && !pitr.IsEmpty() {
+		if dropTS.GT(pitr) {
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-PITR-PIN",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", pitr.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
+			return true
+		}
+	}
+
+	left, right := 0, len(snapshots)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		snapTS := snapshots[mid]
+		if snapTS.GE(createTS) && snapTS.LT(dropTS) {
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"GCJOB-DEBUG-2",
+					zap.String("name", obj.ObjectName().String()),
+					zap.String("pitr", snapTS.ToString()),
+					zap.String("create-ts", createTS.ToString()),
+					zap.String("drop-ts", dropTS.ToString()),
+				)
+			})
+			return true
+		} else if snapTS.LT(createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1

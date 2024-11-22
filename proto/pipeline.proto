@@ -52,6 +52,7 @@ message Message {
   uint64  id = 7;
   bytes   uuid = 8;
   bool    needNotReply = 9;
+  string debugMsg = 10;
 }
 
 message Connector {
@@ -133,11 +134,11 @@ message Insert{
 
 message MultiUpdate {
   uint64 affected_rows = 1;
-  bool ToWriteS3 = 2;
+  uint32 Action = 2;
   uint32 IBucket = 3;
   uint32 NBucket = 4;
   map<string,int32> SegmentMap = 5;
-  repeated plan.UpdateCtx update_ctx = 6;
+  repeated plan.UpdateCtx update_ctx_list = 6;
 }
 
 message Array{
@@ -178,6 +179,18 @@ message PreInsert {
   plan.Expr cluster_by_expr  = 9;
 }
 
+message PostDml {
+  // PostDmlCtx
+  plan.ObjectRef ref = 1;
+  bool add_affected_rows = 2;
+  int32 primary_key_idx = 3;
+  string primary_key_name = 4;
+  bool is_delete = 5;
+  bool is_insert = 6;
+  bool is_delete_without_filters = 7;
+  plan.PostDmlFullTextCtx full_text = 8;
+}
+
 message LockTarget {
   uint64 table_id           	  = 1;
   int32 primary_col_idx_in_bat  = 2;
@@ -187,6 +200,8 @@ message LockTarget {
   bool lock_table               = 6;
   bool ChangeDef               = 7;
   lock.LockMode Mode         = 8;
+  plan.Expr lock_rows = 9;
+  bool lock_table_at_the_end = 10;
 }
 
 message LockOp {
@@ -340,6 +355,22 @@ message MarkJoin {
   int32 shuffle_idx = 9;
 }
 
+message DedupJoin {
+  repeated plan.Expr left_cond = 1;
+  repeated plan.Expr right_cond = 2;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
+  bool is_shuffle = 4;
+  int32 join_map_tag = 5;
+  int32 shuffle_idx = 6;
+  plan.Node.OnDuplicateAction on_duplicate_action = 7;
+  string dedup_col_name = 8;
+  repeated plan.Type dedup_col_types = 9 [(gogoproto.nullable) = false];
+  repeated plan.Type left_types = 10 [(gogoproto.nullable) = false];
+  repeated plan.Type right_types = 11 [(gogoproto.nullable) = false];
+	repeated int32 update_col_idx_list = 12;
+	repeated plan.Expr update_col_expr_list = 13;
+}
+
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
@@ -417,6 +448,10 @@ message HashBuild {
 	int32 JoinMapTag = 6;
 	int32 JoinMapRefCnt = 7;
 	plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
+  bool is_dedup = 9;
+  plan.Node.OnDuplicateAction on_duplicate_action = 10;
+  string dedup_col_name = 11;
+  repeated plan.Type dedup_col_types = 12 [(gogoproto.nullable) = false];
 }
 
 message Shufflebuild {
@@ -427,6 +462,10 @@ message Shufflebuild {
 	plan.RuntimeFilterSpec RuntimeFilterSpec = 5;
 	int32 JoinMapTag = 6;
 	int32 ShuffleIdx = 7;
+  bool is_dedup = 8;
+  plan.Node.OnDuplicateAction on_duplicate_action = 9;
+  string dedup_col_name = 10;
+  repeated plan.Type dedup_col_types = 11 [(gogoproto.nullable) = false];
 }
 
 message Indexbuild {
@@ -454,11 +493,12 @@ message Instruction{
   Connector   connect = 4;
   Dispatch  dispatch = 5;
   Group     agg = 6;
+  Join    join = 7;
   LeftJoin  left_join = 8;
   SemiJoin  semi_join = 9;
   SingleJoin single_join = 10;
   MarkJoin    mark_join = 11;
-  Join    join = 12;
+  DedupJoin   dedup_join = 12;
   Product    product = 13;
   TableFunction table_function = 14;
   ExternalScan external_scan = 16;
@@ -502,6 +542,8 @@ message Instruction{
   Shufflebuild shuffle_build = 49;
   Indexbuild index_build = 50;
   Apply apply = 51;
+  MultiUpdate multi_update = 52;
+  PostDml post_dml = 53;
 }
 
 message AnalysisList {
@@ -516,10 +558,11 @@ message Source {
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
   plan.Expr  expr = 7;
-  plan.TableDef tableDef = 8;
-  timestamp.Timestamp timestamp = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
-  bool is_const = 11;
+  plan.Node node = 8;
+  plan.TableDef tableDef = 9;
+  timestamp.Timestamp timestamp = 10;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
+  bool is_const = 12;
 }
 
 message NodeInfo {
@@ -527,6 +570,9 @@ message NodeInfo {
   string id = 2;
   string addr = 3;
   string payload = 4;
+  bool need_expand_ranges = 5;
+  int32 cn_cnt = 6;
+  int32 cn_idx = 7;
 }
 
 message ProcessLimitation {

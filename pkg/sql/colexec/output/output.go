@@ -73,10 +73,14 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		bat := result.Batch
 
-		if err = output.Func(bat); err != nil {
+		crs := analyzer.GetOpCounterSet()
+		if err = output.Func(bat, crs); err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
+		analyzer.AddS3RequestCount(crs)
+		analyzer.AddDiskIO(crs)
+
 		// TODO: analyzer.Output(result.Batch)
 		return result, nil
 	} else {
@@ -115,10 +119,15 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
 				output.ctr.currentIdx = output.ctr.currentIdx + 1
-				if err := output.Func(bat); err != nil {
+
+				crs := analyzer.GetOpCounterSet()
+				if err := output.Func(bat, crs); err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
+				analyzer.AddS3RequestCount(crs)
+				analyzer.AddDiskIO(crs)
+
 				result.Batch = bat
 				// same as nonBlock
 				// analyzer.Output(result.Batch)

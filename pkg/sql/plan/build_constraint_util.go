@@ -22,14 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -429,7 +428,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -439,7 +438,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
+		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -642,7 +641,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		rightTableDef := DeepCopyTableDef(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
-		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
+		uniqueCols, uniqueColNames := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.Pkey.CompPkeyCol)
@@ -676,17 +675,19 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			for _, updateExpr := range stmt.OnDuplicateUpdate {
 				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
+				if _, ok := uniqueColNames[col]; ok {
+					return false, nil, nil, moerr.NewInternalError(builder.GetContext(), "do not support update primary key/unique key for on duplicate key update")
+				}
 			}
 
 			var defExpr *Expr
 			idxs := make([]int32, len(rightTableDef.Cols))
 			updateExprs := make(map[string]*Expr)
+			binder := NewUpdateBinder(builder.GetContext(), builder, nil, rightTableDef.Cols)
 			for i, col := range rightTableDef.Cols {
 				info.idx = info.idx + 1
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
-					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
-					binder.builder = builder
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
@@ -866,7 +867,7 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
 
-	return builder.buildSelect(astSelect, bindCtx, false)
+	return builder.bindSelect(astSelect, bindCtx, false)
 }
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
@@ -960,6 +961,158 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	}, nil
 }
 
+func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (*plan.Expr, error) {
+	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
+		return makePlan2NullConstExprWithType(), nil
+	}
+	switch colType.Oid {
+	case types.T_bool:
+		canInsert, num, err := util.SetInsertValueBool(proc, numVal)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2BoolConstExprWithType(num), err
+
+	case types.T_bit:
+		canInsert, num, err := util.SetInsertValueBit(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Uint64ConstExprWithType(num), err
+	case types.T_int8:
+		canInsert, num, err := util.SetInsertValueNumber[int8](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Int8ConstExprWithType(num), err
+	case types.T_int16:
+		canInsert, num, err := util.SetInsertValueNumber[int16](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Int16ConstExprWithType(num), err
+	case types.T_int32:
+		canInsert, num, err := util.SetInsertValueNumber[int32](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Int32ConstExprWithType(num), err
+	case types.T_int64:
+		canInsert, num, err := util.SetInsertValueNumber[int64](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Int64ConstExprWithType(num), err
+	case types.T_uint8:
+		canInsert, num, err := util.SetInsertValueNumber[uint8](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Uint8ConstExprWithType(num), err
+	case types.T_uint16:
+		canInsert, num, err := util.SetInsertValueNumber[uint16](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Uint16ConstExprWithType(num), err
+	case types.T_uint32:
+		canInsert, num, err := util.SetInsertValueNumber[uint32](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Uint32ConstExprWithType(num), err
+	case types.T_uint64:
+		canInsert, num, err := util.SetInsertValueNumber[uint64](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Uint64ConstExprWithType(num), err
+	case types.T_float32:
+		canInsert, num, err := util.SetInsertValueNumber[float32](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Float32ConstExprWithType(num), err
+	case types.T_float64:
+		canInsert, num, err := util.SetInsertValueNumber[float64](proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2Float64ConstExprWithType(num), err
+	case types.T_decimal64:
+		canInsert, num, err := util.SetInsertValueDecimal64(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		planType := MakePlan2TypeValue(colType)
+		return MakePlan2Decimal64ExprWithType(num, &planType), err
+	case types.T_decimal128:
+		canInsert, num, err := util.SetInsertValueDecimal128(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		planType := MakePlan2TypeValue(colType)
+		return MakePlan2Decimal128ExprWithType(num, &planType), err
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+		types.T_array_float32, types.T_array_float64:
+		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2StringConstExprWithType(string(num)), err
+	case types.T_json:
+		canInsert, num, err := util.SetInsertValueJSON(proc, numVal)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		return MakePlan2StringConstExprWithType(string(num)), err
+		/* 	case types.T_uuid:
+		canInsert, num, err := setInsertValueUuid(proc, numVal) */
+	case types.T_time:
+		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		if isnull {
+			return makePlan2NullConstExprWithType(), nil
+		}
+		return MakePlan2TimeConstExprWithType(int64(num)), err
+	case types.T_date:
+		canInsert, isnull, num, err := util.SetInsertValueDate(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		if isnull {
+			return makePlan2NullConstExprWithType(), nil
+		}
+
+		return MakePlan2DateConstExprWithType(int32(num)), err
+	case types.T_datetime:
+		canInsert, isnull, num, err := util.SetInsertValueDateTime(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		if isnull {
+			return makePlan2NullConstExprWithType(), nil
+		}
+		return MakePlan2DateTimeConstExprWithType(int64(num)), err
+	case types.T_timestamp:
+		canInsert, isnull, num, err := util.SetInsertValueTimeStamp(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		if isnull {
+			return makePlan2NullConstExprWithType(), nil
+		}
+		return MakePlan2TimestampConstExprWithType(int64(num)), err
+
+	case types.T_enum:
+		return nil, nil
+	}
+
+	return nil, nil
+}
+
 func buildValueScan(
 	isAllDefault bool,
 	info *dmlSelectInfo,
@@ -988,13 +1141,10 @@ func buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*Expr, colCount)
-	bat := batch.NewWithSize(len(updateColumns))
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
-		vec := vector.NewVec(colTyp)
-		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_T{
@@ -1011,70 +1161,42 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
+			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(slt.Rows))
 			for j := range slt.Rows {
-				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-					bat.Clean(proc.Mp())
-					return err
+				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
+					Expr: defExpr,
 				}
-				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Pos:    -1,
-					RowPos: int32(j),
-					Expr:   defExpr,
-				})
 			}
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
-			for j, r := range slt.Rows {
+			for _, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
-					canInsert, err := util.SetInsertValue(proc, nv, vec)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return err
 					}
-					if canInsert {
+					if expr != nil {
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
+							Expr: expr,
+						})
 						continue
 					}
 				}
 
-				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-					bat.Clean(proc.Mp())
-					return err
-				}
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return err
 					}
-				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
-					if !builder.isPrepareStatement {
-						bat.Clean(proc.Mp())
-						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
-					}
-					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-						RowPos: int32(j),
-						Pos:    int32(nv.Offset),
-						Expr: &plan.Expr{
-							Typ: constTextType,
-							Expr: &plan.Expr_P{
-								P: &plan.ParamRef{
-									Pos: int32(nv.Offset),
-								},
-							},
-						},
-					})
-					continue
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
 					if err != nil {
-						bat.Clean(proc.Mp())
 						return err
 					}
 					if col.Typ.Id == int32(types.T_enum) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							bat.Clean(proc.Mp())
 							return err
 						}
 					}
@@ -1083,22 +1205,8 @@ func buildValueScan(
 				if err != nil {
 					return err
 				}
-				if nv, ok := r[i].(*tree.ParamExpr); ok {
-					if !builder.isPrepareStatement {
-						bat.Clean(proc.Mp())
-						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
-					}
-					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-						RowPos: int32(j),
-						Pos:    int32(nv.Offset),
-						Expr:   defExpr,
-					})
-					continue
-				}
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Pos:    -1,
-					RowPos: int32(j),
-					Expr:   defExpr,
+					Expr: defExpr,
 				})
 			}
 		}
@@ -1160,7 +1268,6 @@ func buildValueScan(
 			}
 		}
 	}
-	bat.SetRowCount(len(slt.Rows))
 	rowsetData.RowCount = int32(len(slt.Rows))
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
@@ -1171,11 +1278,7 @@ func buildValueScan(
 		Uuid:          nodeId[:],
 		OnUpdateExprs: onUpdateExprs,
 	}
-	if builder.isPrepareStatement {
-		proc.SetPrepareBatch(bat)
-	} else {
-		proc.SetValueScanBatch(nodeId, bat)
-	}
+
 	info.rootId = builder.appendNode(scanNode, bindCtx)
 	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
 		return err
@@ -1366,7 +1469,8 @@ func appendPrimaryConstraintPlan(
 				Typ: pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						Name: tableDef.Pkey.PkeyColName,
+						Name:   tableDef.Pkey.PkeyColName,
+						ColPos: int32(pkPos),
 					},
 				},
 			}

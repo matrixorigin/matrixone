@@ -74,7 +74,9 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
-			(accountId != catalog.System_Account || IsSnapshotValid(snapshot)) {
+			(accountId != catalog.System_Account || IsSnapshotValid(snapshot) || useDbName) {
+			// useDbName reuse in build alter table sql
+			// if use in other place, need to check or add a new parameter
 			continue
 		}
 
@@ -158,45 +160,80 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		indexNames := make(map[string]bool)
 
 		for _, indexdef := range tableDef.Indexes {
-			if _, ok := indexNames[indexdef.IndexName]; ok {
-				continue
-			} else {
-				indexNames[indexdef.IndexName] = true
+			// Index Name can be empty string when CREATE TABLE with index
+			// avoid duplicate only work when index name is not empty
+			if len(indexdef.IndexName) > 0 {
+				if _, ok := indexNames[indexdef.IndexName]; ok {
+					continue
+				} else {
+					indexNames[indexdef.IndexName] = true
+				}
 			}
 
 			var indexStr string
-			if indexdef.Unique {
-				indexStr = "  UNIQUE KEY "
+			if !indexdef.Unique && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+				indexStr += " FULLTEXT("
+				i := 0
+				for _, part := range indexdef.Parts {
+					if catalog.IsAlias(part) {
+						continue
+					}
+					if i > 0 {
+						indexStr += ","
+					}
+
+					part = colNameToOriginName[part]
+					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					i++
+				}
+
+				indexStr += ")"
+
+				if indexdef.IndexAlgoParams != "" {
+					paramMap, err := catalog.IndexParamsStringToMap(indexdef.IndexAlgoParams)
+					if err != nil {
+						return "", nil, err
+					}
+					parser, ok := paramMap["parser"]
+					if ok {
+						indexStr += " WITH PARSER " + parser
+					}
+				}
+
 			} else {
-				indexStr = "  KEY "
-			}
-			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
-			}
-			indexStr += "("
-			i := 0
-			for _, part := range indexdef.Parts {
-				if catalog.IsAlias(part) {
-					continue
+				if indexdef.Unique {
+					indexStr = "  UNIQUE KEY "
+				} else {
+					indexStr = "  KEY "
 				}
-				if i > 0 {
-					indexStr += ","
+				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
+				indexStr += "("
+				i := 0
+				for _, part := range indexdef.Parts {
+					if catalog.IsAlias(part) {
+						continue
+					}
+					if i > 0 {
+						indexStr += ","
+					}
+
+					part = colNameToOriginName[part]
+					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					i++
 				}
 
-				part = colNameToOriginName[part]
-				indexStr += fmt.Sprintf("`%s`", formatStr(part))
-				i++
-			}
-
-			indexStr += ")"
-			if indexdef.IndexAlgoParams != "" {
-				var paramList string
-				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
-				if err != nil {
-					return "", nil, err
+				indexStr += ")"
+				if indexdef.IndexAlgoParams != "" {
+					var paramList string
+					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
+					if err != nil {
+						return "", nil, err
+					}
+					indexStr += paramList
 				}
-				indexStr += paramList
 			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)

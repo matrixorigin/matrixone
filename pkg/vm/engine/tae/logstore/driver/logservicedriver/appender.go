@@ -20,12 +20,16 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	"go.uber.org/zap"
 )
+
+const SlowAppendThreshold = 1 * time.Second
 
 type driverAppender struct {
 	client          *clientWithRecord
@@ -64,8 +68,8 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)
 	record.ResizePayload(size)
-	defer logSlowAppend()()
-	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+	defer logSlowAppend(size, a.appendlsn)()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender1)
 
 	var timeoutSpan trace.Span
 	// Before issue#10467 is resolved, we skip this span,
@@ -80,28 +84,50 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
-		logutil.Errorf("append failed: %v", err)
+		err = moerr.AttachCause(ctx, err)
+		logutil.Error(
+			"WAL-Append-Error",
+			zap.Error(err),
+			zap.Uint64("append-lsn", a.appendlsn),
+			zap.Int("client-id", a.client.id),
+			zap.Int("size", size),
+		)
 	}
 	cancel()
 	if err != nil {
+		retryTimes := 0
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+			retryTimes++
+			ctx, cancel := context.WithTimeoutCause(context.Background(), appendTimeout, moerr.CauseDriverAppender2)
 			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
 				trace.WithProfileGoroutine(),
 				trace.WithProfileHeap(),
 				trace.WithProfileCpuSecs(time.Second*10))
 			defer timeoutSpan.End()
 			lsn, err = a.client.c.Append(ctx, record)
+			err = moerr.AttachCause(ctx, err)
 			cancel()
 			if err != nil {
-				logutil.Errorf("append failed: %v", err)
+				logutil.Error(
+					"WAL-Append-Error",
+					zap.Error(err),
+					zap.Uint64("append-lsn", a.appendlsn),
+					zap.Int("client-id", a.client.id),
+					zap.Int("size", size),
+					zap.Int("retry", retryTimes),
+				)
 			}
 			return err == nil
 		})
 	}
-	logutil.Debugf("Log Service Driver: append end %p", a.client.record.Data)
 	if err != nil {
-		logutil.Infof("size is %d", size)
+		logutil.Error(
+			"WAL-Append-Error",
+			zap.Error(err),
+			zap.Uint64("append-lsn", a.appendlsn),
+			zap.Int("client-id", a.client.id),
+			zap.Int("size", size),
+		)
 		logutil.Panic(err.Error())
 	}
 	a.logserviceLsn = lsn
@@ -118,15 +144,19 @@ func (a *driverAppender) freeEntries() {
 	}
 }
 
-func logSlowAppend() func() {
-	const slowAppend = 1 * time.Second
+func logSlowAppend(
+	size int,
+	appendLsn uint64,
+) func() {
 	start := time.Now()
 	return func() {
 		elapsed := time.Since(start)
-		if elapsed >= slowAppend {
+		if elapsed >= SlowAppendThreshold {
 			logutil.Warn(
-				"SLOW-LOG",
-				zap.Duration("append-wal", elapsed),
+				"SLOW-LOG-AppendWAL",
+				zap.Duration("latency", elapsed),
+				zap.Int("size", size),
+				zap.Uint64("append-lsn", appendLsn),
 			)
 		}
 	}

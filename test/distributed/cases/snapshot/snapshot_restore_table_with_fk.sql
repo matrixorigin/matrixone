@@ -115,3 +115,4 @@ drop database fk_test2;
 drop account acc1;
 -- @ignore:1
 show snapshots;
+

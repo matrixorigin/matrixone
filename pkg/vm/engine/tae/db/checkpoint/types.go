@@ -38,6 +38,7 @@ const (
 	ET_Global EntryType = iota
 	ET_Incremental
 	ET_Backup
+	ET_Compacted
 )
 
 type Runner interface {
@@ -55,6 +56,7 @@ type Runner interface {
 	// for test, delete in next phase
 	DebugUpdateOptions(opts ...Option)
 	GetAllCheckpoints() []*CheckpointEntry
+	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
 }
 
 type DirtyCtx struct {

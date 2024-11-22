@@ -19,10 +19,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
@@ -135,6 +137,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, obj := range checker.readSet {
 		if err = readWriteConfilictCheck(obj, ts); err != nil {
+			logutil.Error(
+				"Txn-Check-All",
+				zap.Error(err),
+				zap.String("ts", ts.ToString()),
+				zap.String("obj", obj.ID().String()),
+			)
 			return
 		}
 	}

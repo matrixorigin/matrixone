@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,7 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"go.uber.org/zap"
 )
+
+type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
@@ -40,24 +42,36 @@ func WithTrasnferBuffer(buffer *containers.OneSchemaBatchBuffer) TransferOption 
 }
 
 func ConstructCNTombstoneObjectsTransferFlow(
+	ctx context.Context,
 	start, end types.TS,
 	table *txnTable,
 	txn *Transaction,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (*TransferFlow, error) {
+) (*TransferFlow, []zap.Field, error) {
 
-	ctx := table.proc.Load().Ctx
+	//ctx := table.proc.Load().Ctx
 	state, err := table.getPartitionState(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
 		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
 	}
 
-	deletedObjects := state.CollectObjectsBetween(start, end, true)
+	var logs []zap.Field
+
+	newDataObjects, deletedObjects := state.CollectObjectsBetween(start, end)
+
+	logs = append(logs,
+		zap.Int("newDataObjects", len(newDataObjects)),
+		zap.Int("deletedObjects", len(deletedObjects)))
+
+	if len(newDataObjects) == 0 || len(deletedObjects) == 0 {
+		return nil, logs, nil
+	}
+
 	deletedObjectsIter := func() *types.Objectid {
 		if len(deletedObjects) == 0 {
 			return nil
@@ -69,28 +83,30 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	tombstoneObjects := make([]objectio.ObjectStats, 0)
-	txn.ForEachTableWrites(
-		table.db.databaseId, table.tableId,
-		len(txn.writes),
-		func(entry Entry) {
-			if entry.fileName != "" && entry.typ == DELETE {
-				stats := objectio.ObjectStats(entry.bat.Vecs[0].GetBytesAt(0))
+
+	for _, e := range txn.writes {
+		if e.tableId != table.tableId || e.databaseId != table.db.databaseId {
+			continue
+		}
+
+		if e.fileName != "" && e.typ == DELETE {
+			for i := range e.bat.Vecs[0].Length() {
+				stats := objectio.ObjectStats(e.bat.Vecs[0].GetBytesAt(i))
 				tombstoneObjects = append(tombstoneObjects, stats)
 			}
-		})
+		}
+	}
+
+	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
 	if tombstoneObjects, err = blockio.CoarseFilterTombstoneObject(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
-		return nil, err
+		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
-		return nil, nil
+		return nil, logs, nil
 	}
 
-	newDataObjects := state.CollectObjectsBetween(start, end, false)
-
-	if len(newDataObjects) == 0 {
-		return nil, nil
-	}
+	logs = append(logs, zap.Int("coarse-tombstoneObjects", len(tombstoneObjects)))
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
@@ -111,7 +127,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		isObjectDeletedFn,
 		newDataObjects,
 		mp,
-		fs), nil
+		fs), logs, nil
 }
 
 func ConstructTransferFlow(
@@ -151,7 +167,11 @@ type TransferFlow struct {
 	sinker            *engine_util.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
-	transferred       int
+
+	transferred struct {
+		rowCnt     int
+		objDetails map[string]int
+	}
 }
 
 func (flow *TransferFlow) fillDefaults() {
@@ -175,9 +195,11 @@ func (flow *TransferFlow) fillDefaults() {
 			engine_util.WithBuffer(flow.buffer, false),
 			engine_util.WithMemorySizeThreshold(mpool.MB*16),
 			engine_util.WithTailSizeCap(0),
-			// engine_util.WithAllMergeSorted(),
+			//engine_util.WithAllMergeSorted(),
 		)
 	}
+
+	flow.transferred.objDetails = make(map[string]int)
 }
 
 func (flow *TransferFlow) getBuffer() *batch.Batch {
@@ -242,7 +264,10 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		if err := staged.UnionOne(buffer, int64(i), flow.mp); err != nil {
 			return err
 		}
-		flow.transferred++
+
+		flow.transferred.rowCnt++
+		flow.transferred.objDetails[objectid.ShortStringEx()]++
+
 		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err
@@ -314,5 +339,6 @@ func (flow *TransferFlow) Close() error {
 	}
 	flow.mp = nil
 	flow.table = nil
+	flow.transferred.objDetails = nil
 	return nil
 }

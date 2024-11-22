@@ -16,9 +16,12 @@ package frontend
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
-func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
+func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
+	ses.EnterRunSql()
+	defer ses.ExitRunSql()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
@@ -41,19 +44,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
-		var uniqueCheckOnAuto string
 		dbName := st.Name.Compare()
 		//use database
 		err = handleChangeDB(ses, execCtx, dbName)
 		if err != nil {
 			return
 		}
-
-		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
-		if err != nil {
-			return
-		}
-		ses.SetConfig(dbName, "unique_check_on_autoincr", uniqueCheckOnAuto)
 	case *tree.MoDump:
 
 		//dump
@@ -300,7 +296,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPCreateFunction)
 		defer ses.ExitFPrint(FPCreateFunction)
 		if err = st.Valid(); err != nil {
-			return err
+			return
 		}
 		if err = handleCreateFunction(ses, execCtx, st); err != nil {
 			return
@@ -419,7 +415,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPRestoreSnapShot)
 		defer ses.ExitFPrint(FPRestoreSnapShot)
 		//TODO: invalidate privilege cache
-		if err = handleRestoreSnapshot(ses, execCtx, st); err != nil {
+		stats, err = handleRestoreSnapshot(ses, execCtx, st)
+		if err != nil {
 			return
 		}
 	case *tree.UpgradeStatement:
@@ -454,7 +451,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.EnterFPrint(FPRestorePitr)
 		defer ses.ExitFPrint(FPRestorePitr)
 		//TODO: invalidate privilege cache
-		if err = handleRestorePitr(ses, execCtx, st); err != nil {
+		stats, err = handleRestorePitr(ses, execCtx, st)
+		if err != nil {
 			return
 		}
 	case *tree.SetConnectionID:

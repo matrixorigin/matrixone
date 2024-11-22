@@ -15,8 +15,7 @@
 package hashmap
 
 import (
-	"unsafe"
-
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -85,10 +84,6 @@ func (m *StrHashMap) Size() int64 {
 	return m.hashMap.Size()
 }
 
-func (m *StrHashMap) Cardinality() uint64 {
-	return m.hashMap.Cardinality()
-}
-
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
@@ -105,6 +100,38 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	}
 }
 
+func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, n int, start int) {
+	keys := itr.keys
+	bytes := vec.GetBytesAt(start)
+	length := uint16(len(bytes))
+	// can't be const null
+	if itr.mp.hasNull {
+		gsp := vec.GetGrouping()
+		for i := 0; i < n; i++ {
+			hasGrouping := gsp.Contains(uint64(i + start))
+			if hasGrouping {
+				keys[i] = append(keys[i], byte(2))
+				continue
+			}
+			// for "a"，"bc" and "ab","c", we need to distinct
+			// this is not null value
+			keys[i] = append(keys[i], 0)
+			// give the length
+			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+			// append the pure value bytes
+			keys[i] = append(keys[i], bytes...)
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			// for "a"，"bc" and "ab","c", we need to distinct
+			// give the length
+			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+			// append the pure value bytes
+			keys[i] = append(keys[i], bytes...)
+		}
+	}
+}
+
 // A NULL C
 // 01A101C 9 bytes
 // for non-NULL value, give 3 bytes, the first byte is always 0, the last two bytes are the length
@@ -112,90 +139,165 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 // for NULL value, just only one byte, give one byte(1)
 // these are the rules of multi-cols
 // for one col, just give the value bytes
-func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, start int, lenCols int) {
+func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, start int, lenCols int) {
 	keys := itr.keys
 	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
+		for i := 0; i < lenV; i++ {
 			keys[i] = append(keys[i], byte(2))
 		}
 		return
 	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				keys[i] = append(keys[i], byte(1))
 			}
 		} else {
-			for i := 0; i < n; i++ {
+			for i := 0; i < lenV; i++ {
 				itr.zValues[i] = 0
 			}
 		}
 		return
 	}
+	if vec.IsConst() {
+		fillStringGroupStrForConstVec(itr, vec, lenV, start)
+		return
+	}
+
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			gsp := vec.GetGrouping()
-			for i := 0; i < n; i++ {
-				bytes := vec.GetBytesAt(i + start)
-				hasGrouping := gsp.Contains(uint64(i + start))
-				if hasGrouping {
-					keys[i] = append(keys[i], byte(2))
-					continue
-				}
-				// for "a"，"bc" and "ab","c", we need to distinct
-				// this is not null value
-				keys[i] = append(keys[i], 0)
-				// give the length
-				length := uint16(len(bytes))
-				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-				// append the ture value bytes
-				keys[i] = append(keys[i], bytes...)
-			}
-		} else {
-			for i := 0; i < n; i++ {
-				bytes := vec.GetBytesAt(i + start)
-				// for "a"，"bc" and "ab","c", we need to distinct
-				// give the length
-				length := uint16(len(bytes))
-				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-				// append the ture value bytes
-				keys[i] = append(keys[i], bytes...)
-			}
-		}
-	} else {
-		nsp := vec.GetNulls()
-		rsp := vec.GetGrouping()
-		for i := 0; i < n; i++ {
-			hasNull := nsp.Contains(uint64(i + start))
-			hasGrouping := rsp.Contains(uint64(i + start))
-			if itr.mp.hasNull {
-				if hasGrouping {
-					keys[i] = append(keys[i], byte(2))
-				} else if hasNull {
-					keys[i] = append(keys[i], byte(1))
-				} else {
-					bytes := vec.GetBytesAt(i + start)
+			va, area := vector.MustVarlenaRawData(vec)
+			if area == nil {
+				for i := 0; i < lenV; i++ {
+					bytes := va[i+start].ByteSlice()
+					hasGrouping := gsp.Contains(uint64(i + start))
+					if hasGrouping {
+						keys[i] = append(keys[i], byte(2))
+						continue
+					}
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// this is not null value
 					keys[i] = append(keys[i], 0)
 					// give the length
 					length := uint16(len(bytes))
-					keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-					// append the ture value bytes
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
 					keys[i] = append(keys[i], bytes...)
 				}
 			} else {
-				if hasNull {
-					itr.zValues[i] = 0
-					continue
+				for i := 0; i < lenV; i++ {
+					bytes := va[i+start].GetByteSlice(area)
+					hasGrouping := gsp.Contains(uint64(i + start))
+					if hasGrouping {
+						keys[i] = append(keys[i], byte(2))
+						continue
+					}
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// this is not null value
+					keys[i] = append(keys[i], 0)
+					// give the length
+					length := uint16(len(bytes))
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
+					keys[i] = append(keys[i], bytes...)
 				}
-				bytes := vec.GetBytesAt(i + start)
-				// for "a"，"bc" and "ab","c", we need to distinct
-				// give the length
-				length := uint16(len(bytes))
-				keys[i] = append(keys[i], unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)...)
-				// append the ture value bytes
-				keys[i] = append(keys[i], bytes...)
+			}
+		} else {
+			va, area := vector.MustVarlenaRawData(vec)
+			if area == nil {
+				for i := 0; i < lenV; i++ {
+					bytes := va[i+start].ByteSlice()
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// give the length
+					length := uint16(len(bytes))
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
+					keys[i] = append(keys[i], bytes...)
+				}
+			} else {
+				for i := 0; i < lenV; i++ {
+					bytes := va[i+start].GetByteSlice(area)
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// give the length
+					length := uint16(len(bytes))
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
+					keys[i] = append(keys[i], bytes...)
+				}
+			}
+		}
+	} else {
+		nsp := vec.GetNulls()
+		rsp := vec.GetGrouping()
+		va, area := vector.MustVarlenaRawData(vec)
+		if area == nil {
+			for i := 0; i < lenV; i++ {
+				hasNull := nsp.Contains(uint64(i + start))
+				hasGrouping := rsp.Contains(uint64(i + start))
+				if itr.mp.hasNull {
+					if hasGrouping {
+						keys[i] = append(keys[i], byte(2))
+					} else if hasNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						bytes := va[i+start].ByteSlice()
+						// for "a"，"bc" and "ab","c", we need to distinct
+						// this is not null value
+						keys[i] = append(keys[i], 0)
+						// give the length
+						length := uint16(len(bytes))
+						keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+						// append the pure value bytes
+						keys[i] = append(keys[i], bytes...)
+					}
+				} else {
+					if hasNull {
+						itr.zValues[i] = 0
+						continue
+					}
+					bytes := va[i+start].ByteSlice()
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// give the length
+					length := uint16(len(bytes))
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
+					keys[i] = append(keys[i], bytes...)
+				}
+			}
+		} else {
+			for i := 0; i < lenV; i++ {
+				hasNull := nsp.Contains(uint64(i + start))
+				hasGrouping := rsp.Contains(uint64(i + start))
+				if itr.mp.hasNull {
+					if hasGrouping {
+						keys[i] = append(keys[i], byte(2))
+					} else if hasNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						bytes := va[i+start].GetByteSlice(area)
+						// for "a"，"bc" and "ab","c", we need to distinct
+						// this is not null value
+						keys[i] = append(keys[i], 0)
+						// give the length
+						length := uint16(len(bytes))
+						keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+						// append the pure value bytes
+						keys[i] = append(keys[i], bytes...)
+					}
+				} else {
+					if hasNull {
+						itr.zValues[i] = 0
+						continue
+					}
+					bytes := va[i+start].GetByteSlice(area)
+					// for "a"，"bc" and "ab","c", we need to distinct
+					// give the length
+					length := uint16(len(bytes))
+					keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
+					// append the pure value bytes
+					keys[i] = append(keys[i], bytes...)
+				}
 			}
 		}
 	}
@@ -222,7 +324,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		return
 	}
 	if vec.IsConst() {
-		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), sz)
+		data := vec.GetData()[:sz]
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], 0)
@@ -235,7 +337,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		}
 		return
 	}
-	data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
+	data := vec.GetData()[:(n+start)*sz]
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {

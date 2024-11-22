@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -166,7 +167,7 @@ func (s *serverConn) RawConn() net.Conn {
 func (s *serverConn) HandleHandshake(
 	handshakeResp *frontend.Packet, timeout time.Duration,
 ) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
 	defer cancel()
 
 	var r *frontend.Packet
@@ -187,10 +188,10 @@ func (s *serverConn) HandleHandshake(
 	case <-ch:
 		return r, err
 	case <-ctx.Done():
-		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
-			s.cnServer.addr, timeout, s.connID)
+		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
+			s.cnServer.addr, timeout, s.connID, goid.Get())
 		// Return a retryable error.
-		return nil, newConnectErr(context.DeadlineExceeded)
+		return nil, newConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
 	}
 }
 
@@ -247,9 +248,7 @@ func (s *serverConn) CreateTime() time.Time {
 
 func (s *serverConn) Quit() error {
 	defer func() {
-		// Disconnect from the connection manager, also, close the
-		// raw TCP connection.
-		_ = s.RawConn().Close()
+		_ = s.Close()
 	}()
 	_, err := s.ExecStmt(internalStmt{
 		cmdType: cmdQuit,
@@ -271,8 +270,10 @@ func (s *serverConn) Close() error {
 			s.mysqlProto.Close()
 		}
 	})
-	// Un-track the connection.
-	s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	if s.rebalancer != nil {
+		// Un-track the connection.
+		s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+	}
 	return nil
 }
 
@@ -327,8 +328,8 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	)
 	err := c.Connect(s.addr, timeout)
 	if err != nil {
-		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, error: %v",
-			timeout, s.connID, s.addr, err)
+		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
+			timeout, s.connID, s.addr, goid.Get(), err)
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {

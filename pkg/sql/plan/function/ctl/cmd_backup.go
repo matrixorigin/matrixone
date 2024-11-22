@@ -17,7 +17,7 @@ package ctl
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
 )
@@ -37,7 +37,7 @@ func handleBackup() handleFunc {
 					return nil, err
 				}
 			}
-			payload, err := types.Encode(&db.Checkpoint{
+			payload, err := types.Encode(&cmd_util.Checkpoint{
 				FlushDuration: flushDuration,
 			})
 			return payload, err

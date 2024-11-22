@@ -85,7 +85,8 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			break
 		}
 
-		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
+		var vec *vector.Vector
+		vec, err = filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{filterBat}, nil)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -111,11 +112,10 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
+				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
 				if err != nil {
 					return vm.CancelResult, err
 				}
-				filterBat.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -140,11 +140,10 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			if len(sels) != filterBat.RowCount() {
-				filterBat, err = tryDupBatch(&filter.ctr, proc, filterBat)
+				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
 				if err != nil {
 					return vm.CancelResult, err
 				}
-				filterBat.Shrink(sels, false)
 			}
 		}
 	}
@@ -165,18 +164,35 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func tryDupBatch(ctr *container, proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, sels []int64) (*batch.Batch, error) {
+	if len(sels) == 0 {
+		return batch.EmptyBatch, nil
+	}
 	if bat == ctr.buf {
-		return bat, nil
-	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	//copy input.Batch to ctr.buf
-	var err error
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), bat)
-	if err != nil {
-		return nil, err
+		ctr.buf.Shrink(sels, false)
+	} else {
+		if ctr.buf == nil {
+			ctr.buf = batch.NewWithSize(len(bat.Vecs))
+			ctr.buf.SetAttributes(bat.Attrs)
+			ctr.buf.Recursive = bat.Recursive
+			for j, vec := range bat.Vecs {
+				typ := *bat.GetVector(int32(j)).GetType()
+				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
+				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
+			}
+			ctr.buf.SetRowCount(bat.RowCount())
+			ctr.buf.ShuffleIDX = bat.ShuffleIDX
+			err := ctr.buf.PreExtend(proc.Mp(), len(sels))
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
+		err := ctr.buf.Union(bat, sels, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return ctr.buf, nil
 }

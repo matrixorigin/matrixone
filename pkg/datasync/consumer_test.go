@@ -144,7 +144,7 @@ func TestCopyFiles(t *testing.T) {
 		}
 		assert.NoError(t, c.srcFS.Write(ctx, vec))
 		assert.Error(t, c.copyFiles(ctx, locations, ""))
-		entries, err := c.dstFS.List(ctx, "")
+		entries, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(entries))
 	})
@@ -171,7 +171,7 @@ func TestCopyFiles(t *testing.T) {
 		}
 		assert.NoError(t, c.srcFS.Write(ctx, vec))
 		assert.Error(t, c.copyFiles(ctx, locations, "/nodir"))
-		entries, err := c.dstFS.List(ctx, "")
+		entries, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(entries))
 	})
@@ -200,7 +200,7 @@ func TestCopyFiles(t *testing.T) {
 			assert.NoError(t, c.srcFS.Write(ctx, vec))
 		}
 		assert.NoError(t, c.copyFiles(ctx, locations, ""))
-		entries, err := c.dstFS.List(ctx, "")
+		entries, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 		assert.NoError(t, err)
 		assert.Equal(t, 100, len(entries))
 	})
@@ -217,7 +217,7 @@ func withCheckpointData(t *testing.T, f func(
 	opts.Fs = newTestFS()
 	db := testutil.NewTestEngine(ctx, "datasync", t, opts)
 	defer func() {
-		opts.Fs.Close()
+		opts.Fs.Close(ctx)
 		_ = db.Close()
 	}()
 
@@ -328,7 +328,7 @@ func TestFullSync(t *testing.T) {
 			assert.NotNil(t, ckp)
 			err = c.fullSync(ctx, ckp.Location)
 			assert.NoError(t, err)
-			files, err := c.dstFS.List(ctx, "")
+			files, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 			assert.NoError(t, err)
 			assert.Equal(t, 35, len(files))
 		})
@@ -383,7 +383,7 @@ func TestConsume(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -405,7 +405,7 @@ func TestConsume(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -442,7 +442,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -452,7 +452,7 @@ func TestConsumeEntries(t *testing.T) {
 
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -469,7 +469,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -492,7 +492,7 @@ func TestConsumeEntries(t *testing.T) {
 		lc := c.logClient.(*mockLogClient)
 		lc.fakeError("setRequiredLsn")
 		defer lc.clearFakeError("setRequiredLsn")
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -509,7 +509,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -529,7 +529,7 @@ func TestConsumeEntries(t *testing.T) {
 		}))
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -548,7 +548,7 @@ func TestConsumeEntries(t *testing.T) {
 
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err := c.consumerEntries(ctx, []logservice.LogRecord{
+		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: make([]byte, 100),
@@ -570,7 +570,7 @@ func TestConsumeEntries(t *testing.T) {
 		lc := c.logClient.(*mockLogClient)
 		lc.fakeError("setRequiredLsn")
 		defer lc.clearFakeError("setRequiredLsn")
-		err := c.consumerEntries(ctx, []logservice.LogRecord{
+		err := c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: make([]byte, 100),
@@ -587,7 +587,7 @@ func TestConsumeEntries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t,
 			[]string{fmt.Sprintf("%s_0_0_0_0_0_0", fileName)},
-			getLocations(rec),
+			getLocations(rec, ""),
 		)
 
 		ctx := context.Background()
@@ -607,7 +607,7 @@ func TestConsumeEntries(t *testing.T) {
 		}))
 		var initSyncedLsn uint64 = 8
 		c.syncedLsn.Store(initSyncedLsn)
-		err = c.consumerEntries(ctx, []logservice.LogRecord{
+		err = c.consumeEntries(ctx, []logservice.LogRecord{
 			{
 				Lsn:  10,
 				Data: rec.Data,
@@ -1006,7 +1006,7 @@ func TestCompleteData(t *testing.T) {
 		lc.setLeaderID(10)
 		err := c.completeData(ctx)
 		assert.NoError(t, err)
-		files, err := c.dstFS.List(ctx, "")
+		files, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(files))
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
@@ -1027,7 +1027,7 @@ func TestCompleteData(t *testing.T) {
 			lc.setLeaderID(10)
 			err := c.completeData(ctx)
 			assert.NoError(t, err)
-			files, err := c.dstFS.List(ctx, "")
+			files, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 			assert.NoError(t, err)
 			assert.Equal(t, 35, len(files))
 			requiredLsn, err := c.logClient.getRequiredLsn(ctx)
@@ -1069,7 +1069,7 @@ func TestCompleteData(t *testing.T) {
 
 			err := c.completeData(ctx)
 			assert.NoError(t, err)
-			files, err := c.dstFS.List(ctx, "")
+			files, err := fileservice.SortedList(c.dstFS.List(ctx, ""))
 			assert.NoError(t, err)
 			assert.Equal(t, 35+(150-102), len(files))
 			requiredLsn, err := c.logClient.getRequiredLsn(ctx)

@@ -16,11 +16,9 @@ package plan
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -62,12 +60,12 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 
 	// calculate uuid
-	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(builder.compCtx.GetProcess(), exprs[0])
 	if err != nil {
 		return 0, err
 	}
 	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
-	vec.Free(builder.compCtx.GetProcess().GetMPool())
+	free()
 
 	// get cols
 	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.String())
@@ -85,7 +83,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
-		name2ColIndex[strings.ToLower(cols[i].Name)] = int32(i)
+		name2ColIndex[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
 		Name:          uuid.String(),

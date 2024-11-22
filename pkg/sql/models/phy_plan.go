@@ -30,12 +30,13 @@ type PhyPlan struct {
 }
 
 type PhyScope struct {
-	Magic        string        `json:"Magic"`
-	Mcpu         int8          `json:"Mcpu,omitempty"`
-	Receiver     []PhyReceiver `json:"Receiver,omitempty"`
-	DataSource   *PhySource    `json:"DataSource,omitempty"`
-	PreScopes    []PhyScope    `json:"PreScopes,omitempty"`
-	RootOperator *PhyOperator  `json:"RootOperator,omitempty"`
+	Magic               string        `json:"Magic"`
+	Mcpu                int8          `json:"Mcpu,omitempty"`
+	Receiver            []PhyReceiver `json:"Receiver,omitempty"`
+	DataSource          *PhySource    `json:"DataSource,omitempty"`
+	PreScopes           []PhyScope    `json:"PreScopes,omitempty"`
+	RootOperator        *PhyOperator  `json:"RootOperator,omitempty"`
+	PrepareTimeConsumed int64         `json:"PrepareTimeConsumed,omitempty"`
 }
 
 type PhyReceiver struct {

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -55,6 +56,8 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		cnt := 0
@@ -127,6 +130,8 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -194,6 +199,8 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
@@ -252,6 +259,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -325,6 +334,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -337,7 +349,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -356,6 +368,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		setPu("", pu)
 		setSessionAlloc("", NewLeakCheckAllocator())
 		ses := genSession(ctrl, pu)
+		ses.GetTxnHandler().txnOp = txnOperator
 
 		var ts *timestamp.Timestamp
 		tcc := ses.GetTxnCompileCtx()
@@ -380,21 +393,21 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	})
 }
 
-func TestSession_GetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
+var genSession1 = func(t *testing.T, ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
 	}
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	if err != nil {
+		t.Error(err)
+	}
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	session := NewSession(context.Background(), "", proto, nil)
+	return session
+}
 
+func TestSession_GetTempTableStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -402,28 +415,13 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 	assert.Panics(t, func() {
 		_ = ses.GetTxnHandler().GetTempStorage()
 	})
 }
 
 func TestIfInitedTempEngine(t *testing.T) {
-
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -431,25 +429,11 @@ func TestIfInitedTempEngine(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 	assert.False(t, ses.GetTxnHandler().HasTempEngine())
 }
 
 func TestSetTempTableStorage(t *testing.T) {
-	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-		session := NewSession(context.Background(), "", proto, nil)
-		return session
-	}
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -457,7 +441,7 @@ func TestSetTempTableStorage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession(ctrl, pu)
+	ses := genSession1(t, ctrl, pu)
 
 	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
@@ -516,6 +500,8 @@ func TestSession_Migrate(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
@@ -527,6 +513,8 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -547,6 +535,11 @@ func TestSession_Migrate(t *testing.T) {
 			TxnClient:     txnClient,
 			StorageEngine: eng,
 		})
+
+		mockBS := MockBaseService{}
+		rm, _ := NewRoutineManager(context.Background(), "")
+		rm.baseService = &mockBS
+		setRtMgr("", rm)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 		ioses, err := NewIOSession(&testConn{}, getPu(""), "")
 		if err != nil {
@@ -560,6 +553,7 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: session}
 		proto.ses = session
+		session.setRoutineManager(rm)
 		return session
 	}
 	ctrl := gomock.NewController(t)
@@ -582,4 +576,189 @@ func TestSession_Migrate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "d1", s.GetDatabaseName())
 	assert.Equal(t, 2, len(s.prepareStmts))
+}
+
+func Test_connectionid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	s := newSes(nil, ctrl)
+	s.SetConnectionID(10)
+	x := s.GetConnectionID()
+	assert.Equal(t, uint32(10), x)
+}
+
+func TestCheckPasswordExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// password never expires
+	expired, err := checkPasswordExpired(0, "2022-01-01 00:00:00")
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// password not expires
+	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.False(t, expired)
+
+	// password not expires
+	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+	assert.True(t, expired)
+
+	// exexpir can not execute stmt
+	ses.setRoutine(&Routine{})
+	ses.getRoutine().setExpired(true)
+	sql := "select 1"
+	rp, err := mysql.Parse(ctx, sql, 1)
+	defer rp[0].Free()
+	assert.NoError(t, err)
+	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	assert.Error(t, err)
+
+	// exexpir can execute stmt
+	sql = "alter user dump identified by '123456'"
+	rp, err = mysql.Parse(ctx, sql, 1)
+	defer rp[0].Free()
+	assert.NoError(t, err)
+	err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
+	assert.Error(t, err)
+
+	// getPasswordLifetime error
+	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
+	_, err = checkPasswordExpired(1, "1")
+	assert.Error(t, err)
+	assert.True(t, expired)
+}
+
+func Test_CheckLockTimeExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock time expires
+	ses.gSysVars.Set(ConnectionControlMaxConnectionDelay, int64(30000000))
+	_, err := checkLockTimeExpired(ctx, ses, time.Now().Add(time.Hour*-3).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+
+	// lock time not expires
+	_, err = checkLockTimeExpired(ctx, ses, time.Now().Add(time.Second*-20).Format("2006-01-02 15:04:05"))
+	assert.NoError(t, err)
+
+	// lock time parse error
+	_, err = checkLockTimeExpired(ctx, ses, "1")
+	assert.Error(t, err)
+}
+
+func Test_OperatorLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+
+	// lock
+	err := setUserUnlock(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// increaseLoginAttempts
+	err = increaseLoginAttempts(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// updateLockTime
+	err = updateLockTime(ctx, "user1", bh)
+	assert.NoError(t, err)
+
+	// unlock
+	err = setUserLock(ctx, "user1", bh)
+	assert.NoError(t, err)
+}
+
+func TestReserveConnAndClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	rm, _ := NewRoutineManager(context.Background(), "")
+	ses.rm = rm
+	rm = ses.getRoutineManager()
+	rm.sessionManager.AddSession(ses)
+
+	ses.ReserveConnAndClose()
+	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
 }

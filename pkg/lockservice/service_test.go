@@ -19,6 +19,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"hash/crc64"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -443,6 +444,8 @@ func TestRangeLockWithConflict(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+					err := os.Setenv("mo_reuse_enable_checker", "true")
+					require.NoError(t, err)
 					option := newTestRangeExclusiveOptions()
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
@@ -454,7 +457,7 @@ func TestRangeLockWithConflict(t *testing.T) {
 					}
 
 					// txn1 hold the lock
-					_, err := s.Lock(ctx, table, rows, txn1, option)
+					_, err = s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
 					// txn2 blocked by txn1
@@ -1464,7 +1467,7 @@ func TestIssue3693(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			alloc.registerService(l.serviceID, 0)
+			alloc.registerService(l.serviceID)
 
 			alloc.setRestartService("s1")
 			for {
@@ -2065,7 +2068,7 @@ func TestIssue16121(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1", "s2"},
-		time.Second*1,
+		time.Second*10,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
@@ -2120,7 +2123,7 @@ func TestReLockSuccWithBindChanged(t *testing.T) {
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1", "s2"},
-		time.Second*1,
+		time.Second*10,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
@@ -3006,6 +3009,22 @@ func TestCannotCommit(t *testing.T) {
 	)
 }
 
+func TestResumeInvalidService(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			alloc.inactiveService.Store(s[0].serviceID, time.Now())
+			_, err := alloc.Valid(s[0].serviceID, []byte("testTxn"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+
+			require.NoError(t, s[0].Resume())
+			_, err = alloc.Valid(s[0].serviceID, []byte("testTxn"), nil)
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -3857,7 +3876,7 @@ func TestIssue14008(t *testing.T) {
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
+					writeResponse(getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
 				})
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {

@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -59,7 +60,7 @@ func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 	return fs
 }
 
-func (o *ObjectFS) ListDir(dir string) ([]fileservice.DirEntry, error) {
+func (o *ObjectFS) ListDir(dir string) iter.Seq2[*fileservice.DirEntry, error] {
 	return o.Service.List(context.Background(), dir)
 }
 

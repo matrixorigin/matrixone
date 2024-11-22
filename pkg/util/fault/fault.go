@@ -70,7 +70,7 @@ type faultMap struct {
 	chOut       chan *faultEntry
 }
 
-var enabled atomic.Value
+var enabled atomic.Pointer[faultMap]
 var gfm *faultMap
 
 func (fm *faultMap) run() {
@@ -183,10 +183,7 @@ func Disable() {
 
 func IsEnabled() bool {
 	ld := enabled.Load()
-	if ld == nil {
-		return false
-	}
-	return ld.(*faultMap) != nil
+	return ld != nil
 }
 
 // Trigger a fault point.

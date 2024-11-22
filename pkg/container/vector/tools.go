@@ -279,7 +279,8 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		IsConst:  vec.IsConst(),
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
-		Data:     vec.data[:vec.length*sz],
+		// Data:     vec.data,
+		Data: vec.data[:vec.length*sz],
 	}, nil
 }
 

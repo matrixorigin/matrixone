@@ -20,6 +20,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -133,7 +134,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		return futures[:0], binds[:0]
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoKeepRemoteLock)
 	defer cancel()
 	for _, bind := range services {
 		req := acquireRequest()
@@ -149,6 +150,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			binds = append(binds, bind)
 			continue
 		}
+		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
@@ -187,10 +189,11 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
+	ctx, cancel := context.WithTimeoutCause(ctx, k.keepLockTableBindInterval, moerr.CauseDoKeepLockTableBind)
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		logKeepBindFailed(k.service.logger, err)
 		return
 	}

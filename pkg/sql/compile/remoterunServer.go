@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,15 +35,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -91,16 +92,19 @@ func CnServerMessageHandler(
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
 	}
+	if msg.DebugMsg != "" {
+		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
 
 	// how to handle the *pipeline.Message.
-	if receiver.needNotReply {
-		err = handlePipelineMessage(&receiver)
-	} else {
-		if err = handlePipelineMessage(&receiver); err != nil {
+	err = handlePipelineMessage(&receiver)
+	if receiver.messageTyp != pipeline.Method_StopSending {
+		// stop message only close a running pipeline, there is no need to reply the finished-message.
+		if err != nil {
 			err = receiver.sendError(err)
 		} else {
 			err = receiver.sendEndMessage()
@@ -140,12 +144,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		// todo : the timeout should be removed.
 		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+		timeLimit, cancel := context.WithTimeoutCause(context.TODO(), HandleNotifyTimeout, moerr.CauseHandlePipelineMessage)
 
 		succeed := false
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
+			err = moerr.AttachCause(timeLimit, err)
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
@@ -154,13 +159,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		cancel()
 
 		if err != nil || !succeed {
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -179,7 +184,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		s = appendWriteBackOperator(runCompile, s)
+		if !receiver.needNotReply {
+			s = appendWriteBackOperator(runCompile, s)
+		}
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
@@ -189,14 +196,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
-
-		// running pipeline.
-		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
-			return err
-		}
-		defer func() {
-			_, _ = GetCompileService().removeRunningCompile(runCompile)
-		}()
 
 		err = s.MergeRun(runCompile)
 		if err == nil {
@@ -380,7 +379,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := GetCompileService().getCompile(proc)
+	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
@@ -390,7 +389,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
-	c.fill = func(b *batch.Batch) error {
+	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
 		return receiver.sendBatch(b)
 	}
 
@@ -521,14 +520,15 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 }
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	tout, tcancel := context.WithTimeout(context.Background(), timeout)
+	tout, tcancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseGetProcByUuid)
 
 	for {
 		select {
 		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
+			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
 			tcancel()
-			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			return nil, nil, err
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
@@ -63,6 +64,14 @@ type BlocksIter interface {
 	Next() bool
 	Close() error
 	Entry() types.Blockid
+}
+
+func (p *PartitionState) ApproxInMemTombstones() int {
+	return p.inMemTombstoneRowIdIndex.Len()
+}
+
+func (p *PartitionState) ApproxInMemRows() int {
+	return p.rows.Len()
 }
 
 // ApproxDataObjectsNum not accurate!  only used by stats
@@ -120,8 +129,10 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool) (ObjectsIter, error) {
 
-	if snapshot.LT(&p.minTS) {
-		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.minTS.ToString())
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
+			p.tid, p, snapshot.ToString(), p.start.ToString())
+		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.start.ToString())
 		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 
@@ -136,6 +147,40 @@ func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	//iter := p.dirtyBlocks.Copy().Iter()
 
 	return nil
+}
+
+// In concurrent delete scenario, the following case may happen:
+//
+// / txn1   cn: write s3 tombstone      dn: commit s3 tombstone
+// /	    |                              |
+// /	----+---------------------+--------+-----------+---------->
+// /	                          |                    |
+// / txn2           cn: delete mem row(blocked)        cn: query PrimaryKeysMayBeModified and it returns false, which is wrong
+//
+// what PrimaryKeysMayBeModified does:
+//  1. no mem rows in partition state
+//  2. lastFlushTimestamp > from
+//  3. it boils down to PKPersistedBetween, where dataobjects are empty and tombstones are ignored
+func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
+	if p.tombstoneObjectDTSIndex.Len() == 0 {
+		return false
+	}
+	iter := p.tombstoneObjectDTSIndex.Copy().Iter()
+	defer iter.Release()
+
+	// Created after from
+	if iter.Seek(ObjectEntry{ObjectInfo{CreateTime: from}}) {
+		return true
+	}
+
+	iter.First()
+	// Deleted after from
+	ok := iter.Seek(ObjectEntry{ObjectInfo{DeleteTime: from}})
+	if ok {
+		item := iter.Item()
+		return !item.DeleteTime.IsEmpty()
+	}
+	return false
 }
 
 // GetChangedObjsBetween get changed objects between [begin, end],
@@ -194,8 +239,7 @@ func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 
 func (p *PartitionState) CollectObjectsBetween(
 	start, end types.TS,
-	collectDeleted bool,
-) (stats []objectio.ObjectStats) {
+) (insertList, deletedList []objectio.ObjectStats) {
 
 	iter := p.dataObjectTSIndex.Copy().Iter()
 	defer iter.Release()
@@ -211,6 +255,10 @@ func (p *PartitionState) CollectObjectsBetween(
 	for ok := true; ok; ok = iter.Next() {
 		entry := iter.Item()
 
+		if entry.Time.GT(&end) {
+			break
+		}
+
 		var ss objectio.ObjectStats
 		objectio.SetObjectStatsShortName(&ss, &entry.ShortObjName)
 
@@ -224,25 +272,24 @@ func (p *PartitionState) CollectObjectsBetween(
 			continue
 		}
 
-		if !collectDeleted {
-			// if deleted before end
-			if !val.DeleteTime.IsEmpty() && val.DeleteTime.LE(&end) {
-				continue
-			}
+		// case1: no soft delete
+		if val.DeleteTime.IsEmpty() {
+			insertList = append(insertList, val.ObjectStats)
 		} else {
-			// only collect deletes
-			// if not delete or delete after end
-			if val.DeleteTime.IsEmpty() || val.DeleteTime.GT(&end) {
-				continue
+			if val.CreateTime.LT(&start) {
+				// create --------- delete
+				//          start -------- end
+				if val.DeleteTime.LE(&end) {
+					deletedList = append(deletedList, val.ObjectStats)
+				}
+			} else {
+				//        create ---------- delete
+				// start ------------ end
+				if val.DeleteTime.GT(&end) {
+					insertList = append(insertList, val.ObjectStats)
+				}
 			}
 		}
-
-		// if created not in [start, end]
-		if val.CreateTime.LT(&start) && val.CreateTime.GT(&end) {
-			continue
-		}
-
-		stats = append(stats, val.ObjectStats)
 	}
 
 	return

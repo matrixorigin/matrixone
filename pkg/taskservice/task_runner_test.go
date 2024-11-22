@@ -209,6 +209,80 @@ func TestCancelRunningTask(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestDoHeartbeatInvalidTask(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		ctx, cancel := context.WithCancelCause(context.TODO())
+		r.runningTasks.m = make(map[uint64]runningTask)
+		r.runningTasks.m[1] = runningTask{
+			task:   task.AsyncTask{},
+			ctx:    ctx,
+			cancel: cancel,
+		}
+
+		r.doHeartbeat(context.Background())
+
+		r.runningTasks.RLock()
+		defer r.runningTasks.RUnlock()
+		assert.Equal(t, 1, len(r.runningTasks.m))
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond),
+		WithRunnerHeartbeatInterval(time.Millisecond))
+}
+
+func TestRemoveRunningTask(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+			return nil
+		})
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
+
+		task := mustGetTestAsyncTask(t, store, 1)[0]
+		r.addToWait(context.Background(), task)
+		r.removeRunningTask(task.ID)
+		time.Sleep(1 * time.Second)
+		timeout := time.After(5 * time.Second)
+		for {
+			select {
+			case <-timeout:
+				require.Fail(t, "timeout waiting for task to be removed and added to completedTasks")
+			default:
+				r.runningTasks.RLock()
+				_, exists := r.runningTasks.m[task.ID]
+				if len(r.runningTasks.completedTasks) != 0 {
+					_, completed := r.runningTasks.completedTasks[task.ID]
+					if !exists && completed {
+						r.runningTasks.RUnlock()
+						return
+					}
+				} else {
+					if !exists {
+						r.runningTasks.RUnlock()
+						return
+					}
+				}
+				r.runningTasks.RUnlock()
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRemoveRunningTaskNotExists(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		r.removeRunningTask(999)
+
+		r.runningTasks.RLock()
+		defer r.runningTasks.RUnlock()
+		_, exists := r.runningTasks.m[999]
+		assert.False(t, exists, "non-existent task should not be in runningTasks")
+		_, completed := r.runningTasks.completedTasks[999]
+		assert.True(t, completed, "non-existent task should be added to completedTasks")
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
 func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {

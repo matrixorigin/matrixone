@@ -164,10 +164,16 @@ var (
 	defaultLoggerLabelVal = "logging_cn"
 	defaultLoggerMap      = map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}
 
+	defaultMaxLogMessageSize = 16 << 10
+
 	// largestEntryLimit is the max size for reading file to csv buf
 	LargestEntryLimit = 10 * 1024 * 1024
 
 	CNPrimaryCheck atomic.Bool
+
+	defaultCreateTxnOpTimeout = time.Minute
+
+	defaultConnectTimeout = time.Minute
 )
 
 // FrontendParameters of the frontend
@@ -296,6 +302,16 @@ type FrontendParameters struct {
 
 	// KeyEncryptionKey is the key for encrypt key
 	KeyEncryptionKey string `toml:"key-encryption-key"`
+
+	// timeout of create txn.
+	// txnclient.New
+	// txnclient.RestartTxn
+	// engine.New
+	CreateTxnOpTimeout toml.Duration `toml:"createTxnOpTimeout" user_setting:"advanced"`
+
+	// timeout of authenticating user. different from session timeout
+	// including mysql protocol handshake, checking user, loading session variables
+	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -410,6 +426,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if len(fp.KeyEncryptionKey) == 0 {
 		fp.KeyEncryptionKey = "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y"
+	}
+
+	if fp.CreateTxnOpTimeout.Duration == 0 {
+		fp.CreateTxnOpTimeout.Duration = defaultCreateTxnOpTimeout
+	}
+
+	if fp.ConnectTimeout.Duration == 0 {
+		fp.ConnectTimeout.Duration = defaultConnectTimeout
 	}
 }
 
@@ -561,6 +585,9 @@ type ObservabilityParameters struct {
 	// estimate tcp network packet cost
 	TCPPacket bool `toml:"tcp-packet"`
 
+	// MaxLogMessageSize truncate the reset. default: 16 KiB
+	MaxLogMessageSize toml.ByteSize `toml:"max-log-message-size"`
+
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
@@ -626,6 +653,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{}, /*default: role=logging_cn*/
 		TCPPacket:                          true,
+		MaxLogMessageSize:                  toml.ByteSize(defaultMaxLogMessageSize),
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
@@ -832,10 +860,16 @@ type OBCUConfig struct {
 	// cu unit
 	CUUnit float64 `toml:"cu_unit"`
 	// price
-	CpuPrice      float64 `toml:"cpu_price"`
-	MemPrice      float64 `toml:"mem_price"`
-	IoInPrice     float64 `toml:"io_in_price"`
-	IoOutPrice    float64 `toml:"io_out_price"`
+	CpuPrice   float64 `toml:"cpu_price"`
+	MemPrice   float64 `toml:"mem_price"`
+	IoInPrice  float64 `toml:"io_in_price"`
+	IoOutPrice float64 `toml:"io_out_price"`
+	// IoListPrice default value: IoInPrice
+	// NOT allow 0 value.
+	IoListPrice float64 `toml:"io_list_price"`
+	// IoDeletePrice default value: IoInPrice, cc SetDefaultValues
+	// The only one ALLOW 0 value.
+	IoDeletePrice float64 `toml:"io_delete_price"`
 	TrafficPrice0 float64 `toml:"traffic_price_0"`
 	TrafficPrice1 float64 `toml:"traffic_price_1"`
 	TrafficPrice2 float64 `toml:"traffic_price_2"`
@@ -857,6 +891,8 @@ func NewOBCUConfig() *OBCUConfig {
 		MemPrice:      CUMemPriceDefault,
 		IoInPrice:     CUIOInPriceDefault,
 		IoOutPrice:    CUIOOutPriceDefault,
+		IoListPrice:   -1, // default as OBCUConfig.IoInPrice
+		IoDeletePrice: -1, // default as OBCUConfig.IoInPrice
 		TrafficPrice0: CUTrafficPrice0Default,
 		TrafficPrice1: CUTrafficPrice1Default,
 		TrafficPrice2: CUTrafficPrice2Default,
@@ -879,6 +915,14 @@ func (c *OBCUConfig) SetDefaultValues() {
 	}
 	if c.IoOutPrice <= 0 {
 		c.IoOutPrice = CUIOOutPriceDefault
+	}
+	// default as c.IoInPrice
+	if c.IoListPrice <= 0 {
+		c.IoListPrice = c.IoInPrice
+	}
+	// default as c.IoInPrice, allow value: 0
+	if c.IoDeletePrice < 0 {
+		c.IoDeletePrice = c.IoInPrice
 	}
 	if c.TrafficPrice0 <= 0 {
 		c.TrafficPrice0 = CUTrafficPrice0Default

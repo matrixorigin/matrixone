@@ -84,9 +84,10 @@ func (lp *localLockTableProxy) lock(
 		lp.serviceID,
 		txn,
 		cb,
-		lp.hasRemoteHolderLocked(key))
+		lp.hasRemoteHolderLocked(key),
+		lp.logger)
 	if w != nil {
-		defer w.close()
+		defer w.close("localLockTableProxy lock", lp.logger)
 	}
 	lp.mu.Unlock()
 
@@ -109,7 +110,8 @@ func (lp *localLockTableProxy) lock(
 
 	defer func() {
 		bind := lp.getBind()
-		txn.lockAdded(bind.Group, bind, rows, lp.logger)
+		err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
+		cb(r, err)
 	}()
 
 	// wait first done
@@ -118,7 +120,6 @@ func (lp *localLockTableProxy) lock(
 		return
 	}
 
-	cb(r, nil)
 }
 
 func (lp *localLockTableProxy) unlock(
@@ -252,11 +253,13 @@ func (s *sharedOps) add(
 	serviceID string,
 	txn *activeTxn,
 	cb func(pb.Result, error),
-	hasHolder bool) *waiter {
+	hasHolder bool,
+	logger *log.MOLogger,
+) *waiter {
 	var w *waiter
 	if !hasHolder && !s.isEmpty() {
 		v := txn.toWaitTxn(serviceID, true)
-		w = acquireWaiter(v)
+		w = acquireWaiter(v, "share ops add", logger)
 		w.setStatus(blocking)
 	}
 	if hasHolder {

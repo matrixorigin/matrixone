@@ -15,35 +15,44 @@
 package fifocache
 
 import (
+	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"golang.org/x/sys/cpu"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
+
+const numShards = 256
 
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
 type Cache[K comparable, V any] struct {
 	capacity     fscache.CapacityFunc
 	capacity1    fscache.CapacityFunc
-	keyShardFunc func(K) uint8
+	keyShardFunc func(K) uint64
 
-	postSet   func(key K, value V)
-	postGet   func(key K, value V)
-	postEvict func(key K, value V)
+	postSet   func(ctx context.Context, key K, value V, size int64)
+	postGet   func(ctx context.Context, key K, value V, size int64)
+	postEvict func(ctx context.Context, key K, value V, size int64)
 
-	shards [256]struct {
-		sync.RWMutex
+	shards [numShards]struct {
+		sync.Mutex
 		values map[K]*_CacheItem[K, V]
 		_      cpu.CacheLinePad
 	}
+
+	itemQueue chan *_CacheItem[K, V]
 
 	queueLock sync.RWMutex
 	used1     int64
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
+
+	overEvict atomic.Int64
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -79,16 +88,17 @@ func (c *_CacheItem[K, V]) dec() {
 
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
-	keyShardFunc func(K) uint8,
-	postSet func(key K, value V),
-	postGet func(key K, value V),
-	postEvict func(key K, value V),
+	keyShardFunc func(K) uint64,
+	postSet func(ctx context.Context, key K, value V, size int64),
+	postGet func(ctx context.Context, key K, value V, size int64),
+	postEvict func(ctx context.Context, key K, value V, size int64),
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capacity1: func() int64 {
 			return capacity() / 10
 		},
+		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
 		queue1:       *NewQueue[*_CacheItem[K, V]](),
 		queue2:       *NewQueue[*_CacheItem[K, V]](),
 		keyShardFunc: keyShardFunc,
@@ -102,14 +112,14 @@ func New[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) Set(key K, value V, size int64) {
-	shard := &c.shards[c.keyShardFunc(key)]
+func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
+	defer shard.Unlock()
 	_, ok := shard.values[key]
 	if ok {
 		// existed
-		shard.Unlock()
-		return
+		return nil
 	}
 
 	item := &_CacheItem[K, V]{
@@ -119,38 +129,70 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) {
 	}
 	shard.values[key] = item
 	if c.postSet != nil {
-		c.postSet(key, value)
+		c.postSet(ctx, key, value, size)
 	}
-	shard.Unlock()
 
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
-	c.queue1.enqueue(item)
-	c.used1 += size
-	if c.used1+c.used2 > c.capacity() {
-		c.evict(nil, 0)
+	return item
+}
+
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
+	if item := c.set(ctx, key, value, size); item != nil {
+		c.enqueue(item)
+		c.evict(ctx, nil, 0)
 	}
 }
 
-func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	shard := &c.shards[c.keyShardFunc(key)]
-	shard.RLock()
+func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
+	if !c.queueLock.TryLock() {
+		// try put itemQueue
+		select {
+		case c.itemQueue <- item:
+			// let the queueLock holder do the job
+			return
+		default:
+			// block until get lock
+			c.queueLock.Lock()
+			defer c.queueLock.Unlock()
+		}
+	} else {
+		defer c.queueLock.Unlock()
+	}
+
+	// enqueue
+	c.queue1.enqueue(item)
+	c.used1 += item.size
+
+	// help enqueue
+	for {
+		select {
+		case item := <-c.itemQueue:
+			c.queue1.enqueue(item)
+			c.used1 += item.size
+		default:
+			return
+		}
+	}
+}
+
+func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard.Lock()
 	var item *_CacheItem[K, V]
 	item, ok = shard.values[key]
 	if !ok {
-		shard.RUnlock()
+		shard.Unlock()
 		return
 	}
 	if c.postGet != nil {
-		c.postGet(item.key, item.value)
+		c.postGet(ctx, item.key, item.value, item.size)
 	}
-	shard.RUnlock()
+	shard.Unlock()
 	item.inc()
 	return item.value, true
 }
 
-func (c *Cache[K, V]) Delete(key K) {
-	shard := &c.shards[c.keyShardFunc(key)]
+func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
 	item, ok := shard.values[key]
@@ -159,30 +201,46 @@ func (c *Cache[K, V]) Delete(key K) {
 	}
 	delete(shard.values, key)
 	if c.postEvict != nil {
-		c.postEvict(item.key, item.value)
+		c.postEvict(ctx, item.key, item.value, item.size)
 	}
 	// queues will be update in evict
 }
 
-// must call evict with queueLock held
-func (c *Cache[K, V]) evict(done chan int64, overEvict int64) {
+func (c *Cache[K, V]) evict(ctx context.Context, done chan int64, overEvict int64) {
+	if done == nil {
+		// can be async
+		if c.queueLock.TryLock() {
+			defer c.queueLock.Unlock()
+		} else {
+			if overEvict > 0 {
+				// let the holder do more evict
+				c.overEvict.Add(overEvict)
+			}
+			return
+		}
+	} else {
+		c.queueLock.Lock()
+		defer c.queueLock.Unlock()
+	}
+
 	var target int64
 	for {
-		target = c.capacity() - overEvict
+		globalOverEvict := c.overEvict.Swap(0)
+		target = c.capacity() - overEvict - globalOverEvict
 		if target < 0 {
 			target = 0
 		}
 		if c.used1+c.used2 <= target {
 			break
 		}
-		target1 := c.capacity1() - overEvict
+		target1 := c.capacity1() - overEvict - globalOverEvict
 		if target1 < 0 {
 			target1 = 0
 		}
 		if c.used1 > target1 {
-			c.evict1()
+			c.evict1(ctx)
 		} else {
-			c.evict2()
+			c.evict2(ctx)
 		}
 	}
 	if done != nil {
@@ -190,7 +248,7 @@ func (c *Cache[K, V]) evict(done chan int64, overEvict int64) {
 	}
 }
 
-func (c *Cache[K, V]) evict1() {
+func (c *Cache[K, V]) evict1(ctx context.Context) {
 	// queue 1
 	for {
 		item, ok := c.queue1.dequeue()
@@ -205,20 +263,24 @@ func (c *Cache[K, V]) evict1() {
 			c.used2 += item.size
 		} else {
 			// evict
-			shard := &c.shards[c.keyShardFunc(item.key)]
-			shard.Lock()
-			delete(shard.values, item.key)
-			if c.postEvict != nil {
-				c.postEvict(item.key, item.value)
-			}
-			shard.Unlock()
+			c.deleteItem(ctx, item)
 			c.used1 -= item.size
 			return
 		}
 	}
 }
 
-func (c *Cache[K, V]) evict2() {
+func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
+	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
+	shard.Lock()
+	defer shard.Unlock()
+	delete(shard.values, item.key)
+	if c.postEvict != nil {
+		c.postEvict(ctx, item.key, item.value, item.size)
+	}
+}
+
+func (c *Cache[K, V]) evict2(ctx context.Context) {
 	// queue 2
 	for {
 		item, ok := c.queue2.dequeue()
@@ -232,24 +294,16 @@ func (c *Cache[K, V]) evict2() {
 			item.dec()
 		} else {
 			// evict
-			shard := &c.shards[c.keyShardFunc(item.key)]
-			shard.Lock()
-			delete(shard.values, item.key)
-			if c.postEvict != nil {
-				c.postEvict(item.key, item.value)
-			}
-			shard.Unlock()
+			c.deleteItem(ctx, item)
 			c.used2 -= item.size
 			return
 		}
 	}
 }
 
-func (c *Cache[K, V]) Evict(done chan int64) {
+func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64) {
 	if done != nil && cap(done) < 1 {
 		panic("should be buffered chan")
 	}
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
-	c.evict(done, 0)
+	c.evict(ctx, done, 0)
 }

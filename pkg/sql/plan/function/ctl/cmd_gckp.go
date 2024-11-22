@@ -20,7 +20,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,7 +37,7 @@ func handleGlobalCheckpoint() handleFunc {
 					return nil, err
 				}
 			}
-			return types.Encode(&db.Checkpoint{FlushDuration: flushDuration})
+			return types.Encode(&cmd_util.Checkpoint{FlushDuration: flushDuration})
 		},
 		func(data []byte) (any, error) {
 			resp := api.TNStringResponse{}

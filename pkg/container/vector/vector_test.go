@@ -15,10 +15,15 @@
 package vector
 
 import (
+	"fmt"
+	"math/rand"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -1602,311 +1607,6 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	}
 }
 
-/*
-func TestUnionOne(t *testing.T) {
-	mp := mpool.MustNewZero()
-	{ // bool
-		v := NewVector(types.T_bool.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []bool{true, false, true, false}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_bool.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[bool](v)[:1], MustFixedColWithTypeCheck[bool](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // int8
-		v := NewVector(types.T_int8.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []int8{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_int8.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[int8](v)[:1], MustFixedColWithTypeCheck[int8](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // int16
-		v := NewVector(types.T_int16.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []int16{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_int16.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[int16](v)[:1], MustFixedColWithTypeCheck[int16](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // int32
-		v := NewVector(types.T_int32.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []int32{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_int32.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[int32](v)[:1], MustFixedColWithTypeCheck[int32](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // int64
-		v := NewVector(types.T_int64.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []int64{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_int64.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[int64](v)[:1], MustFixedColWithTypeCheck[int64](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // uint8
-		v := NewVector(types.T_uint8.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []uint8{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_uint8.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[uint8](v)[:1], MustFixedColWithTypeCheck[uint8](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // uint16
-		v := NewVector(types.T_uint16.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []uint16{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_uint16.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[uint16](v)[:1], MustFixedColWithTypeCheck[uint16](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // uint32
-		v := NewVector(types.T_uint32.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []uint32{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_uint32.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[uint32](v)[:1], MustFixedColWithTypeCheck[uint32](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // uint64
-		v := NewVector(types.T_uint64.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []uint64{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_uint64.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[uint64](v)[:1], MustFixedColWithTypeCheck[uint64](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // float32
-		v := NewVector(types.T_float32.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []float32{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_float32.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[float32](v)[:1], MustFixedColWithTypeCheck[float32](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // float64
-		v := NewVector(types.T_float64.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []float64{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_float64.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[float64](v)[:1], MustFixedColWithTypeCheck[float64](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // text
-		v := NewVector(types.T_text.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_text.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustStrCols(v)[:1], MustStrCols(w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // date
-		v := NewVector(types.T_date.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []types.Date{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_date.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Date](v)[:1], MustFixedColWithTypeCheck[types.Date](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // datetime
-		v := NewVector(types.T_datetime.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_datetime.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Datetime](v)[:1], MustFixedColWithTypeCheck[types.Datetime](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // time
-		v := NewVector(types.T_time.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []types.Time{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_time.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Time](v)[:1], MustFixedColWithTypeCheck[types.Time](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // timestamp
-		v := NewVector(types.T_timestamp.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_timestamp.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Timestamp](v)[:1], MustFixedColWithTypeCheck[types.Timestamp](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // decimal64
-		vs := make([]types.Decimal64, 4)
-		v := NewVector(types.T_decimal64.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, vs, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_decimal64.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Decimal64](v)[:1], MustFixedColWithTypeCheck[types.Decimal64](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // decimal128
-		vs := make([]types.Decimal128, 4)
-		v := NewVector(types.T_decimal128.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, vs, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_decimal128.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Decimal128](v)[:1], MustFixedColWithTypeCheck[types.Decimal128](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // uuid
-		vs := make([]types.Uuid, 4)
-		v := NewVector(types.T_uuid.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, vs, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_uuid.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Uuid](v)[:1], MustFixedColWithTypeCheck[types.Uuid](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // ts
-		vs := make([]types.TS, 4)
-		v := NewVector(types.T_TS.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, vs, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_TS.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.TS](v)[:1], MustFixedColWithTypeCheck[types.TS](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-	{ // rowid
-		vs := make([]types.Rowid, 4)
-		v := NewVector(types.T_Rowid.ToType())
-		err := v.PreExtend(10, mp)
-		require.NoError(t, err)
-		err = AppendList(v, vs, nil, mp)
-		require.NoError(t, err)
-		w := NewVector(types.T_Rowid.ToType())
-		w.UnionOne(v, 0, false, mp)
-		require.Equal(t, MustFixedColWithTypeCheck[types.Rowid](v)[:1], MustFixedColWithTypeCheck[types.Rowid](w))
-		w.UnionOne(v, 0, true, mp)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
-}
-*/
-
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())
@@ -2481,6 +2181,450 @@ func TestSetFunction2(t *testing.T) {
 	}
 }
 
+func TestMisc(t *testing.T) {
+	vec := NewVec(types.T_int8.ToType())
+	var gsp nulls.Nulls
+	vec.SetGrouping(&gsp)
+	require.False(t, vec.HasGrouping())
+	gsp.Add(1, 3)
+	vec.SetGrouping(&gsp)
+	require.True(t, vec.HasGrouping())
+	require.True(t, vec.GetGrouping().Contains(1))
+	require.True(t, vec.GetGrouping().Contains(3))
+
+	mp := mpool.MustNewZero()
+	vec2 := NewRollupConst(types.T_int8.ToType(), 5, mp)
+	defer vec2.Free(mp)
+	vec3 := NewVec(types.T_int8.ToType())
+	defer vec3.Free(mp)
+	require.False(t, vec3.HasGrouping())
+	err := vec3.UnionOne(vec2, 0, mp)
+	require.NoError(t, err)
+	require.True(t, vec3.HasGrouping())
+	require.True(t, vec3.GetGrouping().Contains(0))
+
+	vec4 := NewVec(types.T_int8.ToType())
+	defer vec4.Free(mp)
+	err = vec4.UnionMulti(vec2, 1, 2, mp)
+	require.NoError(t, err)
+	require.True(t, vec4.HasGrouping())
+	require.True(t, vec4.GetGrouping().Contains(0))
+	require.True(t, vec4.GetGrouping().Contains(1))
+	require.False(t, vec4.GetGrouping().Contains(2))
+
+	vec5 := NewVec(types.T_int8.ToType())
+	defer vec5.Free(mp)
+	vec6 := NewConstNull(types.T_int8.ToType(), 5, mp)
+	defer vec6.Free(mp)
+
+	err = AppendFixed(vec5, int8(1), false, mp)
+	require.NoError(t, err)
+	err = vec5.UnionMulti(vec6, 1, 2, mp)
+	require.NoError(t, err)
+	require.False(t, vec5.GetNulls().Contains(0))
+	require.True(t, vec5.GetNulls().Contains(1))
+	require.True(t, vec5.GetNulls().Contains(2))
+	require.False(t, vec5.GetNulls().Contains(3))
+
+	vec7 := NewVec(types.T_char.ToType())
+	defer vec7.Free(mp)
+	err = AppendMultiBytes(vec7, nil, true, 2, mp)
+	require.NoError(t, err)
+	require.True(t, vec7.GetNulls().Contains(0))
+	require.True(t, vec7.GetNulls().Contains(1))
+	require.False(t, vec7.GetNulls().Contains(2))
+	require.Equal(t, 2, vec7.Length())
+
+	fixSizedTypes := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_bool.ToType(),
+		types.T_bit.ToType(),
+		types.T_Rowid.ToType(),
+		types.T_TS.ToType(),
+		types.T_uuid.ToType(),
+		types.T_datetime.ToType(),
+		types.T_timestamp.ToType(),
+	}
+	gsp.Clear()
+	gsp.Add(0, 1, 2)
+	for _, fType := range fixSizedTypes {
+		v1 := NewVec(fType)
+		v2 := NewVec(fType)
+		defer v1.Free(mp)
+		defer v2.Free(mp)
+		switch fType.Oid {
+		case types.T_int8:
+			vals := make([]int8, 2)
+			err = AppendFixedList[int8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int8, 3)
+			err = AppendFixedList[int8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int16:
+			vals := make([]int16, 2)
+			err = AppendFixedList[int16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int16, 3)
+			err = AppendFixedList[int16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int32:
+			vals := make([]int32, 2)
+			err = AppendFixedList[int32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int32, 3)
+			err = AppendFixedList[int32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_int64:
+			vals := make([]int64, 2)
+			err = AppendFixedList[int64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]int64, 3)
+			err = AppendFixedList[int64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint8:
+			vals := make([]uint8, 2)
+			err = AppendFixedList[uint8](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint8, 3)
+			err = AppendFixedList[uint8](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint16:
+			vals := make([]uint16, 2)
+			err = AppendFixedList[uint16](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint16, 3)
+			err = AppendFixedList[uint16](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint32:
+			vals := make([]uint32, 2)
+			err = AppendFixedList[uint32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint32, 3)
+			err = AppendFixedList[uint32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uint64:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_float32:
+			vals := make([]float32, 2)
+			err = AppendFixedList[float32](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float32, 3)
+			err = AppendFixedList[float32](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_float64:
+			vals := make([]float64, 2)
+			err = AppendFixedList[float64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]float64, 3)
+			err = AppendFixedList[float64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_bool:
+			vals := make([]bool, 2)
+			err = AppendFixedList[bool](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]bool, 3)
+			err = AppendFixedList[bool](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_bit:
+			vals := make([]uint64, 2)
+			err = AppendFixedList[uint64](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]uint64, 3)
+			err = AppendFixedList[uint64](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_Rowid:
+			vals := make([]types.Rowid, 2)
+			err = AppendFixedList[types.Rowid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Rowid, 3)
+			err = AppendFixedList[types.Rowid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_TS:
+			vals := make([]types.TS, 2)
+			err = AppendFixedList[types.TS](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.TS, 3)
+			err = AppendFixedList[types.TS](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_uuid:
+			vals := make([]types.Uuid, 2)
+			err = AppendFixedList[types.Uuid](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Uuid, 3)
+			err = AppendFixedList[types.Uuid](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_datetime:
+			vals := make([]types.Datetime, 2)
+			err = AppendFixedList[types.Datetime](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Datetime, 3)
+			err = AppendFixedList[types.Datetime](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		case types.T_timestamp:
+			vals := make([]types.Timestamp, 2)
+			err = AppendFixedList[types.Timestamp](v1, vals, []bool{true, true}, mp)
+			require.NoError(t, err)
+			vals = make([]types.Timestamp, 3)
+			err = AppendFixedList[types.Timestamp](v2, vals, []bool{true, true, true}, mp)
+			require.NoError(t, err)
+			v2.SetGrouping(&gsp)
+		}
+		union := GetUnionAllFunction(fType, mp)
+		err = union(v1, v2)
+		require.NoError(t, err)
+		require.Equal(t, 5, v1.Length())
+		require.Equal(t, 5, v1.GetNulls().Count())
+		require.Equal(t, 3, v1.GetGrouping().Count())
+	}
+}
+
+func TestGetAny(t *testing.T) {
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_int8.ToType())
+		err := AppendFixed(v, int8(0), false, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		v.Free(mp)
+		require.Equal(t, int8(0), s.(int8))
+	}
+	{ // test const vector
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(w, []byte("x"), false, mp)
+		require.NoError(t, err)
+		s := GetAny(w, 0)
+		require.Equal(t, []byte("x"), s.([]byte))
+		w.Free(mp)
+	}
+	{ // bool
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_bool.ToType())
+		err := AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(w, 0)
+		require.Equal(t, true, s.(bool))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int8
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int8.ToType())
+		err := AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int8(1), s.(int8))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int16.ToType())
+		err := AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int16(1), s.(int16))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int32.ToType())
+		err := AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int32(1), s.(int32))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_int64.ToType())
+		err := AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, int64(1), s.(int64))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint8
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint8.ToType())
+		err := AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint8(1), s.(uint8))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint16.ToType())
+		err := AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint16(1), s.(uint16))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint32.ToType())
+		err := AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint32(1), s.(uint32))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		mp := mpool.MustNewZero()
+		w := NewVec(types.T_uint64.ToType())
+		err := AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(w, 0)
+		require.Equal(t, uint64(1), s.(uint64))
+
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // text
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_text.ToType())
+		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
+		require.NoError(t, err)
+
+		s := GetAny(v, 0)
+		require.Equal(t, []byte("1"), s.([]byte))
+
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // time
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_time.ToType())
+		err := AppendFixedList(v, []types.Time{12 * 3600 * 1000 * 1000, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Time(12*3600*1000*1000), s.(types.Time))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // timestamp
+		mp := mpool.MustNewZero()
+		v := NewVec(types.T_timestamp.ToType())
+		err := AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Timestamp(10000000), s.(types.Timestamp))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal64
+		mp := mpool.MustNewZero()
+		typ := types.T_decimal64.ToType()
+		typ.Scale = 2
+		v := NewVec(typ)
+		err := AppendFixedList(v, []types.Decimal64{1234, 2000}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Decimal64(1234), s.(types.Decimal64))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal128
+		mp := mpool.MustNewZero()
+		typ := types.T_decimal128.ToType()
+		typ.Scale = 2
+		v := NewVec(typ)
+		err := AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Decimal128{B0_63: 1234, B64_127: 0}, s.(types.Decimal128))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uuid
+		mp := mpool.MustNewZero()
+		vs := make([]types.Uuid, 4)
+		v := NewVec(types.T_uuid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, "00000000-0000-0000-0000-000000000000", fmt.Sprint(s))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // ts
+		mp := mpool.MustNewZero()
+		vs := make([]types.TS, 4)
+		v := NewVec(types.T_TS.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.TS(types.TS{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // rowid
+		mp := mpool.MustNewZero()
+		vs := make([]types.Rowid, 4)
+		v := NewVec(types.T_Rowid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		s := GetAny(v, 0)
+		require.Equal(t, types.Rowid(types.Rowid{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
 func BenchmarkUnmarshal(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -2542,4 +2686,488 @@ func BenchmarkMustFixedCol(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		MustFixedColWithTypeCheck[int8](vec)
 	}
+}
+
+func TestRowToString(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	{ // Array Float32
+		v := NewVec(types.T_array_float32.ToType())
+		err := AppendArrayList(v, [][]float32{{1, 1}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[1, 1]", v.RowToString(0))
+		err = AppendArrayList(v, [][]float32{{2, 2}, {3, 3}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[2, 2]", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // Array Float64
+		v := NewVec(types.T_array_float64.ToType())
+		err := AppendArrayList(v, [][]float64{{1, 1}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[1, 1]", v.RowToString(0))
+		err = AppendArrayList(v, [][]float64{{2, 2}, {3, 3}}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[2, 2]", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // bool
+		v := NewVec(types.T_bool.ToType())
+		err := AppendFixed(v, true, false, mp)
+		require.NoError(t, err)
+		require.Equal(t, "true", v.RowToString(0))
+		err = AppendFixed(v, false, true, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v.RowToString(1))
+		v.Free(mp)
+
+		v0 := NewVec(types.T_bool.ToType())
+		err = AppendFixed(v0, false, true, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v0.RowToString(0))
+		err = AppendFixed(v0, true, false, mp)
+		require.NoError(t, err)
+		require.Equal(t, "true", v0.RowToString(1))
+		v0.Free(mp)
+
+		v1 := NewConstNull(types.T_bool.ToType(), 1, mp)
+		require.Equal(t, "null", v1.RowToString(1))
+		v1.Free(mp)
+
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int8
+		v := NewVec(types.T_int8.ToType())
+		err := AppendFixedList(v, []int8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int16
+		v := NewVec(types.T_int16.ToType())
+		err := AppendFixedList(v, []int16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int32
+		v := NewVec(types.T_int32.ToType())
+		err := AppendFixedList(v, []int32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // int64
+		v := NewVec(types.T_int64.ToType())
+		err := AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint8
+		v := NewVec(types.T_uint8.ToType())
+		err := AppendFixedList(v, []uint8{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint16
+		v := NewVec(types.T_uint16.ToType())
+		err := AppendFixedList(v, []uint16{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint32
+		v := NewVec(types.T_uint32.ToType())
+		err := AppendFixedList(v, []uint32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uint64
+		v := NewVec(types.T_uint64.ToType())
+		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // float32
+		v := NewVec(types.T_float32.ToType())
+		err := AppendFixedList(v, []float32{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // float64
+		v := NewVec(types.T_float64.ToType())
+		err := AppendFixedList(v, []float64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // text
+		v := NewVec(types.T_text.ToType())
+		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // date
+		v := NewVec(types.T_date.ToType())
+		err := AppendFixedList(v, []types.Date{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0001-01-03", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // datetime
+		v := NewVec(types.T_datetime.ToType())
+		scale := types.Datetime(types.MicroSecsPerSec * types.SecsPerDay)
+		err := AppendFixedList(v, []types.Datetime{1 * scale, 2 * scale, 3 * scale, 4 * scale}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0001-01-03 00:00:00", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // time
+		v := NewVec(types.T_time.ToType())
+		scale := types.Time(types.MicroSecsPerSec)
+		err := AppendFixedList(v, []types.Time{1 * scale, 2 * scale, 3 * scale, 4 * scale}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "00:00:02", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // timestamp
+		v := NewVec(types.T_timestamp.ToType())
+		err := AppendFixedList(v, []types.Timestamp{1, types.Timestamp(types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "1970-01-01 00:00:00", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal64
+		vs := make([]types.Decimal64, 4)
+		v := NewVec(types.T_decimal64.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // decimal128
+		vs := make([]types.Decimal128, 4)
+		v := NewVec(types.T_decimal128.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // uuid
+		vs := make([]types.Uuid, 4)
+		v := NewVec(types.T_uuid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "00000000-0000-0000-0000-000000000000", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // ts
+		vs := make([]types.TS, 4)
+		v := NewVec(types.T_TS.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // rowid
+		vs := make([]types.Rowid, 4)
+		v := NewVec(types.T_Rowid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "00000000-0000-0000-0000-000000000000-0-0-0", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // blockid
+		vs := make([]types.Blockid, 4)
+		v := NewVec(types.T_Blockid.ToType())
+		err := AppendFixedList(v, vs, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // bit
+		v := NewVec(types.T_bit.ToType())
+		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		require.Equal(t, "2", v.RowToString(1))
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
+func TestIntersection2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Intersection2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestIntersection2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Intersection2VectorVarlen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			for j := range b {
+				if cmp(a[i], b[j]) == 0 {
+					mm[a[i]] = struct{}{}
+				}
+			}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorOrdered(t *testing.T) {
+	const ll = 10000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a []int32 = make([]int32, lenA)
+		var b []int32 = make([]int32, lenB)
+
+		for i := 0; i < lenA; i++ {
+			a[i] = rand.Int31() % (ll / 2)
+		}
+
+		for i := 0; i < lenB; i++ {
+			b[i] = rand.Int31() % (ll / 2)
+		}
+
+		cmp := func(x, y int32) int {
+			return int(x) - int(y)
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		ret := NewVec(types.T_int32.ToType())
+		Union2VectorOrdered(a, b, ret, mp, cmp)
+
+		mm := make(map[int32]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col := MustFixedColWithTypeCheck[int32](ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i]]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestUnion2VectorVarlen(t *testing.T) {
+	const ll = 5000
+	const cnt = 100
+
+	mp := mpool.MustNewZero()
+
+	lenA := rand.Intn(ll) + ll/5
+	lenB := rand.Intn(ll) + ll/5
+
+	for range cnt {
+		var a = make([]string, lenA)
+		var b = make([]string, lenB)
+
+		va := NewVec(types.T_text.ToType())
+		vb := NewVec(types.T_text.ToType())
+
+		for i := 0; i < lenA; i++ {
+			x := rand.Int31() % (ll / 2)
+			a[i] = fmt.Sprintf("%d", x)
+		}
+
+		for i := 0; i < lenB; i++ {
+			x := rand.Int31() % (ll / 2)
+			b[i] = fmt.Sprintf("%d", x)
+		}
+
+		cmp := func(x, y string) int {
+			return strings.Compare(string(x), string(y))
+		}
+
+		slices.SortFunc(a, cmp)
+		slices.SortFunc(b, cmp)
+
+		for i := 0; i < lenA; i++ {
+			AppendBytes(va, []byte(a[i]), false, mp)
+		}
+
+		for i := 0; i < lenB; i++ {
+			AppendBytes(vb, []byte(b[i]), false, mp)
+		}
+
+		ret := NewVec(types.T_text.ToType())
+		Union2VectorValen(va, vb, ret, mp)
+
+		mm := make(map[string]struct{})
+
+		for i := range a {
+			mm[a[i]] = struct{}{}
+		}
+
+		for i := range b {
+			mm[b[i]] = struct{}{}
+		}
+
+		col, area := MustVarlenaRawData(ret)
+
+		require.Equal(t, len(mm), len(col))
+
+		for i := range col {
+			_, ok := mm[col[i].GetString(area)]
+			require.True(t, ok)
+		}
+	}
+}
+
+func TestProtoVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_char.ToType())
+	defer vec.Free(mp)
+	ss := "xxxxxx"
+	err := AppendBytes(vec, []byte(ss), false, mp)
+	require.NoError(t, err)
+	vec.ResetWithSameType()
+	vec2, err := VectorToProtoVector(vec)
+	require.NoError(t, err)
+	_, err = ProtoVectorToVector(vec2)
+	require.NoError(t, err)
 }

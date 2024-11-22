@@ -469,3 +469,4 @@ drop database EducationSystem;
 drop snapshot if exists sp06;
 -- @ignore:1
 show snapshots;
+

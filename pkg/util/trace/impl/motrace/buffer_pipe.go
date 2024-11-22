@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,14 +207,6 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			item, ok := i.(table.RowField)
 			if !ok {
 				panic("not MalCsv, dont support output CSV")
-			}
-
-			stmt, stmt_ok := i.(*StatementInfo)
-			if stmt_ok {
-				if stmt.AggrCount > 1 {
-					stmt.Statement = "/* " + strconv.FormatInt(stmt.AggrCount, 10) + " queries */ \n" + stmt.StmtBuilder.String()
-				}
-				stmt.StmtBuilder.Reset()
 			}
 
 			writeValues(item)

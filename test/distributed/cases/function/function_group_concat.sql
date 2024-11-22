@@ -233,3 +233,7 @@ FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_
 DELETE FROM group_concat_17 WHERE somename = 'tesgroup_concat_17';
 SELECT COUNT(*), GROUP_CONCAT(DISTINCT group_concat_17.somename SEPARATOR ' |')
 FROM group_concat_16 JOIN group_concat_17 ON group_concat_16.bID = group_concat_17.bID;
+drop table if exists g18;
+create table g18 (a int);
+select group_concat(a order by a) from g18;
+drop table if exists g18;

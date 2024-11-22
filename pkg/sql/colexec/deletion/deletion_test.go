@@ -204,7 +204,7 @@ func TestSplitBatch(t *testing.T) {
 			if tt.name == "test_partition_table_1" {
 				vector.SetFixedAtWithTypeCheck(tt.args.srcBat.GetVector(2), 0, int32(-1))
 			}
-			if err := deletion.SplitBatch(tt.args.proc, tt.args.srcBat); (err != nil) != tt.wantErr {
+			if err := deletion.SplitBatch(tt.args.proc, tt.args.srcBat, nil); (err != nil) != tt.wantErr {
 				t.Errorf("Deletion.SplitBatch() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

@@ -18,10 +18,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/petermattis/goid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
@@ -29,7 +31,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sqlAddr)
 	if addr == "" {
@@ -37,7 +39,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	r := resp.MigrateConnFromResponse
 
@@ -47,6 +49,7 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 		zap.Uint32("conn ID", c.connID),
 		zap.String("DB", r.DB),
 		zap.Int("prepare stmt num", len(r.PrepareStmts)),
+		zap.Int64("goId", goid.Get()),
 	)
 
 	defer c.queryClient.Release(resp)
@@ -84,18 +87,20 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
 		zap.String("username", c.clientInfo.username),
-		zap.Uint32("conn ID", c.connID))
+		zap.Uint32("conn ID", c.connID),
+		zap.Int64("goId", goid.Get()),
+	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
 		ConnID:       c.connID,
 		DB:           info.DB,
 		PrepareStmts: info.PrepareStmts,
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnTo)
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	c.queryClient.Release(resp)
 	return nil

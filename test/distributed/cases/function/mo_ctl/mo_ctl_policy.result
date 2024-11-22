@@ -17,3 +17,5 @@ mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
 select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1');
 mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
 \nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
+create table t2(a int primary key);
+drop table t2;

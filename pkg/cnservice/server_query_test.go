@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_file"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
@@ -48,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -141,6 +141,68 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGoMemLimit(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+		})
+	}
+}
+
+func Test_service_handleGoGCPercent(t *testing.T) {
+	ctx := context.Background()
+	// reset GCPercent
+	_ = debug.SetGCPercent(100)
+	type fields struct{}
+	type args struct {
+		ctx  context.Context
+		req  *query.Request
+		resp *query.Response
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr error
+		want    *query.Response
+	}{
+		{
+			name:   "disable_gc",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: -1}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: 100}},
+		},
+		{
+			name:   "set_90",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: 90}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: -1}},
+		},
+		{
+			name:   "set_100",
+			fields: fields{},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{GoGCPercentRequest: query.GoGCPercentRequest{Percent: 100}},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GoGCPercentResponse: query.GoGCPercentResponse{Percent: 90}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &service{}
+			err := s.handleGoGCPercent(tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, tt.wantErr, err)
+			require.Equalf(t, tt.want, tt.args.resp,
+				"handleGoGCPercent(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
 }
@@ -930,6 +992,19 @@ func Test_service_handleGetReplicaCount(t *testing.T) {
 			wantErr: nil,
 			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: mockReplicaCount}},
 		},
+		{
+			name: "disabled",
+			fields: fields{
+				shardService: nil,
+			},
+			args: args{
+				ctx:  ctx,
+				req:  &query.Request{},
+				resp: &query.Response{},
+			},
+			wantErr: nil,
+			want:    &query.Response{GetReplicaCount: query.GetReplicaCountResponse{Count: 0}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1003,11 +1078,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 	ctx := context.Background()
 	ctl := gomock.NewController(t)
 
-	mockFs := mock_file.NewMockFileService(ctl)
-	mockFs.EXPECT().Name().Return(defines.SharedFileServiceName).AnyTimes()
-	mockFs.EXPECT().ReadCache(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	fs, err := fileservice.NewFileServices("dummy", mockFs)
+	fs, err := fileservice.NewFileServices("dummy", testutil.NewSharedFS())
 	require.NoError(t, err)
 
 	mockQuery := mock_query.NewMockQueryService(ctl)
@@ -1107,4 +1178,19 @@ func Test_service_copy(t *testing.T) {
 	got := copyTxnInfo(srcLock)
 	require.Falsef(t, unsafe.Pointer(&srcLock.Rows) == unsafe.Pointer(&got.Rows), "copyTxnInfo Rows should diff. src: %p, got: %p", srcLock.Rows, got.Rows)
 	require.Falsef(t, unsafe.Pointer(&srcLock.Options) == unsafe.Pointer(got.Options), "copyTxnInfo Options should diff. src: %p, got: %p", &srcLock.Options, got.Options)
+}
+
+func Test_service_handleMetadataCacheRequest(t *testing.T) {
+	ctx := context.Background()
+	s := &service{}
+	var resp query.Response
+	err := s.handleMetadataCacheRequest(ctx, &query.Request{
+		MetadataCacheRequest: query.MetadataCacheRequest{
+			CacheSize: 42,
+		},
+	}, &resp, nil)
+	require.Nil(t, err)
+	if resp.MetadataCacheResponse.CacheCapacity != 42 {
+		t.Fatal()
+	}
 }

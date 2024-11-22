@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -172,10 +172,11 @@ func transferRequest2OtherCNs(
 	clusterservice.GetMOCluster(
 		proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferRequest2OtherCNs)
 			defer cancel()
 
 			resp, err = proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
+			err = moerr.AttachCause(ctx, err)
 			return true
 		},
 	)
@@ -198,7 +199,7 @@ func send2TNAndWaitResp(proc *process.Process,
 			args = args[1:]
 		}
 
-		req := db.TraceSpan{
+		req := cmd_util.TraceSpan{
 			Cmd:       args[0],
 			Spans:     args[1],
 			Threshold: threshold,

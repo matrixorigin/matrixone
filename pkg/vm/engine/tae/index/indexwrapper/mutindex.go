@@ -52,16 +52,13 @@ func (idx *MutIndex) BatchUpsert(
 	if err = index.BatchUpdateZM(idx.zonemap, keys); err != nil {
 		return
 	}
-	// logutil.Infof("Pre: %s", idx.art.String())
 	err = idx.art.BatchInsert(keys, 0, keys.Length(), uint32(offset))
-	// logutil.Infof("Post: %s", idx.art.String())
 	return
 }
 
 func (idx *MutIndex) GetActiveRow(key any) (row []uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
-		// logutil.Infof("[Trace][GetActiveRow] key=%v: err=%v", key, err)
 	}()
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed

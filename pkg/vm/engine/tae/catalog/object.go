@@ -92,7 +92,9 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 		EntryMVCCNode: &entry.EntryMVCCNode,
 	}
 }
-func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntry, isNewNode bool) {
+func (entry *ObjectEntry) GetDropEntry(
+	txn txnif.TxnReader,
+) (dropped *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
@@ -104,7 +106,13 @@ func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntr
 	isNewNode = true
 	return
 }
-func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.ObjectStats) (dropped *ObjectEntry, isNewNode bool) {
+func (entry *ObjectEntry) GetUpdateEntry(
+	txn txnif.TxnReader,
+	stats *objectio.ObjectStats,
+) (
+	dropped *ObjectEntry,
+	isNewNode bool,
+) {
 	dropped = entry.Clone()
 	node := dropped.GetLastMVCCNode()
 	objectio.SetObjectStats(&dropped.ObjectStats, stats)

@@ -112,7 +112,11 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(loggerNameCol, table.StringField(m.LoggerName))
 	row.SetColumnVal(levelCol, table.StringField(m.Level.String()))
 	row.SetColumnVal(callerCol, table.StringField(m.Caller))
-	row.SetColumnVal(messageCol, table.StringField(m.Message))
+	if maxVal := GetTracerProvider().MaxLogMessageSize; maxVal > 0 && len(m.Message) > maxVal {
+		row.SetColumnVal(messageCol, table.StringField(m.Message[:maxVal]))
+	} else {
+		row.SetColumnVal(messageCol, table.StringField(m.Message))
+	}
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 	if m.SessionID != "" {

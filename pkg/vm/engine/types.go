@@ -46,6 +46,8 @@ type Node struct {
 	Addr             string `json:"address"`
 	Data             RelData
 	NeedExpandRanges bool
+	CNCNT            int32 // number of all cns
+	CNIDX            int32 // cn index , starts from 0
 }
 
 // Attribute is a column
@@ -94,6 +96,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
+	// NOTE: Stats May indirectly access the file service
 	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
@@ -582,6 +585,14 @@ const (
 	TombstoneData
 )
 
+type DataCollectPolicy uint64
+
+const (
+	Policy_CollectCommittedData = 1 << iota
+	Policy_CollectUncommittedData
+	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+)
+
 type TombstoneCollectPolicy uint64
 
 const (
@@ -615,7 +626,7 @@ type Tombstoner interface {
 	String() string
 	StringWithPrefix(string) string
 
-	// false positive check
+	// false positive check, HasBlockTombstone will access FileService
 	HasBlockTombstone(ctx context.Context, id *objectio.Blockid, fs fileservice.FileService) (bool, error)
 
 	MarshalBinaryWithBuffer(w *bytes.Buffer) error
@@ -676,7 +687,7 @@ type RelData interface {
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	BuildEmptyRelData() RelData
+	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
 	// specified interface
@@ -714,13 +725,13 @@ func ForRangeShardID(
 func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
-	onBlock func(blk objectio.BlockInfo) (bool, error)) error {
+	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
 
 	for i := 0; i < sliceLen; i++ {
-		if ok, err := onBlock(*slice.Get(i)); !ok || err != nil {
+		if ok, err := onBlock(slice.Get(i)); !ok || err != nil {
 			return err
 		}
 	}
@@ -773,6 +784,7 @@ type DataSource interface {
 	SetFilterZM(zm objectio.ZoneMap)
 
 	Close()
+	String() string
 }
 
 type Ranges interface {
@@ -813,7 +825,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -829,6 +841,7 @@ type Relation interface {
 
 	GetHideKeys(context.Context) ([]*Attribute, error)
 
+	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 
 	Update(context.Context, *batch.Batch) error
@@ -854,6 +867,7 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
+	// Note: Write Will access Fileservice
 	BuildReaders(
 		ctx context.Context,
 		proc any,
@@ -863,6 +877,7 @@ type Relation interface {
 		txnOffset int,
 		orderBy bool,
 		policy TombstoneApplyPolicy,
+		filterHint FilterHint,
 	) ([]Reader, error)
 
 	BuildShardingReaders(
@@ -885,6 +900,7 @@ type Relation interface {
 
 	GetProcess() any
 
+	// Note: GetColumMetadataScanInfo Will access Fileservice
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
@@ -892,14 +908,20 @@ type Relation interface {
 	// Initially added for implementing locking rows by primary keys
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 }
 
-type Reader interface {
+type BaseReader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)
+}
+
+type Reader interface {
+	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetFilterZM(objectio.ZoneMap)
@@ -1088,7 +1110,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
 	return &EmptyRelationData{}
 }
 
@@ -1162,4 +1184,8 @@ func GetForceShuffleReader() (bool, []uint64, int) {
 	defer forceShuffleReader.Unlock()
 
 	return forceShuffleReader.force, forceShuffleReader.tblIds, forceShuffleReader.blkCnt
+}
+
+type FilterHint struct {
+	Must bool
 }

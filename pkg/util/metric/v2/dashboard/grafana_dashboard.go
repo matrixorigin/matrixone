@@ -28,15 +28,20 @@ import (
 	"github.com/K-Phoen/grabana/target/prometheus"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
+	"github.com/K-Phoen/grabana/timeseries/fields"
 	"github.com/K-Phoen/grabana/variable/datasource"
 	"github.com/K-Phoen/grabana/variable/interval"
 	"github.com/K-Phoen/grabana/variable/query"
+	"github.com/K-Phoen/sdk"
 )
 
 var (
 	defaultMoFolderName = "Matrixone"
 	localFolderName     = "Matrixone-Standalone"
 )
+
+var UnitPercent01 = axis.Unit("percentunit")
+var UnitPercent0100 = axis.Unit("percent")
 
 type DashboardCreator struct {
 	cli             *grabana.Client
@@ -211,6 +216,49 @@ func (c *DashboardCreator) withMultiGraph(
 	)
 }
 
+// withTimeSeries
+// cc github.com/K-Phoen/grabana/cmd/builder-example
+func (c *DashboardCreator) withTimeSeries(
+	title string,
+	span float32,
+	queries []string,
+	legends []string,
+	tsOpts ...timeseries.Option,
+) row.Option {
+
+	opts := []timeseries.Option{
+		timeseries.Span(span),
+		timeseries.DataSource(c.dataSource),
+		timeseries.Tooltip(timeseries.AllSeries), // default show all metrics' value.
+	}
+	opts = append(opts, tsOpts...)
+
+	for i, query := range queries {
+		opts = append(opts,
+			timeseries.WithPrometheusTarget(
+				query,
+				prometheus.Legend(legends[i]),
+			))
+	}
+
+	return row.WithTimeSeries(
+		title,
+		opts...,
+	)
+}
+
+func ScaleDistributionLinear() fields.OverrideOption {
+	return func(field *sdk.FieldConfigOverride) {
+		field.Properties = append(field.Properties,
+			sdk.FieldConfigOverrideProperty{
+				ID: "custom.scaleDistribution",
+				Value: struct {
+					Type string `json:"type"`
+				}{Type: "linear"},
+			})
+	}
+}
+
 func (c *DashboardCreator) getHistogram(
 	title string,
 	metric string,
@@ -241,7 +289,7 @@ func (c *DashboardCreator) getPercentHist(
 	options = append(options, opts...)
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
-		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
+		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le))", percent, metric)
 		legend := fmt.Sprintf("P%.0f", percent*100)
 		options = append(options, timeseries.WithPrometheusTarget(
 			query,

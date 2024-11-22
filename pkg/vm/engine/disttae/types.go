@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -49,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -131,10 +132,11 @@ const (
 )
 
 const (
-	WorkspaceThreshold   uint64 = 1 * mpool.MB
-	InsertEntryThreshold        = 5000
-	GCBatchOfFileCount   int    = 1000
-	GCPoolSize           int    = 5
+	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	InsertEntryThreshold                  = 5000
+	GCBatchOfFileCount             int    = 1000
+	GCPoolSize                     int    = 5
+	CNTransferTxnLifespanThreshold        = time.Second * 5
 )
 
 var (
@@ -155,13 +157,19 @@ type EngineOptions func(*Engine)
 
 func WithWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
-		e.workspaceThreshold = th
+		e.config.workspaceThreshold = th
 	}
 }
 
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
-		e.insertEntryMaxCount = th
+		e.config.insertEntryMaxCount = th
+	}
+}
+
+func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
+	return func(e *Engine) {
+		e.config.cnTransferTxnLifespanThreshold = th
 	}
 }
 
@@ -178,16 +186,15 @@ type Engine struct {
 	idGen    IDGenerator
 	tnID     string
 
-	workspaceThreshold  uint64
-	insertEntryMaxCount int
+	config struct {
+		workspaceThreshold  uint64
+		insertEntryMaxCount int
+
+		cnTransferTxnLifespanThreshold time.Duration
+	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
 	catalog *cache.CatalogCache
-	//snapshot catalog will be loaded from TN When snapshot read is needed.
-	snapCatalog *struct {
-		sync.Mutex
-		snaps []*cache.CatalogCache
-	}
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
@@ -244,11 +251,13 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
-	// txn workspace size
+	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
-	// the total row count for insert entries when txn commits.
-	insertCount int
-	// the approximation of total row count for delete entries when txn commits.
+	// the approximation of total size for insert entries
+	approximateInMemInsertSize uint64
+	// the approximation of total row count for insert entries
+	approximateInMemInsertCnt int
+	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
@@ -284,10 +293,11 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	cn_flushed_s3_tombstone_object_stats_list struct {
-		sync.RWMutex
-		data []objectio.ObjectStats
-	}
+	cn_flushed_s3_tombstone_object_stats_list *sync.Map
+	//cn_flushed_s3_tombstone_object_stats_list struct {
+	//	sync.RWMutex
+	//	data []objectio.ObjectStats
+	//}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -298,7 +308,15 @@ type Transaction struct {
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
-	timestamps []timestamp.Timestamp
+
+	transfer struct {
+		lastTransferred types.TS
+		timestamps      []timestamp.Timestamp
+		pendingTransfer bool
+
+		//workerPool *ants.Pool
+	}
+
 	//the start time of first statement in a txn.
 	start time.Time
 
@@ -395,7 +413,10 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		batchSelectList:      make(map[*batch.Batch][]int64),
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
+
+	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
@@ -408,11 +429,7 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
-	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.data =
-		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
 }
 
 func (txn *Transaction) Readonly() bool {
@@ -456,12 +473,12 @@ func (txn *Transaction) PPString() string {
 		}),
 		stringifySyncMap(txn.tableCache),
 		len(txn.toFreeBatches),
-		txn.insertCount,
+		txn.approximateInMemInsertCnt,
 		txn.snapshotWriteOffset,
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
-		stringifySlice(txn.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
+		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
 func (txn *Transaction) StartStatement() {
@@ -499,17 +516,36 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	//free batches
 	txn.CleanToFreeBatches()
 	//merge writes for the last statement
-	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return err
 	}
 	// dump batch to s3, starting from 0 (begining of the workspace)
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
 	txn.offsets = append(txn.offsets, len(txn.writes))
+
 	txn.statementID++
 
-	return txn.handleRCSnapshot(ctx, commit)
+	if txn.op.Txn().IsRCIsolation() {
+		// each statement's start snapshot
+		// will be used by transfer than between statements
+		txn.transfer.timestamps = append(txn.transfer.timestamps, txn.op.SnapshotTS())
+
+		if txn.transfer.lastTransferred.IsEmpty() {
+			txn.start = time.Now()
+			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[0])
+		}
+
+		updated, err := txn.handleRCSnapshot(ctx, commit)
+		if err != nil {
+			return err
+		}
+
+		return txn.transferTombstonesByStatement(ctx, updated, commit)
+	}
+
+	return nil
 }
 
 // writeOffset returns the offset of the first write in the workspace
@@ -597,7 +633,6 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 }
 
 func (txn *Transaction) gcObjs(start int) error {
-	objsToGC := make(map[string]struct{})
 	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil ||
@@ -608,16 +643,25 @@ func (txn *Transaction) gcObjs(start int) error {
 		//2. Remove the segments generated by this statement lazily till txn commits or rollback.
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
 		if txn.writes[i].fileName != "" {
-			vs, area := vector.MustVarlenaRawData(txn.writes[i].bat.GetVector(0))
-			for i := range vs {
-				loc, _ := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
-				if _, ok := objsToGC[loc.Name().String()]; !ok {
-					objsToGC[loc.Name().String()] = struct{}{}
-					objsName = append(objsName, loc.Name().String())
+			var vec *vector.Vector
+			//  [object_stats, pk]
+			if txn.writes[i].typ == DELETE {
+				vec = txn.writes[i].bat.Vecs[0]
+			} else {
+				// [%!%mo__meta_loc, object_stats]
+				vec = txn.writes[i].bat.Vecs[1]
+			}
+
+			for j := range vec.Length() {
+				ss := objectio.ObjectStats(vec.GetBytesAt(j))
+				if txn.writes[i].typ == DELETE {
+					txn.cn_flushed_s3_tombstone_object_stats_list.Delete(ss)
 				}
+				objsName = append(objsName, ss.ObjectName().String())
 			}
 		}
 	}
+
 	//gc the objects asynchronously.
 	//TODO:: to handle the failure when CN is down.
 	step := GCBatchOfFileCount
@@ -662,8 +706,22 @@ func (txn *Transaction) gcObjs(start int) error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	var (
+		beforeEntries int
+		afterEntries  int
+	)
+	defer func() {
+		logutil.Info(
+			"RollbackLastStatement",
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+			zap.Int("before", beforeEntries),
+			zap.Int("after", afterEntries),
+		)
+	}()
 	txn.Lock()
 	defer txn.Unlock()
+
+	beforeEntries = len(txn.writes)
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
@@ -679,16 +737,30 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
+			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
 			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
-		txn.timestamps = txn.timestamps[:txn.statementID]
+
+		// transfer stuff
+		if txn.op.Txn().IsRCIsolation() {
+			txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
+
+			if txn.statementID == 0 {
+				txn.transfer.pendingTransfer = false
+				txn.transfer.lastTransferred = types.TS{}
+			} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
+				txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
+			}
+		}
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+
+	afterEntries = len(txn.writes)
 
 	txn.CleanToFreeBatches()
 
@@ -724,32 +796,38 @@ func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }
 
+func (txn *Transaction) advanceSnapshot(
+	ctx context.Context,
+	minTS timestamp.Timestamp) error {
+
+	if err := txn.op.UpdateSnapshot(ctx, minTS); err != nil {
+		return err
+	}
+
+	// reset to get the latest partitionstate
+	return txn.resetSnapshot()
+}
+
 // For RC isolation, update the snapshot TS of transaction for each statement.
 // only 2 cases need to reset snapshot
 // 1. cn sync latest commit ts from mo_ctl
 // 2. not first sql
-func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
+func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
 	needResetSnapshot := false
 	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
-	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 0 || needResetSnapshot) {
+
+	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
-			txn.op,
-			0,
-			"before execute")
-		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
-			return err
-		}
-		txn.resetSnapshot()
+			txn.op, 0, "before execute")
+
+		return true, txn.advanceSnapshot(ctx, timestamp.Timestamp{})
 	}
-	//Transfer row ids for deletes in RC isolation
-	return txn.transferInmemTombstoneLocked(ctx, commit)
+
+	return false, nil
 }
 
 // Entry represents a delete/insert

@@ -174,11 +174,7 @@ func (s *stateMachine) handleTsoUpdate(cmd []byte) sm.Result {
 func (s *stateMachine) handleSetRequiredLsn(cmd []byte) sm.Result {
 	lsn := parseRequiredLsn(cmd)
 	if lsn > s.state.RequiredLsn {
-		if lsn <= s.state.Index {
-			s.state.RequiredLsn = lsn
-		} else {
-			s.state.RequiredLsn = s.state.Index
-		}
+		s.state.RequiredLsn = lsn
 		return sm.Result{}
 	}
 	return sm.Result{Value: s.state.RequiredLsn}

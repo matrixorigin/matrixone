@@ -38,7 +38,7 @@ func TestConntrack(t *testing.T) {
 	t0 := time.Now()
 	for {
 
-		for range tooManyThreshold {
+		for range connsThreshold {
 
 			events <- conntrack.Event{
 				Type: conntrack.EventNew,

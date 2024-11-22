@@ -13,6 +13,10 @@ col8 bigint unsigned
 );
 
 -- load data
+load data infile '$resources/load_data/integer_numbers_4.csv' into table t1 fields terminated by ',';
+select * from t1;
+delete from t1;
+
 load data infile '$resources/load_data/integer_numbers_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 
@@ -298,6 +302,9 @@ create table test06(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+delete from test06;
+load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 drop table test06;
 

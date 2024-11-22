@@ -1138,7 +1138,7 @@ a    b    c
 -28.32320    387213.0    3.2132313E7
 null    327.32892    -38922.2123
 INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
-Duplicate entry '271.21212' for key '__mo_index_idx_col'
+Duplicate entry '271.21212' for key '(.*)'
 DROP TABLE decimal15;
 DROP TABLE IF EXISTS decimal16;
 CREATE TABLE decimal16(a decimal, b decimal(38,10), c varchar(20),UNIQUE INDEX(a),INDEX(b));

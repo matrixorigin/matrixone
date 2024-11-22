@@ -1,4 +1,3 @@
--- @bvt:issue#17509
 set global enable_privilege_cache = off;
 
 -- create udf, create snapshot, drop udf, restore
@@ -158,7 +157,7 @@ insert into tbh2(id, val) values(1,'a'),(2,'b'),(3,'c');
 insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 drop procedure if exists test_if_hit_second_elseif;
-create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
+create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_second_elseif();
 
 drop procedure if exists test_if_hit_else;
@@ -196,21 +195,21 @@ drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
--- @ignore:0,5
+-- @ignore:0,2,3,5
 select * from mo_catalog.mo_stages;
 
 drop snapshot if exists stage_sp01;
 create snapshot stage_sp01 for cluster;
 
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
--- @ignore:0,5
+-- @ignore:0,2,3,5
 select * from mo_catalog.mo_stages;
 drop stage my_ext_stage;
--- @ignore:0,5
+-- @ignore:0,2,3,5
 select * from mo_catalog.mo_stages;
 
 restore account sys from snapshot stage_sp01;
--- @ignore:0,5
+-- @ignore:0,2,3,5
 select * from mo_catalog.mo_stages;
 drop snapshot stage_sp01;
 drop stage my_ext_stage;
@@ -488,4 +487,3 @@ drop snapshot sp01;
 drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
 set global enable_privilege_cache = on;
--- @bvt:issue

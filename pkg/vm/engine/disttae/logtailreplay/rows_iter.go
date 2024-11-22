@@ -16,12 +16,12 @@ package logtailreplay
 
 import (
 	"bytes"
-
-	"github.com/tidwall/btree"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -44,7 +44,6 @@ var _ RowsIter = new(rowsIter)
 
 func (p *rowsIter) Next() bool {
 	for {
-
 		if !p.firstCalled {
 			if p.checkBlockID {
 				if !p.iter.Seek(RowEntry{
@@ -99,56 +98,119 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts           types.TS
-	spec         PrimaryKeyMatchSpec
-	iter         btree.IterG[*PrimaryIndexEntry]
-	rows         *btree.BTreeG[RowEntry]
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	curRow       RowEntry
+	ts                types.TS
+	spec              PrimaryKeyMatchSpec
+	iter              btree.IterG[*PrimaryIndexEntry]
+	rows              *btree.BTreeG[RowEntry]
+	primaryIndex      *btree.BTreeG[*PrimaryIndexEntry]
+	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
+	curRow            RowEntry
+
+	specHint struct {
+		isDelIter bool
+	}
 }
 
 type PrimaryKeyMatchSpec struct {
-	// Move moves to the target
-	Move func(p *primaryKeyIter) bool
-	Name string
+	// Next() --> Move() --> moveInner()
+	// the existence of Move is to avoid
+	// the redundant comparison .
+	Move      func(p *primaryKeyIter) bool
+	Name      string
+	moveInner func(p *primaryKeyIter) bool
 }
 
 func Exact(key []byte) PrimaryKeyMatchSpec {
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
-	return PrimaryKeyMatchSpec{
+	cnt := 3
+	spec := PrimaryKeyMatchSpec{
 		Name: "Exact",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: key,
-				})
+
+				pivot.Bytes = key
+				pivot.Time = p.ts
+
+				if ok = p.iter.Seek(&pivot); !ok {
+					return false
+				}
+
 			} else {
 				ok = p.iter.Next()
-			}
 
+				if !p.specHint.isDelIter {
+					cnt--
+				}
+
+				// Note that:
+				// delete a pk may happen twice, means there may have two deletes
+				// for one pk both pushed to CN, and they have different TS.
+				// this happened when an update or delete commit to TN during flush,
+				// the delete target is transferred to a new object, so the extra delete was generated.
+				// the new delete may have bigger TS than the older one.
+				//
+				// update case:
+				//    delete pk  t1
+				//    insert pk  t1
+				//
+				//    flush ----> transfer delete ---> delete pk t2
+				//
+				// if the Exact only consider the latest one records, it may miss the insert!
+				//
+				if !ok || cnt <= 0 {
+					return false
+				}
+			}
+			return true
+		},
+	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			ok = spec.moveInner(p)
 			if !ok {
 				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
 			}
 
 			item := p.iter.Item()
 			return bytes.Equal(item.Bytes, key)
-		},
+		}
 	}
+
+	return spec
 }
 
 func Prefix(prefix []byte) PrimaryKeyMatchSpec {
+
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "Prefix",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
-					Bytes: prefix,
-				})
+
+				pivot.Bytes = prefix
+				pivot.Time = p.ts
+
+				ok = p.iter.Seek(&pivot)
 			} else {
 				ok = p.iter.Next()
 			}
@@ -157,10 +219,27 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			item := p.iter.Item()
-			return bytes.HasPrefix(item.Bytes, prefix)
+			return true
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			item := p.iter.Item()
+			return bytes.HasPrefix(item.Bytes, prefix)
+		}
+	}
+
+	return spec
 }
 
 func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
@@ -213,14 +292,23 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
 	}
 
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
 	first := true
-	return PrimaryKeyMatchSpec{
+	spec := PrimaryKeyMatchSpec{
 		Name: "Between Kind",
-		Move: func(p *primaryKeyIter) bool {
+		moveInner: func(p *primaryKeyIter) bool {
 			var ok bool
 			if first {
 				first = false
-				if ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb}); ok {
+
+				pivot.Bytes = lb
+				pivot.Time = p.ts
+
+				if ok = p.iter.Seek(&pivot); ok {
 					ok = seek2First(&p.iter)
 				}
 			} else {
@@ -231,18 +319,34 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			item := p.iter.Item()
-			return validCheck(item.Bytes)
+			return true
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			item := p.iter.Item()
+			return validCheck(item.Bytes)
+		}
+	}
+
+	return spec
 }
 
 type phase int
 
 const (
-	scan  phase = 0
-	seek  phase = 1
-	judge phase = 2
+	scan phase = 0
+	seek phase = 1
 )
 
 func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
@@ -279,7 +383,12 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{Bytes: lb})
+				ok = p.iter.Seek(&PrimaryIndexEntry{
+					Bytes: lb,
+					Time:  p.ts,
+					// if bytes and time matched, we hope scan from the first
+					RowEntryID: math.MaxInt64,
+				})
 
 				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
 					ok = p.iter.Next()
@@ -330,9 +439,14 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 		return true
 	}
 
-	return PrimaryKeyMatchSpec{
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
+	spec := PrimaryKeyMatchSpec{
 		Name: "InKind",
-		Move: func(p *primaryKeyIter) (ret bool) {
+		moveInner: func(p *primaryKeyIter) (ret bool) {
 			// TODO: optimize the case where len(encodes) >> p.primaryIndex.Len(), refer to the UT TestPrefixIn
 			for {
 				switch currentPhase {
@@ -341,7 +455,11 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 						// out of vec
 						return false
 					}
-					if !p.iter.Seek(&PrimaryIndexEntry{Bytes: encoded}) {
+
+					pivot.Bytes = encoded
+					pivot.Time = p.ts
+
+					if !p.iter.Seek(&pivot) {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -362,9 +480,65 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 			}
 		},
 	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return spec
 }
 
 var _ RowsIter = new(primaryKeyIter)
+
+func (p *primaryKeyIter) isPKItemValid(pkItem PrimaryIndexEntry) bool {
+	iter := p.rows.Iter()
+	defer iter.Release()
+
+	var pivot = RowEntry{
+		Time:    p.ts,
+		BlockID: pkItem.BlockID,
+		RowID:   pkItem.RowID,
+	}
+
+	// for 1000*10 items:
+	// Seek() ≈ 10x compare(pk bytes) ≈ 10x Next()
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		row := iter.Item()
+
+		if !row.RowID.EQ(&pkItem.RowID) {
+			break
+		}
+
+		if p.specHint.isDelIter && !row.Deleted {
+			// pick up deletes, should test each item
+			continue
+
+		} else if !p.specHint.isDelIter && row.Deleted {
+			// pick up inserts, quick break if found this item deleted already
+			break
+		}
+
+		if row.ID == pkItem.RowEntryID {
+			p.curRow = row
+			return true
+		}
+
+		return false
+	}
+
+	return false
+}
 
 func (p *primaryKeyIter) Next() bool {
 	for {
@@ -374,44 +548,9 @@ func (p *primaryKeyIter) Next() bool {
 
 		entry := p.iter.Item()
 
-		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
-				break
-			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.GT(&p.ts) {
-				// not visible
-				continue
-			}
-			if row.Deleted {
-				// visible and deleted, no longer valid
-				break
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
+		if p.isPKItemValid(*entry) {
+			return true
 		}
-		rowsIter.Release()
-
-		if !valid {
-			continue
-		}
-
-		return true
 	}
 }
 
@@ -443,44 +582,9 @@ func (p *primaryKeyDelIter) Next() bool {
 			continue
 		}
 
-		// validate
-		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
-			if row.BlockID != entry.BlockID {
-				// no more
-				break
-			}
-			if row.RowID != entry.RowID {
-				// no more
-				break
-			}
-			if row.Time.GT(&p.ts) {
-				// not visible
-				continue
-			}
-			if !row.Deleted {
-				// skip not deleted
-				continue
-			}
-			valid = row.ID == entry.RowEntryID
-			if valid {
-				p.curRow = row
-			}
-			break
+		if p.isPKItemValid(*entry) {
+			return true
 		}
-		rowsIter.Release()
-
-		if !valid {
-			continue
-		}
-
-		return true
 	}
 }
 
@@ -512,25 +616,24 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	}
 }
 
-//type primaryKeyDelIter struct {
-//	primaryKeyIter
-//	bid types.Blockid
-//}
-
 func (p *PartitionState) NewPrimaryKeyDelIter(
 	ts *types.TS,
 	spec PrimaryKeyMatchSpec,
 	bid *types.Blockid,
 ) *primaryKeyDelIter {
 	index := p.rowPrimaryKeyIndex.Copy()
-	return &primaryKeyDelIter{
+	delIter := &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
-			ts:           *ts,
-			spec:         spec,
-			primaryIndex: index,
-			iter:         index.Iter(),
-			rows:         p.rows.Copy(),
+			ts:                *ts,
+			spec:              spec,
+			primaryIndex:      index,
+			iter:              index.Iter(),
+			rows:              p.rows.Copy(),
+			tombstoneRowIdIdx: p.inMemTombstoneRowIdIndex.Copy(),
 		},
 		bid: *bid,
 	}
+
+	delIter.specHint.isDelIter = true
+	return delIter
 }

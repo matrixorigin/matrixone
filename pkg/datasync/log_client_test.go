@@ -210,9 +210,9 @@ func TestRequiredLsn(t *testing.T) {
 
 		err = lc.setRequiredLsn(ctx, 100)
 		assert.NoError(t, err)
-		lsn, err = lc.getRequiredLsn(ctx) // return the max index
+		lsn, err = lc.getRequiredLsn(ctx)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(16), lsn)
+		assert.Equal(t, uint64(100), lsn)
 	}
 	logservice.RunClientTest(t, false, nil, fn)
 }

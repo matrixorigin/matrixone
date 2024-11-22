@@ -16,11 +16,11 @@ package logtailreplay
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -34,13 +34,6 @@ type Partition struct {
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
 
-	//current partitionState can serve snapshot read only if start <= ts <= end
-	mu struct {
-		sync.Mutex
-		start types.TS
-		end   types.TS
-	}
-
 	TableInfo   TableInfo
 	TableInfoOK bool
 }
@@ -49,13 +42,6 @@ type TableInfo struct {
 	ID            uint64
 	Name          string
 	PrimarySeqnum int
-}
-
-// PXU TODO
-func (p *Partition) CanServe(ts types.TS) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end)
 }
 
 func NewPartition(
@@ -67,7 +53,6 @@ func NewPartition(
 	ret := &Partition{
 		lock: lock,
 	}
-	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
 }
@@ -103,40 +88,6 @@ func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
 }
 
-func (p *Partition) IsValid() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start.LE(&p.mu.end)
-}
-
-func (p *Partition) IsEmpty() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start == types.MaxTs()
-}
-
-func (p *Partition) UpdateStart(ts types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.mu.start != types.MaxTs() {
-		p.mu.start = ts
-	}
-}
-
-// [start, end]
-func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.mu.start = start
-	p.mu.end = end
-}
-
-func (p *Partition) GetDuration() (types.TS, types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start, p.mu.end
-}
-
 func (p *Partition) ConsumeSnapCkps(
 	_ context.Context,
 	ckps []*checkpoint.CheckpointEntry,
@@ -155,20 +106,22 @@ func (p *Partition) ConsumeSnapCkps(
 	state := p.state.Load()
 	start := types.MaxTs()
 	end := types.TS{}
-	for _, ckp := range ckps {
+	for i, ckp := range ckps {
 		if err = fn(ckp, state); err != nil {
 			return
 		}
-		if ckp.GetType() == checkpoint.ET_Global {
+		if ckp.GetType() == checkpoint.ET_Global ||
+			(ckp.GetType() == checkpoint.ET_Compacted && i == 0) {
 			ckpStart := ckp.GetStart()
-			if ckpStart.IsEmpty() {
+			if ckpStart.IsEmpty() && ckp.GetType() == checkpoint.ET_Global {
 				start = ckp.GetEnd()
 			} else {
 				start = ckp.GetStart()
 				end = ckp.GetEnd()
 			}
 		}
-		if ckp.GetType() == checkpoint.ET_Incremental {
+		if ckp.GetType() == checkpoint.ET_Incremental ||
+			(ckp.GetType() == checkpoint.ET_Compacted && i > 0) {
 			ckpstart := ckp.GetStart()
 			if ckpstart.LT(&start) {
 				start = ckpstart
@@ -183,8 +136,8 @@ func (p *Partition) ConsumeSnapCkps(
 		//only one global checkpoint.
 		end = start
 	}
-	p.UpdateDuration(start, end)
-	if !p.IsValid() {
+	state.UpdateDuration(start, end)
+	if !state.IsValid() {
 		return moerr.NewInternalErrorNoCtx("invalid checkpoints duration")
 	}
 	return nil
@@ -204,9 +157,9 @@ func (p *Partition) ConsumeCheckpoints(
 	if p.checkpointConsumed.Load() {
 		return nil
 	}
+
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
-		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
@@ -218,17 +171,15 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
-		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
 	state := curState.Copy()
 
+	//consume checkpoints.
 	if err := state.consumeCheckpoints(fn); err != nil {
 		return err
 	}
-
-	p.UpdateDuration(state.start, types.MaxTs())
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
@@ -254,6 +205,9 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
+
+	logutil.Infof("Truncate:table name:%s,tid:%v partition state from %p to %p,startTs:%s",
+		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString())
 
 	return nil
 }

@@ -238,6 +238,9 @@ count(*)
 10000000
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
+select mo_ctl('dn', 'flush', 'd1.t3');
+mo_ctl(dn, flush, d1.t3)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -266,5 +269,22 @@ count(*)
 select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
 count(*)
 499999
+explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (t1.c1 = t2.c1) shuffle: REUSE
+              ->  Aggregate
+                    Group Key: t1.c1 shuffle: range(t1.c1)
+                    ->  Table Scan on d1.t1
+              ->  Table Scan on d1.t2
+                    Filter Cond: (t2.c2 < 1000000)
+                    Block Filter Cond: (t2.c2 < 1000000)
+select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+count(*)
+999999
 drop table t3;
 drop database if exists d1;

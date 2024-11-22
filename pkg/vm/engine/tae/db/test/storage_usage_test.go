@@ -95,11 +95,11 @@ func Test_StorageUsageCache(t *testing.T) {
 
 		gathered := cache.GatherAllAccSize()
 		for accId := range gathered {
-			totalSize -= gathered[accId]
+			totalSize -= gathered[accId][0]
 
-			size, exist := cache.GatherAccountSize(accId)
+			size, _, exist := cache.GatherAccountSize(accId)
 			require.True(t, exist)
-			require.Equal(t, gathered[accId], size)
+			require.Equal(t, gathered[accId][0], size)
 		}
 
 		require.Equal(t, uint64(0), totalSize)
@@ -112,7 +112,7 @@ func Test_StorageUsageCache(t *testing.T) {
 				continue
 			}
 
-			gsize, exist := cache.GatherAccountSize(preAccId)
+			gsize, _, exist := cache.GatherAccountSize(preAccId)
 			require.True(t, exist)
 			require.Equal(t, size, gsize)
 
@@ -138,7 +138,7 @@ func Test_StorageUsageCache(t *testing.T) {
 
 		require.False(t, cache.IsExpired())
 
-		_, exist := cache.GatherAccountSize(usages[0].AccId)
+		_, _, exist := cache.GatherAccountSize(usages[0].AccId)
 		require.False(t, exist)
 	}
 
@@ -394,7 +394,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 				require.Equal(t, accCnt, len(abstract))
 				for id, aa := range abstract {
 					require.Equal(t, dbCnt*tblCnt, aa.TotalObjCnt)
-					require.Equal(t, int(memUsages[id]), aa.TotalObjSize)
+					require.Equal(t, int(memUsages[id][0]), aa.TotalObjSize)
 				}
 
 				accCol := vector.MustFixedColWithTypeCheck[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())

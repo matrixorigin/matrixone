@@ -77,9 +77,9 @@ func SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec, mb *M
 	}
 }
 
-func FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, pipelineFailed bool, err error, mb *MessageBoard) {
+func FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, sendSucceed bool, mb *MessageBoard) {
 	if m != nil {
-		if pipelineFailed || err != nil {
+		if !sendSucceed {
 			var runtimeFilter RuntimeFilterMessage
 			runtimeFilter.Tag = m.Tag
 			runtimeFilter.Typ = RuntimeFilter_DROP

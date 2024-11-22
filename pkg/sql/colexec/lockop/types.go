@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -111,6 +112,8 @@ type lockTarget struct {
 	lockTable                    bool
 	changeDef                    bool
 	mode                         lock.LockMode
+	lockRows                     *plan.Expr
+	lockTableAtTheEnd            bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
@@ -119,6 +122,7 @@ type RowsFilter func(row int, filterCols []int32) bool
 type hasNewVersionInRangeFunc func(
 	proc *process.Process,
 	rel engine.Relation,
+	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -130,4 +134,5 @@ type state struct {
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc
 	hasNewVersionInRange hasNewVersionInRangeFunc
+	lockCount            int64
 }

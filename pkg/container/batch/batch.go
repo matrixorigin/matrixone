@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,16 +72,6 @@ func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
 	return bat
 }
 
-func EmptyBatchWithSize(n int) Batch {
-	bat := Batch{
-		Vecs: make([]*vector.Vector, n),
-	}
-	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
-	}
-	return bat
-}
-
 func EmptyBatchWithAttrs(attrs []string) Batch {
 	bat := Batch{
 		Attrs: attrs,
@@ -113,32 +104,87 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	// --------------------------------------------------------------------
 	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
 	// --------------------------------------------------------------------
-	var buf bytes.Buffer
+	var w bytes.Buffer
 
 	// row count.
 	rl := int64(bat.rowCount)
-	buf.Write(types.EncodeInt64(&rl))
+	w.Write(types.EncodeInt64(&rl))
 
 	// Vecs
 	l := int32(len(bat.Vecs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		data, err := bat.Vecs[i].MarshalBinary()
 		if err != nil {
 			return nil, err
 		}
 		size := int32(len(data))
-		buf.Write(types.EncodeInt32(&size))
-		buf.Write(data)
+		w.Write(types.EncodeInt32(&size))
+		w.Write(data)
 	}
 
 	// Attrs
 	l = int32(len(bat.Attrs))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(bat.Attrs[i]))
-		buf.Write(types.EncodeInt32(&size))
-		n, _ := buf.WriteString(bat.Attrs[i])
+		w.Write(types.EncodeInt32(&size))
+		w.WriteString(bat.Attrs[i])
+	}
+
+	// AggInfos
+	aggInfos := make([][]byte, len(bat.Aggs))
+	for i, exec := range bat.Aggs {
+		data, err := aggexec.MarshalAggFuncExec(exec)
+		if err != nil {
+			return nil, err
+		}
+		aggInfos[i] = data
+	}
+
+	l = int32(len(aggInfos))
+	w.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(aggInfos[i]))
+		w.Write(types.EncodeInt32(&size))
+		w.Write(aggInfos[i])
+	}
+
+	w.Write(types.EncodeInt32(&bat.Recursive))
+	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
+
+	return w.Bytes(), nil
+}
+
+func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
+	w.Reset()
+	// row count.
+	rl := int64(bat.rowCount)
+	w.Write(types.EncodeInt64(&rl))
+
+	// Vecs
+	l := int32(len(bat.Vecs))
+	w.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		var size uint32
+		offset := w.Len()
+		w.Write(types.EncodeUint32(&size))
+		err := bat.Vecs[i].MarshalBinaryWithBuffer(w)
+		if err != nil {
+			return nil, err
+		}
+		size = uint32(w.Len() - offset - 4)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&size))
+	}
+
+	// Attrs
+	l = int32(len(bat.Attrs))
+	w.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(bat.Attrs[i]))
+		w.Write(types.EncodeInt32(&size))
+		n, _ := w.WriteString(bat.Attrs[i])
 		if int32(n) != size {
 			panic("unexpected length for string")
 		}
@@ -155,17 +201,17 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	}
 
 	l = int32(len(aggInfos))
-	buf.Write(types.EncodeInt32(&l))
+	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		size := int32(len(aggInfos[i]))
-		buf.Write(types.EncodeInt32(&size))
-		buf.Write(aggInfos[i])
+		w.Write(types.EncodeInt32(&size))
+		w.Write(aggInfos[i])
 	}
 
-	buf.Write(types.EncodeInt32(&bat.Recursive))
-	buf.Write(types.EncodeInt32(&bat.ShuffleIDX))
+	w.Write(types.EncodeInt32(&bat.Recursive))
+	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
 
-	return buf.Bytes(), nil
+	return w.Bytes(), nil
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
@@ -331,7 +377,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// situations that batch was still in use.
-	if bat == EmptyBatch || bat == CteEndBatch {
+	if bat == EmptyBatch || bat == CteEndBatch || bat == EmptyForConstFoldBatch {
 		return
 	}
 
@@ -436,7 +482,19 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	return rbat, nil
 }
 
-func (bat *Batch) Union(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {
+			return err
+		}
+	}
+	if len(bat.Vecs) > 0 {
+		bat.rowCount = bat.Vecs[0].Length()
+	}
+	return nil
+}
+
+func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
 			return err
@@ -553,6 +611,7 @@ func (bat *Batch) Allocated() int {
 func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
+	b.Attrs = bat.Attrs
 	for i, vec := range bat.Vecs {
 		b.Vecs[i], err = vec.Window(start, end)
 		if err != nil {

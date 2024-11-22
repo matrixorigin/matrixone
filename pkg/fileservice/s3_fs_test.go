@@ -20,20 +20,12 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
-	"fmt"
-	"net/http/httptrace"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -135,8 +127,6 @@ func testS3FS(
 			switch storage := fs.storage.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
-			case *AwsSDKv1:
-				storage.listMaxKeys = 5
 			}
 
 			return fs
@@ -175,7 +165,7 @@ func testS3FS(
 		})
 		assert.Nil(t, err)
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 
 		assert.True(t, len(entries) > 0)
@@ -423,98 +413,6 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 	})
 }
 
-func TestS3FSMinioServer(t *testing.T) {
-
-	// find minio executable
-	exePath, err := exec.LookPath("minio")
-	if errors.Is(err, exec.ErrNotFound) {
-		// minio not found in machine
-		t.Skip("minio executable not found")
-	}
-
-	// start minio
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cmd := exec.CommandContext(ctx,
-		exePath,
-		"server",
-		t.TempDir(),
-		//"--certs-dir", filepath.Join("testdata", "minio-certs"),
-	)
-	cmd.Env = append(os.Environ(),
-		"MINIO_SITE_NAME=test",
-		"MINIO_SITE_REGION=test",
-	)
-	//cmd.Stderr = os.Stderr
-	//cmd.Stdout = os.Stdout
-	err = cmd.Start()
-	assert.Nil(t, err)
-
-	// set s3 credentials
-	t.Setenv("AWS_REGION", "test")
-	t.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
-
-	endpoint := "http://localhost:9000"
-
-	// create bucket
-	ctx, cancel = context.WithTimeout(ctx, time.Second*59)
-	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
-	assert.Nil(t, err)
-	client := s3.NewFromConfig(cfg,
-		s3.WithEndpointResolver(
-			s3.EndpointResolverFunc(
-				func(
-					region string,
-					options s3.EndpointResolverOptions,
-				) (
-					ep aws.Endpoint,
-					err error,
-				) {
-					_ = options
-					ep.URL = endpoint
-					ep.Source = aws.EndpointSourceCustom
-					ep.HostnameImmutable = true
-					ep.SigningRegion = region
-					return
-				},
-			),
-		),
-	)
-	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: ptrTo("test"),
-	})
-	assert.Nil(t, err)
-
-	// run test
-	t.Run("file service", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		testFileService(t, 0, func(name string) FileService {
-			ctx := context.Background()
-			fs, err := NewS3FS(
-				ctx,
-				ObjectStorageArguments{
-					Name:      name,
-					Endpoint:  endpoint,
-					Bucket:    "test",
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					IsMinio:   true,
-				},
-				CacheConfig{
-					DiskPath: ptrTo(cacheDir),
-				},
-				nil,
-				true,
-				false,
-			)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-}
-
 func BenchmarkS3FS(b *testing.B) {
 	config, err := loadS3TestConfig(b)
 	assert.Nil(b, err)
@@ -585,6 +483,8 @@ func TestS3FSWithSubPath(t *testing.T) {
 }
 
 func BenchmarkS3ConcurrentRead(b *testing.B) {
+	ctx := context.Background()
+
 	config, err := loadS3TestConfig(b)
 	if err != nil {
 		b.Fatal(err)
@@ -596,51 +496,6 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 	b.Setenv("AWS_REGION", config.Region)
 	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
-	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			//fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			}
-			//fmt.Printf("got conn: %+v\n", info)
-		},
-
-		PutIdleConn: func(err error) {
-			//if err != nil {
-			//	fmt.Printf("put idle conn failed: %v\n", err)
-			//}
-		},
-
-		ConnectStart: func(network, addr string) {
-			numConnect.Add(1)
-			//fmt.Printf("connect %v %v\n", network, addr)
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
@@ -698,7 +553,6 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 				if err != nil {
 					panic(err)
 				}
-				numRead.Add(1)
 			}()
 		}
 		for i := 0; i < cap(sem); i++ {
@@ -709,6 +563,8 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 }
 
 func TestSequentialS3Read(t *testing.T) {
+	ctx := context.Background()
+
 	config, err := loadS3TestConfig(t)
 	if err != nil {
 		t.Fatal(err)
@@ -717,55 +573,6 @@ func TestSequentialS3Read(t *testing.T) {
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
-	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			} else {
-				fmt.Printf("got conn not reuse: %+v\n", info)
-			}
-		},
-
-		PutIdleConn: func(err error) {
-			if err != nil {
-				fmt.Printf("put idle conn failed: %v\n", err)
-			}
-		},
-
-		ConnectDone: func(network string, addr string, err error) {
-			numConnect.Add(1)
-			fmt.Printf("connect done: %v %v\n", network, addr)
-			if err != nil {
-				fmt.Printf("connect error: %v\n", err)
-			}
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
@@ -814,7 +621,6 @@ func TestSequentialS3Read(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		numRead.Add(1)
 	}
 
 }
@@ -1076,6 +882,8 @@ func TestNewS3NoDefaultCredential(t *testing.T) {
 }
 
 func TestS3FSIOMerger(t *testing.T) {
+	ctx := context.Background()
+
 	fs, err := NewS3FS(
 		context.Background(),
 		ObjectStorageArguments{
@@ -1093,10 +901,10 @@ func TestS3FSIOMerger(t *testing.T) {
 		false,
 	)
 	assert.Nil(t, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	var counterSet perfcounter.CounterSet
-	ctx := perfcounter.WithCounterSet(context.Background(), &counterSet)
+	ctx = perfcounter.WithCounterSet(context.Background(), &counterSet)
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -1139,6 +947,8 @@ func TestS3FSIOMerger(t *testing.T) {
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+
 	fs, err := NewS3FS(
 		context.Background(),
 		ObjectStorageArguments{
@@ -1155,13 +965,75 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 		false,
 	)
 	assert.Nil(b, err)
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			data := fs.AllocateCacheData(42)
+			data := fs.AllocateCacheData(ctx, 42)
 			data.Release()
 		}
 	})
+}
+
+func TestS3FSFromEnv(t *testing.T) {
+
+	// test disk backed S3
+	t.Setenv("TEST_S3FS_DISK", "name=disk,endpoint=disk,bucket="+t.TempDir())
+
+	// examples
+	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
+	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
+
+	// emulate env vars and get test specs
+	for _, pairs := range os.Environ() {
+		name, value, ok := strings.Cut(pairs, "=")
+		if !ok {
+			continue
+		}
+		// env vars begin with TEST_S3FS_
+		if !strings.HasPrefix(name, "TEST_S3FS_") {
+			continue
+		}
+
+		// parse args
+		reader := csv.NewReader(strings.NewReader(value))
+		argStrs, err := reader.Read()
+		if err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+		var args ObjectStorageArguments
+		if err := args.SetFromString(argStrs); err != nil {
+			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			continue
+		}
+
+		// test
+		t.Run(args.Name, func(t *testing.T) {
+			testFileService(t, 0, func(name string) FileService {
+				args.Name = name
+				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+
+				fs, err := NewS3FS(
+					context.Background(),
+					args,
+					DisabledCacheConfig,
+					nil,
+					true,
+					false,
+				)
+				if err != nil {
+					logutil.Error("S3FS errror",
+						zap.Any("args", args),
+						zap.Any("error", err),
+					)
+					t.Fatal(err)
+				}
+
+				return fs
+			})
+		})
+
+	}
 }

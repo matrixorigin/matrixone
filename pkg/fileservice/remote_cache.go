@@ -116,7 +116,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Second*2)
+			ctx, cancel := context.WithTimeoutCause(ctx, time.Second*2, moerr.CauseRemoteCacheRead)
 			defer cancel()
 			resp, err := r.client.SendMessage(ctx, target, req)
 			if err != nil {
@@ -145,17 +145,17 @@ func (r *RemoteCache) Update(ctx context.Context, vector *IOVector, async bool) 
 	return nil
 }
 
-func (r *RemoteCache) Flush() {}
+func (r *RemoteCache) Flush(ctx context.Context) {}
 
 func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 	//TODO
 	return nil
 }
 
-func (r *RemoteCache) Evict(done chan int64) {
+func (r *RemoteCache) Evict(ctx context.Context, done chan int64) {
 }
 
-func (r *RemoteCache) Close() {
+func (r *RemoteCache) Close(ctx context.Context) {
 	_ = r.client.Close()
 }
 

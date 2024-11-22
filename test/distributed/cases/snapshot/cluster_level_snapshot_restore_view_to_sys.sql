@@ -372,95 +372,10 @@ drop database test01;
 
 
 
--- create table1 and view, create table2 and view, drop table1 then restore
+-- single table, multi table
 drop database if exists test02;
 create database test02;
 use test02;
-drop table if exists students;
-create table Students (
-                          StudentID INT PRIMARY KEY auto_increment,
-                          Name VARCHAR(100),
-                          Grade DECIMAL(3, 2)
-);
-
-drop table if exists Courses;
-create table Courses (
-                         CourseID INT PRIMARY KEY,
-                         Title VARCHAR(100),
-                         Teacher VARCHAR(100)
-);
-insert into Students (StudentID, Name, Grade) VALUES
-                                                  (1, 'Alice', 3.5),
-                                                  (2, 'Bob', 3.0),
-                                                  (3, 'Charlie', 3.7);
-
-insert into Courses (CourseID, Title, Teacher) VALUES
-                                                   (101, 'Mathematics', 'Mr. Smith'),
-                                                   (102, 'Physics', 'Dr. Johnson'),
-                                                   (103, 'Chemistry', 'Ms. Lee');
-
-drop table if exists Enrollments;
-create table Enrollments (
-                             StudentID INT,
-                             CourseID INT,
-                             EnrollmentDate DATE,
-                             PRIMARY KEY (StudentID, CourseID),
-                             FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
-                             FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
-);
-insert into Enrollments (StudentID, CourseID, EnrollmentDate) VALUES
-                                                                  (1, 101, '2024-01-10'),
-                                                                  (2, 102, '2024-01-15'),
-                                                                  (1, 103, '2024-01-20'),
-                                                                  (3, 101, '2024-02-01');
-
-drop view if exists StudentCoursesView;
-create view StudentCoursesView as
-select
-    s.Name as StudentName,
-    c.Title as CourseTitle,
-    c.Teacher,
-    e.EnrollmentDate
-from
-    Students s
-        join
-    Enrollments e on s.StudentID = e.StudentID
-        join
-    Courses c on e.CourseID = c.CourseID
-order by
-    s.Name, c.Title;
-select * from StudentCoursesView;
-
-drop snapshot if exists sp07;
-create snapshot sp07 for cluster;
-
-drop table Enrollments;
-drop table students;
-
-select * from StudentCoursesView;
-select * from StudentCoursesView {snapshot = 'sp07'};
-
-restore account sys database test02 table students from snapshot sp07;
-select * from Students;
-select * from Students {snapshot = 'sp07'};
-select * from Enrollments;
-select * from Enrollments {snapshot = 'sp07'};
-select * from StudentCoursesView;
-restore account sys database test02 table Enrollments from snapshot sp07;
-select * from Enrollments;
-select * from Enrollments {snapshot = 'sp07'};
-select * from StudentCoursesView;
-show create view StudentCoursesView;
-drop view StudentCoursesView;
-drop table Enrollments;
-drop table students;
-drop table Courses;
-drop snapshot sp07;
-
-
-
-
--- single table, multi table
 drop table if exists employees;
 create table employees (
                            id INT PRIMARY KEY auto_increment,

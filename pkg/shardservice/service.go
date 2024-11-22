@@ -354,6 +354,9 @@ func (s *service) GetTableShards(table uint64) (pb.ShardsMetadata, []pb.TableSha
 }
 
 func (s *service) ReplicaCount() int64 {
+	if s == nil || !s.cfg.Enable {
+		return 0
+	}
 	return int64(s.cache.allocate.Load().replicasCount(nil))
 }
 

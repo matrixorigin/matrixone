@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -46,10 +47,10 @@ import (
 
 type inspectContext struct {
 	db     *db.DB
-	acinfo *db.AccessInfo
+	acinfo *cmd_util.AccessInfo
 	args   []string
 	out    io.Writer
-	resp   *db.InspectResp
+	resp   *cmd_util.InspectResp
 }
 
 // impl Pflag.Value interface
@@ -853,25 +854,22 @@ func (c *mergePolicyArg) Run() error {
 		if err != nil {
 			return err
 		}
-		err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
+		if err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
 			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 		if c.stopMerge {
-			err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false)
-			if err != nil {
+			if err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false); err != nil {
 				return err
 			}
 		} else {
 			if c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name) {
-				err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false)
-				if err != nil {
+				if err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false); err != nil {
 					return err
 				}
 			}
@@ -966,10 +964,10 @@ func (c *PolicyStatus) String() string {
 
 func (c *PolicyStatus) Run() (err error) {
 	if c.pruneAgo == 0 && c.pruneId == 0 {
-		c.ctx.resp.Payload = []byte(merge.ActiveCNObj.String())
+		c.ctx.resp.Payload = []byte(c.ctx.db.MergeScheduler.CNActiveObjectsString())
 		return nil
 	} else {
-		merge.ActiveCNObj.Prune(c.pruneId, c.pruneAgo)
+		c.ctx.db.MergeScheduler.PruneCNActiveObjects(c.pruneId, c.pruneAgo)
 		return nil
 	}
 }
@@ -1003,7 +1001,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEnt
 	return oentry, bn, nil
 }
 
-func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
+func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
 	if address == "*" {
 		return nil, nil
 	}
@@ -1092,7 +1090,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 //
 // the history of all
 // mo_ctl("dn", "inspect", "storage_usage -t *");
-func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageDetail(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	accId uint64, dbId uint64, tblId uint64, err error) {
 	strs := strings.Split(expr, ".")
 
@@ -1165,7 +1163,7 @@ func subString(src string, pos1, pos2 int) (string, error) {
 //
 // no limit, show all request trace info
 // select mo_ctl("dn", "inspect", "-t ");
-func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
+func parseStorageUsageTrace(expr string, ac *cmd_util.AccessInfo, db *db.DB) (
 	tStart, tEnd time.Time, accounts map[uint64]struct{}, err error) {
 
 	var str string
@@ -1248,7 +1246,7 @@ func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
 }
 
 func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseStorageUsageDetails)
 	defer cancel()
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()

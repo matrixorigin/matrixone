@@ -15,3 +15,7 @@ select /*case 4*/ statement from system.statement_info where statement_type in (
 
 -- case: select span_kind issue #7571
 select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
+
+-- issue: https://github.com/matrixorigin/MO-Cloud/issues/4241
+-- case: check host not ""
+select statement_id, account, `user`, `database`, host, statement from system.statement_info where host = '' and request_at > date_sub(now(), interval 5 minute) limit 10;

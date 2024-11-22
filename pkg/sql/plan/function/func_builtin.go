@@ -23,9 +23,9 @@ import (
 	"math/rand"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -44,7 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -112,6 +112,7 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
+	defExprInShowColumns = 4 //default expr in the show columns.
 )
 
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -120,10 +121,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 3], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 4], but got NULL")
 	}
-	if tp > 3 {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 3], but got %d", tp))
+	if tp > defExprInShowColumns {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 4], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -171,13 +172,47 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 
 			ts := typ.String()
+			ret := ""
 			// after decimal fix, remove this
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
+				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			} else {
+				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
 
-			ret := fmt.Sprintf("%s(%d)", ts, typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
+		}
+	case defExprInShowColumns:
+		formatStr := func(str string) string {
+			tmp := strings.Replace(str, "`", "``", -1)
+			strLen := len(tmp)
+			if strLen < 2 {
+				return tmp
+			}
+			if tmp == "''" {
+				return ""
+			}
+			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
+				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
+			}
+			return strings.Replace(tmp, "'", "''", -1)
+		}
+		f = func(s []byte) ([]byte, error) {
+			def := new(plan.Default)
+			err := types.Decode(s, def)
+			if err != nil {
+				return nil, err
+			}
+			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
+				return nil, nil
+			}
+
+			fStr := formatStr(def.OriginString)
+			if len(fStr) == 0 {
+				return []byte{}, nil
+			}
+			return functionUtil.QuickStrToBytes(fStr), nil
 		}
 	}
 
@@ -643,7 +678,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 
 			found = true
 			targetTime := v2.ToDatetime().ConvertToGoTime(time.Local)
-			if d := now.Sub(targetTime); d > rpc.AllowPruneDuration {
+			if d := now.Sub(targetTime); d > cmd_util.AllowPruneDuration {
 				d = d / time.Second * time.Second
 				result, err := pruneObj(tbl, d)
 				if err != nil {
@@ -652,7 +687,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 				rs.AppendMustBytesValue(util.UnsafeStringToBytes(result))
 			} else {
 				// try prune obj 24 hours before
-				_, err := pruneObj(tbl, rpc.AllowPruneDuration)
+				_, err := pruneObj(tbl, cmd_util.AllowPruneDuration)
 				if err != nil {
 					return err
 				}
@@ -1020,46 +1055,77 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 // XXX I just copy this function.
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
-		area := vec.GetArea()
-		vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
-		if !vec.GetNulls().Any() {
-			for i := 0; i < n; i++ {
-				keys[i] = append(keys[i], byte(0))
-				keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+		if vec.IsConst() {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			data := vs[0].GetByteSlice(area)
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
 			}
 		} else {
-			nsp := vec.GetNulls()
-			for i := 0; i < n; i++ {
-				hasNull := nsp.Contains(uint64(i + start))
-				if hasNull {
-					keys[i] = append(keys[i], byte(1))
-				} else {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					hasNull := nsp.Contains(uint64(i + start))
+					if hasNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+					}
 				}
 			}
 		}
 	}
 
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
-		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
-		if !vec.GetNulls().Any() {
-			for i := 0; i < n; i++ {
-				keys[i] = append(keys[i], byte(0))
-				keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+		if vec.IsConst() {
+			data := vec.GetData()[:vec.GetType().Size]
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
 			}
 		} else {
-			nsp := vec.GetNulls()
-			for i := 0; i < n; i++ {
-				isNull := nsp.Contains(uint64(i + start))
-				if isNull {
-					keys[i] = append(keys[i], byte(1))
-				} else {
+			data := vec.GetData()[:(n+start)*sz]
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(0))
 					keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					isNull := nsp.Contains(uint64(i + start))
+					if isNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+					}
+				}
 			}
 		}
+
 	}
 
 	encodeHashKeys := func(keys [][]byte, vecs []*vector.Vector, start, count int) {
@@ -1108,15 +1174,16 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	op.tryExpand(length, proc.Mp())
-
-	bitMap := new(nulls.Nulls)
-
 	for _, v := range parameters {
-		if v.IsConstNull() {
-			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+		if v.AllNull() {
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
+	}
+
+	op.tryExpand(length, proc.Mp())
+	bitMap := new(nulls.Nulls)
+	for _, v := range parameters {
 		SerialHelper(v, bitMap, op.ps, false)
 	}
 
@@ -2387,12 +2454,19 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "mem":
 			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg) +
+				motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
+				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iolist":
+			cu = motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
+		case "iodelete":
+			cu = motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "network":
 			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
 		case "total":
+			// total = cpu + mem + ioin + ioout + network
 			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
 		default:
 			rs.Append(float64(0), true)

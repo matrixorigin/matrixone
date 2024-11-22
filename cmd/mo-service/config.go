@@ -29,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/BurntSushi/toml"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -48,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
-	"go.uber.org/zap"
 )
 
 var (
@@ -438,9 +439,8 @@ func (c *Config) getProxyConfig() proxy.Config {
 }
 
 func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
-	cfg := c.Observability
-	cfg.SetDefaultValues(version.Version)
-	return cfg
+	c.Observability.SetDefaultValues(version.Version)
+	return c.Observability
 }
 
 // memberlist requires all gossip seed addresses to be provided as IP:PORT

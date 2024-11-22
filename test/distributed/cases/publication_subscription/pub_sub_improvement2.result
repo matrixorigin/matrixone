@@ -264,7 +264,7 @@ insert into clu01 values(1,2,0);
 insert into clu01 values(2,3,0);
 drop publication if exists p04;
 create publication p04 database mo_catalog table clu01 account all;
-internal error: invalid database name 'mo_catalog', not support publishing system database
+internal error: Unknown database name 'mo_catalog', not support publishing system database
 drop table clu01;
 drop database if exists publish_subscribed_table;
 create database publish_subscribed_table;
@@ -327,7 +327,7 @@ internal error: do not have privilege to execute the statement
 create database auth01;
 internal error: do not have privilege to execute the statement
 use auth01;
-invalid database auth01
+Unknown database auth01
 create publication p01 database auth01 account acc01;
 internal error: do not have privilege to execute the statement
 drop user u01;

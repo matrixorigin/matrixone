@@ -45,7 +45,7 @@ type evalVector struct {
 type container struct {
 	state   int
 	itr     hashmap.Iterator
-	lastpos int
+	lastPos int
 
 	batches       []*batch.Batch
 	batchRowCount int64
@@ -143,7 +143,7 @@ func (rightAnti *RightAnti) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.matched = nil
 	ctr.handledLast = false
 	ctr.state = Build
-	ctr.lastpos = 0
+	ctr.lastPos = 0
 }
 
 func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err error) {

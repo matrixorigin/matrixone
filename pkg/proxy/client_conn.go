@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -511,10 +512,6 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				return nil, err
 			}
 			v2.ProxyConnectSuccessCounter.Inc()
-
-			// manage this connection in the manager.
-			c.tun.rebalancer.connManager.connect(sc.GetCNServer(), c.tun)
-
 			return sc, nil
 		}
 	}
@@ -609,6 +606,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 					zap.String("current uuid", cn.uuid),
 					zap.String("current addr", cn.addr),
 					zap.Any("bad backend servers", badCNServers),
+					zap.Int64("goId", goid.Get()),
 					zap.Error(err),
 				)
 				badCNServers[cn.addr] = struct{}{}
@@ -682,13 +680,13 @@ func (c *clientConn) genConnID() (uint32, error) {
 	if c.haKeeperClient == nil {
 		return nextClientConnID(), nil
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseGenConnID)
 	defer cancel()
 	// Use the same key with frontend module to make sure the connection ID
 	// is unique globally.
 	connID, err := c.haKeeperClient.AllocateIDByKey(ctx, frontend.ConnIDAllocKey)
 	if err != nil {
-		return 0, err
+		return 0, moerr.AttachCause(ctx, err)
 	}
 	// Convert uint64 to uint32 to adapt MySQL protocol.
 	return uint32(connID), nil

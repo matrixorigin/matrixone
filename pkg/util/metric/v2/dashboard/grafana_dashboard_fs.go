@@ -19,6 +19,10 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
+	"github.com/K-Phoen/grabana/timeseries"
+	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
+	"github.com/K-Phoen/grabana/timeseries/fields"
 )
 
 func (c *DashboardCreator) initFileServiceDashboard() error {
@@ -31,10 +35,11 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		"FileService Metrics",
 		c.withRowOptions(
 			c.initFSOverviewRow(),
+			c.initFSCacheRow(),
 			c.initFSObjectStorageRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
-			c.initFSMallocRow(),
+			c.initFSHTTPTraceRow(),
 			c.initFSReadWriteBytesRow(),
 			c.initFSS3ConnOverviewRow(),
 			c.initFSS3ConnDurationRow(),
@@ -47,6 +52,16 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 }
 
 func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
+
+	cacheHitQuery := func(hitType, readType string) string {
+		// example result:
+		// sum(rate(mo_fs_read_total{type="hit-disk",instance=~"$instance"}[$interval])) / sum(rate(mo_fs_read_total{type="read-disk",instance=~"$instance"}[$interval]))
+		hitMetricFilter := `type="` + hitType + `"`
+		readMetricFilter := `type="` + readType + `"`
+		return `sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", hitMetricFilter) + `[$interval]))` +
+			`/ sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", readMetricFilter) + `[$interval]))`
+	}
+
 	return dashboard.Row(
 		"FileService Overview",
 		c.withMultiGraph(
@@ -58,6 +73,7 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-mem"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-disk"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-remote"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-meta"`) + `[$interval]))`,
 			},
 			[]string{
 				"s3",
@@ -65,7 +81,78 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 				"hit-mem",
 				"hit-disk",
 				"hit-remote",
+				"hit-meta",
 			}),
+
+		c.withMultiGraph(
+			"Cache Hit",
+			6,
+			[]string{
+				cacheHitQuery("hit-mem", "read-mem"),
+				cacheHitQuery("hit-disk", "read-disk"),
+				cacheHitQuery("hit-meta", "read-meta"),
+			},
+			[]string{
+				"mem",
+				"disk",
+				"meta",
+			},
+			UnitPercent01,
+		),
+	)
+}
+
+func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
+
+	cacheUsingPercent := func(componentFilter string) string {
+		// example result:
+		// sum by(component) (mo_fs_cache_bytes{instance=~"$instance", type="inuse", component=~".*mem"}) / sum by(component) (mo_fs_cache_bytes{instance=~"$instance", type="cap", component=~".*mem"})
+		inuseFilter := `type="inuse",` + componentFilter
+		capilter := `type="cap",` + componentFilter
+		return `sum by(component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", inuseFilter) + `)` +
+			` / sum by(component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", capilter) + `)`
+	}
+
+	onePanel := func(title, componentFilter string) row.Option {
+		return c.withTimeSeries(
+			title,
+			3,
+			[]string{
+				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
+				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
+				cacheUsingPercent(componentFilter),
+			},
+			[]string{
+				"{{component}} - inuse",
+				"{{component}} - cap",
+				"{{component}} - Usage",
+			},
+			timeseries.Axis(tsaxis.Unit("bytes")),
+			/* like:
+			"overrides": [
+			{
+			   "matcher": { "id": "byRegexp", "options": "/.*Usage/" },
+			   "properties": [
+			     { "id": "custom.axisPlacement", "value": "right" },
+			     { "id": "unit", "value": "percentunit" }
+			   ]
+			 }
+			]*/
+			timeseries.FieldOverride( // override right-axis
+				fields.ByRegex("/.*Usage/"),
+				fields.AxisPlacement(tsaxis.Right),
+				fields.Unit("percentunit"),
+				fields.FillOpacity(0),
+				ScaleDistributionLinear(),
+			),
+		)
+	}
+
+	return dashboard.Row(
+		"FileService Cache",
+		onePanel("Mem", `component=~".*mem"`),
+		onePanel("Meta", `component=~".*meta"`),
+		onePanel("Disk", `component=~".*disk"`),
 	)
 }
 
@@ -115,12 +202,14 @@ func (c *DashboardCreator) initFSS3ConnDurationRow() dashboard.Option {
 			[]string{
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="connect"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="get-conn"`),
+				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="got-first-response"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="dns-resolve"`),
 				c.getMetricWithFilter(`mo_fs_s3_conn_duration_seconds_bucket`, `type="tls-handshake"`),
 			},
 			[]string{
 				"connect",
 				"get-conn",
+				"got-first-response",
 				"dns-resolve",
 				"tls-handshake",
 			},
@@ -199,26 +288,6 @@ func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
-	return dashboard.Row(
-		"malloc stats",
-
-		c.withMultiGraph(
-			"active objects",
-			3,
-			[]string{
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="io_entry_data"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="bytes"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_malloc_live_objects", `type="memory_cache"`) + `)`,
-			},
-			[]string{
-				"io_entry_data",
-				"bytes",
-				"memory_cache",
-			}),
-	)
-}
-
 func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 	return dashboard.Row(
 		"Object Storage",
@@ -266,6 +335,35 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 				"list",
 				"exists",
 				"stat",
+			},
+		),
+	)
+}
+
+func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
+	return dashboard.Row(
+		"HTTP Trace",
+
+		c.withMultiGraph(
+			"trace",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="DNSStart"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="ConnectStart"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="TSLHandshakeStart"`) + `)`,
+			},
+			[]string{
+				"GetConn",
+				"GotConn",
+				"GotConnReused",
+				"GotConnIdle",
+				"DNSStart",
+				"ConnectStart",
+				"TLSHandshakeStart",
 			},
 		),
 	)

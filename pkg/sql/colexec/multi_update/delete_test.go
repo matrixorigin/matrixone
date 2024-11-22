@@ -94,8 +94,8 @@ func buildDeleteTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 
 	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := false
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteTable
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
 	return proc, retCase
 }
 
@@ -103,10 +103,10 @@ func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl)
 
-	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 200, hasUniqueKey, hasSecondaryKey, isPartition)
+	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey, isPartition)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey, isPartition)
-	toWriteS3 := true
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, toWriteS3)
+	action := UpdateWriteS3
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
 	return proc, retCase
 }
 
@@ -114,6 +114,9 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	partitionCount := 3
+	mainObjectID := types.NewObjectid()
+	uniqueObjectID := types.NewObjectid()
+	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
 		rowCount := colexec.DefaultBatchSize
 		if i == size-1 {
@@ -122,7 +125,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
 		columnA := testutil.MakeInt64Vector(rows, nil)
-		columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+		columnRowID := makeTestRowIDVector(mp, mainObjectID, uint16(i), rowCount)
 		attrs := []string{"main_rowid", "a"}
 
 		bat := &batch.Batch{
@@ -131,7 +134,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasUniqueKey {
-			columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+			columnRowID := makeTestRowIDVector(mp, uniqueObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
@@ -139,7 +142,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasSecondaryKey {
-			columnRowID := testutil.NewRowidVector(rowCount, types.T_Rowid.ToType(), mp, false, nil)
+			columnRowID := makeTestRowIDVector(mp, secondaryObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
@@ -166,10 +169,11 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 	objRef, tableDef := getTestMainTable(isPartition)
 
 	updateCtx := &MultiUpdateCtx{
-		ref:        objRef,
-		tableDef:   tableDef,
-		tableType:  updateMainTable,
-		deleteCols: []int{0, 1}, //row_id & pk
+		ObjRef:          objRef,
+		TableDef:        tableDef,
+		DeleteCols:      []int{0, 1}, //row_id & pk
+		OldPartitionIdx: -1,
+		NewPartitionIdx: -1,
 	}
 	updateCtxs := []*MultiUpdateCtx{updateCtx}
 	colCount := 2
@@ -190,10 +194,11 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		uniqueObjRef, uniqueTableDef := getTestUniqueIndexTable(uniqueTblName, isPartition)
 
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        uniqueObjRef,
-			tableDef:   uniqueTableDef,
-			tableType:  updateUniqueIndexTable,
-			deleteCols: []int{2, 3}, //row_id & pk
+			ObjRef:          uniqueObjRef,
+			TableDef:        uniqueTableDef,
+			DeleteCols:      []int{2, 3}, //row_id & pk
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 		colCount += 2
 	}
@@ -219,23 +224,22 @@ func prepareTestDeleteMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool, is
 		}
 		colCount += 2
 		updateCtxs = append(updateCtxs, &MultiUpdateCtx{
-			ref:        secondaryIdxObjRef,
-			tableDef:   secondaryIdxTableDef,
-			tableType:  updateSecondaryIndexTable,
-			deleteCols: secondaryPkPos,
+			ObjRef:          secondaryIdxObjRef,
+			TableDef:        secondaryIdxTableDef,
+			DeleteCols:      secondaryPkPos,
+			OldPartitionIdx: -1,
+			NewPartitionIdx: -1,
 		})
 	}
 
 	if isPartition {
-		for i, updateCtx := range updateCtxs {
-			partTblIDs := make([]int32, len(tableDef.Partition.PartitionTableNames))
-			for j := range tableDef.Partition.PartitionTableNames {
-				partTblIDs[j] = int32(i*1000 + j)
-			}
-			updateCtx.partitionIdx = colCount
-			updateCtx.partitionTableIDs = partTblIDs
-			updateCtx.partitionTableNames = tableDef.Partition.PartitionTableNames
+		partTblIDs := make([]uint64, len(tableDef.Partition.PartitionTableNames))
+		for j := range tableDef.Partition.PartitionTableNames {
+			partTblIDs[j] = uint64(1000 + j)
 		}
+		updateCtxs[0].OldPartitionIdx = colCount
+		updateCtxs[0].PartitionTableIDs = partTblIDs
+		updateCtxs[0].PartitionTableNames = tableDef.Partition.PartitionTableNames
 	}
 
 	return updateCtxs

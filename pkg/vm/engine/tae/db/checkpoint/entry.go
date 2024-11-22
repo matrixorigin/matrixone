@@ -38,12 +38,14 @@ type CheckpointEntry struct {
 	entryType  EntryType
 	cnLocation objectio.Location
 	tnLocation objectio.Location
-	lastPrint  time.Time
-	waterLine  time.Duration
 	version    uint32
 
 	ckpLSN      uint64
 	truncateLSN uint64
+
+	// only for new entry logic procedure
+	bornTime   time.Time
+	refreshCnt uint32
 }
 
 func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -53,9 +55,8 @@ func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *Checkpo
 		end:       end,
 		state:     ST_Pending,
 		entryType: typ,
-		lastPrint: time.Now(),
-		waterLine: time.Minute * 4,
 		version:   logtail.CheckpointCurrentVersion,
+		bornTime:  time.Now(),
 	}
 }
 
@@ -65,19 +66,24 @@ func (e *CheckpointEntry) SetVersion(version uint32) {
 	e.version = version
 }
 
-func (e *CheckpointEntry) IncrWaterLine() {
-	e.Lock()
-	defer e.Unlock()
-	e.waterLine += time.Minute * 4
-}
 func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 	e.ckpLSN = ckpLSN
 	e.truncateLSN = truncateLSN
 }
-func (e *CheckpointEntry) CheckPrintTime() bool {
+func (e *CheckpointEntry) DeferRetirement() {
+	e.Lock()
+	defer e.Unlock()
+	e.refreshCnt++
+}
+func (e *CheckpointEntry) Age() time.Duration {
 	e.RLock()
 	defer e.RUnlock()
-	return time.Since(e.lastPrint) > e.waterLine
+	return time.Since(e.bornTime)
+}
+func (e *CheckpointEntry) TooOld() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return time.Since(e.bornTime) > time.Minute*4*time.Duration(e.refreshCnt+1)
 }
 func (e *CheckpointEntry) LSNString() string {
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
@@ -176,6 +182,9 @@ func (e *CheckpointEntry) GetType() EntryType {
 }
 
 func (e *CheckpointEntry) String() string {
+	if e == nil {
+		return "nil"
+	}
 	t := "I"
 	if !e.IsIncremental() {
 		t = "G"

@@ -22,7 +22,7 @@ import (
 )
 
 type BloomFilter struct {
-	bitmap   *bitmap.Bitmap
+	bitmap   bitmap.Bitmap
 	hashSeed []uint64
 
 	keys      [][]byte
@@ -33,13 +33,13 @@ type BloomFilter struct {
 	addVals []uint64
 }
 
-func New(rowCount int64, probability float64) *BloomFilter {
+func New(rowCount int64, probability float64) BloomFilter {
 	bitSize, seedCount := computeMemAndHashCount(rowCount, probability)
 	hashSeed := make([]uint64, seedCount)
 	for i := 0; i < seedCount; i++ {
 		hashSeed[i] = rand.Uint64()
 	}
-	bits := &bitmap.Bitmap{}
+	bits := bitmap.Bitmap{}
 	bits.InitWithSize(bitSize)
 
 	vals := make([][]uint64, hashmap.UnitLimit)
@@ -49,7 +49,7 @@ func New(rowCount int64, probability float64) *BloomFilter {
 		vals[j] = make([]uint64, seedCount*3)
 	}
 
-	return &BloomFilter{
+	return BloomFilter{
 		bitmap:   bits,
 		hashSeed: hashSeed,
 

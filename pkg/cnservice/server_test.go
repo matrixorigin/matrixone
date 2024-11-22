@@ -20,6 +20,11 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_InitServer(t *testing.T) {
@@ -143,4 +147,72 @@ func (c *testMessageCache) Pop() (morpc.Message, bool, error) {
 }
 
 func (c *testMessageCache) Close() {
+}
+
+var _ bootstrap.Service = new(testBootService)
+
+type testBootService struct {
+	choice int
+}
+
+func (boot *testBootService) Bootstrap(ctx context.Context) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {
+	if boot.choice == 1 {
+		return false, moerr.NewInternalErrorNoCtx("return_err")
+	}
+	return true, nil
+}
+
+func (boot *testBootService) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error) {
+	if boot.choice == 1 {
+		return false, moerr.NewInternalErrorNoCtx("return_err")
+	}
+	return true, nil
+}
+
+func (boot *testBootService) GetFinalVersion() string {
+	return "2.0.0"
+}
+
+func (boot *testBootService) GetFinalVersionOffset() int32 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (boot *testBootService) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_tenant(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	boot := &testBootService{}
+
+	sv := &service{
+		bootstrapService: boot,
+	}
+
+	err := sv.CheckTenantUpgrade(ctx, 3)
+	assert.Nil(t, err)
+
+	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
+	assert.Nil(t, err)
+
+	boot.choice = 1
+	err = sv.CheckTenantUpgrade(ctx, 3)
+	assert.Error(t, err)
+
+	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
+	assert.Error(t, err)
 }

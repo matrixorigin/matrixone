@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -34,6 +35,10 @@ const (
 	MORawLogType    = "rawlog"
 )
 
+const (
+	MaxStatementSize = "MaxStatementSize"
+)
+
 // tracerProviderConfig.
 type tracerProviderConfig struct {
 	// spanProcessors contains collection of SpanProcessors that are processing pipeline
@@ -44,6 +49,9 @@ type tracerProviderConfig struct {
 	spanProcessors []trace.SpanProcessor
 
 	enable bool // SetEnable
+
+	// service used to get global config from mo.runtime
+	service string // WithService
 
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator trace.IDGenerator
@@ -93,6 +101,10 @@ type tracerProviderConfig struct {
 
 	tcpPacket bool // WithTCPPacket
 
+	MaxLogMessageSize int // WithMaxLogMessageSize
+	MaxStatementSize  int // WithMaxStatementSize
+
+	// labels for db_logger select target cn as operator.
 	labels map[string]string
 
 	mux sync.RWMutex
@@ -135,6 +147,12 @@ type tracerProviderOption func(config *tracerProviderConfig)
 
 func (f tracerProviderOption) apply(config *tracerProviderConfig) {
 	f(config)
+}
+
+func WithService(service string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.service = service
+	}
 }
 
 func withMOVersion(v string) tracerProviderOption {
@@ -235,6 +253,20 @@ func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOp
 func WithTCPPacket(count bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.tcpPacket = count
+	}
+}
+
+func WithMaxLogMessageSize(size int) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.MaxLogMessageSize = size
+	}
+}
+
+func WithMaxStatementSize(service string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MaxStatementSize); exist {
+			cfg.MaxStatementSize = s.(int)
+		}
 	}
 }
 

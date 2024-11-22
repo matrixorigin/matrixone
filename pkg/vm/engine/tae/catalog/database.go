@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"sort"
@@ -76,7 +77,7 @@ type DBEntry struct {
 }
 
 func (entry *TableEntry) Less(b *TableEntry) int {
-	return CompareUint64(entry.ID, b.ID)
+	return cmp.Compare(entry.ID, b.ID)
 }
 
 func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
@@ -136,7 +137,7 @@ func (e *DBEntry) CoarseTableCnt() int {
 }
 
 func (e *DBEntry) Less(b *DBEntry) int {
-	return CompareUint64(e.ID, b.ID)
+	return cmp.Compare(e.ID, b.ID)
 }
 
 func (e *DBEntry) GetTenantID() uint32          { return e.acInfo.TenantID }

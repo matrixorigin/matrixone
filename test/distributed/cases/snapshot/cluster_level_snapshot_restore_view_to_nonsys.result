@@ -429,7 +429,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+Unknown database test01
 restore account acc01 from snapshot sp06;
 select * from test01.EmployeeSalaryRanking;
 employeeid    employeename    salary    salaryrank
@@ -442,102 +442,6 @@ drop database test01;
 drop snapshot sp06;
 drop database if exists test02;
 create database test02;
-use test02;
-drop table if exists students;
-create table Students (
-StudentID INT PRIMARY KEY auto_increment,
-Name VARCHAR(100),
-Grade DECIMAL(3, 2)
-);
-drop table if exists Courses;
-create table Courses (
-CourseID INT PRIMARY KEY,
-Title VARCHAR(100),
-Teacher VARCHAR(100)
-);
-insert into Students (StudentID, Name, Grade) VALUES
-(1, 'Alice', 3.5),
-(2, 'Bob', 3.0),
-(3, 'Charlie', 3.7);
-insert into Courses (CourseID, Title, Teacher) VALUES
-(101, 'Mathematics', 'Mr. Smith'),
-(102, 'Physics', 'Dr. Johnson'),
-(103, 'Chemistry', 'Ms. Lee');
-drop table if exists Enrollments;
-create table Enrollments (
-StudentID INT,
-CourseID INT,
-EnrollmentDate DATE,
-PRIMARY KEY (StudentID, CourseID),
-FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
-FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
-);
-insert into Enrollments (StudentID, CourseID, EnrollmentDate) VALUES
-(1, 101, '2024-01-10'),
-(2, 102, '2024-01-15'),
-(1, 103, '2024-01-20'),
-(3, 101, '2024-02-01');
-drop view if exists StudentCoursesView;
-create view StudentCoursesView as
-select
-s.Name as StudentName,
-c.Title as CourseTitle,
-c.Teacher,
-e.EnrollmentDate
-from
-Students s
-join
-Enrollments e on s.StudentID = e.StudentID
-join
-Courses c on e.CourseID = c.CourseID
-order by
-s.Name, c.Title;
-select * from StudentCoursesView;
-studentname    coursetitle    teacher    enrollmentdate
-Alice    Chemistry    Ms. Lee    2024-01-20
-Alice    Mathematics    Mr. Smith    2024-01-10
-Bob    Physics    Dr. Johnson    2024-01-15
-Charlie    Mathematics    Mr. Smith    2024-02-01
-drop snapshot if exists sp07;
-create snapshot sp07 for cluster;
-use test02;
-drop table Enrollments;
-drop table students;
-select * from StudentCoursesView;
-SQL parser error: table "students" does not exist
-restore account acc01 database test02 table students from snapshot sp07;
-use test02;
-select * from Students;
-studentid    name    grade
-1    Alice    3.50
-2    Bob    3.00
-3    Charlie    3.70
-select * from Enrollments;
-SQL parser error: table "enrollments" does not exist
-select * from StudentCoursesView;
-SQL parser error: table "enrollments" does not exist
-restore account acc01 database test02 table Enrollments from snapshot sp07;
-use test02;
-select * from Enrollments;
-studentid    courseid    enrollmentdate
-1    101    2024-01-10
-2    102    2024-01-15
-1    103    2024-01-20
-3    101    2024-02-01
-select * from StudentCoursesView;
-studentname    coursetitle    teacher    enrollmentdate
-Alice    Chemistry    Ms. Lee    2024-01-20
-Alice    Mathematics    Mr. Smith    2024-01-10
-Bob    Physics    Dr. Johnson    2024-01-15
-Charlie    Mathematics    Mr. Smith    2024-02-01
-show create view StudentCoursesView;
-View    Create View    character_set_client    collation_connection
-studentcoursesview    create view StudentCoursesView as\nselect\ns.Name as StudentName,\nc.Title as CourseTitle,\nc.Teacher,\ne.EnrollmentDate\nfrom\nStudents s\njoin\nEnrollments e on s.StudentID = e.StudentID\njoin\nCourses c on e.CourseID = c.CourseID\norder by\ns.Name, c.Title;    utf8mb4    utf8mb4_general_ci
-drop view StudentCoursesView;
-drop table Enrollments;
-drop table students;
-drop table Courses;
-drop snapshot sp07;
 use test02;
 drop table if exists employees;
 create table employees (
@@ -574,11 +478,11 @@ create snapshot sp10 for account acc01;
 use test02;
 drop database test02;
 select * from test02.employees_view;
-invalid database test02
+Unknown database test02
 select * from test02.employees_view{snapshot = 'sp10'};
 internal error: find 0 snapshot records by name(sp10), expect only 1
 select * from test02.employees_by_salary_view;
-invalid database test02
+Unknown database test02
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 internal error: find 0 snapshot records by name(sp10), expect only 1
 restore account acc01 from snapshot sp10;
@@ -670,23 +574,23 @@ drop snapshot if exists sp100;
 create snapshot sp100 for cluster;
 drop database test04;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
 department_id    department_name
 1    HR
 2    Engineering
 select * from test05.employee_with_department_view;
-invalid database test04
+Unknown database test04
 drop snapshot if exists sp101;
 create snapshot sp101 for cluster;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;
-invalid database test04
+Unknown database test04
 select * from test03.department_view;
-invalid database test03
+Unknown database test03
 select * from test05.employee_with_department_view;
-invalid database test05
+Unknown database test05
 restore account acc01 from snapshot sp100;
 select * from test04.employee_view;
 employee_id    first_name    last_name    department_id

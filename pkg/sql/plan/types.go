@@ -92,7 +92,7 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef
-	// get needed info for stats by table
+	// get needed info for stats by table, NOTE: Stats May indirectly access the file service
 	Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string
@@ -169,7 +169,8 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
-	tag2Table map[int32]*TableDef
+	tag2Table  map[int32]*TableDef
+	tag2NodeID map[int32]int32
 
 	nextTag    int32
 	nextMsgTag int32
@@ -180,9 +181,10 @@ type QueryBuilder struct {
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isSkipResolveTableDef bool
+	skipStats             bool
 
-	deleteNode     map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
-	skipStats      bool
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+
 	optimizerHints *OptimizerHints
 }
 
@@ -207,6 +209,7 @@ type OptimizerHints struct {
 	execType                   int
 	disableRightJoin           int
 	printShuffle               int
+	skipDedup                  int
 }
 
 type CTERef struct {
@@ -232,9 +235,14 @@ type BindContext struct {
 	recSelect              bool
 	finalSelect            bool
 	unionSelect            bool
-	recRecursiveScanNodeId int32
 	isTryBindingCTE        bool
 	sliding                bool
+	isDistinct             bool
+	isCorrelated           bool
+	hasSingleRow           bool
+	forceWindows           bool
+	isGroupingSet          bool
+	recRecursiveScanNodeId int32
 
 	cteName  string
 	headings []string
@@ -274,17 +282,11 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	isDistinct   bool
-	isCorrelated bool
-	hasSingleRow bool
-
 	parent     *BindContext
 	leftChild  *BindContext
 	rightChild *BindContext
 
 	defaultDatabase string
-
-	forceWindows bool
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
@@ -298,8 +300,7 @@ type BindContext struct {
 	// lower is sys var lower_case_table_names
 	lower int64
 
-	isGroupingSet bool
-	groupingFlag  []bool
+	groupingFlag []bool
 }
 
 type NameTuple struct {
@@ -343,6 +344,13 @@ type DefaultBinder struct {
 type UpdateBinder struct {
 	baseBinder
 	cols []*ColDef
+}
+
+type OndupUpdateBinder struct {
+	baseBinder
+	scanTag   int32
+	selectTag int32
+	tableDef  *plan.TableDef
 }
 
 type TableBinder struct {
@@ -394,6 +402,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
+var _ Binder = (*OndupUpdateBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

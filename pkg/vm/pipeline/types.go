@@ -31,11 +31,11 @@ type Pipeline struct {
 	rootOp vm.Operator
 }
 
-func (p *Pipeline) isCtePipelineAtLoop() (isMergeCte bool, atLoop bool) {
+func IsCtePipelineAtLoop(rootOp vm.Operator) (isMergeCte bool, atLoop bool) {
 	// required:
 	// 1. it is a linked tree.
 	// 2. it holds `merge-cte` or `merge-recursive`.
-	if d, ok := p.rootOp.(*dispatch.Dispatch); ok {
+	if d, ok := rootOp.(*dispatch.Dispatch); ok {
 		return d.RecCTE, d.RecCTE || d.RecSink
 	}
 	return false, false
@@ -57,10 +57,10 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
 	// cancel the context to stop its pre-pipelines.
-	proc.Cancel()
+	proc.Cancel(err)
 
 	// do special cleanup for the pipeline at a loop.
-	if isMergeCte, isSpecial := p.isCtePipelineAtLoop(); isSpecial {
+	if isMergeCte, isSpecial := IsCtePipelineAtLoop(p.rootOp); isSpecial {
 		if proc.Base.GetContextBase().DoSpecialCleanUp(isMergeCte) {
 			p.cleanupLoopPipeline(proc, pipelineFailed, isPrepare, err)
 			return

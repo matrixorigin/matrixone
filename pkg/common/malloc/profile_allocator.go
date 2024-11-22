@@ -22,19 +22,23 @@ import (
 )
 
 type HeapSampleValues struct {
-	AllocatedObjects ShardedCounter[int64, atomic.Int64, *atomic.Int64]
-	AllocatedBytes   ShardedCounter[int64, atomic.Int64, *atomic.Int64]
-	InuseObjects     ShardedCounter[int64, atomic.Int64, *atomic.Int64]
-	InuseBytes       ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	Objects struct {
+		Allocated ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
+		Inuse     ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	}
+	Bytes struct {
+		Allocated ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
+		Inuse     ShardedCounter[int64, atomic.Int64, *atomic.Int64]
+	}
 }
 
 var _ SampleValues[*HeapSampleValues] = new(HeapSampleValues)
 
 func (h *HeapSampleValues) Init() {
-	h.AllocatedObjects = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
-	h.AllocatedBytes = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
-	h.InuseObjects = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
-	h.InuseBytes = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+	h.Objects.Allocated = *NewShardedCounter[uint64, atomic.Uint64](runtime.GOMAXPROCS(0))
+	h.Objects.Inuse = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
+	h.Bytes.Allocated = *NewShardedCounter[uint64, atomic.Uint64](runtime.GOMAXPROCS(0))
+	h.Bytes.Inuse = *NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0))
 }
 
 func (h *HeapSampleValues) DefaultSampleType() string {
@@ -64,18 +68,11 @@ func (h *HeapSampleValues) SampleTypes() []*profile.ValueType {
 
 func (h *HeapSampleValues) Values() []int64 {
 	return []int64{
-		h.AllocatedObjects.Load(),
-		h.AllocatedBytes.Load(),
-		h.InuseObjects.Load(),
-		h.InuseBytes.Load(),
+		int64(h.Objects.Allocated.Load()),
+		int64(h.Bytes.Allocated.Load()),
+		h.Objects.Inuse.Load(),
+		h.Bytes.Inuse.Load(),
 	}
-}
-
-func (h *HeapSampleValues) Merge(from *HeapSampleValues) {
-	h.AllocatedObjects.Add(from.AllocatedObjects.Load())
-	h.AllocatedBytes.Add(from.AllocatedBytes.Load())
-	h.InuseObjects = from.InuseObjects
-	h.InuseBytes = from.InuseBytes
 }
 
 type ProfileAllocator[U Allocator] struct {
@@ -97,8 +94,8 @@ func NewProfileAllocator[U Allocator](
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *profileDeallocateArgs) {
-				args.values.InuseBytes.Add(int64(-args.size))
-				args.values.InuseObjects.Add(-1)
+				args.values.Bytes.Inuse.Add(-int64(args.size))
+				args.values.Objects.Inuse.Add(-1)
 			},
 		),
 	}
@@ -115,17 +112,25 @@ func (profileDeallocateArgs) As(Trait) bool {
 
 var _ Allocator = new(ProfileAllocator[Allocator])
 
+const largeAllocationThreshold = 128 * 1024
+
 func (p *ProfileAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := p.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
 	const skip = 1 // p.Allocate
-	values := p.profiler.Sample(skip, p.fraction)
-	values.AllocatedBytes.Add(int64(size))
-	values.AllocatedObjects.Add(1)
-	values.InuseBytes.Add(int64(size))
-	values.InuseObjects.Add(int64(1))
+	var values *HeapSampleValues
+	if size >= largeAllocationThreshold {
+		// no sampling for large allocations
+		values = p.profiler.Sample(skip, 1)
+	} else {
+		values = p.profiler.Sample(skip, p.fraction)
+	}
+	values.Bytes.Allocated.Add(size)
+	values.Objects.Allocated.Add(1)
+	values.Bytes.Inuse.Add(int64(size))
+	values.Objects.Inuse.Add(1)
 	return ptr, ChainDeallocator(
 		dec,
 		p.deallocatorPool.Get(profileDeallocateArgs{

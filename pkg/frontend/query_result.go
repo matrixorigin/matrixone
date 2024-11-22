@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -261,15 +262,16 @@ func saveQueryResult(ctx context.Context, ses *Session,
 }
 
 // saveQueryResult2 saves the data from the engine.
-func saveQueryResult2(execCtx *ExecCtx, bat *batch.Batch) error {
+func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	ses := execCtx.ses.(*Session)
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
+		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
-			if err := saveMeta(execCtx.reqCtx, ses); err != nil {
+			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
 		} else {
-			if err := saveBatch(execCtx.reqCtx, ses, bat); err != nil {
+			if err := saveBatch(newCtx, ses, bat); err != nil {
 				return err
 			}
 		}
@@ -340,12 +342,12 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
 					// calculate uuid
-					vec, err := colexec.EvalExpressionOnce(proc, n.TblFuncExprList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
-					vec.Free(proc.GetMPool())
+					uuid := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
+					free()
 
 					uuids = append(uuids, uuid.String())
 				}
@@ -776,8 +778,8 @@ var defResultSaver BinaryWriter = &QueryResult{}
 type QueryResult struct {
 }
 
-func (result *QueryResult) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	return saveQueryResult2(execCtx, bat)
+func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	return saveQueryResult2(execCtx, crs, bat)
 }
 
 func (result *QueryResult) Close() {

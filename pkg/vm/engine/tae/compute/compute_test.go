@@ -27,6 +27,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSortAndDedup(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vals := []int{2, 1, 3, 4, 5, 1, 2, 3, 4, 5}
+	vals = SortAndDedup(vals, func(a, b *int) bool {
+		return *a < *b
+	}, func(a, b *int) bool {
+		return *a == *b
+	})
+	assert.Equal(t, 5, len(vals))
+	assert.Equal(t, []int{1, 2, 3, 4, 5}, vals)
+	t.Log(vals)
+}
+
 func TestShuffleByDeletes(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	origMask := roaring.New()

@@ -31,6 +31,10 @@ var (
 				status   varchar(8),
 				created_time  timestamp,
 				expired_time timestamp,
+				password_last_changed timestamp default utc_timestamp,
+				password_history text default '[]',
+				login_attempts int unsigned default 0,
+				lock_time timestamp default utc_timestamp,
 				login_type  varchar(16),
 				creator int signed,
 				owner int signed,
@@ -158,7 +162,8 @@ var (
     		)`, catalog.MO_CATALOG, catalog.MO_RETENTION)
 
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
-    		pub_name varchar(64) primary key,
+    		account_id int not null,
+    		pub_name varchar(64),
     		database_name varchar(5000),
     		database_id bigint unsigned,
     		all_table bool,
@@ -168,8 +173,9 @@ var (
     		update_time timestamp default NULL,
     		owner int unsigned,
     		creator int unsigned,
-    		comment text
-    		)`
+    		comment text,
+			primary key (account_id, pub_name)
+	)`
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
 			sub_account_id INT NOT NULL, 
@@ -242,7 +248,7 @@ var (
     			checkpoint_str varchar(1000),
     			no_full bool,
     			incr_config varchar(1000),
-    			reserved0 text,
+    			additional_config text,
     			reserved1 text,
     			reserved2 text,
     			reserved3 text,
@@ -290,21 +296,21 @@ var (
 		)`, catalog.MO_CATALOG, catalog.MOAutoIncrTable)
 
 	MoCatalogMoIndexesDDL = fmt.Sprintf(`create table %s.%s (
-			id 			bigint unsigned not null,
-			table_id 	bigint unsigned not null,
-			database_id bigint unsigned not null,
-			name 		varchar(64) not null,
-			type        varchar(11) not null,
-    		algo	varchar(11),
-    		algo_table_type varchar(11),
-			algo_params varchar(2048),
-			is_visible  tinyint not null,
-			hidden      tinyint not null,
-			comment 	varchar(2048) not null,
-			column_name    varchar(256) not null,
-			ordinal_position  int unsigned  not null,
-			options     text,
-			index_table_name varchar(5000),
+			id                  bigint unsigned not null,
+			table_id            bigint unsigned not null,
+			database_id         bigint unsigned not null,
+			name                varchar(64) not null,
+			type                varchar(11) not null,
+			algo                varchar(11),
+			algo_table_type     varchar(11),
+			algo_params         varchar(2048),
+			is_visible          tinyint not null,
+			hidden              tinyint not null,
+			comment             varchar(2048) not null,
+			column_name         varchar(256) not null,
+			ordinal_position    int unsigned  not null,
+			options             text,
+			index_table_name    varchar(5000),
 			primary key(id, column_name)
 		)`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 
@@ -344,18 +350,18 @@ var (
 		)`, catalog.MO_CATALOG, catalog.MOForeignKeys)
 
 	MoCatalogMoTablePartitionsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-    		  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-    		  PRIMARY KEY table_id (table_id, name)
-			)`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+			table_id bigint unsigned NOT NULL,
+			database_id bigint unsigned not null,
+			number smallint unsigned NOT NULL,
+			name varchar(64) NOT NULL,
+			partition_type varchar(50) NOT NULL,
+			partition_expression varchar(2048) NULL,
+			description_utf8 text,
+			comment varchar(2048) NOT NULL,
+			options text,
+			partition_table_name varchar(1024) NOT NULL,
+			PRIMARY KEY table_id (table_id, name)
+		)`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 )
 
 // step3InitSQLs

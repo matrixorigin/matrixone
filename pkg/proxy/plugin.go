@@ -141,11 +141,11 @@ func (p *rpcPlugin) Close() error {
 }
 
 func (p *rpcPlugin) request(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
-	cc, cancel := context.WithTimeout(ctx, p.timeout)
+	cc, cancel := context.WithTimeoutCause(ctx, p.timeout, moerr.CauseRequest)
 	defer cancel()
 	f, err := p.client.Send(cc, p.backend, req)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 	defer f.Close()
 	resp, err := f.Get()

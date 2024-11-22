@@ -19,10 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -35,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	pipeline2 "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -176,56 +177,41 @@ type Scope struct {
 	// Proc contains the execution context.
 	Proc *process.Process
 
+	ScopeAnalyzer *ScopeAnalyzer
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	PartialResults     []any
-	PartialResultTypes []types.T
+	HasPartialResults bool
 }
 
-func canScopeOpRemote(rootOp vm.Operator) bool {
-	if rootOp == nil {
+// ipAddrMatch return true if the node-addr of the scope matches to local address.
+//
+// once node-addr is just empty, it means local.
+func (s *Scope) ipAddrMatch(local string) bool {
+	if len(s.NodeInfo.Addr) == 0 {
 		return true
 	}
-	if vm.CannotRemote(rootOp) {
-		return false
-	}
-	numChildren := rootOp.GetOperatorBase().NumChildren()
-	for idx := 0; idx < numChildren; idx++ {
-		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
-		if !res {
-			return false
-		}
-	}
-	return true
+	return isSameCN(s.NodeInfo.Addr, local)
 }
 
-// canRemote checks whether the current scope can be executed remotely.
-func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
-	// check the remote address.
-	// if it was empty or equal to the current address, return false.
-	if checkAddr {
-		if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
-			return false
-		}
-		if isSameCN(c.addr, s.NodeInfo.Addr) {
-			return false
-		}
-	}
-
-	// some operators cannot be remote.
-	// todo: it is not a good way to check the operator type here.
-	//  cannot generate this remote pipeline if the operator type is not supported.
-
-	if !canScopeOpRemote(s.RootOp) {
-		return false
+// holdAnyCannotRemoteOperator returns error message
+// if this pipeline holds any operator that cannot send to a remote node for running.
+//
+// For now,
+// we are only not support to run recursiveCTE on remote node.
+// so we do a quick check here.
+// If more operators need to be rejected in the future, please use recursion honestly to check each operator.
+func (s *Scope) holdAnyCannotRemoteOperator() error {
+	if _, isCTE := pipeline2.IsCtePipelineAtLoop(s.RootOp); isCTE {
+		return moerr.NewInternalErrorNoCtx("remote running of cyclic CTE is not supported.")
 	}
 
 	for _, pre := range s.PreScopes {
-		if !pre.canRemote(c, false) {
-			return false
+		if err := pre.holdAnyCannotRemoteOperator(); err != nil {
+			return err
 		}
 	}
-	return true
+	return nil
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -250,7 +236,7 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch) error
+	fill func(*batch.Batch, *perfcounter.CounterSet) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -268,7 +254,8 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *AnalyzeModule
+	retryTimes int
+	anal       *AnalyzeModule
 	// e db engine instance.
 	e engine.Engine
 
@@ -307,6 +294,11 @@ type Compile struct {
 	filterExprExes []colexec.ExpressionExecutor
 
 	isPrepare bool
+
+	hasMergeOp bool
+
+	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
+	ncpu int
 }
 
 type RemoteReceivRegInfo struct {
@@ -337,4 +329,47 @@ type fuzzyCheck struct {
 type MultiTableIndex struct {
 	IndexAlgo string
 	IndexDefs map[string]*plan.IndexDef
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+
+type ScopeAnalyzer struct {
+	start        time.Time // Records the start time when the analyzer begins
+	isStarted    bool      // Indicates whether the analyzer has started
+	isStoped     bool      // Indicates whether the analyzer has stopped
+	TimeConsumed int64     // Stores the total time consumed between Start and Stop in nanoseconds
+}
+
+// Start begins the time tracking. It will not start if it has already started or if it has been stopped.
+func (sa *ScopeAnalyzer) Start() {
+	if sa.isStarted {
+		return
+	}
+	// Set the start time to the current time and mark the analyzer as started
+	sa.start = time.Now()
+	sa.isStarted = true
+}
+
+// Stop halts the time tracking and calculates the duration.
+// It won't perform any actions if it has not started or if it has already been stopped.
+func (sa *ScopeAnalyzer) Stop() {
+	if sa.isStoped || !sa.isStarted {
+		return
+	}
+	// Calculate the time duration since start and store it in TimeConsumed
+	duration := time.Since(sa.start)
+	sa.TimeConsumed = duration.Nanoseconds()
+	sa.isStoped = true
+}
+
+// Reset clears the analyzer's state, allowing it to start again.
+// Both isStarted and isStoped flags are reset.
+func (sa *ScopeAnalyzer) Reset() {
+	sa.TimeConsumed = 0
+	sa.isStoped = false
+	sa.isStarted = false
+}
+
+func NewScopeAnalyzer() *ScopeAnalyzer {
+	return &ScopeAnalyzer{}
 }

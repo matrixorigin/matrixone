@@ -152,7 +152,7 @@ func (sp *ShufflePool) GetFullBatch(buf *batch.Batch, proc *process.Process) (*b
 
 }
 
-func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int64, proc *process.Process) error {
+func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
 	var err error
 	for i := range sp.batches {
 		currentSels := sels[i]
@@ -171,7 +171,7 @@ func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, se
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
 				v.SetSorted(false)
-				err = v.Union(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
+				err = v.UnionInt32(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
 				if err != nil {
 					sp.locks[i].Unlock()
 					return err

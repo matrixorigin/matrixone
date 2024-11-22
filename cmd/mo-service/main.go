@@ -23,13 +23,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	struntime "runtime"
 	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
+	"go.uber.org/automaxprocs/maxprocs"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -55,8 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"go.uber.org/automaxprocs/maxprocs"
-	"go.uber.org/zap"
 )
 
 var (
@@ -77,7 +77,7 @@ func init() {
 
 func main() {
 	if *maxProcessor > 0 {
-		struntime.GOMAXPROCS(*maxProcessor)
+		system.SetGoMaxProcs(*maxProcessor)
 	}
 
 	flag.Parse()
@@ -441,6 +441,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 
 	selector := clusterservice.NewSelector().SelectByLabel(SV.LabelSelector, clusterservice.Contain)
 	mustGetRuntime(cfg).SetGlobalVariables(runtime.BackgroundCNSelector, selector)
+	mustGetRuntime(cfg).SetGlobalVariables(motrace.MaxStatementSize, int(cfg.getCNServiceConfig().Frontend.LengthOfQueryPrinted))
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
@@ -449,6 +450,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			err, act := motrace.InitWithConfig(ctx,
 				&SV,
+				motrace.WithService(cfg.mustGetServiceUUID()),
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),
 				motrace.WithFSWriterFactory(writerFactory),

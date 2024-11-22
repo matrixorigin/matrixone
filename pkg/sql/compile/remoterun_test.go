@@ -16,9 +16,18 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,7 +66,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -224,9 +233,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&mergegroup.MergeGroup{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
-		&mark.MarkJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&table_function.TableFunction{},
 		&external.External{
 			Es: &external.ExternalParam{
@@ -238,6 +244,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&indexbuild.IndexBuild{},
 		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
+		&postdml.PostDml{
+			PostDmlCtx: &postdml.PostDmlCtx{FullText: &postdml.PostDmlFullTextCtx{}}},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -295,7 +303,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Filter), Filter: &plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
-		{Op: int32(vm.Mark), MarkJoin: &pipeline.MarkJoin{}},
 		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.Intersect), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
@@ -313,6 +320,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.ShuffleBuild), ShuffleBuild: &pipeline.Shufflebuild{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
+		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
@@ -459,5 +467,294 @@ func Test_GetProcByUuid(t *testing.T) {
 
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
+	}
+}
+
+var _ morpc.Stream = &fakeStreamSender{}
+
+// fakeStreamSender implement the morpc.Stream interface.
+type fakeStreamSender struct {
+	// how many packages were sent.
+	sentCnt int
+
+	// return it during next send.
+	nextSendError error
+}
+
+func (s *fakeStreamSender) ID() uint64 { return 0 }
+func (s *fakeStreamSender) Send(ctx context.Context, request morpc.Message) error {
+	if s.nextSendError == nil {
+		s.sentCnt++
+	}
+	return s.nextSendError
+}
+func (s *fakeStreamSender) Receive() (chan morpc.Message, error) {
+	ch := make(chan morpc.Message, 1)
+	ch <- &pipeline.Message{
+		Sid: pipeline.Status_MessageEnd,
+	}
+	return ch, nil
+}
+func (s *fakeStreamSender) Close(_ bool) error {
+	return nil
+}
+
+type fakeTxnOperator struct {
+	client.TxnOperator
+}
+
+func (f fakeTxnOperator) Txn() txn.TxnMeta {
+	return txn.TxnMeta{
+		ID: []byte("test"),
+	}
+}
+
+func (f fakeTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
+	return txn.CNTxnSnapshot{}, nil
+}
+
+func Test_prepareRemoteRunSendingData(t *testing.T) {
+	proc := testutil.NewProcess()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+
+	// if this is a pipeline with operator list "connector / dispatch".
+	// this should return withoutOut == false.
+	s1 := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument(),
+	}
+	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	require.NoError(t, err)
+	require.False(t, withoutOut)
+
+	// if this is a pipeline with operator list "scan -> connector / dispatch".
+	// this should return withoutOut == false.
+	s2 := &Scope{
+		Proc:   proc,
+		RootOp: dispatch.NewArgument(),
+	}
+	s2.RootOp.AppendChild(value_scan.NewArgument())
+	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	require.NoError(t, err)
+	require.False(t, withoutOut)
+
+	// if this is a pipeline no need to sent back message, like "scan -> scan".
+	// this should return withoutOut == true.
+	s3 := &Scope{
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+	}
+	s3.RootOp.AppendChild(value_scan.NewArgument())
+	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	require.NoError(t, err)
+	require.True(t, withoutOut)
+}
+
+func Test_MessageSenderSendPipeline(t *testing.T) {
+	sender := messageSenderOnClient{
+		ctx:          context.Background(),
+		streamSender: &fakeStreamSender{},
+	}
+
+	{
+		// there should only send one time if this is just a small data.
+		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).nextSendError = nil
+
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
+		require.Nil(t, err)
+
+		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
+	}
+
+	{
+		// there should be cut as multiple message to send for a big data.
+		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).nextSendError = nil
+
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
+		require.Nil(t, err)
+
+		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
+	}
+
+	{
+		// error should be thrown once error occurs while sending.
+		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).nextSendError = moerr.NewInternalErrorNoCtx("timeout")
+
+		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
+		require.NotNil(t, err)
+	}
+}
+
+func Test_ReceiveMessageFromCnServer(t *testing.T) {
+	proc := testutil.NewProcess()
+	sender := messageSenderOnClient{
+		ctx:          context.Background(),
+		streamSender: &fakeStreamSender{},
+	}
+
+	{
+		// if the root operator is connector.
+		s1 := &Scope{
+			Proc:   proc,
+			RootOp: connector.NewArgument(),
+		}
+		s1.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
+			Ch2: make(chan process.PipelineSignal, 1),
+		}
+		ch, err1 := sender.streamSender.Receive()
+		require.Nil(t, err1)
+		sender.receiveCh = ch
+		err := receiveMessageFromCnServer(s1, false, &sender)
+		require.Nil(t, err)
+	}
+
+	{
+		// if the root operator is dispatch.
+		s2 := &Scope{
+			Proc:   proc,
+			RootOp: nil,
+		}
+		d := dispatch.NewArgument()
+		d.LocalRegs = []*process.WaitRegister{
+			{Ch2: make(chan process.PipelineSignal, 1)},
+		}
+		d.FuncId = dispatch.SendToAllLocalFunc
+		s2.RootOp = d
+		ch, err1 := sender.streamSender.Receive()
+		require.Nil(t, err1)
+		sender.receiveCh = ch
+
+		err := receiveMessageFromCnServer(s2, false, &sender)
+		require.Nil(t, err)
+	}
+
+	{
+		// if others.
+		s3 := &Scope{
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+		}
+		ch, err1 := sender.streamSender.Receive()
+		require.Nil(t, err1)
+		sender.receiveCh = ch
+
+		err := receiveMessageFromCnServer(s3, true, &sender)
+		require.Nil(t, err)
+	}
+
+	{
+		// if not withoutOutput and no connector / dispatch, it's an unexpected case, should throw error.
+		s4 := &Scope{
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+		}
+		ch, err1 := sender.streamSender.Receive()
+		require.Nil(t, err1)
+		sender.receiveCh = ch
+
+		require.NotNil(t, receiveMessageFromCnServer(s4, false, &sender))
+	}
+}
+
+func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
+	proc := testutil.NewProcess()
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	// a standalone pipeline tree should return true.
+	{
+		// s0, pre: s1, s2
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(2),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = s0.Proc.Reg.MergeReceivers[0]
+		s1.RootOp = op1
+
+		s2 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op2 := dispatch.NewArgument()
+		op2.LocalRegs = []*process.WaitRegister{s0.Proc.Reg.MergeReceivers[1]}
+		s2.RootOp = op2
+
+		s0.PreScopes = append(s0.PreScopes, s1, s2)
+
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// a pipeline holds an invalid dispatch should return false.
+	{
+		// s0, pre: s1
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := dispatch.NewArgument()
+		op1.LocalRegs = []*process.WaitRegister{{}}
+		s1.RootOp = op1
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// a pipeline holds an invalid connector should return false.
+	{
+		// s0, pre: s1
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = &process.WaitRegister{}
+		s1.RootOp = op1
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
+	}
+
+	// depth more than 2.
+	{
+		// s0, pre: s1, pre: s2.
+		s0 := &Scope{
+			Proc:   proc.NewContextChildProc(1),
+			RootOp: dispatch.NewArgument(),
+		}
+
+		s1 := &Scope{
+			Proc: proc.NewContextChildProc(1),
+		}
+		op1 := connector.NewArgument()
+		op1.Reg = s0.Proc.Reg.MergeReceivers[0]
+		s1.RootOp = op1
+
+		s2 := &Scope{
+			Proc: proc.NewContextChildProc(0),
+		}
+		op2 := connector.NewArgument()
+		op2.Reg = &process.WaitRegister{}
+		s2.RootOp = op2
+
+		s0.PreScopes = append(s0.PreScopes, s1)
+		s1.PreScopes = append(s1.PreScopes, s2)
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
 }

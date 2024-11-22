@@ -19,13 +19,14 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"go.uber.org/zap"
 )
 
 const (
@@ -96,11 +97,12 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 			zap.String("status", status.String()))
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseQueryTasks)
 	defer cancel()
 
 	tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskStatusCond(status))
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		runtime.ServiceRuntime(s.service).Logger().Error("failed to query tasks",
 			zap.String("status", status.String()),
 			zap.Error(err))
@@ -149,10 +151,11 @@ func allocateTask(
 			zap.Error(moerr.NewInternalErrorNoCtx("no CN available")))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseAllocateTasks)
 	defer cancel()
 
 	if err := ts.Allocate(ctx, t, runner.uuid); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
@@ -172,7 +175,7 @@ func (s *scheduler) truncateTasks() {
 	if ts == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseTruncateTasks)
 	defer cancel()
 
 	_ = ts.TruncateCompletedTasks(ctx)

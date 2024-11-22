@@ -49,6 +49,21 @@ func ConstructTombstoneWriter(
 	)
 }
 
+func ConstructWriterWithSegmentID(
+	segmentID *objectio.Segmentid,
+	num uint16,
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
+	name := objectio.BuildObjectName(segmentID, num)
+	return constructWriterWithName(name,
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+}
+
 func ConstructWriter(
 	ver uint32,
 	seqnums []uint16,
@@ -58,6 +73,19 @@ func ConstructWriter(
 	fs fileservice.FileService,
 ) *BlockWriter {
 	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	return constructWriterWithName(name,
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+}
+
+func constructWriterWithName(
+	name objectio.ObjectName,
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+) *BlockWriter {
 	writer, err := NewBlockWriterNew(
 		fs,
 		name,
@@ -168,7 +196,7 @@ func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) object
 	return w.writer.GetObjectStats(opts...)
 }
 
-// WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
+// WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew, write batch to memroy cache, not S3
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {

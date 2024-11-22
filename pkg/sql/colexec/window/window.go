@@ -92,7 +92,11 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				if result.Batch == nil {
-					ctr.status = eval
+					if ctr.bat != nil {
+						ctr.status = eval
+					} else {
+						ctr.status = done
+					}
 					break
 				}
 				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)

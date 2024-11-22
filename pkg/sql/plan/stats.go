@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -46,9 +46,15 @@ const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
 
-var ncpu = runtime.GOMAXPROCS(0)
-var BlockThresholdForOneCN = ncpu * blockThresholdForTpQuery
-var costThresholdForOneCN = ncpu * costThresholdForTpQuery
+func BlockThresholdForOneCN(ncpu int) int {
+	if ncpu == 0 {
+		ncpu = system.GoMaxProcs()
+	}
+	return ncpu * blockThresholdForTpQuery
+}
+func costThresholdForOneCN() int {
+	return system.GoMaxProcs() * costThresholdForTpQuery
+}
 
 type ExecType int
 
@@ -116,9 +122,14 @@ type InfoFromZoneMap struct {
 	ColumnZMs            []objectio.ZoneMap
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
+	MaxNDVs              []float64
+	NDVinMaxOBJ          []float64
+	NDVinMinOBJ          []float64
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
 	ColumnSize           []int64
+	MaxOBJSize           uint32
+	MinOBJSize           uint32
 	BlockNumber          int64
 	AccurateObjectNumber int64
 	ApproxObjectNumber   int64
@@ -130,11 +141,100 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
+		MaxNDVs:       make([]float64, lenCols),
+		NDVinMaxOBJ:   make([]float64, lenCols),
+		NDVinMinOBJ:   make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
 		ColumnSize:    make([]int64, lenCols),
 		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
+}
+
+func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
+	if info.AccurateObjectNumber > 1 {
+		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+			if info.ColumnNDVs[i] > s.TableCnt {
+				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
+			}
+			colName := coldef.Name
+			rate := info.ColumnNDVs[i] / info.TableCnt
+			if info.ColumnNDVs[i] < 3 {
+				info.ColumnNDVs[i] *= (4 - info.ColumnNDVs[i])
+				continue
+			}
+			if info.MaxNDVs[i] < 50 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
+				continue
+			}
+			if info.MaxNDVs[i] < 500 && rate < 0.01 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
+				continue
+			}
+			overlap := 1.0
+			if s.ShuffleRangeMap[colName] != nil {
+				overlap = s.ShuffleRangeMap[colName].Overlap
+			}
+			if overlap < overlapThreshold/3 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold/2 {
+				info.ColumnNDVs[i] = info.TableCnt * rate
+				continue
+			}
+			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
+			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
+			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold/2 {
+				info.ColumnNDVs[i] = info.TableCnt * rate * (1 - overlap)
+				continue
+			}
+
+			if info.NDVinMinOBJ[i] == info.NDVinMaxOBJ[i] && info.NDVinMaxOBJ[i] == info.MaxNDVs[i] && overlap > overlapThreshold/2 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i]
+				continue
+			}
+			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.99 && info.NDVinMaxOBJ[i]/info.MaxNDVs[i] > 0.99 && overlap > overlapThreshold*2/3 {
+				info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+				continue
+			}
+			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > overlapThreshold {
+				if rateMax < 0.3 {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] / (1 - rateMax)
+				}
+				continue
+			}
+
+			//don't know how to calc ndv, just guess
+			if GetSortOrder(tableDef, int32(i)) > 0 && overlap > overlapThreshold/2 {
+				if info.AccurateObjectNumber > 100 {
+					info.ColumnNDVs[i] /= 80
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+				}
+				continue
+			}
+			if overlap > overlapThreshold {
+				if info.AccurateObjectNumber > 100 {
+					info.ColumnNDVs[i] /= 30
+				} else {
+					info.ColumnNDVs[i] = info.MaxNDVs[i] * 3
+				}
+			} else {
+				info.ColumnNDVs[i] /= math.Pow(float64(info.AccurateObjectNumber), (1-rate)*overlap)
+			}
+		}
+	}
+
+	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+		colName := coldef.Name
+		s.NdvMap[colName] = info.ColumnNDVs[i]
+		if s.NdvMap[colName] > s.TableCnt {
+			s.NdvMap[colName] = s.TableCnt * 0.99
+		}
+	}
 }
 
 func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.StatsInfo) {
@@ -147,11 +247,9 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
 	s.TableName = tableDef.Name
-	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	//set info in statsInfo
+
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
-		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
@@ -312,6 +410,14 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return s.NdvMap[col.Name]
 }
 
+//func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
+//	s := builder.getStatsInfoByCol(col)
+//	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
+//		return 1.0
+//	}
+//	return s.ShuffleRangeMap[col.Name].Overlap
+//}
+
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:
@@ -382,6 +488,10 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	var ok bool
 	var val1, val2 float64
+	if max < min {
+		//something error happend
+		return 0.1
+	}
 	switch funcName {
 	case ">", ">=":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
@@ -400,7 +510,12 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	default:
 		ret = 0.1
 	}
-	if !ok || ret < 0 || ret > 1 {
+	if ret < 0 {
+		// val out of range, return low sel
+		return 0.00000001
+	}
+	if !ok || ret > 1 {
+		//somwthing error happened
 		return 0.1
 	}
 	return ret
@@ -609,6 +724,12 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 }
 
 func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
+	if expr == nil || expr.GetF() == nil {
+		return 0 //something error
+	}
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+		return 0 //make prefix_in and prefix_eq always the first filter
+	}
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 8
@@ -617,7 +738,11 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
-		w += 4
+		if expr.Typ.Width < types.VarlenaInlineSize {
+			w += 1
+		} else {
+			w += float64(expr.Typ.Width)
+		}
 	case int32(types.T_json), int32(types.T_datalink):
 		w += 32
 	}
@@ -632,6 +757,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 			w += 8
 		case "in":
 			w += 3
+		case "or":
+			w += 8
 		case "<>", "!=":
 			w += 2
 		case "<", "<=":
@@ -657,7 +784,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr, sortOrder)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -671,11 +798,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	return 1
 }
 
-func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			rewriteFilterListByStats(ctx, child, builder)
+			sortFilterListByStats(ctx, child, builder)
 		}
 	}
 	switch node.NodeType {
@@ -685,11 +812,6 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
 				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
 				return cost1 <= cost2
-			})
-			sort.Slice(node.BlockFilterList, func(i, j int) bool {
-				blockSel1 := node.BlockFilterList[i].Selectivity
-				blockSel2 := node.BlockFilterList[j].Selectivity
-				return blockSel1 <= blockSel2
 			})
 		}
 	}
@@ -723,6 +845,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_JOIN:
 		if needResetHashMapStats {
 			resetHashMapStats(node.Stats)
+		}
+		if node.Stats.HashmapStats.Shuffle {
+			return //dont calc shuffle nodes again
 		}
 
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
@@ -766,7 +891,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
-			node.Stats.Selectivity = selectivity_out
+			node.Stats.Selectivity = selectivity
+
+		case plan.Node_DEDUP:
+			node.Stats.Outcnt = rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
@@ -993,7 +1124,9 @@ func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
 	}
 	var cost float64
 	var canGetCost bool
-	if len(exprs) == 2 {
+	if len(exprs) == 1 {
+		cost, canGetCost = getCost(nil, exprs[0], nil)
+	} else if len(exprs) == 2 {
 		if exprs[0].Typ.Id != exprs[1].Typ.Id {
 			return false
 		}
@@ -1036,9 +1169,13 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 		return 0, false
 	}
 
-	switch start.Typ.Id {
+	switch end.Typ.Id {
 	case int32(types.T_int32):
-		startNum, flag1 = getInt32Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt32Val(start)
+		}
 		endNum, flag2 = getInt32Val(end)
 		flag3 = true
 		if step != nil {
@@ -1048,7 +1185,11 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			return 0, false
 		}
 	case int32(types.T_int64):
-		startNum, flag1 = getInt64Val(start)
+		if start == nil {
+			startNum, flag1 = 0, true
+		} else {
+			startNum, flag1 = getInt64Val(start)
+		}
 		endNum, flag2 = getInt64Val(end)
 		flag3 = true
 		if step != nil {
@@ -1095,7 +1236,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.JoinType == plan.Node_DEDUP || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
 		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
 			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
@@ -1177,16 +1318,20 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				node.BlockFilterList = nil
 			} else {
 				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
+					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+						copyOfExpr := DeepCopyExpr(node.FilterList[i])
+						copyOfExpr.Selectivity = currentBlockSel
+						blockExprList = append(blockExprList, copyOfExpr)
+					}
 				}
 			}
 		} else {
 			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				copyOfExpr := DeepCopyExpr(node.FilterList[i])
-				copyOfExpr.Selectivity = currentBlockSel
-				blockExprList = append(blockExprList, copyOfExpr)
+				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
+					copyOfExpr := DeepCopyExpr(node.FilterList[i])
+					copyOfExpr.Selectivity = currentBlockSel
+					blockExprList = append(blockExprList, copyOfExpr)
+				}
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
@@ -1233,10 +1378,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN)
-	stats.Outcnt = float64(costThresholdForOneCN)
+	stats.Cost = float64(costThresholdForOneCN())
+	stats.Outcnt = float64(costThresholdForOneCN())
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN)
+	stats.BlockNum = int32(BlockThresholdForOneCN(0))
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1360,7 +1505,7 @@ func andSelectivity(s1, s2 float64) float64 {
 	if s1 < s2 {
 		s1, s2 = s2, s1
 	}
-	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
+	if s1 > 0.02 && s2 > 0.02 {
 		return s1 * s2
 	}
 	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))
@@ -1392,7 +1537,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1400,15 +1545,21 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
-		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
-			ret = ExecTypeAP_ONECN
+		if isPrepare {
+			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+				ret = ExecTypeAP_ONECN
+			}
+		} else {
+			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+				ret = ExecTypeAP_ONECN
+			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
 			ret = ExecTypeAP_ONECN
@@ -1418,7 +1569,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
 	case ExecTypeAP_ONECN:
@@ -1430,7 +1582,8 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	switch GetExecType(qry, txnHaveDDL) {
+	ncpu := system.GoMaxProcs()
+	switch GetExecType(qry, txnHaveDDL, false, ncpu) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"
 	case ExecTypeAP_ONECN:
@@ -1485,26 +1638,41 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr, sortOrder int) float64 {
+func getOverlap(s *pb.StatsInfo, colname string) float64 {
+	if s == nil || s.ShuffleRangeMap[colname] == nil {
+		return 1.0
+	}
+	return s.ShuffleRangeMap[colname].Overlap
+}
+
+func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
-	if s == nil {
-		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
-			//speicial handle for isnull
-			return sel
-		}
-		if sel <= 0.01 {
-			return sel * 100
+	switch expr.GetF().Func.ObjName {
+	case "isnull", "is_null", "prefix_eq", "prefix_in": //special handle
+		return sel
+	}
+	overlap := getOverlap(s, colname)
+	if overlap < overlapThreshold/2 {
+		//very good overlap
+		return sel
+	}
+	_, _, _, _, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if hasDynamicParam {
+		// assume dynamic parameter always has low selectivity
+		if sel <= 0.02 {
+			return sel * 50
 		} else {
 			return 1
 		}
 	}
-	if sortOrder == 0 || sortOrder == 1 {
-		return sel * math.Pow(10, float64(sortOrder+1))
+	if overlap > overlapThreshold {
+		if sel <= 0.002 {
+			return sel * 500
+		} else {
+			return 1
+		}
 	}
-	if s.Overlap > 0.5 {
-		return 1
-	}
-	ret := sel * math.Pow(1000000, s.Overlap)
+	ret := sel * 100 / (1 - overlap)
 	if ret > 1 {
 		ret = 1
 	}

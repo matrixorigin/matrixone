@@ -43,6 +43,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	if hashBuild.NeedHashMap {
+		hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
+		hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
+		hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
+		hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 		return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, proc)
 	}
 	return nil
@@ -82,6 +86,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				//jm.SetIgnoreRows(ctr.hashmapBuilder.IgnoreRows)
 				if ap.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
@@ -91,7 +96,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				panic("wrong joinmap message tag!")
 			}
 			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+			ctr.state = SendSucceed
 
+		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			analyzer.Output(result.Batch)
@@ -173,10 +180,10 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
-	vec := ctr.hashmapBuilder.UniqueJoinKeys[0]
-
 	defer func() {
-		vec.Free(proc.Mp())
+		for i := range ctr.hashmapBuilder.UniqueJoinKeys {
+			ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
+		}
 		ctr.hashmapBuilder.UniqueJoinKeys = nil
 	}()
 
@@ -185,31 +192,34 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
+		rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
+
+		var data []byte
+		var err error
 		// Composite primary key
 		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
-			bat.SetRowCount(vec.Length())
+			bat.SetRowCount(rowCount)
 			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
 
-			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
-			if err != nil {
-				return err
+			vec, free, erg := colexec.GetReadonlyResultFromExpression(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
+			if erg != nil {
+				return erg
 			}
-
-			for i := range ctr.hashmapBuilder.UniqueJoinKeys {
-				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
-			}
-			vec = newVec
+			vec.InplaceSort()
+			data, err = vec.MarshalBinary()
+			free()
+		} else {
+			ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
+			data, err = ctr.hashmapBuilder.UniqueJoinKeys[0].MarshalBinary()
 		}
 
-		vec.InplaceSort()
-		data, err := vec.MarshalBinary()
 		if err != nil {
 			return err
 		}
 
 		runtimeFilter.Typ = message.RuntimeFilter_IN
-		runtimeFilter.Card = int32(vec.Length())
+		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true

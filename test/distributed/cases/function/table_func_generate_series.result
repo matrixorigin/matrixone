@@ -180,16 +180,23 @@ ttl
 drop table t;
 create table t(a int, b int);
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  CROSS APPLY
         ->  Table Scan on table_func_generate_series.t
         ->  Table Function on generate_series
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf where t.a > 1;
-TP QURERY PLAN
+TP QUERY PLAN
 Project
   ->  CROSS APPLY
         ->  Table Scan on table_func_generate_series.t
               Filter Cond: (t.a > 1)
         ->  Table Function on generate_series
 drop table t;
+create table t (id int);
+insert into t select result from generate_series(1,100.0) g;
+invalid input: generate_series end must be int32 or int64
+insert into t select result from generate_series(1,1e2) g;
+invalid input: generate_series end must be int32 or int64
+insert into t select result from generate_series(1,100, "step") g;
+invalid input: generate_series step must be int32 or int64

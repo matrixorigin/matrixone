@@ -393,3 +393,16 @@ create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 drop account acc_idx;
 drop table mo_instance;
 drop table if exists statement_cu;
+
+use mo_catalog;
+DROP TABLE IF EXISTS `mo_catalog`.`document`;
+CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
+desc document;
+ALTER TABLE document add meta longtext;
+desc document;
+DROP TABLE document;
+CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
+desc mo_catalog.document;
+ALTER TABLE mo_catalog.document add meta longtext;
+desc mo_catalog.document;
+DROP TABLE mo_catalog.document;

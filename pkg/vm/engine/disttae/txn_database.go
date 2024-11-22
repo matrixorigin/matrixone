@@ -17,10 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -38,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var _ engine.Database = new(txnDatabase)
@@ -104,39 +105,28 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	// special tables
-	if db.databaseName == catalog.MO_CATALOG {
-		switch name {
-		case catalog.MO_DATABASE:
-			id := uint64(catalog.MO_DATABASE_ID)
-			defs := catalog.GetDefines(p.GetService()).MoDatabaseTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_TABLES:
-			id := uint64(catalog.MO_TABLES_ID)
-			defs := catalog.GetDefines(p.GetService()).MoTablesTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_COLUMNS:
-			id := uint64(catalog.MO_COLUMNS_ID)
-			defs := catalog.GetDefines(p.GetService()).MoColumnsTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		}
-	}
-
+	openSys := db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(name)
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if openSys {
+		accountId = 0
+	}
+
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 
 	// check the table is deleted or not
-	if txn.tableOps.existAndDeleted(key) {
+	if !openSys && txn.tableOps.existAndDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 
 	// get relation from the txn created tables cache: created by this txn
-	if v := txn.tableOps.existAndActive(key); v != nil {
-		v.proc.Store(p)
-		return v, nil
+	if !openSys {
+		if v := txn.tableOps.existAndActive(key); v != nil {
+			v.proc.Store(p)
+			return v, nil
+		}
 	}
 
 	rel := txn.getCachedTable(ctx, key)
@@ -224,17 +214,31 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+
+	rmFault := func() {}
+
+	if objectio.Debug19524Injected() {
+		if rmFault, err = objectio.InjectRanges(
+			ctx,
+			catalog.MO_TABLES,
+		); err != nil {
+			return nil, err
+		}
+	}
 	res, err := execReadSql(ctx, db.op, sql, true)
+	rmFault()
 	if err != nil {
 		return nil, err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
-		logutil.Error("FIND_TABLE deleteTableError",
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
 			zap.String("sql", sql),
+			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
 			zap.Uint64("tid", rel.GetTableID(ctx)),
 			zap.String("workspace", db.getTxn().PPString()))
@@ -254,7 +258,16 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	if len(rowids) != len(colPKs) {
-		panic(fmt.Sprintf("delete table failed %v, %v", len(rowids), len(colPKs)))
+		logutil.Error(
+			"FIND_TABLE deleteTableError",
+			zap.String("bat", stringifySlice(rowids, func(a any) string {
+				r := a.(types.Rowid)
+				return r.ShortStringEx()
+			})),
+			zap.String("txn", db.op.Txn().DebugString()),
+			zap.Uint64("did", db.databaseId),
+			zap.Uint64("tid", rel.GetTableID(ctx)))
+		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 
 	{ // 2. delete the row from mo_tables
@@ -495,48 +508,6 @@ func (db *txnDatabase) createWithID(
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(
-	p *process.Process,
-	id uint64,
-	name string,
-	defs []engine.TableDef,
-) engine.Relation {
-	item := &cache.TableItem{
-		AccountId:  catalog.System_Account,
-		DatabaseId: catalog.MO_CATALOG_ID,
-		Name:       name,
-		Ts:         db.op.SnapshotTS(),
-	}
-	// it is always safe to use latest cache to open system table
-	found := db.getEng().GetLatestCatalogCache().GetTable(item)
-	if !found {
-		panic("can't find system table")
-	}
-	tbl := &txnTable{
-		//AccountID for mo_tables, mo_database, mo_columns is always 0.
-		accountId:     0,
-		db:            db,
-		tableId:       id,
-		tableName:     name,
-		defs:          defs,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  -1,
-		eng:           db.getTxn().engine,
-	}
-	switch name {
-	case catalog.MO_DATABASE:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoDatabaseConstraint
-	case catalog.MO_TABLES:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoTableConstraint
-	case catalog.MO_COLUMNS:
-		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
-	}
-	tbl.GetTableDef(p.Ctx)
-	tbl.proc.Store(p)
-	return tbl
-}
-
 func (db *txnDatabase) loadTableFromStorage(
 	ctx context.Context,
 	accountID uint32,
@@ -642,11 +613,6 @@ func (db *txnDatabase) getTableItem(
 			}
 		}
 		if tableitem == nil {
-			if strings.Contains(name, "_copy_") {
-				stackInfo := debug.Stack()
-				logutil.Error(moerr.NewParseErrorf(context.Background(), "table %q does not exists", name).Error(),
-					zap.String("Stack Trace", string(stackInfo)))
-			}
 			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 		}
 		return *tableitem, nil

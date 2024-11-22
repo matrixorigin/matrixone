@@ -20,6 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,8 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type TestFlushBailoutPos1 struct{}
@@ -165,8 +166,7 @@ func NewFlushTableTailTask(
 		return
 	}
 	task.schema = rel.Schema(false).(*catalog.Schema)
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+	task.BaseTask = tasks.NewBaseTask(task, tasks.FlushTableTailTask, ctx)
 
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
@@ -229,8 +229,6 @@ func NewFlushTableTailTask(
 			task.transMappings[i] = make(api.TransferMap)
 		}
 	}
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	task.createAt = time.Now()
 	return
@@ -830,7 +828,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 // waitFlushAObjForSnapshot waits all io tasks about flushing aobject for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, subtasks []*flushObjTask, isTombstone bool) (err error) {
-	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	ictx, cancel := context.WithTimeoutCause(ctx, 6*time.Minute, moerr.CauseWaitFlushAObjForSnapshot)
 	defer cancel()
 	var handles []handle.Object
 	if isTombstone {
@@ -843,7 +841,7 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 			continue
 		}
 		if err = subtask.WaitDone(ictx); err != nil {
-			return
+			return moerr.AttachCause(ictx, err)
 		}
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
@@ -861,9 +859,10 @@ func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, e
 			zap.String("task", ftask.Name()),
 		)
 		// add a timeout to avoid WaitDone block the whole process
-		ictx, cancel := context.WithTimeout(
+		ictx, cancel := context.WithTimeoutCause(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/
+			moerr.CauseReleaseFlushObjTasks,
 		)
 		defer cancel()
 		for _, subtask := range subtasks {

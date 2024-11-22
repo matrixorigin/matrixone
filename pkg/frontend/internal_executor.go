@@ -19,7 +19,9 @@ import (
 	"math"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -139,7 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer func() {
@@ -156,14 +158,18 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	return doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	return
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, getPu(ie.service).SV.SessionTimeout.Duration)
+	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
@@ -178,7 +184,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	defer tempExecCtx.Close()
 	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
-	res.err = err
+	res.err = moerr.AttachCause(ctx, err)
 	return res
 }
 
@@ -257,6 +263,8 @@ func (ip *internalProtocol) GetStr(id PropertyID) string {
 		return ip.GetUserName()
 	case DBNAME:
 		return ip.GetDatabaseName()
+	case PEER:
+		return ip.Peer()
 	}
 	return ""
 }
@@ -285,7 +293,7 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 	return false
 }
 
-func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
+func (ip *internalProtocol) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	mrs := execCtx.ses.GetMysqlResultSet()
 	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
 	if err != nil {

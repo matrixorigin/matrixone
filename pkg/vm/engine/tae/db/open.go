@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -112,11 +114,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:          dirname,
-		Opts:         opts,
-		Closed:       new(atomic.Value),
-		usageMemo:    logtail.NewTNUsageMemo(nil),
-		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
+		Dir:       dirname,
+		Opts:      opts,
+		Closed:    new(atomic.Value),
+		usageMemo: logtail.NewTNUsageMemo(nil),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
@@ -208,7 +209,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		store.BindTxn(txn)
 	}
 	// 2. replay all table Entries
-	ckpReplayer.ReplayCatalog(txn)
+	if err = ckpReplayer.ReplayCatalog(txn); err != nil {
+		panic(err)
+	}
 
 	// 3. replay other tables' objectlist
 	if err = ckpReplayer.ReplayObjectlist(); err != nil {
@@ -238,7 +241,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
 	scanner.RegisterOp(db.MergeScheduler)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
@@ -248,21 +251,23 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	cleaner := gc2.NewCheckpointCleaner(
-		opts.Ctx,
-		opts.SID,
-		fs,
-		db.BGCheckpointRunner,
-		opts.GCCfg.DisableGC,
-	)
-	cleaner.SetCheckGC(opts.GCCfg.CheckGC)
+	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
+	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
+	cleaner := gc2.NewCheckpointCleaner(opts.Ctx,
+		opts.SID, fs, db.BGCheckpointRunner,
+		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
+		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
+		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),
+		gc2.WithGCProbility(opts.GCCfg.GCProbility),
+		gc2.WithCheckOption(opts.GCCfg.CheckGC),
+		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
 			return !endTS.GE(&ts)
-		}, gc2.CheckerKeyTTL)
+		}, cmd_util.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	// Init gc manager at last
@@ -292,11 +297,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CheckpointCfg.DisableGCCheckpoint {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				return db.BGCheckpointRunner.GCByTS(ctx, consumed.GetEnd())
+				return db.BGCheckpointRunner.GCByTS(ctx, *gcWaterMark)
 			}),
 		gc.WithCronJob(
 			"catalog-gc",
@@ -305,11 +310,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				if opts.CatalogCfg.DisableGC {
 					return nil
 				}
-				consumed := db.DiskCleaner.GetCleaner().GetMaxConsumed()
-				if consumed == nil {
+				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+				if gcWaterMark == nil {
 					return nil
 				}
-				db.Catalog.GCByTS(ctx, consumed.GetEnd())
+				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
 				return nil
 			}),
 		gc.WithCronJob(
@@ -317,7 +322,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
 				logutil.Info(db.Runtime.ExportLogtailStats())
-				ckp := db.BGCheckpointRunner.MaxCheckpoint()
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 				if ckp != nil {
 					// use previous end to gc logtail
 					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here

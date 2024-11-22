@@ -56,6 +56,7 @@ func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion s
 func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
 	var initMoAccount string
 	var initDataSqls []string
+	var err error
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)

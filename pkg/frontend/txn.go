@@ -122,9 +122,9 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 				return err
 			}
 			// if commitTxnFunc failed, we will roll back the transaction.
+			// if commit panic, rollback below executed at the second time.
 			execErr = err
 		}
-
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
 	return
@@ -216,6 +216,9 @@ func (th *TxnHandler) Close() {
 		th.txnCtxCancel()
 	}
 	th.txnCtx = nil
+	th.shareTxn = false
+	th.serverStatus = defaultServerStatus
+	th.optionBits = defaultOptionBits
 }
 
 func (th *TxnHandler) GetConnCtx() context.Context {
@@ -330,6 +333,7 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		return err
 	}
 	tempCtx := defines.AttachAccountId(th.txnCtx, accId)
+	//carefully, this context must be valid for a long term.
 	err = th.storage.New(tempCtx, th.txnOp)
 	if err != nil {
 		execCtx.ses.SetTxnId(dumpUUID[:])
@@ -345,8 +349,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn
 func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
-	var err error
-	if getPu(execCtx.ses.GetService()).TxnClient == nil {
+	var err, err2 error
+	var hasRecovered bool
+	pu := getPu(execCtx.ses.GetService())
+	if pu.TxnClient == nil {
 		panic("must set txn client")
 	}
 
@@ -407,11 +413,18 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	th.txnOp, err = getPu(execCtx.ses.GetService()).TxnClient.New(
-		th.txnCtx,
-		execCtx.ses.getLastCommitTS(),
-		opts...)
-	if err != nil {
+	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	defer tempCancel()
+
+	txnClient := pu.TxnClient
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
+		th.txnOp, err2 = txnClient.New(
+			tempCtx,
+			execCtx.ses.getLastCommitTS(),
+			opts...)
+		return err2
+	})
+	if err != nil || hasRecovered {
 		return err
 	}
 	if th.txnOp == nil {
@@ -462,7 +475,8 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.CommitTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
-	var err error
+	var err, err2 error
+	var hasRecovered, hasRecovered2 bool
 	defer th.inActiveTxnUnsafe()
 	if !th.inActiveTxnUnsafe() || th.shareTxn {
 		return nil
@@ -479,9 +493,10 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 	storage := th.storage
-	ctx2, cancel := context.WithTimeout(
+	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		storage.Hints().CommitOrRollbackTimeout,
+		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
@@ -514,8 +529,22 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		err = th.txnOp.Commit(ctx2)
+		err, hasRecovered = ExecuteFuncWithRecover(func() error {
+			return th.txnOp.Commit(ctx2)
+		})
 		if err != nil {
+			err = moerr.AttachCause(ctx2, err)
+			if hasRecovered {
+				execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
+				defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)
+				err2, hasRecovered2 = ExecuteFuncWithRecover(func() error {
+					return th.txnOp.Rollback(ctx2)
+				})
+				if err2 != nil || hasRecovered2 {
+					//rollback error or panic again
+					err = errors.Join(err, moerr.AttachCause(ctx2, err2))
+				}
+			}
 			th.invalidateTxnUnsafe()
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
@@ -531,6 +560,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
 	var err error
+	var hasRecovered bool
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	/*
@@ -558,8 +588,10 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
-			err = th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
-			if err != nil {
+			err, hasRecovered = ExecuteFuncWithRecover(func() error {
+				return th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
+			})
+			if err != nil || hasRecovered {
 				err4 := th.rollbackUnsafe(execCtx)
 				return errors.Join(err, err4)
 			}
@@ -575,6 +607,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
 	var err error
+	var hasRecovered bool
 	defer th.inActiveTxnUnsafe()
 	if !th.inActiveTxnUnsafe() || th.shareTxn {
 		return nil
@@ -591,9 +624,10 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
 		}
 	}
-	ctx2, cancel := context.WithTimeout(
+	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
+		moerr.CauseRollbackUnsafe,
 	)
 	defer cancel()
 	defer func() {
@@ -618,8 +652,11 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
-		err = th.txnOp.Rollback(ctx2)
-		if err != nil {
+		err, hasRecovered = ExecuteFuncWithRecover(func() error {
+			return th.txnOp.Rollback(ctx2)
+		})
+		if err != nil || hasRecovered {
+			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
 		}
 	}

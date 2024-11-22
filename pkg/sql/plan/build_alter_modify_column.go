@@ -214,27 +214,31 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 
 // checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL
 func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, hasNullFlag bool, priKeyDef *plan.PrimaryKeyDef) error {
-	if hasDefaultValue {
-		hasNullFlag = DefaultValueIsNull(col.Default) || hasNullFlag
-	}
-	// Primary key should not be null.
-	if col.Primary && hasDefaultValue && DefaultValueIsNull(col.Default) {
-		return moerr.NewErrInvalidDefault(ctx, col.Name)
-	}
-	// Set primary key flag for outer primary key constraint.
-	// Such as: create table t1 (id int ,name varchar(20), age int, primary key(id, name))
-	if !col.Primary && priKeyDef != nil {
+	hasPriKeyFlag := false
+	if col.Primary {
+		hasPriKeyFlag = true
+	} else if priKeyDef != nil {
 		for _, key := range priKeyDef.Names {
 			if key == col.Name {
-				// Primary key should not be null.
-				if hasNullFlag {
-					return moerr.NewErrPrimaryCantHaveNull(ctx)
-				}
+				hasPriKeyFlag = true
 				break
 			} else {
 				continue
 			}
 		}
+	}
+
+	// Primary key should not be null.
+	if hasPriKeyFlag && hasDefaultValue {
+		if DefaultValueIsNull(col.Default) {
+			//return moerr.NewErrInvalidDefault(ctx, col.Name)
+			return moerr.NewErrPrimaryCantHaveNull(ctx)
+		}
+	}
+
+	// Primary key should not be null.
+	if hasPriKeyFlag && hasNullFlag {
+		return moerr.NewErrPrimaryCantHaveNull(ctx)
 	}
 	return nil
 }

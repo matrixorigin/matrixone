@@ -25,19 +25,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-type mockSQLWorker struct{}
+const (
+	workerModeReturnError int = 1
+)
+
+type mockSQLWorker struct {
+	mod int
+}
 
 func newMockSQLWorker() *mockSQLWorker {
 	return &mockSQLWorker{}
 }
 
 func (w *mockSQLWorker) GetCNServerByConnID(_ uint32) (*CNServer, error) {
+	if w.mod == workerModeReturnError {
+		return nil, moerr.NewInternalErrorNoCtx("return err")
+	}
 	return nil, nil
 }
 
@@ -272,8 +282,9 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	frontend.InitServerLevelVars(cn1.uuid)
 	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
-	_, _, err := ru.Connect(cn1, testPacket, nil)
+	sc1, _, err := ru.Connect(cn1, testPacket, nil)
 	require.NoError(t, err)
+	defer sc1.Close()
 
 	cn2, err := ru.SelectByConnID(10)
 	require.NoError(t, err)
@@ -361,8 +372,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -380,8 +392,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -399,8 +412,9 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	frontend.InitServerLevelVars(cn.uuid)
 	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(newTestPu()))
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 3, len(connResult))
@@ -474,8 +488,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li2 := labelInfo{
@@ -490,8 +505,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu2 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu2)
+	sc2, _, err := ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
+	defer sc2.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	li3 := labelInfo{
@@ -506,8 +522,9 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
 	tu3 := newTunnel(context.TODO(), logger, nil)
-	_, _, err = ru.Connect(cn, testPacket, tu3)
+	sc3, _, err := ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
+	defer sc3.Close()
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 2, len(connResult))
@@ -644,8 +661,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	_, _, err = ru.Connect(cn, testPacket, tu1)
+	sc1, _, err := ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
+	defer sc1.Close()
 	require.Equal(t, "cn1", cn.uuid)
 
 	// could not connect to cn3, because of timeout.
@@ -660,4 +678,14 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.True(t, isRetryableErr(err))
+}
+
+func Test_router(t *testing.T) {
+	rt := &router{
+		sqlRouter: &mockSQLWorker{
+			mod: workerModeReturnError,
+		},
+	}
+	_, err := rt.SelectByConnID(123)
+	require.Error(t, err)
 }

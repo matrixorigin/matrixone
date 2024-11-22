@@ -279,7 +279,7 @@ func (p *KeyHashPartitionPruner) getUsedPartition(cnfColEqVal map[string]*plan.E
 
 	for i, colDef := range p.node.TableDef.GetCols() {
 		if valueExpr, ok := cnfColEqVal[colDef.GetName()]; ok {
-			colVec, err := colexec.EvalExpressionOnce(p.process, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			colVec, err := colexec.GetWritableResultFromNoColumnExpression(p.process, valueExpr)
 			if err != nil {
 				return false, -1
 			}
@@ -292,11 +292,11 @@ func (p *KeyHashPartitionPruner) getUsedPartition(cnfColEqVal map[string]*plan.E
 	}
 
 	// 2. calculate partition expression
-	resVec, err := colexec.EvalExpressionOnce(p.process, p.partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
+	resVec, free, err := colexec.GetReadonlyResultFromExpression(p.process, p.partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
 	if err != nil {
 		return false, -1
 	}
-	defer resVec.Free(p.process.Mp())
+	defer free()
 
 	// 3. prune the partition
 	if resVec.IsConstNull() {

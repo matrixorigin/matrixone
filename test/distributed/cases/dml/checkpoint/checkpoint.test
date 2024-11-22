@@ -21,12 +21,18 @@ select * from t;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3), (4), (5);
+-- @separator:table
+select mo_ctl('dn','checkpoint','');
+create snapshot snapshot01 for account sys;
+select * from t;
 delete from t where a = 2;
 insert into t values (6);
 delete from t where a = 3;
 -- @separator:table
 select mo_ctl('dn','checkpoint','');
 select * from t;
+select * from t {snapshot = 'snapshot01'};
+drop snapshot snapshot01;
 
 drop table if exists t;
 create table t (a int);

@@ -67,7 +67,7 @@ func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Dealloca
 	if i >= len(c.classes) {
 		return nil, nil, moerr.NewInternalErrorNoCtxf("cannot allocate %v bytes: too large", size)
 	}
-	slice, dec, err := c.classes[i].allocator.Allocate(hints)
+	slice, dec, err := c.classes[i].allocator.Allocate(hints, size)
 	if err != nil {
 		return nil, nil, err
 	}

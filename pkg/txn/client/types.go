@@ -25,6 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
+const (
+	DebugFlag   = uint32(1 << 0)
+	AbortedFlag = uint32(1 << 1)
+)
+
 // TxnOption options for setup transaction
 // FIXME(fagongzi): refactor TxnOption to avoid mem alloc
 type TxnOption func(*txnOperator)
@@ -123,6 +128,7 @@ type TxnOperator interface {
 	Txn() txn.TxnMeta
 	// TxnOptions returns the current txn options
 	TxnOptions() txn.TxnOptions
+
 	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
 	// will updated before statement executed.
 	TxnRef() *txn.TxnMeta

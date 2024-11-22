@@ -17,10 +17,9 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
-	"net/http/httptrace"
+	"iter"
 	pathpkg "path"
 	"runtime"
 	"sort"
@@ -28,16 +27,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"go.uber.org/zap"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -83,25 +81,38 @@ func NewS3FS(
 	var err error
 	switch {
 
-	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+	case args.IsMinio ||
+		// 天翼云，使用SignatureV2验证，其他SDK不再支持
+		strings.Contains(args.Endpoint, "ctyunapi.cn"):
+		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
+	case strings.Contains(args.Endpoint, "myqcloud.com"):
+		// 腾讯云
+		fs.storage, err = NewQCloudSDK(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		// 阿里云
 		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case strings.EqualFold(args.Endpoint, "disk"):
+		// disk based
 		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	default:
+		// AWS SDK
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
@@ -125,6 +136,9 @@ func NewS3FS(
 		"s3",
 	)
 
+	// http trace
+	fs.storage = newObjectStorageHTTPTrace(fs.storage)
+
 	// cache
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -135,15 +149,25 @@ func NewS3FS(
 	return fs, nil
 }
 
-func (s *S3FS) AllocateCacheData(size int) fscache.Data {
+func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(
-			size,
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(s.memCache.cache.Capacity()/100),
-		)
+		s.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheData(size)
+	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
+}
+
+func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(ctx, size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(ctx, len(data))
+	}
+	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -215,51 +239,58 @@ func (s *S3FS) keyToPath(key string) string {
 	return path
 }
 
-func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
-	ctx, span := trace.Start(ctx, "S3FS.List")
-	defer span.End()
-	start := time.Now()
-	defer func() {
-		metric.FSReadDurationList.Observe(time.Since(start).Seconds())
-	}()
+func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		ctx, span := trace.Start(ctx, "S3FS.List")
+		defer span.End()
+		start := time.Now()
+		defer func() {
+			metric.FSReadDurationList.Observe(time.Since(start).Seconds())
+		}()
 
-	path, err := ParsePathAtService(dirPath, s.name)
-	if err != nil {
-		return nil, err
-	}
-	prefix := s.pathToKey(path.File)
-	if prefix != "" {
-		prefix += "/"
-	}
-
-	if err := s.storage.List(ctx, prefix, func(isPrefix bool, key string, size int64) (bool, error) {
-
-		if isPrefix {
-			filePath := s.keyToPath(key)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			entries = append(entries, DirEntry{
-				Name:  name,
-				IsDir: true,
-			})
-
-		} else {
-			filePath := s.keyToPath(key)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			entries = append(entries, DirEntry{
-				Name:  name,
-				IsDir: false,
-				Size:  size,
-			})
+		path, err := ParsePathAtService(dirPath, s.name)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		prefix := s.pathToKey(path.File)
+		if prefix != "" {
+			prefix += "/"
 		}
 
-		return true, nil
-	}); err != nil {
-		return nil, err
-	}
+		for entry, err := range s.storage.List(ctx, prefix) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
 
-	return
+			if entry.IsDir {
+				filePath := s.keyToPath(entry.Name)
+				filePath = strings.TrimRight(filePath, "/")
+				_, name := pathpkg.Split(filePath)
+				if !yield(&DirEntry{
+					Name:  name,
+					IsDir: true,
+				}, nil) {
+					break
+				}
+
+			} else {
+				filePath := s.keyToPath(entry.Name)
+				filePath = strings.TrimRight(filePath, "/")
+				_, name := pathpkg.Split(filePath)
+				if !yield(&DirEntry{
+					Name:  name,
+					IsDir: false,
+					Size:  entry.Size,
+				}, nil) {
+					break
+				}
+			}
+
+		}
+
+	}
 }
 
 func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
@@ -288,13 +319,16 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
-
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
 
 	startLock := time.Now()
+	defer func() {
+		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
+	}()
+
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path: filePath,
 	})
@@ -304,7 +338,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		// not wait in prefetch, return
 		return nil
 	}
-	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -317,7 +350,6 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -345,10 +377,6 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	tp := reuse.Alloc[tracePoint](nil)
-	defer reuse.Free(tp, nil)
-	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	var bytesWritten int
 	start := time.Now()
@@ -435,6 +463,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Record S3 IO and netwokIO(un memory IO) time Consumption
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -443,12 +478,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	LogEvent(ctx, str_s3fs_read, vector)
 	defer func() {
 		LogEvent(ctx, str_read_return)
-		LogSlowEvent(ctx, time.Second*5)
+		LogSlowEvent(ctx, time.Millisecond*500)
 	}()
-
-	tp := reuse.Alloc[tracePoint](nil)
-	defer reuse.Free(tp, nil)
-	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -506,13 +537,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	stats := statistic.StatsInfoFromContext(ctx)
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
 
 read_disk_cache:
 	if s.diskCache != nil {
@@ -924,18 +948,18 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
-func (s *S3FS) Close() {
+func (s *S3FS) Close(ctx context.Context) {
 	if s.memCache != nil {
-		s.memCache.Close()
+		s.memCache.Close(ctx)
 	}
 	if s.diskCache != nil {
-		s.diskCache.Close()
+		s.diskCache.Close(ctx)
 	}
 }
 
-func (s *S3FS) FlushCache() {
+func (s *S3FS) FlushCache(ctx context.Context) {
 	if s.memCache != nil {
-		s.memCache.Flush()
+		s.memCache.Flush(ctx)
 	}
 }
 
@@ -947,76 +971,4 @@ func (s *S3FS) Cost() *CostAttr {
 	return &CostAttr{
 		List: CostHigh,
 	}
-}
-
-type tracePoint struct {
-	start             time.Time
-	dnsStart          time.Time
-	connectStart      time.Time
-	tlsHandshakeStart time.Time
-	ct                *httptrace.ClientTrace
-}
-
-func newTracePoint() *tracePoint {
-	tp := &tracePoint{
-		ct: &httptrace.ClientTrace{},
-	}
-	tp.ct.GetConn = tp.getConnPoint
-	tp.ct.GotConn = tp.gotConnPoint
-	tp.ct.DNSStart = tp.dnsStartPoint
-	tp.ct.DNSDone = tp.dnsDonePoint
-	tp.ct.ConnectStart = tp.connectStartPoint
-	tp.ct.ConnectDone = tp.connectDonePoint
-	tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
-	tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
-	return tp
-}
-
-func (tp tracePoint) TypeName() string {
-	return "fileservice.tracePoint"
-}
-
-func resetTracePoint(tp *tracePoint) {
-	tp.start = time.Time{}
-	tp.dnsStart = time.Time{}
-	tp.connectStart = time.Time{}
-	tp.tlsHandshakeStart = time.Time{}
-}
-
-func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
-	return tp.ct
-}
-
-func (tp *tracePoint) getConnPoint(hostPort string) {
-	tp.start = time.Now()
-}
-
-func (tp *tracePoint) gotConnPoint(info httptrace.GotConnInfo) {
-	metric.S3GetConnDurationHistogram.Observe(time.Since(tp.start).Seconds())
-}
-
-func (tp *tracePoint) dnsStartPoint(di httptrace.DNSStartInfo) {
-	metric.S3DNSResolveCounter.Inc()
-	tp.dnsStart = time.Now()
-}
-
-func (tp *tracePoint) dnsDonePoint(di httptrace.DNSDoneInfo) {
-	metric.S3DNSResolveDurationHistogram.Observe(time.Since(tp.dnsStart).Seconds())
-}
-
-func (tp *tracePoint) connectStartPoint(network, addr string) {
-	metric.S3ConnectCounter.Inc()
-	tp.connectStart = time.Now()
-}
-
-func (tp *tracePoint) connectDonePoint(network, addr string, err error) {
-	metric.S3ConnectDurationHistogram.Observe(time.Since(tp.connectStart).Seconds())
-}
-
-func (tp *tracePoint) tlsHandshakeStartPoint() {
-	tp.tlsHandshakeStart = time.Now()
-}
-
-func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
-	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
 }

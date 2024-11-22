@@ -93,6 +93,10 @@ var (
 
 const ZoneMapSize = index.ZMSize
 
+func IsPhysicalAddr(attr string) bool {
+	return attr == PhysicalAddr_Attr
+}
+
 func GetTombstoneAttrs(hidden HiddenColumnSelection) []string {
 	if hidden&HiddenColumnSelection_PhysicalAddr != 0 &&
 		hidden&HiddenColumnSelection_CommitTS != 0 {

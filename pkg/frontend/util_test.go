@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -881,7 +881,7 @@ func TestRewriteError(t *testing.T) {
 			},
 			want:  moerr.ER_BAD_DB_ERROR,
 			want1: "HY000",
-			want2: "invalid database yyy",
+			want2: "Unknown database yyy",
 		},
 	}
 	for _, tt := range tests {
@@ -1211,6 +1211,11 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 		defines.MYSQL_TYPE_TIME,
 		defines.MYSQL_TYPE_DATETIME,
 		defines.MYSQL_TYPE_TIMESTAMP,
+		defines.MYSQL_TYPE_ENUM,
+		defines.MYSQL_TYPE_TINY,
+		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_TEXT,
 	}
 	colNames := make([]string, len(colMysqlTyps))
 	mrs := &MysqlResultSet{}
@@ -1232,7 +1237,7 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case defines.MYSQL_TYPE_VAR_STRING:
 				row[j] = "abc"
 			case defines.MYSQL_TYPE_SHORT:
-				row[j] = int32(math.MaxInt16)
+				row[j] = int16(math.MaxInt16)
 			case defines.MYSQL_TYPE_LONG:
 				row[j] = int32(math.MaxInt32)
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -1251,6 +1256,15 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = types.Timestamp(0)
 			case defines.MYSQL_TYPE_ENUM:
 				row[j] = types.Enum(1)
+			case defines.MYSQL_TYPE_TEXT:
+				if j%2 == 0 {
+					row[j] = "abc"
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
+			case defines.MYSQL_TYPE_TINY:
+				row[j] = int8(math.MaxInt8)
+
 			default:
 				assert.True(t, false)
 			}
@@ -1290,11 +1304,50 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case types.T_enum:
 				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
 				continue
+			case types.T_text:
+				if j%2 == 0 {
+					row[j] = string(row[j].([]uint8))
+				} else {
+					row[j] = int16(math.MaxInt16)
+				}
 			}
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
 	}
+}
+
+func Test_convertRowsIntoBatchError(t *testing.T) {
+	colMysqlTyps := []defines.MysqlType{
+		defines.MYSQL_TYPE_TIMESTAMP,
+	}
+	colNames := make([]string, len(colMysqlTyps))
+	mrs := &MysqlResultSet{}
+	cnt := 5
+	for colIdx, mysqlTyp := range colMysqlTyps {
+		col := new(MysqlColumn)
+		col.SetColumnType(mysqlTyp)
+		col.SetName(colNames[colIdx])
+		mrs.AddColumn(col)
+	}
+
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(mrs.Columns))
+		mrs.AddRow(row)
+		for j := 0; j < len(mrs.Columns); j++ {
+			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				row[j] = int64(0)
+			default:
+				assert.True(t, false)
+			}
+		}
+	}
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	_, _, err = convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.Error(t, err)
 }
 
 func Test_issue3482(t *testing.T) {
@@ -1443,7 +1496,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		bhStub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -1477,12 +1530,76 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
 		assert.Nil(t, err)
 
-		mrs := newMrsForPasswordOfUser([][]interface{}{{}})
+		typ := new(types.Type)
+		typBytes, err := typ.Marshal()
+		assert.Nil(t, err)
+
+		def := new(plan2.Default)
+		defBytes, err := types.Encode(def)
+		assert.Nil(t, err)
+
+		mrs := newMrsForTableColumnDef([][]interface{}{
+			{
+				"abc",
+				string(typBytes),
+				10,
+				nil,
+				string(defBytes),
+				nil,
+				1,
+			},
+		})
 		bh.sql2result[sql] = mrs
 
 		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("attname")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("atttyp")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("attnum")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("attnotnull")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("att_default")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col6 := &MysqlColumn{}
+	col6.SetName("att_is_auto_increment")
+	col6.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col7 := &MysqlColumn{}
+	col7.SetName("att_is_hidden")
+	col7.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
 }
 
 func Test_getTableColumnDefSql(t *testing.T) {

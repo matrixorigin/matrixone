@@ -44,6 +44,7 @@ enum OpCode {
     OpDiskDiskCleaner   = 2012;
     OpReader = 2013;
     OpGetLatestCheckpoint = 2014;
+    OpSnapshotRead = 2015;
 }
 
 // TNPingRequest ping request
@@ -226,6 +227,8 @@ message Entry {
         Update = 2;
         Alter = 3;
         SpecialDelete = 4;
+        DataObject = 5;
+        TombstoneObject = 6;
     }
     EntryType entry_type = 1;
     uint64 table_id      = 2;

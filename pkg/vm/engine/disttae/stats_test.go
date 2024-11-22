@@ -87,3 +87,32 @@ func TestGlobalStats_ClearTables(t *testing.T) {
 	gs.clearTables()
 	assert.Equal(t, 0, len(gs.logtailUpdate.mu.updated))
 }
+
+func TestWaitKeeper(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	var tid uint64 = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gs := NewGlobalStats(ctx, nil, nil)
+	assert.False(t, gs.safeToUnsubscribe(tid))
+
+	w := gs.waitKeeper
+	w.add(tid)
+	_, ok := w.records[tid]
+	assert.True(t, ok)
+	assert.True(t, gs.safeToUnsubscribe(tid))
+
+	gs.RemoveTid(tid)
+	_, ok = w.records[tid]
+	assert.False(t, ok)
+	assert.False(t, gs.safeToUnsubscribe(tid))
+
+	w.add(tid)
+	_, ok = w.records[tid]
+	assert.True(t, ok)
+	gs.clearTables()
+	_, ok = w.records[tid]
+	assert.False(t, ok)
+	assert.False(t, gs.safeToUnsubscribe(tid))
+}

@@ -79,7 +79,7 @@ func TestLocalETLFS(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
 
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, "foo", entries[0].Name)
@@ -109,7 +109,7 @@ func TestLocalETLFS(t *testing.T) {
 		assert.Nil(t, err)
 
 		ctx := context.Background()
-		entries, err := fs.List(ctx, "")
+		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)
 		assert.Equal(t, 2, len(entries))
 		assert.True(t, entries[0].IsDir)
@@ -138,6 +138,6 @@ func TestLocalETLFSWithBadSymlink(t *testing.T) {
 	assert.Nil(t, err)
 	fs, err := NewLocalETLFS("test", dir)
 	assert.Nil(t, err)
-	_, err = fs.List(ctx, "")
+	_, err = SortedList(fs.List(ctx, ""))
 	assert.Nil(t, err)
 }

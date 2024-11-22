@@ -1,4 +1,10 @@
 set global enable_privilege_cache = off;
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
+add_fault_point(fj/trace/partitionstate, :::, echo, 1, mo_tables)
+true
 drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
@@ -168,7 +174,6 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_mysql_compatibility_mode
-mo_pubs
 mo_retention
 mo_stored_procedure
 mo_stages
@@ -281,4 +286,7 @@ drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
 drop account if exists ccc;
+select disable_fault_injection();
+disable_fault_injection()
+true
 set global enable_privilege_cache = on;

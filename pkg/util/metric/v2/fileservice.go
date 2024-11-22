@@ -19,22 +19,6 @@ import (
 )
 
 var (
-	S3ConnectCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "s3_connect_total",
-			Help:      "Total number of s3 connect count.",
-		})
-
-	S3DNSResolveCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "s3_dns_resolve_total",
-			Help:      "Total number of s3 dns resolve count.",
-		})
-
 	fsReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -47,6 +31,10 @@ var (
 	FSReadHitMemCounter    = fsReadCounter.WithLabelValues("hit-mem")
 	FSReadHitDiskCounter   = fsReadCounter.WithLabelValues("hit-disk")
 	FSReadHitRemoteCounter = fsReadCounter.WithLabelValues("hit-remote")
+	FSReadHitMetaCounter   = fsReadCounter.WithLabelValues("hit-meta")
+	FSReadReadMemCounter   = fsReadCounter.WithLabelValues("read-mem")
+	FSReadReadDiskCounter  = fsReadCounter.WithLabelValues("read-disk")
+	FSReadReadMetaCounter  = fsReadCounter.WithLabelValues("read-meta")
 )
 
 var (
@@ -69,10 +57,11 @@ var (
 			Help:      "Bucketed histogram of s3 get conn duration.",
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
-	S3GetConnDurationHistogram      = s3ConnDurationHistogram.WithLabelValues("get-conn")
-	S3DNSResolveDurationHistogram   = s3ConnDurationHistogram.WithLabelValues("dns-resolve")
-	S3ConnectDurationHistogram      = s3ConnDurationHistogram.WithLabelValues("connect")
-	S3TLSHandshakeDurationHistogram = s3ConnDurationHistogram.WithLabelValues("tls-handshake")
+	S3GetConnDurationHistogram          = s3ConnDurationHistogram.WithLabelValues("get-conn")
+	S3GotFirstResponseDurationHistogram = s3ConnDurationHistogram.WithLabelValues("got-first-response")
+	S3DNSResolveDurationHistogram       = s3ConnDurationHistogram.WithLabelValues("dns-resolve")
+	S3ConnectDurationHistogram          = s3ConnDurationHistogram.WithLabelValues("connect")
+	S3TLSHandshakeDurationHistogram     = s3ConnDurationHistogram.WithLabelValues("tls-handshake")
 
 	localIOBytesHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -152,6 +141,43 @@ var (
 		},
 		[]string{
 			"name",
+			"op",
+		},
+	)
+)
+
+var (
+	fsCacheBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_bytes",
+			Help:      "Total bytes of fs cache.",
+		}, []string{"component", "type"})
+)
+
+// GetFsCacheBytesGauge return inuse, cap Gauge metric
+// {typ} should be [mem, disk, meta]
+func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
+	var component string
+	if name == "" {
+		component = typ
+	} else {
+		component = name + "-" + typ
+	}
+	return fsCacheBytes.WithLabelValues(component, "inuse"),
+		fsCacheBytes.WithLabelValues(component, "cap")
+}
+
+var (
+	FSHTTPTraceCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "http_trace",
+			Help:      "http trace statistics",
+		},
+		[]string{
 			"op",
 		},
 	)

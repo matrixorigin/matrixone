@@ -27,6 +27,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -39,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 const (
@@ -125,7 +126,7 @@ func NewService(
 	if service.dataSync != nil {
 		onReplicaChanged = service.dataSync.NotifyReplicaID
 	}
-	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime)
+	store, err := newLogStore(cfg, service.getTaskService, onReplicaChanged, service.runtime, fileService)
 	if err != nil {
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -168,6 +169,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
+		if closeErr := store.close(); closeErr != nil {
+			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 
@@ -339,6 +343,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetLeaderID(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HEALTH:
 		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
+	case pb.READ_LSN:
+		return s.handleReadLsn(ctx, req)
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -441,6 +447,18 @@ func (s *Service) handleRead(ctx context.Context, req pb.Request) (pb.Response, 
 		resp.LogResponse.LastLsn = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
+}
+
+func (s *Service) handleReadLsn(ctx context.Context, req pb.Request) (pb.Response, pb.LogRecordResponse) {
+	r := req.LogRequest
+	resp := getResponse(req)
+	lsn, err := s.store.queryLogLsn(ctx, r.ShardID, r.TS)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	} else {
+		resp.LogResponse.Lsn = lsn
+	}
+	return resp, pb.LogRecordResponse{}
 }
 
 func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Response {
@@ -659,9 +677,10 @@ func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
 	wg.Add(1)
 	if err := s.stopper.RunNamedTask("add new log shard", func(ctx context.Context) {
 		defer wg.Done()
-		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseHandleAddLogShard)
 		defer cancel()
 		if err := s.store.addLogShard(ctx, pb.AddLogShard{ShardID: shardID}); err != nil {
+			err = moerr.AttachCause(ctx, err)
 			s.runtime.Logger().Error("failed to add shard",
 				zap.Uint64("shard ID", shardID),
 				zap.Error(err),

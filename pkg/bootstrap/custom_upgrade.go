@@ -19,12 +19,13 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error) {
@@ -82,7 +83,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Hour*12)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*12, moerr.CauseUpgradeOneTenant)
 	defer cancel()
 
 	opts := executor.Options{}.
@@ -161,7 +162,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		},
 		opts)
 	if err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true

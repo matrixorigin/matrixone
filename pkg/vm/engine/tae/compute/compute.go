@@ -16,12 +16,34 @@ package compute
 
 import (
 	"bytes"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+func SortAndDedup[T any](
+	vals []T,
+	lessFn func(*T, *T) bool,
+	eqFn func(*T, *T) bool,
+) []T {
+	if len(vals) < 1 {
+		return vals
+	}
+	sort.Slice(vals, func(i, j int) bool {
+		return lessFn(&vals[i], &vals[j])
+	})
+	pos := 1
+	for start, end := 1, len(vals); start < end; start++ {
+		if !eqFn(&vals[start], &vals[start-1]) {
+			vals[pos] = vals[start]
+			pos++
+		}
+	}
+	return vals[:pos]
+}
 
 func ShuffleByDeletes(inputDeletes, deletes *nulls.Bitmap) (outDeletes *nulls.Bitmap) {
 	if deletes.IsEmpty() || inputDeletes.IsEmpty() {
@@ -52,24 +74,6 @@ func ShuffleByDeletes(inputDeletes, deletes *nulls.Bitmap) (outDeletes *nulls.Bi
 	}
 
 	return outDeletes
-}
-
-func GetOffsetMapBeforeApplyDeletes(deletes *nulls.Bitmap) []uint32 {
-	if deletes.IsEmpty() {
-		return nil
-	}
-	prev := -1
-	mapping := make([]uint32, 0)
-	it := deletes.GetBitmap().Iterator()
-	for it.HasNext() {
-		del := it.Next()
-		for i := uint32(prev + 1); i < uint32(del); i++ {
-			mapping = append(mapping, i)
-		}
-		prev = int(del)
-	}
-	mapping = append(mapping, uint32(prev)+1)
-	return mapping
 }
 
 func GetOffsetOfBytes(

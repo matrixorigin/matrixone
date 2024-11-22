@@ -1,5 +1,4 @@
 -- insert ignore autoincrement primary key
--- @bvt:issue#15365
 create table insert_ignore_01(c1 int not null auto_increment primary key,c2 varchar(10));
 insert into insert_ignore_01(c2) values("a"),("b"),("c"),("d");
 insert ignore into insert_ignore_01 values(3,"e"),(6,"f"),(1,"g");
@@ -7,7 +6,6 @@ insert ignore into insert_ignore_01(c2) values("h"),("g"),("k");
 insert ignore into insert_ignore_01 values(NULL,NULL);
 select * from insert_ignore_01;
 drop table insert_ignore_01;
--- @bvt:issue
 -- insert ignore multi primary key
 create table insert_ignore_01 (part_id INT NOT NULL,color VARCHAR(20) NOT NULL,quantity INT,PRIMARY KEY (part_id, color));
 insert ignore into insert_ignore_01 (part_id, color, quantity)values(1, 'Red', 10),(1, 'Blue', 20),(2, 'Green', 15),(1, 'Red', 5);
@@ -22,17 +20,13 @@ insert ignore into insert_ignore_02 values(NULL,44.56);
 select * from insert_ignore_02;
 
 -- insert ignore secondary key
--- @bvt:issue#15365
 create table insert_ignore_03(c1 int auto_increment primary key,c2 int,key(c2));
 insert into insert_ignore_03(c2) values(2),(2),(5),(10),(12),(NULL);
 insert ignore into insert_ignore_03(c2) values(7),(2),(5),(10),(12),(NULL);
 select * from insert_ignore_03;
--- @bvt:issue
 -- insert ignore not null and default constraint
--- @bvt:issue#15358
 create table insert_ignore_04 (product_id INT NOT NULL AUTO_INCREMENT,product_name VARCHAR(255) NOT NULL,quantity_in_stock INT DEFAULT 0,price DECIMAL(10, 2) NOT NULL,PRIMARY KEY (product_id));
 insert ignore into insert_ignore_04(product_name, price) VALUES('Laptop', 1200.00),('Monitor', 150.00),('Keyboard', NULL),('Mouse', 15.00);
--- @bvt:issue
 -- @bvt:issue#15345
 insert ignore into insert_ignore_04(product_name, quantity_in_stock,price) VALUES(NULL, 5,1200.00),('board',6, NULL),('phone',NULL,1500.00);
 select * from insert_ignore_04;
@@ -68,7 +62,6 @@ create table insert_ignore_06 (sale_id INT AUTO_INCREMENT,product_id INT,sale_am
 insert ignore into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES(1, 1000.00, '1990-04-01'),(2, 1500.00, '1992-05-01'),(3, 500.00, '1995-06-01'),(1, 2000.00, '1991-07-01');
 select * from insert_ignore_06;
 -- insert ignore select from table
--- @bvt:issue#15349
 create table insert_ignore_07(c1 int primary key auto_increment, c2 int);
 insert into insert_ignore_07(c2) select result from generate_series(1,100000) g;
 create table insert_ignore_08(c1 int primary key, c2 int);
@@ -76,4 +69,3 @@ insert into insert_ignore_08 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222
 insert ignore into insert_ignore_08 select * from insert_ignore_07;
 select count(*) from insert_ignore_08;
 select * from insert_ignore_08 where c2 in (45,55,22,1,222,19);
--- @bvt:issue

@@ -16,36 +16,34 @@ package merge
 
 import (
 	"context"
+	"sort"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
-	objects  []*catalog.ObjectEntry
 	fs       fileservice.FileService
 
+	segObjects map[objectio.Segmentid][]*catalog.ObjectEntry
+
 	tombstones     []*catalog.ObjectEntry
-	tombstoneStats []objectio.ObjectStats
+	tombstoneMetas []objectio.ObjectDataMeta
 
 	validTombstones map[*catalog.ObjectEntry]struct{}
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
 	return &objCompactPolicy{
-		objects: make([]*catalog.ObjectEntry, 0),
-		fs:      fs,
+		fs: fs,
+
+		segObjects: make(map[objectio.Segmentid][]*catalog.ObjectEntry),
 
 		tombstones:      make([]*catalog.ObjectEntry, 0),
-		tombstoneStats:  make([]objectio.ObjectStats, 0),
 		validTombstones: make(map[*catalog.ObjectEntry]struct{}),
 	}
 }
@@ -60,59 +58,43 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	if entry.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-	if len(o.tombstoneStats) == 0 {
+	if len(o.tombstones) == 0 {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	sels, err := blockio.FindTombstonesOfObject(ctx, entry.ID(), o.tombstoneStats, o.fs)
-	cancel()
-	if err != nil {
-		return false
-	}
-	iter := sels.Iterator()
-	for iter.HasNext() {
-		i := iter.Next()
-		tombstone := o.tombstones[i]
-
-		o.validTombstones[tombstone] = struct{}{}
-
-		if (entryOutdated(tombstone, config.TombstoneLifetime) && tombstone.OriginSize() > 10*common.Const1MBytes) ||
-			tombstone.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
-			logutil.Info("[MERGE-POLICY]",
-				zap.String("policy", "compact"),
-				zap.String("table", o.tblEntry.GetFullName()),
-				zap.String("data object", entry.ID().ShortStringEx()),
-				zap.Uint32("data rows", entry.Rows()),
-				zap.Uint32("tombstone size", tombstone.OriginSize()),
-			)
-			o.objects = append(o.objects, entry)
-			return true
+	for i, meta := range o.tombstoneMetas {
+		if !checkTombstoneMeta(meta, entry.ID()) {
+			continue
 		}
+		o.validTombstones[o.tombstones[i]] = struct{}{}
+		o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
 	}
 	return false
 }
 
-func (o *objCompactPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (o *objCompactPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	if o.tblEntry == nil {
 		return nil
 	}
 	o.filterValidTombstones()
-	results := make([]reviseResult, 0, len(o.objects)+len(o.tombstones))
-	for _, obj := range o.objects {
-		results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, TaskHostDN})
+	results := make([]reviseResult, 0, len(o.segObjects)+1)
+	for _, objs := range o.segObjects {
+		if rc.resourceAvailable(objs) {
+			rc.reserveResources(objs)
+			results = append(results, reviseResult{objs, taskHostDN})
+		}
 	}
-	if len(o.tombstoneStats) > 0 {
-		results = append(results, reviseResult{o.tombstones, TaskHostDN})
+	if len(o.tombstones) > 0 {
+		results = append(results, reviseResult{o.tombstones, taskHostDN})
 	}
 	return results
 }
 
-func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
+func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
-	o.objects = o.objects[:0]
 	o.tombstones = o.tombstones[:0]
-	o.tombstoneStats = o.tombstoneStats[:0]
+	o.tombstoneMetas = o.tombstoneMetas[:0]
+	clear(o.segObjects)
 	clear(o.validTombstones)
 
 	tIter := entry.MakeTombstoneObjectIt()
@@ -123,8 +105,19 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry) {
 			continue
 		}
 
-		o.tombstones = append(o.tombstones, tEntry)
-		o.tombstoneStats = append(o.tombstoneStats, *tEntry.GetObjectStats())
+		if (entryOutdated(tEntry, config.TombstoneLifetime) && tEntry.OriginSize() > 10*common.Const1MBytes) ||
+			tEntry.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			meta, err := loadTombstoneMeta(ctx, tEntry.GetObjectStats(), o.fs)
+			cancel()
+			if err != nil {
+				continue
+			}
+
+			o.tombstoneMetas = append(o.tombstoneMetas, meta)
+			o.tombstones = append(o.tombstones, tEntry)
+		}
 	}
 }
 
@@ -140,4 +133,40 @@ func (o *objCompactPolicy) filterValidTombstones() {
 		o.tombstones[j] = nil
 	}
 	o.tombstones = o.tombstones[:i]
+}
+
+func loadTombstoneMeta(ctx context.Context, tombstoneObject *objectio.ObjectStats, fs fileservice.FileService) (objectio.ObjectDataMeta, error) {
+	location := tombstoneObject.ObjectLocation()
+	objMeta, err := objectio.FastLoadObjectMeta(
+		ctx, &location, false, fs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return objMeta.MustDataMeta(), nil
+}
+
+func checkTombstoneMeta(tombstoneMeta objectio.ObjectDataMeta, objectId *objectio.ObjectId) bool {
+	prefixPattern := objectId[:]
+	blkCnt := int(tombstoneMeta.BlockCount())
+
+	startIdx := sort.Search(blkCnt, func(i int) bool {
+		return tombstoneMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(prefixPattern)
+	})
+
+	for pos := startIdx; pos < blkCnt; pos++ {
+		blkMeta := tombstoneMeta.GetBlockMeta(uint32(pos))
+		columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+		// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
+		// !PrefixEq means there is no rowid of this block in this zonemap, so skip
+		if columnZonemap.RowidPrefixEq(prefixPattern) {
+			return true
+		}
+		if columnZonemap.RowidPrefixGT(prefixPattern) {
+			// all zone maps are sorted by the rowid
+			// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			break
+		}
+	}
+	return false
 }

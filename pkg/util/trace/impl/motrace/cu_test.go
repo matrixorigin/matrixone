@@ -15,12 +15,14 @@
 package motrace
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func TestCalculateFloat64(t *testing.T) {
@@ -279,6 +281,60 @@ func TestCalculateCU(t *testing.T) {
 			got := CalculateCUWithCfg(tt.args.stats, int64(tt.args.durationNS), tt.args.cfg)
 			t.Logf("stats: %s", tt.args.stats.ToJsonString())
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCalculateCUIODelete_IOList(t *testing.T) {
+	type args struct {
+		deleteCnt float64
+		listCnt   float64
+		cfg       *config.OBCUConfig
+	}
+
+	_1_0_cu_price := &config.OBCUConfig{
+		CUUnit:        1.0,
+		IoListPrice:   1.0,
+		IoDeletePrice: 2.0,
+	}
+
+	// [ 3, 7528422223, 573384797164.000, 0, 1, 247109, 2 ]
+	var stats2 statistic.StatsArray
+	stats2.Init()
+
+	tests := []struct {
+		name         string
+		args         args
+		wantDeleteCU float64
+		wantListCU   float64
+	}{
+		{
+			name: "1.0_price",
+			args: args{
+				deleteCnt: 100,
+				listCnt:   100,
+				cfg:       _1_0_cu_price,
+			},
+			wantDeleteCU: 200.0,
+			wantListCU:   100.0,
+		},
+		{
+			name: "1.0_price_2",
+			args: args{
+				deleteCnt: 123,
+				listCnt:   456,
+				cfg:       _1_0_cu_price,
+			},
+			wantDeleteCU: 246.0,
+			wantListCU:   456.0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotDeleteCU := CalculateCUIODelete(tt.args.deleteCnt, tt.args.cfg)
+			assert.Equalf(t, tt.wantDeleteCU, gotDeleteCU, "CalculateCUIODelete(%v, %v)", tt.args.deleteCnt, tt.args.cfg)
+			gotListCU := CalculateCUIOList(tt.args.listCnt, tt.args.cfg)
+			assert.Equalf(t, tt.wantListCU, gotListCU, "CalculateCUIOList(%v, %v)", tt.args.listCnt, tt.args.cfg)
 		})
 	}
 }

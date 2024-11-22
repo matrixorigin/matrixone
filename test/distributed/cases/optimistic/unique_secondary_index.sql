@@ -30,6 +30,7 @@ insert into index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
 insert into index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 select * from index_05;
 create table index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint,unique key id1(col1),key id2(col4));
+-- @pattern
 insert into index_06 values (1,2,20.23,56),(1,4,100.00,90);
 insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_06;
@@ -240,6 +241,7 @@ insert into create_index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.
 select * from create_index_05;
 create table create_index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint);
 create unique index tinyint_index on create_index_06(col1);
+-- @pattern
 insert into create_index_06 values (1,2,20.23,56),(1,4,100.00,90);
 insert into create_index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from create_index_06;
@@ -251,6 +253,7 @@ insert into create_index_07 values (1,2,20.23,56),(1,4,100.00,90);
 select * from create_index_07;
 create table create_index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
 create unique index bigint_unsigned_index on create_index_08(col1);
+-- @pattern
 insert into create_index_08 values (1,2,20.23,56),(1,4,100.00,90);
 insert into create_index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from create_index_08;

@@ -750,6 +750,7 @@ show create table index02;
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 show create table index02;
+-- @pattern
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
@@ -1177,5 +1178,25 @@ insert into t1 values('D', 29);
 show create table t1;
 desc t1;
 drop table t1;
+
+drop table if exists tb_3;
+create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(30) not null;
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(30);
+desc tb_3;
+
+alter table tb_3 modify c1 VARCHAR(40);
+desc tb_3;
+
+alter table tb_3 modify c4 VARCHAR(40);
+desc tb_3;
+
+alter table tb_3 modify c4 VARCHAR(40) NOT null;
+desc tb_3;
+drop table tb_3;
 
 drop database db2;

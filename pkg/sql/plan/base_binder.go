@@ -242,6 +242,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// * should only appear in SELECT clause
 		err = moerr.NewInvalidInput(b.GetContext(), "SELECT clause contains unqualified star")
 
+	case *tree.FullTextMatchExpr:
+		expr, err = b.bindFullTextMatchExpr(exprImpl, depth, isRoot)
 	default:
 		err = moerr.NewNYIf(b.GetContext(), "expr '%+v'", exprImpl)
 	}
@@ -437,12 +439,12 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	var err error
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
-		nodeID, err = b.builder.buildSelect(subquery.Select, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
 	case *tree.Select:
-		nodeID, err = b.builder.buildSelect(subquery, subCtx, false)
+		nodeID, err = b.builder.bindSelect(subquery, subCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -964,6 +966,24 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
+
+	args := make([]*Expr, 2+len(astExpr.KeyParts))
+
+	mode := int64(astExpr.Mode)
+	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	args[1] = makePlan2Int64ConstExprWithType(mode)
+	for i, k := range astExpr.KeyParts {
+		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+		args[i+2] = c
+	}
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -1619,20 +1639,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			//expand the in list to col=a or col=b or ......
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if err != nil {
+						return nil, err
+					}
 					if newExpr == nil {
 						newExpr = tmpExpr
 					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, _ := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					if err != nil {
+						return nil, err
+					}
 					if newExpr == nil {
 						newExpr = tmpExpr
 					} else {
-						newExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			}

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -165,13 +166,6 @@ func (n *anode) FillBlockView(
 	view.Deletes = n.data.Deletes
 	return
 }
-
-// func (n *anode) FillColumnView(view *containers.Batch, idx int, mp *mpool.MPool) (err error) {
-// 	orig := n.data.GetVectorByName(n.table.schema.ColDefs[idx].Name)
-// 	view.AddVector(n.table.schema.ColDefs[idx].Name, orig.CloneWindow(0, orig.Length(), mp))
-// 	view.Deletes = n.data.Deletes
-// 	return
-// }
 
 func (n *anode) Compact() {
 	if n.data == nil {

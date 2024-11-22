@@ -17,6 +17,7 @@ package lockservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,51 +38,50 @@ func TestNewFixedSlicePool(t *testing.T) {
 func TestAcquire(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		assert.Equal(t, 1, fs.cap())
 		fs.close()
 
-		fs = fsp.acquire(3)
+		fs, err = fsp.acquire(3)
+		assert.NoError(t, err)
 		assert.Equal(t, 4, fs.cap())
 		fs.close()
 
-		fs = fsp.acquire(5)
+		fs, err = fsp.acquire(5)
+		assert.NoError(t, err)
 		assert.Equal(t, 8, fs.cap())
 		fs.close()
 
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-		fsp.acquire(1024)
+		fs, err = fsp.acquire(1024)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+		assert.Nil(t, fs)
 	})
 }
 
 func TestRelease(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
-		fsp.release(fs)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
+		err = fsp.release(fs)
+		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), fsp.releaseV.Load())
-
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-		fs = fsp.acquire(1)
+		fs, err = fsp.acquire(1)
+		assert.NoError(t, err)
 		fs.values = make([][]byte, 1024)
-		fsp.release(fs)
+		err = fsp.release(fs)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 	})
 }
 
 func TestFixedSliceAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(4)
+		fs, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs.close()
 
 		for i := byte(0); i < 4; i++ {
@@ -94,10 +94,12 @@ func TestFixedSliceAppend(t *testing.T) {
 func TestFixedSliceJoin(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs1 := fsp.acquire(4)
+		fs1, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs1.close()
 
-		fs2 := fsp.acquire(1)
+		fs2, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		defer fs2.close()
 		fs2.append([][]byte{{1}})
 
@@ -110,7 +112,8 @@ func TestFixedSliceJoin(t *testing.T) {
 func TestFixedSliceRefAndUnRef(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(1)
+		fs, err := fsp.acquire(1)
+		assert.NoError(t, err)
 		assert.Equal(t, int32(1), fs.atomic.ref.Load())
 		fs.ref()
 		assert.Equal(t, int32(2), fs.atomic.ref.Load())
@@ -137,7 +140,8 @@ func TestFixedSliceRefAndUnRef(t *testing.T) {
 func TestFixedSliceIter(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		fs := fsp.acquire(4)
+		fs, err := fsp.acquire(4)
+		assert.NoError(t, err)
 		defer fs.close()
 
 		for i := byte(0); i < 4; i++ {
@@ -163,13 +167,15 @@ func TestFixedSliceIter(t *testing.T) {
 func TestCowSliceAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}, {2}, {3}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}, {2}, {3}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		assert.Equal(t, 4, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
-		cs.append([][]byte{{4}})
+		err = cs.append([][]byte{{4}})
+		assert.NoError(t, err)
 		assert.Equal(t, 4, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
@@ -181,13 +187,15 @@ func TestCowSliceAppend(t *testing.T) {
 func TestCowSliceAppendWithCow(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		assert.Equal(t, 1, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(1), fsp.acquireV.Load())
 
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, cs.fs.Load().(*fixedSlice).cap())
 		assert.Equal(t, uint64(2), fsp.acquireV.Load())
 
@@ -199,12 +207,14 @@ func TestCowSliceAppendWithCow(t *testing.T) {
 func TestCowSliceRead(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 
 		s := cs.slice()
 		assert.Equal(t, [][]byte{{1}}, s.values[:s.len()])
 
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, uint64(0), fsp.releaseV.Load())
 
 		assert.Equal(t, [][]byte{{1}}, s.values[:s.len()])
@@ -219,7 +229,8 @@ func TestCowSliceRead(t *testing.T) {
 func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		var s *fixedSlice
@@ -230,7 +241,8 @@ func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 			}
 			n++
 		}
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, n)
 		assert.Equal(t, uint64(1), fsp.releaseV.Load())
 	})
@@ -239,7 +251,8 @@ func TestCowSliceAppendConcurrentWithSliceGetNew(t *testing.T) {
 func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		old := cs.fs.Load().(*fixedSlice)
@@ -251,7 +264,8 @@ func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 			}
 			n++
 		}
-		cs.append([][]byte{{2}})
+		err = cs.append([][]byte{{2}})
+		assert.NoError(t, err)
 		assert.Equal(t, 2, n)
 		assert.Equal(t, uint64(0), fsp.releaseV.Load())
 
@@ -263,13 +277,15 @@ func TestCowSliceAppendConcurrentWithSliceGetOld(t *testing.T) {
 func TestCowSliceSliceReadConcurrentWithAppend(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		fsp := newFixedSlicePool(16)
-		cs := newCowSlice(fsp, [][]byte{{1}})
+		cs, err := newCowSlice(fsp, [][]byte{{1}})
+		assert.NoError(t, err)
 		defer cs.close()
 
 		n := 0
 		cs.hack.slice = func() {
 			if n == 0 {
-				cs.append([][]byte{{2}})
+				err = cs.append([][]byte{{2}})
+				assert.NoError(t, err)
 			}
 			n++
 		}

@@ -16,8 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"io"
+	"iter"
+	"net/http"
 	"net/url"
 	gotrace "runtime/trace"
 	"strings"
@@ -70,7 +71,23 @@ func NewMinioSDK(
 				AccessKeyID:     args.KeyID,
 				SecretAccessKey: args.KeySecret,
 				SessionToken:    args.SessionToken,
+				SignerType:      credentials.SignatureV2,
+			},
+		})
+		credentialProviders = append(credentialProviders, &credentials.Static{
+			Value: credentials.Value{
+				AccessKeyID:     args.KeyID,
+				SecretAccessKey: args.KeySecret,
+				SessionToken:    args.SessionToken,
 				SignerType:      credentials.SignatureV4,
+			},
+		})
+		credentialProviders = append(credentialProviders, &credentials.Static{
+			Value: credentials.Value{
+				AccessKeyID:     args.KeyID,
+				SecretAccessKey: args.KeySecret,
+				SessionToken:    args.SessionToken,
+				SignerType:      credentials.SignatureDefault,
 			},
 		})
 	}
@@ -116,6 +133,13 @@ func NewMinioSDK(
 	// region
 	if args.Region != "" {
 		options.Region = args.Region
+	}
+
+	// bucket lookup style
+	if strings.Contains(args.Endpoint, "myqcloud") ||
+		strings.Contains(args.Endpoint, "aliyuncs") {
+		// 腾讯云，阿里云默认使用virtual host style
+		options.BucketLookup = minio.BucketLookupDNS
 	}
 
 	// transport
@@ -170,49 +194,48 @@ var _ ObjectStorage = new(MinioSDK)
 func (a *MinioSDK) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	var marker string
-
-loop1:
-	for {
-		result, err := a.listObjects(ctx, prefix, marker)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
 
-		for _, obj := range result.Contents {
-			more, err := fn(false, obj.Key, obj.Size)
+		var marker string
+
+	loop1:
+		for {
+			result, err := a.listObjects(ctx, prefix, marker)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range result.Contents {
+				if !yield(&DirEntry{
+					Name: obj.Key,
+					Size: obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range result.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  prefix.Prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !result.IsTruncated {
+				break
+			}
+			marker = result.NextMarker
 		}
 
-		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix.Prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !result.IsTruncated {
-			break
-		}
-		marker = result.Marker
 	}
-
-	return nil
 }
 
 func (a *MinioSDK) Stat(
@@ -222,6 +245,12 @@ func (a *MinioSDK) Stat(
 	size int64,
 	err error,
 ) {
+
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -317,6 +346,11 @@ func (a *MinioSDK) Read(
 		if err != nil {
 			return nil, err
 		}
+		// eager read to expose file not found error
+		_, err = r.Read(nil)
+		if err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 
@@ -326,6 +360,11 @@ func (a *MinioSDK) Read(
 		min,
 		max,
 	)
+	if err != nil {
+		return nil, err
+	}
+	// eager read to expose file not found error
+	_, err = r.Read(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -353,14 +392,8 @@ func (a *MinioSDK) Delete(
 		return a.deleteSingle(ctx, keys[0])
 	}
 
-	for i := 0; i < len(keys); i += 1000 {
-		end := i + 1000
-		if end > len(keys) {
-			end = len(keys)
-		}
-		if _, err := a.deleteObjects(ctx, keys[i:end]...); err != nil {
-			return err
-		}
+	if _, err := a.deleteObjects(ctx, keys...); err != nil {
+		return err
 	}
 
 	return nil
@@ -384,12 +417,12 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 list objects",
 		func() (minio.ListBucketResult, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			return a.core.ListObjects(
 				a.bucket,
 				prefix,
@@ -406,12 +439,12 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.StatObject(
 				ctx,
 				a.bucket,
@@ -433,11 +466,11 @@ func (a *MinioSDK) putObject(
 ) (minio.UploadInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
 	defer task.End()
+	// not retryable because Reader may be half consumed
+	//TODO set expire
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
-	// not retryable because Reader may be half consumed
-	//TODO set expire
 	return a.client.PutObject(
 		ctx,
 		a.bucket,
@@ -451,14 +484,17 @@ func (a *MinioSDK) putObject(
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			obj, err := DoWithRetry(
 				"s3 get object",
 				func() (obj *minio.Object, err error) {
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
 				},
 				maxRetryAttemps,
@@ -486,12 +522,12 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete object",
 		func() (any, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			if err := a.client.RemoveObject(ctx, a.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 				return nil, err
 			}
@@ -505,12 +541,12 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete objects",
 		func() (any, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			objsCh := make(chan minio.ObjectInfo)
 			errCh := a.client.RemoveObjects(ctx, a.bucket, objsCh, minio.RemoveObjectsOptions{})
 			for _, key := range keys {
@@ -518,6 +554,7 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 					Key: key,
 				}
 			}
+			close(objsCh)
 			for err := range errCh {
 				return nil, err.Err
 			}
@@ -532,11 +569,8 @@ func (a *MinioSDK) is404(err error) bool {
 	if err == nil {
 		return false
 	}
-	var resp minio.ErrorResponse
-	if !errors.As(err, &resp) {
-		return false
-	}
-	return resp.Code == "NoSuchKey"
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || resp.StatusCode == http.StatusNotFound
 }
 
 func minioValidateEndpoint(args *ObjectStorageArguments) (isSecure bool, err error) {

@@ -14,52 +14,61 @@
 
 package pSpool
 
-const (
-	noneLastPop int8 = -1
-)
-
 // receiver will be a unlimited queue for int8.
+// I ensure that the elements will never be full, so it is no need set a lock here.
 type receiver struct {
-	// todo: I ensure that this elements will never be full, so there is no need set a lock here.
-	lastPop    int8
+	lastPop    uint32
+	hasLastPop bool
+
 	head, tail int
 	andBase    int
-	elements   []int8
+	elements   []uint32
 }
 
-func newReceivers(count int, cp int32) []receiver {
-	// we should make sure cap will be the power of 2.
-	if cp&(cp-1) != 0 {
-		cp |= cp >> 1
-		cp |= cp >> 2
-		cp |= cp >> 4
-		cp |= cp >> 8
-		cp |= cp >> 16
-		cp++
+func nextPowerOfTwo(k uint32) uint32 {
+	if k&(k-1) == 0 {
+		return k
 	}
+	k--
+	k |= k >> 1
+	k |= k >> 2
+	k |= k >> 4
+	k |= k >> 8
+	k |= k >> 16
+	return k + 1
+}
+
+func newReceivers(count uint32, cp uint32) []receiver {
+	// we should make sure cap will be the power of 2.
+	cp = nextPowerOfTwo(cp)
 
 	rs := make([]receiver, count)
 	ab := int(cp - 1)
 	for i := range rs {
-		rs[i].lastPop = noneLastPop
-		rs[i].elements = make([]int8, cp)
+		rs[i].hasLastPop = false
+		rs[i].elements = make([]uint32, cp)
 		rs[i].head, rs[i].tail = 0, 0
 		rs[i].andBase = ab
 	}
 	return rs
 }
 
-func (r *receiver) getLastPop() int8 {
-	return r.lastPop
+func (r *receiver) getLastPop() (uint32, bool) {
+	return r.lastPop, r.hasLastPop
 }
 
-func (r *receiver) popNextIndex() int8 {
+func (r *receiver) flagLastPopRelease() {
+	r.hasLastPop = false
+}
+
+func (r *receiver) popNextIndex() uint32 {
 	r.lastPop = r.elements[r.head]
+	r.hasLastPop = true
 	r.head = (r.head + 1) & r.andBase
 	return r.lastPop
 }
 
-func (r *receiver) pushNextIndex(index int8) {
+func (r *receiver) pushNextIndex(index uint32) {
 	r.elements[r.tail] = index
 	r.tail = (r.tail + 1) & r.andBase
 }

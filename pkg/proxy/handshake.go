@@ -19,7 +19,9 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
@@ -79,9 +81,10 @@ func (c *clientConn) upgradeToTLS() error {
 	// TLS handshake packet from client might have been read into the buffer, use a wrapped conn to
 	// avoid losing handshake packets.
 	tlsConn := tls.Server(c.conn.(goetty.BufferedIOSession).BufferedConn(), c.tlsConfig)
-	ctx, cancel := context.WithTimeout(context.Background(), c.tlsConnectTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), c.tlsConnectTimeout, moerr.CauseUpgradeToTLS)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		err = moerr.AttachCause(ctx, err)
 		return moerr.NewInternalErrorf(ctx, "TSL handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)

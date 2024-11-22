@@ -17,13 +17,11 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,7 +46,7 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
-	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), ctr.localRegsCnt)
+	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:
@@ -169,11 +167,12 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(dispatch.RemoteRegs)
 	for cnt > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
+		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), waitNotifyTimeout, moerr.CauseWaitRemoteRegsReady)
 		select {
 		case <-timeoutCtx.Done():
+			err := moerr.AttachCause(timeoutCtx, moerr.NewInternalErrorNoCtx("wait notify message timeout"))
 			timeoutCancel()
-			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+			return false, err
 
 		case <-proc.Ctx.Done():
 			timeoutCancel()

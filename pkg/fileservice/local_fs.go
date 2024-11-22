@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
+	"iter"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -111,15 +113,25 @@ func NewLocalFS(
 	return fs, nil
 }
 
-func (l *LocalFS) AllocateCacheData(size int) fscache.Data {
+func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(
-			size,
-			// evict at least 1/100 capacity to reduce number of evictions
-			int(l.memCache.cache.Capacity()/100),
-		)
+		l.memCache.cache.EnsureNBytes(ctx, size)
 	}
-	return DefaultCacheDataAllocator().AllocateCacheData(size)
+	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
+}
+
+func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(ctx, size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(ctx, len(data))
+	}
+	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -299,6 +311,13 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Record diskIO IO and netwokIO(un memory IO) time Consumption
+	stats := statistic.StatsInfoFromContext(ctx)
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -313,8 +332,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
 
 	for _, cache := range vector.Caches {
 
@@ -360,13 +377,6 @@ read_memory_cache:
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
-
-	// Record diskIO and netwokIO(un memory IO) resource
-	ioStart := time.Now()
-	defer func() {
-		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
-	}()
-
 read_disk_cache:
 	if l.diskCache != nil {
 
@@ -533,7 +543,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(cr, nil, l)
+				cacheData, err = entry.ToCacheData(ctx, cr, nil, l)
 				if err != nil {
 					return err
 				}
@@ -680,7 +690,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			closeFunc: func() error {
 				defer file.Close()
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), l)
+				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
 				if err != nil {
 					return err
 				}
@@ -696,69 +706,73 @@ func (l *LocalFS) handleReadCloserForRead(
 	return nil
 }
 
-func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
-	defer func() {
-		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
-		span.End()
-	}()
-
-	_ = ctx
-
-	path, err := ParsePathAtService(dirPath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-
-	f, err := os.Open(nativePath)
-	if os.IsNotExist(err) {
-		err = nil
-		return
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	entries, err := f.ReadDir(-1)
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
+func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
-		info, err := entry.Info()
+
+		ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+		defer func() {
+			span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
+			span.End()
+		}()
+
+		_ = ctx
+
+		path, err := ParsePathAtService(dirPath, l.name)
 		if err != nil {
-			return nil, err
+			yield(nil, err)
+			return
 		}
-		fileSize := info.Size()
-		nBlock := ceilingDiv(fileSize, _BlockSize)
-		contentSize := fileSize - _ChecksumSize*nBlock
+		nativePath := l.toNativeFilePath(path.File)
 
-		isDir, err := entryIsDir(nativePath, name, info)
+		f, err := os.Open(nativePath)
+		if os.IsNotExist(err) {
+			return
+		}
 		if err != nil {
-			return nil, err
+			yield(nil, err)
+			return
 		}
-		ret = append(ret, DirEntry{
-			Name:  name,
-			IsDir: isDir,
-			Size:  contentSize,
-		})
+		defer f.Close()
+
+		entries, err := f.ReadDir(-1)
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			fileSize := info.Size()
+			nBlock := ceilingDiv(fileSize, _BlockSize)
+			contentSize := fileSize - _ChecksumSize*nBlock
+
+			isDir, err := entryIsDir(nativePath, name, info)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if !yield(&DirEntry{
+				Name:  name,
+				IsDir: isDir,
+				Size:  contentSize,
+			}, nil) {
+				break
+			}
+		}
+
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
 	}
-
-	sort.Slice(ret, func(i, j int) bool {
-		return ret[i].Name < ret[j].Name
-	})
-
-	if err != nil {
-		return ret, err
-	}
-
-	return
 }
 
 func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
@@ -1052,21 +1066,21 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 
 var _ CachingFileService = new(LocalFS)
 
-func (l *LocalFS) Close() {
+func (l *LocalFS) Close(ctx context.Context) {
 	if l.memCache != nil {
-		l.memCache.Close()
+		l.memCache.Close(ctx)
 	}
 	if l.diskCache != nil {
-		l.diskCache.Close()
+		l.diskCache.Close(ctx)
 	}
 }
 
-func (l *LocalFS) FlushCache() {
+func (l *LocalFS) FlushCache(ctx context.Context) {
 	if l.memCache != nil {
-		l.memCache.Flush()
+		l.memCache.Flush(ctx)
 	}
 	if l.diskCache != nil {
-		l.diskCache.Flush()
+		l.diskCache.Flush(ctx)
 	}
 }
 

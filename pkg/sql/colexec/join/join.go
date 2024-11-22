@@ -118,16 +118,16 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				ctr.inbat = bat
-				ctr.lastrow = 0
+				ctr.lastRow = 0
 			}
 
-			startrow := innerJoin.ctr.lastrow
+			startrow := innerJoin.ctr.lastRow
 			if err := ctr.probe(innerJoin, proc, &probeResult); err != nil {
 				return result, err
 			}
-			if innerJoin.ctr.lastrow == 0 {
+			if innerJoin.ctr.lastRow == 0 {
 				innerJoin.ctr.inbat = nil
-			} else if innerJoin.ctr.lastrow == startrow {
+			} else if innerJoin.ctr.lastRow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
 
@@ -195,18 +195,17 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(mpbat[0], proc.Mp())
 	}
 
-	mSels := ctr.mp.Sels()
 	count := ap.ctr.inbat.RowCount()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
 	itr := ctr.itr
 	rowCount := 0
-	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
+	for i := ap.ctr.lastRow; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
 			result.Batch = ctr.rbat
-			ap.ctr.lastrow = i
+			ap.ctr.lastRow = i
 			return nil
 		}
 		n := count - i
@@ -221,7 +220,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 			idx := vals[k] - 1
 
 			if ap.Cond == nil {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionOne(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
@@ -236,7 +235,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[j].UnionMulti(ap.ctr.inbat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
@@ -254,13 +253,13 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 					rowCount += len(sels)
 				}
 			} else {
-				if ap.HashOnPK {
+				if ap.HashOnPK || ctr.mp.HashOnUnique() {
 					if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(idx)); err != nil {
 						return err
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
+					sels := ctr.mp.GetSels(idx)
 					for _, sel := range sels {
 						if err := ctr.evalApCondForOneSel(ap.ctr.inbat, ctr.rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
 							return err
@@ -274,7 +273,7 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, result *vm.Cal
 
 	ctr.rbat.AddRowCount(rowCount)
 	result.Batch = ctr.rbat
-	ap.ctr.lastrow = 0
+	ap.ctr.lastRow = 0
 	return nil
 }
 

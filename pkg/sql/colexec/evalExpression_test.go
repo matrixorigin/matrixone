@@ -425,6 +425,13 @@ func TestFunctionFold(t *testing.T) {
 	t.Skip("todo: implement this test")
 }
 
+func TestModifyResultOwnerToOuter(t *testing.T) {
+	// we cannot modify the column expression's memory owner.
+	// because its owner is never own to executor.
+	columnExecutor := &ColumnExpressionExecutor{}
+	require.False(t, modifyResultOwnerToOuter(columnExecutor))
+}
+
 // some util code copied from package `plan`.
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{

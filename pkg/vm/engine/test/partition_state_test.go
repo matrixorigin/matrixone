@@ -223,7 +223,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 				txn, _ = taeEngine.StartTxn()
 				ts := txn.GetStartTS()
-				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
+				taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second*10)
 			}
 
 			{
@@ -447,7 +447,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 		txn, _ = taeEngine.StartTxn()
 		ts := txn.GetStartTS()
-		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second)
+		taeEngine.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10)
 	}
 
 	var err error

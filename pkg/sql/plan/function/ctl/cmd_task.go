@@ -70,11 +70,11 @@ func handleTask(
 			Data:   "OK",
 		}, nil
 	case getUser:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseHandleTask)
 		state, err := proc.GetHaKeeper().GetClusterState(ctx)
 		cancel()
 		if err != nil {
-			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
+			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, moerr.AttachCause(ctx, err)
 		}
 		user := state.GetTaskTableUser()
 		return Result{Method: TaskMethod, Data: user}, nil
@@ -139,10 +139,11 @@ func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (re
 		func(cn metadata.CNService) bool {
 			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseTransferTaskToCN)
 			defer cancel()
 
 			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)
+			err = moerr.AttachCause(ctx, err)
 			return false
 		})
 	return

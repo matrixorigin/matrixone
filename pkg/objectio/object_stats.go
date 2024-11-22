@@ -315,10 +315,6 @@ func (o *ObjectStatsSlice) Get(i int) *ObjectStats {
 	return &stats
 }
 
-func (o *ObjectStatsSlice) GetBytes(i int) []byte {
-	return (*o)[i*ObjectStatsLen : (i+1)*ObjectStatsLen]
-}
-
 func (o *ObjectStatsSlice) Len() int {
 	return len(*o) / ObjectStatsLen
 }
@@ -329,14 +325,6 @@ func (o *ObjectStatsSlice) Append(stats []byte) {
 
 func (o *ObjectStatsSlice) Size() int {
 	return len(*o)
-}
-
-func (o *ObjectStatsSlice) SetBytes(stats []byte) {
-	*o = stats
-}
-
-func (o *ObjectStatsSlice) GetAllBytes() []byte {
-	return (*o)[:]
 }
 
 func (o *ObjectStatsSlice) Slice(i, j int) []byte {

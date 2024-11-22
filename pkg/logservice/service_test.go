@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -1392,6 +1393,114 @@ func TestServiceCheckHealth(t *testing.T) {
 		}
 		resp := s.handleCheckHealth(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestServiceReadLsn(t *testing.T) {
+	orig := defaultLogDBMaxLogFileSize
+	defaultLogDBMaxLogFileSize = 500
+	defaultArchiverEnabled = true
+	defer func() {
+		defaultArchiverEnabled = false
+		defaultLogDBMaxLogFileSize = orig
+	}()
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			req := pb.Request{
+				Method: pb.APPEND,
+				LogRequest: pb.LogRequest{
+					ShardID: 1,
+				},
+			}
+			resp := s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(0), resp.ErrorCode)
+		}
+		searchTime := time.Now()
+		for i := 0; i < 50; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(100, data)
+			req := pb.Request{
+				Method: pb.APPEND,
+				LogRequest: pb.LogRequest{
+					ShardID: 1,
+				},
+			}
+			resp := s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+
+		req := pb.Request{
+			Method: pb.READ_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TS:      time.Now(),
+			},
+		}
+		resp, _ := s.handleReadLsn(ctx, req)
+		assert.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		resp = s.handleGetLatestLsn(ctx, pb.Request{
+			Method: pb.GET_LATEST_LSN,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		})
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		lsn := resp.LogResponse.Lsn
+		t.Logf("lastest lsn is: %d", lsn)
+
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            lsn - 1,
+		}
+		_, err := s.store.nh.SyncRequestSnapshot(ctx, 1, opts)
+		assert.NoError(t, err)
+
+		timeout := time.NewTimer(time.Second * 5)
+		defer timeout.Stop()
+		tick := time.NewTicker(time.Millisecond * 10)
+		defer tick.Stop()
+		var readLsn uint64
+	FOR:
+		for {
+			select {
+			case <-timeout.C:
+				panic("the lsn is not valid")
+
+			case <-tick.C:
+				req := pb.Request{
+					Method: pb.READ_LSN,
+					LogRequest: pb.LogRequest{
+						ShardID: 1,
+						TS:      searchTime,
+					},
+				}
+				resp, _ := s.handleReadLsn(ctx, req)
+				if resp.ErrorCode == 0 && resp.LogResponse.Lsn > 0 {
+					t.Logf("lsn is %d", resp.LogResponse.Lsn)
+					readLsn = resp.LogResponse.Lsn
+					break FOR
+				}
+			}
+		}
+
+		req = pb.Request{
+			Method: pb.READ,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     readLsn - 10,
+				MaxSize: math.MaxUint64,
+			},
+		}
+		resp, logRec := s.handleRead(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, readLsn-10, resp.LogResponse.LastLsn)
+		require.NotEqual(t, 0, len(logRec.Records))
 	}
 	runServiceTest(t, false, true, fn)
 }

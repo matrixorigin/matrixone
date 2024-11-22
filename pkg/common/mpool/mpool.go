@@ -545,8 +545,8 @@ func sizeToIdx(size int) int {
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
-		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
-		return nil, moerr.NewInternalErrorNoCtxf("Invalid alloc size %d", sz)
+		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
+		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
 
 	if sz == 0 {
@@ -646,7 +646,8 @@ func (mp *MPool) Free(bs []byte) {
 		if pHdr.offHeap {
 			allocator().Deallocate(
 				unsafe.Slice((*byte)(hdr), 1),
-				malloc.NoHints,
+				// issue: https://github.com/matrixorigin/matrixone/issues/19758
+				malloc.IgnoreMunmapError,
 			)
 		}
 	}

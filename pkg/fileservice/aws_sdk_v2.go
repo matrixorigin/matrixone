@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -34,11 +35,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 type AwsSDKv2 struct {
@@ -59,7 +61,7 @@ func NewAwsSDKv2(
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseNewAwsSDKv2)
 	defer cancel()
 
 	// options for loading configs
@@ -86,14 +88,14 @@ func NewAwsSDKv2(
 
 	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 
 	// validate
 	if credentialProvider != nil {
 		_, err := credentialProvider.Retrieve(ctx)
 		if err != nil {
-			return nil, err
+			return nil, moerr.AttachCause(ctx, err)
 		}
 	}
 
@@ -105,16 +107,21 @@ func NewAwsSDKv2(
 			),
 		)
 	}
+
+	// http client
+	httpClient := newHTTPClient(args)
+	loadConfigOptions = append(loadConfigOptions, config.WithHTTPClient(httpClient))
+
 	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 	if err != nil {
-		return nil, err
+		return nil, moerr.AttachCause(ctx, err)
 	}
 
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
 			opts.Retryer = newAWSRetryer()
-			opts.HTTPClient = newHTTPClient(args)
+			opts.HTTPClient = httpClient
 		},
 	}
 
@@ -129,32 +136,15 @@ func NewAwsSDKv2(
 
 	// endpoint for s3 client
 	if args.Endpoint != "" {
+		s3Options = append(s3Options, func(opts *s3.Options) {
+			opts.BaseEndpoint = aws.String(args.Endpoint)
+		})
 		if args.IsMinio {
 			// special handling for MinIO
 			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFunc(
-						func(
-							region string,
-							_ s3.EndpointResolverOptions,
-						) (
-							ep aws.Endpoint,
-							err error,
-						) {
-							ep.URL = args.Endpoint
-							ep.Source = aws.EndpointSourceCustom
-							ep.HostnameImmutable = true
-							ep.SigningRegion = region
-							return
-						},
-					),
-				),
-			)
-		} else {
-			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFromURL(args.Endpoint),
-				),
+				func(opts *s3.Options) {
+					opts.EndpointOptions.ResolvedRegion = args.Region
+				},
 			)
 		}
 	}
@@ -185,6 +175,7 @@ func NewAwsSDKv2(
 			Bucket: ptrTo(args.Bucket),
 		})
 		if err != nil {
+			err = moerr.AttachCause(ctx, err)
 			return nil, moerr.NewInternalErrorNoCtxf("bad s3 config: %v", err)
 		}
 	}
@@ -203,60 +194,59 @@ var _ ObjectStorage = new(AwsSDKv2)
 func (a *AwsSDKv2) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	var marker *string
-
-loop1:
-	for {
-		output, err := a.listObjects(
-			ctx,
-			&s3.ListObjectsInput{
-				Bucket:    ptrTo(a.bucket),
-				Delimiter: ptrTo("/"),
-				Prefix:    ptrTo(prefix),
-				Marker:    marker,
-				MaxKeys:   a.listMaxKeys,
-			},
-		)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		select {
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+			return
+		default:
 		}
 
-		for _, obj := range output.Contents {
-			more, err := fn(false, *obj.Key, obj.Size)
+		var marker *string
+
+	loop1:
+		for {
+			output, err := a.listObjects(
+				ctx,
+				&s3.ListObjectsInput{
+					Bucket:    ptrTo(a.bucket),
+					Delimiter: ptrTo("/"),
+					Prefix:    zeroToNil(prefix),
+					Marker:    marker,
+					MaxKeys:   zeroToNil(a.listMaxKeys),
+				},
+			)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range output.Contents {
+				if !yield(&DirEntry{
+					Name: *obj.Key,
+					Size: *obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range output.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  *prefix.Prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !*output.IsTruncated {
+				break
+			}
+			marker = output.NextMarker
 		}
 
-		for _, prefix := range output.CommonPrefixes {
-			more, err := fn(true, *prefix.Prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !output.IsTruncated {
-			break
-		}
-		marker = output.NextMarker
 	}
-
-	return nil
 }
 
 func (a *AwsSDKv2) Stat(
@@ -292,7 +282,7 @@ func (a *AwsSDKv2) Stat(
 		return
 	}
 
-	size = output.ContentLength
+	size = *output.ContentLength
 
 	return
 }
@@ -339,7 +329,7 @@ func (a *AwsSDKv2) Write(
 			Bucket:        ptrTo(a.bucket),
 			Key:           ptrTo(key),
 			Body:          r,
-			ContentLength: size,
+			ContentLength: zeroToNil(size),
 			Expires:       expire,
 		},
 	)
@@ -458,7 +448,7 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		Delete: &types.Delete{
 			Objects: objs,
 			// In quiet mode the response includes only keys where the delete action encountered an error.
-			Quiet: true,
+			Quiet: ptrTo(true),
 		},
 	})
 	// delete api failed
@@ -484,12 +474,12 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.ListObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
@@ -500,12 +490,12 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.HeadObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
@@ -526,9 +516,9 @@ func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, opt
 func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)
@@ -545,6 +535,9 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 				func() (*s3.GetObjectOutput, error) {
 					LogEvent(ctx, str_awssdkv2_get_object_begin)
 					defer LogEvent(ctx, str_awssdkv2_get_object_end)
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
@@ -567,12 +560,12 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.DeleteObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
@@ -583,12 +576,12 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			return a.client.DeleteObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,

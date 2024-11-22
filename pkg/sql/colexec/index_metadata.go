@@ -261,12 +261,12 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, index := range def.Indexes {
-				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch)
 
 				indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
-					return nil, err
+					return nil, moerr.AttachCause(ctx, err)
 				}
 
 				for i, part := range index.Parts {
@@ -359,11 +359,11 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch2)
 			defer cancelFunc()
 			indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			if err != nil {
-				return nil, err
+				return nil, moerr.AttachCause(ctx, err)
 			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				for i, colName := range def.Pkey.Names {

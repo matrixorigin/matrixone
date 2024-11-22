@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	gotrace "runtime/trace"
 	"strconv"
@@ -123,49 +124,48 @@ var _ ObjectStorage = new(AliyunSDK)
 func (a *AliyunSDK) List(
 	ctx context.Context,
 	prefix string,
-	fn func(bool, string, int64) (bool, error),
-) error {
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	var cont string
-
-loop1:
-	for {
-		result, err := a.listObjects(ctx, prefix, cont)
-		if err != nil {
-			return err
+) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
 		}
 
-		for _, obj := range result.Objects {
-			more, err := fn(false, obj.Key, obj.Size)
+		var cont string
+
+	loop1:
+		for {
+			result, err := a.listObjects(ctx, prefix, cont)
 			if err != nil {
-				return err
+				yield(nil, err)
+				return
 			}
-			if !more {
-				break loop1
+
+			for _, obj := range result.Objects {
+				if !yield(&DirEntry{
+					Name: obj.Key,
+					Size: obj.Size,
+				}, nil) {
+					break loop1
+				}
 			}
+
+			for _, prefix := range result.CommonPrefixes {
+				if !yield(&DirEntry{
+					IsDir: true,
+					Name:  prefix,
+				}, nil) {
+					break loop1
+				}
+			}
+
+			if !result.IsTruncated {
+				break
+			}
+			cont = result.NextContinuationToken
 		}
 
-		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix, 0)
-			if err != nil {
-				return err
-			}
-			if !more {
-				break loop1
-			}
-		}
-
-		if !result.IsTruncated {
-			break
-		}
-		cont = result.NextContinuationToken
 	}
-
-	return nil
 }
 
 func (a *AliyunSDK) Stat(
@@ -348,9 +348,6 @@ func (a *AliyunSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string) (oss.ListObjectsResultV2, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.listObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.List.Add(1)
-	}, a.perfCounterSets...)
 	opts := []oss.Option{
 		oss.WithContext(ctx),
 		oss.Delimiter("/"),
@@ -367,6 +364,9 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 	return DoWithRetry(
 		"s3 list objects",
 		func() (oss.ListObjectsResultV2, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.List.Add(1)
+			}, a.perfCounterSets...)
 			return a.bucket.ListObjectsV2(opts...)
 		},
 		maxRetryAttemps,
@@ -377,12 +377,12 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Head.Add(1)
-	}, a.perfCounterSets...)
 	return DoWithRetry(
 		"s3 head object",
 		func() (http.Header, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Head.Add(1)
+			}, a.perfCounterSets...)
 			return a.bucket.GetObjectMeta(
 				key,
 				oss.WithContext(ctx),
@@ -403,9 +403,6 @@ func (a *AliyunSDK) putObject(
 	defer catch(&err)
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
 	opts := []oss.Option{
 		oss.WithContext(ctx),
@@ -413,6 +410,9 @@ func (a *AliyunSDK) putObject(
 	if expire != nil {
 		opts = append(opts, oss.Expires(*expire))
 	}
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Put.Add(1)
+	}, a.perfCounterSets...)
 	return a.bucket.PutObject(
 		key,
 		r,
@@ -423,9 +423,9 @@ func (a *AliyunSDK) putObject(
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.getObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(1)
-	}, a.perfCounterSets...)
+	if min == nil {
+		min = ptrTo[int64](0)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
 			opts := []oss.Option{
@@ -442,6 +442,9 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 			r, err := DoWithRetry(
 				"s3 get object",
 				func() (io.ReadCloser, error) {
+					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+						counter.FileService.S3.Get.Add(1)
+					}, a.perfCounterSets...)
 					return a.bucket.GetObject(
 						key,
 						opts...,
@@ -467,12 +470,12 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Delete.Add(1)
-	}, a.perfCounterSets...)
-	return DoWithRetry[bool](
+	return DoWithRetry(
 		"s3 delete object",
 		func() (bool, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Delete.Add(1)
+			}, a.perfCounterSets...)
 			if err := a.bucket.DeleteObject(
 				key,
 				oss.WithContext(ctx),
@@ -489,12 +492,12 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.DeleteMulti.Add(1)
-	}, a.perfCounterSets...)
-	return DoWithRetry[bool](
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (bool, error) {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.DeleteMulti.Add(1)
+			}, a.perfCounterSets...)
 			_, err := a.bucket.DeleteObjects(
 				keys,
 				oss.WithContext(ctx),
@@ -663,33 +666,44 @@ type ossCredentialProvider struct {
 var _ oss.CredentialsProvider = new(ossCredentialProvider)
 
 func (o *ossCredentialProvider) GetCredentials() oss.Credentials {
-	return o
-}
-
-var _ oss.Credentials = new(ossCredentialProvider)
-
-func (o *ossCredentialProvider) GetAccessKeyID() string {
-	ret, err := o.upstream.GetAccessKeyId()
+	creds, err := o.upstream.GetCredential()
 	if err != nil {
 		throw(err)
 	}
-	return *ret
+	return toOSSCredential(creds)
 }
 
-func (o *ossCredentialProvider) GetAccessKeySecret() string {
-	ret, err := o.upstream.GetAccessKeySecret()
-	if err != nil {
-		throw(err)
+func toOSSCredential(creds *credentials.CredentialModel) oss.Credentials {
+	return &ossCredential{
+		upstream: creds,
 	}
-	return *ret
 }
 
-func (o *ossCredentialProvider) GetSecurityToken() string {
-	ret, err := o.upstream.GetSecurityToken()
-	if err != nil {
-		throw(err)
+type ossCredential struct {
+	upstream *credentials.CredentialModel
+}
+
+var _ oss.Credentials = new(ossCredential)
+
+func (o *ossCredential) GetAccessKeyID() string {
+	if p := o.upstream.AccessKeyId; p != nil {
+		return *p
 	}
-	return *ret
+	return ""
+}
+
+func (o *ossCredential) GetAccessKeySecret() string {
+	if p := o.upstream.AccessKeySecret; p != nil {
+		return *p
+	}
+	return ""
+}
+
+func (o *ossCredential) GetSecurityToken() string {
+	if p := o.upstream.SecurityToken; p != nil {
+		return *p
+	}
+	return ""
 }
 
 type aliyunAssumeRoleCredentialsProvider struct {

@@ -19,13 +19,12 @@ import (
 
 	"go.uber.org/zap"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -71,6 +70,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 			retryErr = err
 		}
+
+		if qry.TableDef.Indexes != nil {
+			for _, indexdef := range qry.TableDef.Indexes {
+				if indexdef.TableExist {
+					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		if retryErr != nil {
 			return retryErr
 		}
@@ -192,7 +202,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, multiTableIndex := range multiTableIndexes {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
@@ -251,6 +261,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) (err error) {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
 	qry := s.Plan.GetDdl().GetAlterTable()
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		err = s.AlterTableCopy(c)
@@ -275,8 +291,13 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {
-	qry := s.Plan.GetDdl().GetRenameTable()
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
 
+	qry := s.Plan.GetDdl().GetRenameTable()
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{

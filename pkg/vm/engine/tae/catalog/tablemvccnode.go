@@ -31,8 +31,10 @@ func NewEmptyTableMVCCNode() *TableMVCCNode {
 }
 
 func (e *TableMVCCNode) CloneAll() *TableMVCCNode {
+	schema := e.Schema.Clone()
 	return &TableMVCCNode{
-		Schema: e.Schema.Clone(),
+		Schema:          schema,
+		TombstoneSchema: GetTombstoneSchema(schema),
 	}
 }
 
@@ -40,12 +42,10 @@ func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 	return e.CloneAll()
 }
 func (e *TableMVCCNode) GetTombstoneSchema() *Schema {
-	if e.TombstoneSchema != nil {
-		return e.TombstoneSchema
-	} else {
-		e.TombstoneSchema = GetTombstoneSchema(e.Schema)
-		return e.TombstoneSchema
+	if e.TombstoneSchema == nil {
+		panic(fmt.Sprintf("logic error, table %v, has pk %v", e.Schema.Name, e.Schema.HasPKOrFakePK()))
 	}
+	return e.TombstoneSchema
 }
 
 func (e *TableMVCCNode) String() string {
@@ -55,6 +55,7 @@ func (e *TableMVCCNode) String() string {
 // for create drop in one txn
 func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 	e.Schema = un.Schema
+	e.TombstoneSchema = GetTombstoneSchema(un.Schema)
 }
 
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
@@ -74,6 +75,7 @@ func (e *TableMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	if n, err = e.Schema.ReadFromWithVersion(r, ver); err != nil {
 		return
 	}
+	e.TombstoneSchema = GetTombstoneSchema(e.Schema)
 	return
 }
 

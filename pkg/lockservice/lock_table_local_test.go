@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -367,14 +368,14 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					}
 					var wg sync.WaitGroup
 					for _, txnID := range c.existsWaiters[i] {
-						w := acquireWaiter(pb.WaitTxn{TxnID: []byte(txnID)})
+						w := acquireWaiter(pb.WaitTxn{TxnID: []byte(txnID)}, "", nil)
 						w.setStatus(blocking)
 						lock.waiters.put(w)
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
 							wg.Done()
 							w.wait(ctx, getLogger(""))
-							w.close()
+							w.close("", nil)
 						}))
 					}
 					wg.Wait()
@@ -906,6 +907,34 @@ func Test15608(t *testing.T) {
 			checkLock(t, lt, rows[0], [][]byte{txn3}, nil, nil)
 			require.NoError(t, s1.Unlock(ctx, txn3, timestamp.Timestamp{}))
 		})
+}
+
+func TestLocalNeedUpgrade(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, s []*service) {
+			table := uint64(1)
+			s1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+			rows := newTestRows(1, 2, 3, 4, 5)
+			txnID := newTestTxnID(1)
+			_, err := s1.Lock(ctx, table, rows, txnID, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			assert.Error(t, err)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+			c.MaxFixedSliceSize = 4
+		},
+	)
 }
 
 type target struct {

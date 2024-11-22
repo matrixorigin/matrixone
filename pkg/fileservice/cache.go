@@ -22,6 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,7 +32,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"go.uber.org/zap"
 )
 
 type CacheConfig struct {
@@ -128,7 +130,7 @@ type IOVectorCache interface {
 		async bool,
 	) error
 
-	Flush()
+	Flush(ctx context.Context)
 
 	//TODO file contents may change in TAE that violates the immutibility assumption
 	// before they fix this, we still need this sh**.
@@ -139,9 +141,9 @@ type IOVectorCache interface {
 
 	// Evict triggers eviction
 	// if done is not nil, when eviction finish, target size will be send to the done chan
-	Evict(done chan int64)
+	Evict(ctx context.Context, done chan int64)
 
-	Close()
+	Close(ctx context.Context)
 }
 
 var slowCacheReadThreshold = time.Second * 0
@@ -153,7 +155,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 
 	if slowCacheReadThreshold > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
+		ctx, cancel = context.WithTimeoutCause(ctx, slowCacheReadThreshold, moerr.CauseReadCache)
 		defer cancel()
 	}
 
@@ -161,6 +163,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 	if err != nil {
 
 		if errors.Is(err, context.DeadlineExceeded) {
+			err = moerr.AttachCause(ctx, err)
 			logutil.Warn("cache read exceed deadline",
 				zap.Any("err", err),
 				zap.Any("cache type", fmt.Sprintf("%T", cache)),
@@ -185,15 +188,20 @@ var (
 	allDiskCaches   sync.Map // *DiskCache -> name
 )
 
-func EvictMemoryCaches() map[string]int64 {
+func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 	ret := make(map[string]int64)
 	ch := make(chan int64, 1)
 
 	allMemoryCaches.Range(func(k, v any) bool {
 		cache := k.(*MemCache)
 		name := v.(string)
-		cache.Evict(ch)
-		ret[name] = <-ch
+		cache.Evict(ctx, ch)
+		target := <-ch
+		ret[name] = target
+		logutil.Info("memory cache forced evicted",
+			zap.Any("name", name),
+			zap.Any("target", target),
+		)
 
 		return true
 	})
@@ -201,15 +209,20 @@ func EvictMemoryCaches() map[string]int64 {
 	return ret
 }
 
-func EvictDiskCaches() map[string]int64 {
+func EvictDiskCaches(ctx context.Context) map[string]int64 {
 	ret := make(map[string]int64)
 	ch := make(chan int64, 1)
 
 	allDiskCaches.Range(func(k, v any) bool {
 		cache := k.(*DiskCache)
 		name := v.(string)
-		cache.Evict(ch)
-		ret[name] = <-ch
+		cache.Evict(ctx, ch)
+		target := <-ch
+		ret[name] = target
+		logutil.Info("disk cache forced evicted",
+			zap.Any("name", name),
+			zap.Any("target", target),
+		)
 
 		return true
 	})

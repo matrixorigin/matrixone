@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"go.uber.org/zap"
 )
 
 const (
@@ -51,11 +52,11 @@ const (
 // EntryOperation contains the operations of the entry in the store.
 // Locked is required before the operations are called.
 type EntryOperation interface {
-	// doPush is the operator to push the connection entry into the store.
+	// push is the operator to push the connection entry into the store.
 	push(store *cacheStore, conn *serverConnAuth, postPush func())
-	// doPop is the operator to pop the connection entry from the store.
+	// pop is the operator to pop the connection entry from the store.
 	pop(store *cacheStore, postPop func()) *serverConnAuth
-	// doPeek is the operator to peek the connection entry in the store.
+	// peek is the operator to peek the connection entry in the store.
 	peek(store *cacheStore) *serverConnAuth
 }
 
@@ -289,7 +290,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	req.ResetSessionRequest = &query.ResetSessionRequest{
 		ConnID: sc.ConnID(),
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseResetSession)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
@@ -298,6 +299,7 @@ func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		err = moerr.AttachCause(ctx, err)
 		c.logger.Error("failed to send clear session request",
 			zap.Uint32("conn ID", sc.ConnID()), zap.Error(err))
 		return nil, err
@@ -381,14 +383,20 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 				s:       fmt.Sprintf(setConnectionIDSQL, connID),
 			}, nil)
 			if err != nil || !ok {
+				c.logger.Error("failed to set conn id",
+					zap.Uint32("conn ID", sc.ConnID()),
+					zap.Error(err),
+				)
 				// Failed to set connection ID, try to send quit command to the server.
 				if err := sc.Quit(); err != nil {
 					c.logger.Error("failed to send quit cmd to server",
 						zap.Uint32("conn ID", sc.ConnID()),
 						zap.Error(err),
 					)
+					// If send quit failed, pop the connection from the store.
+					connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
 				} else {
-					// If send quit successfully, pop the connection from the store.
+					// If send quit successfully, pop the connection from the store either.
 					connOperator[c.opStrategy].pop(c.mu.cache[key], postPop)
 				}
 				continue

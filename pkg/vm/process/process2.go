@@ -19,8 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hayageek/threadsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -78,12 +80,13 @@ func NewTopProcess(
 		UdfService:  udfService,
 
 		// 2. fields from make.
-		LastInsertID:   new(uint64),
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
+		LastInsertID: new(uint64),
 
 		// 3. other fields.
-		logger:   util.GetLogger(sid),
-		UnixTime: time.Now().UnixNano(),
+		logger:         util.GetLogger(sid),
+		UnixTime:       time.Now().UnixNano(),
+		PostDmlSqlList: threadsafe.NewSlice[string](),
+		StageCache:     threadsafe.NewMap[string, stage.StageDef](),
 	}
 
 	proc := &Process{
@@ -142,9 +145,9 @@ func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 // BuildPipelineContext cleans the old pipeline context and creates a new one from the input parent context.
 func (proc *Process) BuildPipelineContext(parentContext context.Context) context.Context {
 	if proc.Cancel != nil {
-		proc.Cancel()
+		proc.Cancel(nil)
 	}
-	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
+	proc.Ctx, proc.Cancel = context.WithCancelCause(parentContext)
 	return proc.Ctx
 }
 
@@ -188,7 +191,7 @@ func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
 // ReplacePipelineCtx replaces the pipeline context and cancel function for the process.
 // It's a very dangerous operation, should be used with caution.
 // And we only use it for the newly built pipeline by the pipeline's ParallelRun method.
-func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelFunc) {
+func ReplacePipelineCtx(proc *Process, ctx context.Context, cancel context.CancelCauseFunc) {
 	proc.Ctx = ctx
 	proc.Cancel = cancel
 }
@@ -214,12 +217,18 @@ func (proc *Process) ResetQueryContext() {
 	proc.doPrepareForRunningWithoutPipeline()
 }
 
+// ResetCloneTxnOperator cleans the clone txn operator for process reuse.
+func (proc *Process) ResetCloneTxnOperator() {
+	if proc.Base.CloneTxnOperator != nil {
+		proc.Base.CloneTxnOperator = nil
+	}
+}
+
 // Free do memory clean for the process.
 func (proc *Process) Free() {
 	if proc == nil {
 		return
 	}
-	proc.CleanValueScanBatchs()
 }
 
 type QueryBaseContext struct {
@@ -261,8 +270,8 @@ func (qbCtx *QueryBaseContext) DoSpecialCleanUp(isMergeCTE bool) bool {
 }
 
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
-func (qbCtx *QueryBaseContext) BuildQueryCtx() context.Context {
-	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
+func (qbCtx *QueryBaseContext) BuildQueryCtx(parent context.Context) context.Context {
+	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(parent)
 
 	qbCtx.Lock()
 	qbCtx.pipelineLoopBreak = false

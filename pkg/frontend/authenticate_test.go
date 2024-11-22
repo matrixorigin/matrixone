@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -206,7 +207,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &createAccount{
+		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AdminName:   "root",
@@ -365,6 +366,18 @@ func Test_initUser(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		ses := newSes(nil, ctrl)
+
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 
@@ -408,11 +421,6 @@ func Test_initUser(t *testing.T) {
 			sql2result[sql] = mrs
 		}
 
-		bh := newBh(ctrl, sql2result)
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
 		tenant := &TenantInfo{
 			Tenant:        sysAccountName,
 			User:          rootName,
@@ -422,7 +430,6 @@ func Test_initUser(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := &Session{}
 		err := InitUser(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeError)
 	})
@@ -7081,6 +7088,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, 0)
 
 		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
@@ -7104,10 +7112,10 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		sql = getPubInfoSql + " order by update_time desc, created_time desc"
+		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-		sql = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1 and sub_account_id = 1"
+		sql = getSubsSql + " and sub_account_id = 1"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		sql = "show databases;"
@@ -7115,7 +7123,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7162,7 +7170,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7206,7 +7214,7 @@ func Test_doDropAccount(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), ses, &dropAccount{
+		err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 			IfExists: stmt.IfExists,
 			Name:     mustUnboxExprStr(stmt.Name),
 		})
@@ -7412,7 +7420,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
 
-	_ = ses.InitSystemVariables(ctx)
+	_ = ses.InitSystemVariables(ctx, nil)
 
 	rm, _ := NewRoutineManager(ctx, "")
 	rm.baseService = new(MockBaseService)
@@ -7427,8 +7435,7 @@ type MockBaseService struct {
 }
 
 func (m *MockBaseService) ID() string {
-	//TODO implement me
-	panic("implement me")
+	return "mock base service"
 }
 
 func (m *MockBaseService) SQLAddress() string {
@@ -7498,6 +7505,12 @@ func (bt *backgroundExecTest) Close() {
 }
 
 func (bt *backgroundExecTest) Clear() {}
+
+func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
+	var stats statistic.StatsArray
+	stats.Reset()
+	return stats
+}
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
@@ -10931,6 +10944,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
+		ses.GetTxnHandler().txnOp = newTestTxnOp()
 
 		//no result set
 		bh.sql2result["begin;"] = nil

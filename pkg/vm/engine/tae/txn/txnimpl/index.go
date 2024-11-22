@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+var notFoundErr = moerr.NewNotFoundNoCtx()
+
 type TableIndex interface {
 	io.Closer
 	BatchDedup(string, containers.Vector) error
@@ -205,7 +207,7 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]
 	if !ok {
-		return 0, moerr.NewNotFoundNoCtx()
+		return 0, notFoundErr
 	}
 	return uint32(row), nil
 }

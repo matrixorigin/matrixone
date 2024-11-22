@@ -62,14 +62,14 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-273354    test01    def    create database test01    0    1    2024-05-30 15:09:06    0    
+275129    test01    def    create database test01    0    1    2024-10-28 18:09:06    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
+__mo_fake_pk_col
+__mo_rowid
 restore account sys from snapshot sp01;
 select count(*) from rs01 {snapshot = 'sp01'};
 count(*)
@@ -87,14 +87,14 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275510    test01    def    create database test01    0    1    2024-05-15 14:06:07    0
+275129    test01    def    create database test01    0    1    2024-10-28 18:09:06    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 col3
+__mo_fake_pk_col
+__mo_rowid
 drop snapshot sp01;
 drop database test01;
 use mo_catalog;
@@ -141,14 +141,12 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275516    test02    def    create database test02    0    1    2024-05-15 14:06:07    0
+275155    test02    def    create database test02    0    1    2024-10-28 18:09:06    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-05-15 12:08:32    0
+1    mo_catalog    mo_catalog        0    0    2024-10-28 18:07:36    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 attname
-__mo_fake_pk_col
-__mo_rowid
 col1
 col2
 __mo_fake_pk_col
@@ -157,6 +155,8 @@ col1
 col2
 col3
 col4
+__mo_fake_pk_col
+__mo_rowid
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
@@ -272,7 +272,7 @@ drop snapshot if exists sp04;
 create snapshot sp04 for account sys;
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-05-15 06:06:08.133411    account    sys
+sp04    2024-10-28 10:09:07.352055113    account    sys        
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -420,7 +420,7 @@ system
 system_metrics
 test03
 select * from test01.t1;
-invalid database test01
+Unknown database test01
 select count(*) from test03.t3;
 count(*)
 3
@@ -508,8 +508,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-05-15 06:06:08.797713    account    sys
-sp07    2024-05-15 06:06:08.772359    account    sys
+sp08    2024-10-28 10:09:08.549594483    account    sys        
+sp07    2024-10-28 10:09:08.528357764    account    sys        
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -555,8 +555,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account sys;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-05-15 06:06:09.060988    account    sys
-sp09    2024-05-15 06:06:09.039712    account    sys
+sp10    2024-10-28 10:09:09.136585304    account    sys        
+sp09    2024-10-28 10:09:09.110649963    account    sys        
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -888,7 +888,7 @@ drop snapshot if exists sp15;
 create snapshot sp15 for account sys;
 restore account sys database db07 from snapshot sp15;
 restore account sys database db08 from snapshot sp15;
-invalid database db08
+Unknown database db08
 show databases;
 Database
 db07
@@ -913,8 +913,8 @@ select * from table01;
 SQL parser error: table "table01" does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-05-15 11:22:49.672343    account    sys
-sp14    2024-05-15 11:22:49.529353    account    sys
+sp15    2024-10-28 10:09:11.10873344    account    sys        
+sp14    2024-10-28 10:09:11.057121731    account    sys        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -929,7 +929,7 @@ drop snapshot if exists sp15;
 create snapshot sp15 for account sys;
 insert into db08 (col1) values (3000);
 restore account sys database db from snapshot sp15;
-invalid database db
+Unknown database db
 drop snapshot sp15;
 drop database db08;
 drop database if exists db09;
@@ -1016,7 +1016,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-05-15 06:06:10.244994    account    sys
+sp16    2024-10-28 10:09:11.352094939    account    sys        
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1085,19 +1085,19 @@ col1    col2
 23420    32432543
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null
-col2    DECIMAL(38)    YES        null
+col1    INT(32)    NO    PRI    null        
+col2    DECIMAL(38,0)    YES        null        
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-275637    db11    def    create database db11    0    1    2024-05-15 14:06:10    0
+275488    db11    def    create database db11    0    1    2024-10-28 18:09:11    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
-__mo_rowid
 col1
 col2
+__mo_rowid
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;

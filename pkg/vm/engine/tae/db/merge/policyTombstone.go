@@ -33,14 +33,14 @@ func (t *tombstonePolicy) onObject(entry *catalog.ObjectEntry, config *BasicPoli
 	return true
 }
 
-func (t *tombstonePolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
+func (t *tombstonePolicy) revise(resourceControl *resourceController, config *BasicPolicyConfig) []reviseResult {
 	if len(t.tombstones) < 2 {
 		return nil
 	}
-	return []reviseResult{{t.tombstones, TaskHostDN}}
+	return []reviseResult{{t.tombstones, taskHostDN}}
 }
 
-func (t *tombstonePolicy) resetForTable(*catalog.TableEntry) {
+func (t *tombstonePolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
 	t.tombstones = t.tombstones[:0]
 }
 

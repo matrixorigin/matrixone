@@ -477,20 +477,7 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 	if srcLen <= 0 {
 		return
 	}
-
-	if srcOff == 0 && srcLen == src.Length() {
-		err = vector.GetUnionAllFunction(
-			*vec.GetType(),
-			vec.mpool,
-		)(vec.wrapped, src)
-		return
-	}
-
-	sels := make([]int64, srcLen)
-	for j := 0; j < srcLen; j++ {
-		sels[j] = int64(j) + int64(srcOff)
-	}
-	err = vec.wrapped.Union(src, sels, vec.mpool)
+	err = vec.wrapped.UnionBatch(src, int64(srcOff), srcLen, nil, vec.mpool)
 	return
 }
 

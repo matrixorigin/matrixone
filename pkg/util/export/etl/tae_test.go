@@ -40,7 +40,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Nil(t, err)
 	ctx := context.TODO()
 	fs := testutil.NewSharedFS()
-	defer fs.Close()
+	defer fs.Close(ctx)
 
 	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
@@ -59,7 +59,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// Done. write
 
 	folder := path.Dir(filepath)
-	files, err := fs.List(ctx, folder)
+	files, err := fileservice.SortedList(fs.List(ctx, folder))
 	require.Nil(t, err)
 	require.Equal(t, 1, len(files))
 
@@ -186,7 +186,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				Account:              "MO",
 				User:                 "moroot",
 				Database:             "system",
-				Statement:            "show tables",
+				Statement:            []byte("show tables"),
 				StatementFingerprint: "show tables",
 				StatementTag:         "",
 				ExecPlan:             nil,
@@ -243,7 +243,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 			writer.FlushAndClose()
 
 			folder := path.Dir(filePath)
-			entrys, err := fs.List(ctx, folder)
+			entrys, err := fileservice.SortedList(fs.List(ctx, folder))
 			require.Nil(t, err)
 			require.NotEqual(t, 0, len(entrys))
 			for _, e := range entrys {
@@ -262,7 +262,7 @@ func TestTaeReadFile(t *testing.T) {
 	ctx := context.TODO()
 	fs := testutil.NewETLFS()
 
-	entrys, err := fs.List(context.TODO(), "etl:/")
+	entrys, err := fileservice.SortedList(fs.List(context.TODO(), "etl:/"))
 	require.Nil(t, err)
 	if len(entrys) == 0 {
 		t.Skip()
@@ -318,7 +318,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	fs := testutil.NewETLFS()
 
 	folder := "/sys/logs/2023/01/11/rawlog"
-	entrys, err := fs.List(context.TODO(), "etl:"+folder)
+	entrys, err := fileservice.SortedList(fs.List(context.TODO(), "etl:"+folder))
 	require.Nil(t, err)
 	if len(entrys) == 0 {
 		t.Skip()

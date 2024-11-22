@@ -69,7 +69,6 @@ func (txn activeTxn) TypeName() string {
 }
 
 func (txn *activeTxn) lockRemoved(
-	serviceID string,
 	group uint32,
 	table uint64,
 	removedLocks map[string]struct{}) {
@@ -78,7 +77,7 @@ func (txn *activeTxn) lockRemoved(
 	if !ok {
 		return
 	}
-	newV := newCowSlice(txn.fsp, nil)
+	newV, _ := newCowSlice(txn.fsp, nil)
 	s := v.slice()
 	defer s.unref()
 	s.iter(func(v []byte) bool {
@@ -96,7 +95,7 @@ func (txn *activeTxn) lockAdded(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
-) {
+) error {
 
 	// only in the lockservice node where the transaction was
 	// initiated will it be holds all locks. A remote transaction
@@ -117,23 +116,27 @@ func (txn *activeTxn) lockAdded(
 	defer logTxnLockAdded(logger, txn, locks)
 	h := txn.getHoldLocksLocked(group)
 	v, ok := h.tableKeys[bind.Table]
+	var err error
 	if ok {
-		v.append(locks)
-		return
+		return v.append(locks)
 	}
-	h.tableKeys[bind.Table] = newCowSlice(txn.fsp, locks)
+	cs, err := newCowSlice(txn.fsp, locks)
+	if err != nil {
+		return err
+	}
+	h.tableKeys[bind.Table] = cs
 	h.tableBinds[bind.Table] = bind
+	return nil
 }
 
 func (txn *activeTxn) close(
-	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint32, uint64) (lockTable, error),
 	logger *log.MOLogger,
 	mutations ...pb.ExtraMutation,
 ) error {
-	logTxnReadyToClose(logger, serviceID, txn)
+	logTxnReadyToClose(logger, txn)
 
 	// cancel all blocked waiters
 	txn.cancelBlocks(logger)
@@ -170,14 +173,12 @@ func (txn *activeTxn) close(
 				return func() {
 					logTxnUnlockTable(
 						logger,
-						serviceID,
 						txn,
 						table,
 					)
 					l.unlock(txn, cs, commitTS, mutations...)
 					logTxnUnlockTableCompleted(
 						logger,
-						serviceID,
 						txn,
 						table,
 						cs,
@@ -223,7 +224,6 @@ func (txn *activeTxn) reset() {
 }
 
 func (txn *activeTxn) abort(
-	serviceID string,
 	waitTxn pb.WaitTxn,
 	err error,
 	logger *log.MOLogger,
@@ -253,25 +253,25 @@ func (txn *activeTxn) cancelBlocks(
 ) {
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrTxnNotFound}, logger)
-		w.close()
+		w.close("cancelBlocks", logger)
 	}
 }
 
-func (txn *activeTxn) clearBlocked(w *waiter) {
+func (txn *activeTxn) clearBlocked(w *waiter, logger *log.MOLogger) {
 	newBlockedWaiters := txn.blockedWaiters[:0]
 	for _, v := range txn.blockedWaiters {
 		if v != w {
 			newBlockedWaiters = append(newBlockedWaiters, v)
 		} else {
-			w.close()
+			w.close("clearBlocked", logger)
 		}
 	}
 	txn.blockedWaiters = newBlockedWaiters
 }
 
-func (txn *activeTxn) closeBlockWaiters() {
+func (txn *activeTxn) closeBlockWaiters(logger *log.MOLogger) {
 	for _, w := range txn.blockedWaiters {
-		w.close()
+		w.close("closeBlockWaiters", logger)
 	}
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 }
@@ -286,7 +286,7 @@ func (txn *activeTxn) setBlocked(
 	if !w.casStatus(ready, blocking, logger) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
-	w.ref()
+	w.ref("activeTxn setBlocked", logger)
 	txn.blockedWaiters = append(txn.blockedWaiters, w)
 }
 
@@ -317,7 +317,6 @@ func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID 
 func (txn *activeTxn) fetchWhoWaitingMe(
 	serviceID string,
 	txnID []byte,
-	holder activeTxnHolder,
 	waiters func(pb.WaitTxn) bool,
 	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
 	txn.RLock()

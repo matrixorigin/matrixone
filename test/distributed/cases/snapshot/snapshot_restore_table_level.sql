@@ -349,3 +349,4 @@ drop account test_account;
 drop account test_account_2;
 -- @ignore:1
 show snapshots;
+

@@ -80,11 +80,7 @@ func NewFixedSizeMmapAllocator(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
 
 				if hints&DoNotReuse > 0 {
-					if err := unix.Munmap(
-						unsafe.Slice((*byte)(args.ptr), size),
-					); err != nil {
-						panic(err)
-					}
+					ret.freeMem(args.ptr)
 					return
 				}
 
@@ -103,12 +99,6 @@ func NewFixedSizeMmapAllocator(
 						// buffer in buffer2
 
 					default:
-						// unmap
-						if err := unix.Munmap(
-							unsafe.Slice((*byte)(args.ptr), size),
-						); err != nil {
-							panic(err)
-						}
 
 					}
 
@@ -123,7 +113,7 @@ func NewFixedSizeMmapAllocator(
 
 var _ FixedSizeAllocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (slice []byte, dec Deallocator, err error) {
+func (f *fixedSizeMmapAllocator) Allocate(hints Hints, clearSize uint64) (slice []byte, dec Deallocator, err error) {
 
 	select {
 
@@ -131,7 +121,7 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (slice []byte, dec Deallo
 		// from buffer1
 		slice = unsafe.Slice((*byte)(ptr), f.size)
 		if hints&NoClear == 0 {
-			clear(slice)
+			clear(slice[:clearSize])
 		}
 
 	default:
@@ -140,7 +130,7 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (slice []byte, dec Deallo
 
 		case ptr := <-f.buffer2:
 			// from buffer2
-			f.reuseMem(ptr, hints)
+			f.reuseMem(ptr, hints, clearSize)
 			slice = unsafe.Slice((*byte)(ptr), f.size)
 
 		default:

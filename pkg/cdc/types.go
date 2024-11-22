@@ -45,6 +45,8 @@ const (
 
 	SASCommon = "common"
 	SASError  = "error"
+
+	InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
 )
 
 var (
@@ -58,23 +60,38 @@ type Reader interface {
 
 // Sinker manages and drains the sql parts
 type Sinker interface {
-	Sink(ctx context.Context, data *DecoderOutput) error
+	Run(ctx context.Context, ar *ActiveRoutine)
+	Sink(ctx context.Context, data *DecoderOutput)
+	SendBegin()
+	SendCommit()
+	SendRollback()
+	// SendDummy to guarantee the last sql is sent
+	SendDummy()
+	// Error must be called after Sink
+	Error() error
+	Reset()
+	Close()
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, ar *ActiveRoutine, sql string) error
+	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) error
+	SendBegin(ctx context.Context, ar *ActiveRoutine) error
+	SendCommit(ctx context.Context, ar *ActiveRoutine) error
+	SendRollback(ctx context.Context, ar *ActiveRoutine) error
 	Close()
 }
 
 type ActiveRoutine struct {
+	Pause  chan struct{}
 	Cancel chan struct{}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
-	activeRoutine := &ActiveRoutine{}
-	activeRoutine.Cancel = make(chan struct{})
-	return activeRoutine
+	return &ActiveRoutine{
+		Pause:  make(chan struct{}),
+		Cancel: make(chan struct{}),
+	}
 }
 
 type OutputType int

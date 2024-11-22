@@ -88,7 +88,7 @@ func BenchmarkBloomFiltrerAdd(b *testing.B) {
 	for i := 0; i < vecCount; i++ {
 		vecs[i] = testutil.NewVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
 	}
-	var boom *BloomFilter
+	var boom BloomFilter
 	for i := 0; i < b.N; i++ {
 		boom = New(testCount, testRate)
 		for j := 0; j < vecCount; j++ {
@@ -103,7 +103,7 @@ func BenchmarkBloomFiltrerTestAndAdd(b *testing.B) {
 	for i := 0; i < vecCount; i++ {
 		vecs[i] = testutil.NewVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
 	}
-	var boom *BloomFilter
+	var boom BloomFilter
 	for i := 0; i < b.N; i++ {
 		boom = New(testCount, testRate)
 		for j := 0; j < vecCount; j++ {

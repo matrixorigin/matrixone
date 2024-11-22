@@ -956,8 +956,8 @@ type GlobalSysVarsMgr struct {
 }
 
 // Get return sys vars of accountId
-func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
-	sysVarsMp, err := ses.getGlobalSysVars(ctx)
+func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
+	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
@@ -1661,14 +1661,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("default_collation_for_utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_general_ci"),
 		Default:           "utf8mb4_0900_ai_ci",
-	},
-	"default_password_lifetime": {
-		Name:              "default_password_lifetime",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("default_password_lifetime", 0, 65535, false),
-		Default:           int64(0),
 	},
 	"default_storage_engine": {
 		Name:              "default_storage_engine",
@@ -2540,7 +2532,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ngram_token_size", 1, 10, false),
-		Default:           int64(2),
+		Default:           int64(3),
 	},
 	"offline_mode": {
 		Name:              "offline_mode",
@@ -2654,28 +2646,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("partial_revokes"),
 		Default:           int64(0),
 	},
-	"password_history": {
-		Name:              "password_history",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("password_history", 0, 4294967295, false),
-		Default:           int64(0),
-	},
 	"password_require_current": {
 		Name:              "password_require_current",
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("password_require_current"),
-		Default:           int64(0),
-	},
-	"password_reuse_interval": {
-		Name:              "password_reuse_interval",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("password_reuse_interval", 0, 4294967295, false),
 		Default:           int64(0),
 	},
 	"persisted_globals_load": {
@@ -3525,6 +3501,142 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableBoolType("disable_agg_statement"),
 		Default:           int64(0),
+	},
+	"experimental_fulltext_index": {
+		Name:              "experimental_fulltext_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
+		Default:           int64(0),
+	},
+	"validate_password": {
+		Name:              "validate_password",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("validate_password"),
+		Default:           int64(0),
+	},
+	"validate_password.check_user_name": {
+		Name:              "validate_password.check_user_name",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("validate_password.check_user_name"),
+		Default:           int64(1),
+	},
+	"validate_password.changed_characters_percentage": {
+		Name:              "validate_password.changed_characters_percentage",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.changed_characters_percentage", 0, 100, false),
+		Default:           int64(0),
+	},
+	"validate_password.policy": {
+		Name:              "validate_password.policy",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.policy", 0, 1, false),
+		Default:           int64(0),
+	},
+	"validate_password.length": {
+		Name:              "validate_password.length",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.length", 0, 1024, false),
+		Default:           int64(8),
+	},
+	"validate_password.mixed_case_count": {
+		Name:              "validate_password.mixed_case_count",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.mixed_case_count", 0, 128, false),
+		Default:           int64(1),
+	},
+	"validate_password.number_count": {
+		Name:              "validate_password.number_count",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.number_count", 0, 128, false),
+		Default:           int64(1),
+	},
+	"validate_password.special_char_count": {
+		Name:              "validate_password.special_char_count",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("validate_password.special_char_count", 0, 128, false),
+		Default:           int64(1),
+	},
+	"default_password_lifetime": {
+		Name:              "default_password_lifetime",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("default_password_lifetime", 0, 65535, false),
+		Default:           int64(0),
+	},
+	"password_history": {
+		Name:              "password_history",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("password_history", 0, 4294967295, false),
+		Default:           int64(0),
+	},
+	"password_reuse_interval": {
+		Name:              "password_reuse_interval",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("password_reuse_interval", 0, 4294967295, false),
+		Default:           int64(0),
+	},
+	"connection_control_failed_connections_threshold": {
+		Name:              "connection_control_failed_connections_threshold",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("connection_control_failed_connections_threshold", 0, 4294967295, false),
+		Default:           int64(3),
+	},
+	"connection_control_max_connection_delay": {
+		Name:              "connection_control_max_connection_delay",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("connection_control_max_connection_delay", 0, 2147483647, false),
+		Default:           int64(0),
+	},
+	"validnode_checking": {
+		Name:              "validnode_checking",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("validnode_checking"),
+		Default:           int64(0),
+	},
+	"invited_nodes": {
+		Name:              "invited_nodes",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("invited_nodes"),
+		Default:           "*",
+	},
+	"profiling_history_size": {
+		Name:              "profiling_history_size",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
+		Default:           int64(15),
 	},
 }
 

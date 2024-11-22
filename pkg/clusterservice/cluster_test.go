@@ -20,12 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func TestClusterReady(t *testing.T) {
@@ -77,7 +78,7 @@ func TestClusterRefresh(t *testing.T) {
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 0, cnt)
 
-			hc.addTN("dn0")
+			hc.addTN(logpb.NormalState, "dn0")
 			time.Sleep(time.Millisecond * 100)
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 1, cnt)
@@ -95,7 +96,7 @@ func BenchmarkGetService(b *testing.B) {
 			}
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 
-			hc.addTN("dn0")
+			hc.addTN(logpb.NormalState, "dn0")
 			c.ForceRefresh(true)
 
 			b.ResetTimer()
@@ -125,6 +126,44 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 				"k1": {Labels: []string{"v1"}},
 			}, cns[0].Labels)
 		})
+}
+
+func TestCluster_DebugUpdateCNWorkState(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			var cns []metadata.CNService
+			apply := func(c metadata.CNService) bool {
+				cns = append(cns, c)
+				return true
+			}
+			hc.addCN("cn0")
+			err := c.DebugUpdateCNWorkState("cn0", int(metadata.WorkState_Draining))
+			require.NoError(t, err)
+			c.ForceRefresh(true)
+			c.GetCNService(NewServiceIDSelector("cn0"), apply)
+			require.Equal(t, 0, len(cns))
+		})
+}
+
+func TestCluster_GetTNService(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addTN(logpb.NormalState, "dn0")
+			hc.addTN(logpb.TimeoutState, "dn1")
+			c.ForceRefresh(true)
+			var count int
+			c.GetTNService(
+				NewSelector(),
+				func(service metadata.TNService) bool {
+					count++
+					return true
+				},
+			)
+			require.Equal(t, 1, count)
+		},
+	)
 }
 
 func runClusterTest(
@@ -160,12 +199,13 @@ func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
 	}
 }
 
-func (c *testHAKeeperClient) addTN(serviceIDs ...string) {
+func (c *testHAKeeperClient) addTN(state logpb.NodeState, serviceIDs ...string) {
 	c.Lock()
 	defer c.Unlock()
 	for _, id := range serviceIDs {
 		c.value.TNStores = append(c.value.TNStores, logpb.TNStore{
-			UUID: id,
+			UUID:  id,
+			State: state,
 		})
 	}
 }

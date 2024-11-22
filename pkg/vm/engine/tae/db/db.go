@@ -25,7 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v2"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,15 +63,14 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
-	MergeScheduler     *merge.Scheduler
+
+	MergeScheduler *merge.Scheduler
 
 	DiskCleaner *gc2.DiskCleaner
 
 	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
-
-	CNMergeSched merge.CNMergeScheduler
 
 	Closed *atomic.Value
 }
@@ -238,9 +237,9 @@ func (db *DB) Close() error {
 	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
-	db.Wal.Close()
 	db.Catalog.Close()
 	db.DiskCleaner.Stop()
+	db.Wal.Close()
 	db.Runtime.TransferTable.Close()
 	db.usageMemo.Clear()
 	return db.DBLocker.Close()

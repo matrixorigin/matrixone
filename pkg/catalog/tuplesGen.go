@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,15 +91,21 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 				for _, ct := range constraintDef.Cts {
 					if pkdef, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
 						pos := mp[pkdef.Pkey.PkeyColName]
-						attr, _ := defs[pos].(*engine.AttributeDef)
-						attr.Attr.Primary = true
+						if attr, ok3 := defs[pos].(*engine.AttributeDef); ok3 {
+							attr.Attr.Primary = true
+						} else {
+							return nil, moerr.NewInternalErrorNoCtx("PrimaryKeyDef without Primary attribute")
+						}
 					}
 				}
 			}
 
 			if clusterByDef, ok := def.(*engine.ClusterByDef); ok {
-				attr, _ := defs[mp[clusterByDef.Name]].(*engine.AttributeDef)
-				attr.Attr.ClusterBy = true
+				if attr, ok2 := defs[mp[clusterByDef.Name]].(*engine.AttributeDef); ok2 {
+					attr.Attr.ClusterBy = true
+				} else {
+					return nil, moerr.NewInternalErrorNoCtx("ClusterByDef without ClusterBy attribute")
+				}
 			}
 		}
 	}

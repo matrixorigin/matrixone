@@ -246,7 +246,7 @@ prepare01    CREATE TABLE `prepare01` (\n  `col1` int NOT NULL,\n  `col2` char(1
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
-col2    CHAR(1)    YES        'a'        
+col2    CHAR(1)    YES        a
 select * from mo_catalog.mo_retention;
 database_name    table_name    retention_deadline
 test01    prepare01    1726139313

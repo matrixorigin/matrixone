@@ -22,14 +22,14 @@ import (
 // InitMyPipelineSpool return a simple pipeline spool for temporary plan.
 //
 // todo: use spool package after pipeline construct process is simple.
-func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) *PipelineSpool {
+func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 	bl := getBufferLength(receiverCnt)
 
 	ps2 := &PipelineSpool{
 		shardPool:    make([]pipelineSpoolMessage, bl),
 		shardRefs:    nil,
 		doRefCheck:   make([]bool, bl),
-		rs:           newReceivers(receiverCnt, int32(bl)),
+		rs:           newReceivers(receiverCnt, bl),
 		cache:        initCachedBatch(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
 	}
@@ -40,15 +40,15 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt int) *PipelineSpool {
 		ps2.shardRefs = make([]atomic.Int32, bl)
 	}
 
-	ps2.freeShardPool = make(chan int8, len(ps2.shardPool))
-	for i := 0; i < len(ps2.shardPool); i++ {
-		ps2.freeShardPool <- int8(i)
+	ps2.freeShardPool = make(chan uint32, bl)
+	for i := uint32(0); i < bl; i++ {
+		ps2.freeShardPool <- i
 	}
 
 	return ps2
 }
 
-func getBufferLength(cnt int) int {
+func getBufferLength(cnt uint32) uint32 {
 	if cnt <= 2 {
 		return 2
 	}

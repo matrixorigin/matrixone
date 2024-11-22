@@ -200,7 +200,7 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 		}
 	case types.T_date:
 		for i := 1; i <= rows; i++ {
-			vec.Append(types.DateFromCalendar(int32(i)*100, 1, 1), false)
+			vec.Append(types.DateFromCalendar(int32(i+1)*100, 1, 1), false)
 		}
 	case types.T_time:
 		for i := 1; i <= rows; i++ {

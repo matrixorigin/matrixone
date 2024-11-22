@@ -20,11 +20,13 @@ import (
 	"reflect"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
 )
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
@@ -193,12 +195,38 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 	}
 }
 
+func (s *Service) checkReplicaHealth(ctx context.Context) {
+	details, err := s.store.getClusterDetails(ctx)
+	if err != nil {
+		s.runtime.Logger().Error("failed to get cluster details",
+			zap.Error(err))
+		return
+	}
+	var tnShardID uint64
+	for _, tnStore := range details.TNStores {
+		for _, shard := range tnStore.Shards {
+			tnShardID = shard.ShardID
+		}
+	}
+	if tnShardID == 0 {
+		s.runtime.Logger().Error("failed to get tn shard ID",
+			zap.Uint64("shardID", tnShardID))
+		return
+	}
+	if err := s.store.checkHealth(tnShardID); err != nil {
+		s.runtime.Logger().Error("failed to check health", zap.Error(err))
+		v2.LogServiceReplicaHealthGauge.Set(0)
+	} else {
+		v2.LogServiceReplicaHealthGauge.Set(1)
+	}
+}
+
 func (s *Service) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
 		v2.LogHeartbeatHistogram.Observe(time.Since(start).Seconds())
 	}()
-	ctx2, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx2, cancel := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseLogServiceHeartbeat)
 	defer cancel()
 
 	if s.haClient == nil {
@@ -207,11 +235,15 @@ func (s *Service) heartbeat(ctx context.Context) {
 		}
 		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.UUID, s.cfg.GetHAKeeperClientConfig())
 		if err != nil {
+			err = moerr.AttachCause(ctx2, err)
 			s.runtime.Logger().Error("failed to create HAKeeper client", zap.Error(err))
 			return
 		}
 		s.haClient = cc
 	}
+
+	// check the logService TN replica's health on this store.
+	s.checkReplicaHealth(ctx2)
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
@@ -219,6 +251,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
+		err = moerr.AttachCause(ctx2, err)
 		v2.LogHeartbeatFailureCounter.Inc()
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))
 		return

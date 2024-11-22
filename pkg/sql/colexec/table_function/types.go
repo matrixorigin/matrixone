@@ -72,7 +72,8 @@ func (tableFunction *TableFunction) Release() {
 
 type tvfState interface {
 	reset(tf *TableFunction, proc *process.Process)
-	start(tf *TableFunction, proc *process.Process, nthRow int) error
+	//start(tf *TableFunction, proc *process.Process, nthRow int) error
+	start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error
 	call(tf *TableFunction, proc *process.Process) (vm.CallResult, error)
 	free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error)
 }

@@ -1368,7 +1368,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1394,7 +1394,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1420,7 +1420,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
@@ -2759,6 +2759,32 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `crc32`
+	{
+		functionId: CRC32,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newCrc32ExecContext().builtInCrc32
+				},
+			},
+		},
+	},
+
 	// function `exp`
 	{
 		functionId: EXP,
@@ -3538,7 +3564,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `current_timestamp`, `now`
 	{
 		functionId: CURRENT_TIMESTAMP,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 0 {
@@ -3774,7 +3800,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date_sub`
 	{
 		functionId: DATE_SUB,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -6360,38 +6386,6 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `mo_check_level`
-	{
-		functionId: MO_CHECH_LEVEL,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_bool},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						vs := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-						res := vector.MustFunctionResult[bool](result)
-						for i := uint64(0); i < uint64(length); i++ {
-							flag, isNull := vs.GetValue(i)
-							if isNull || !flag {
-								return moerr.NewCheckRecursiveLevel(proc.Ctx)
-							}
-							res.AppendMustValue(true)
-						}
-						return nil
-					}
-				},
-			},
-		},
-	},
-
 	// function `assert`
 	{
 		functionId: ASSERT,
@@ -6697,6 +6691,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
 	// function 'grouping'
 	{
 		functionId: GROUPING,
@@ -6722,6 +6717,107 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `FULLTEXT_MATCH`
+	{
+		functionId: FULLTEXT_MATCH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: fulltext_expand_overload(types.T_bool),
+	},
+	{
+		functionId: FULLTEXT_MATCH_SCORE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: fulltext_expand_overload(types.T_float32),
+	},
+}
+
+// fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types
+func fulltext_expand_overload(rettyp types.T) []overload {
+
+	overloads := make([]overload, 0)
+	supported_types := []types.T{types.T_varchar, types.T_char, types.T_text, types.T_json, types.T_datalink}
+	curr := 0
+
+	prefix_types := []types.T{types.T_varchar, types.T_int64}
+
+	// single key
+	for _, t := range supported_types {
+		o := overload{
+			overloadId: curr,
+			args:       append(prefix_types, t),
+			retType: func(parameters []types.Type) types.Type {
+				return rettyp.ToType()
+			},
+			newOp: func() executeLogicOfOverload {
+				if rettyp == types.T_bool {
+					return fullTextMatch
+				} else {
+					return fullTextMatchScore
+				}
+			},
+		}
+
+		overloads = append(overloads, o)
+		curr += 1
+	}
+
+	// two keys
+	for _, t1 := range supported_types {
+		for _, t2 := range supported_types {
+			o := overload{
+				overloadId: curr,
+				args:       append(prefix_types, []types.T{t1, t2}...),
+				retType: func(parameters []types.Type) types.Type {
+					return rettyp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					if rettyp == types.T_bool {
+						return fullTextMatch
+					} else {
+						return fullTextMatchScore
+					}
+				},
+			}
+
+			overloads = append(overloads, o)
+			curr += 1
+		}
+	}
+
+	// three keys
+	for _, t1 := range supported_types {
+		for _, t2 := range supported_types {
+			for _, t3 := range supported_types {
+				o := overload{
+					overloadId: curr,
+					args:       append(prefix_types, []types.T{t1, t2, t3}...),
+					retType: func(parameters []types.Type) types.Type {
+						return rettyp.ToType()
+					},
+					newOp: func() executeLogicOfOverload {
+						if rettyp == types.T_bool {
+							return fullTextMatch
+						} else {
+							return fullTextMatchScore
+						}
+					},
+				}
+
+				overloads = append(overloads, o)
+				curr += 1
+			}
+		}
+	}
+
+	// up to 3 keys for now.  add more combination below.
+
+	return overloads
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {

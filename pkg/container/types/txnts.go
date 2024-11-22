@@ -69,6 +69,9 @@ func (ts *TS) Compare(rhs *TS) int {
 	return 1
 }
 
+func (ts *TS) EQ(rhs *TS) bool {
+	return ts.Compare(rhs) == 0
+}
 func (ts *TS) LT(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }

@@ -17,7 +17,6 @@ package datasync
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,6 +169,6 @@ func (s *syncer) start(ctx context.Context) {
 	}
 
 	if e != nil {
-		panic(fmt.Sprintf("failed to start datasync module, %v", e))
+		s.log.Error("failed to start datasync worker", zap.Error(e))
 	}
 }

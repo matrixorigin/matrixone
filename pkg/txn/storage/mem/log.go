@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -85,6 +86,10 @@ func (mc *memLogClient) Read(ctx context.Context, firstIndex logservice.Lsn, max
 	values := make([]logpb.LogRecord, logservice.Lsn(len(mc.logs))-firstIndex+1)
 	copy(values, mc.logs[firstIndex-1:])
 	return values, firstIndex, nil
+}
+
+func (mc *memLogClient) ReadLsn(ctx context.Context, ts time.Time) (logservice.Lsn, error) {
+	return 0, nil
 }
 
 func (mc *memLogClient) Truncate(ctx context.Context, index logservice.Lsn) error {

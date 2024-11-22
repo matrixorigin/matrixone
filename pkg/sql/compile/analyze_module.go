@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -44,6 +45,24 @@ type AnalyzeModule struct {
 	mu               sync.RWMutex
 	retryTimes       int
 	explainPhyBuffer *bytes.Buffer
+}
+
+// Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
+func (anal *AnalyzeModule) Reset() {
+	if anal != nil {
+		anal.phyPlan = nil
+		anal.remotePhyPlans = nil
+		anal.explainPhyBuffer = nil
+		anal.retryTimes = 0
+		for _, node := range anal.qry.Nodes {
+			if node.AnalyzeInfo == nil {
+				node.AnalyzeInfo = new(plan.AnalyzeInfo)
+			} else {
+				node.AnalyzeInfo.Reset()
+			}
+		}
+	}
+
 }
 
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
@@ -134,18 +153,30 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = &plan.AnalyzeInfo{}
 		}
-		node.AnalyzeInfo.InputRows += op.OpStats.TotalInputRows
-		node.AnalyzeInfo.OutputRows += op.OpStats.TotalOutputRows
-		node.AnalyzeInfo.InputSize += op.OpStats.TotalInputSize
-		node.AnalyzeInfo.OutputSize += op.OpStats.TotalOutputSize
-		node.AnalyzeInfo.TimeConsumed += op.OpStats.TotalTimeConsumed
-		node.AnalyzeInfo.MemorySize += op.OpStats.TotalMemorySize
-		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.TotalWaitTimeConsumed
-		node.AnalyzeInfo.ScanBytes += op.OpStats.TotalScanBytes
-		node.AnalyzeInfo.NetworkIO += op.OpStats.TotalNetworkIO
-		node.AnalyzeInfo.InputBlocks += op.OpStats.TotalInputBlocks
+		node.AnalyzeInfo.InputRows += op.OpStats.InputRows
+		node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
+		node.AnalyzeInfo.InputSize += op.OpStats.InputSize
+		node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
+		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
+		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
+		node.AnalyzeInfo.ScanBytes += op.OpStats.ScanBytes
+		node.AnalyzeInfo.NetworkIO += op.OpStats.NetworkIO
+		node.AnalyzeInfo.InputBlocks += op.OpStats.InputBlocks
+
+		node.AnalyzeInfo.S3List += op.OpStats.S3List
+		node.AnalyzeInfo.S3Head += op.OpStats.S3Head
+		node.AnalyzeInfo.S3Put += op.OpStats.S3Put
+		node.AnalyzeInfo.S3Get += op.OpStats.S3Get
+		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
+		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
+		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+		node.AnalyzeInfo.WrittenRows += op.OpStats.WrittenRows
+		node.AnalyzeInfo.DeletedRows += op.OpStats.DeletedRows
+
 		node.AnalyzeInfo.ScanTime += op.OpStats.GetMetricByKey(process.OpScanTime)
 		node.AnalyzeInfo.InsertTime += op.OpStats.GetMetricByKey(process.OpInsertTime)
+		node.AnalyzeInfo.WaitLockTime += op.OpStats.GetMetricByKey(process.OpWaitLockTime)
 
 		if _, isMinorOp := vm.MinorOpMap[op.OpName]; isMinorOp {
 			isMinor := true
@@ -155,10 +186,10 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 				}
 			}
 			if isMinor {
-				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+				scopeParalleInfo.NodeIdxTimeConsumeMinor[op.NodeIdx] += op.OpStats.TimeConsumed
 			}
 		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
-			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TotalTimeConsumed
+			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TimeConsumed
 		}
 	}
 
@@ -169,11 +200,12 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 }
 
 // processPhyScope Recursive traversal of PhyScope and processing of PhyOperators within it
-func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
+func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statistic.StatsInfo) {
 	if scope == nil {
 		return
 	}
 
+	stats.AddScopePrepareDuration(scope.PrepareTimeConsumed)
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
 		scopeParallInfo := NewParallelScopeInfo()
@@ -190,41 +222,24 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node) {
 
 	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
-		processPhyScope(&preScope, nodes)
+		processPhyScope(&preScope, nodes, stats)
 	}
 }
 
-// hasValidQueryPlan Check if SQL has a query plan
-func (c *Compile) hasValidQueryPlan() bool {
-	if qry, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-		if qry.Query.StmtType != plan.Query_REPLACE {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Compile) fillPlanNodeAnalyzeInfo() {
+func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 	if c.anal == nil {
 		return
 	}
 
 	// handle local scopes
 	for _, localScope := range c.anal.phyPlan.LocalScope {
-		processPhyScope(&localScope, c.anal.qry.Nodes)
+		processPhyScope(&localScope, c.anal.qry.Nodes, stats)
 	}
 
 	// handle remote run scopes
 	for _, remoteScope := range c.anal.phyPlan.RemoteScope {
-		processPhyScope(&remoteScope, c.anal.qry.Nodes)
+		processPhyScope(&remoteScope, c.anal.qry.Nodes, stats)
 	}
-
-	// Summarize the S3 resources executed by SQL into curNode
-	// TODO: Actually, S3 resources may not necessarily be used by the current node.
-	// We will handle it this way for now and optimize it in the future
-	curNode := c.anal.qry.Nodes[c.anal.curNodeIdx]
-	curNode.AnalyzeInfo.S3IOInputCount = c.anal.phyPlan.S3IOInputCount
-	curNode.AnalyzeInfo.S3IOOutputCount = c.anal.phyPlan.S3IOOutputCount
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -236,6 +251,10 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 		DataSource:   ConvertSourceToPhySource(scope.DataSource),
 		PreScopes:    []models.PhyScope{},
 		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
+	}
+
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
 	}
 
 	if scope.Proc != nil {
@@ -398,7 +417,7 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 		}
 	}
 
-	// record the number of s3 requests
+	// record the number of local cn s3 requests
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.Put.Load()
 	c.anal.phyPlan.S3IOInputCount += runC.counterSet.FileService.S3.List.Load()
 
@@ -408,6 +427,7 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 	c.anal.phyPlan.S3IOOutputCount += runC.counterSet.FileService.S3.DeleteMulti.Load()
 	//-------------------------------------------------------------------------------------------
 
+	// record the number of remote cn s3 requests
 	for _, remotePhy := range runC.anal.remotePhyPlans {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 		c.anal.phyPlan.S3IOInputCount += remotePhy.S3IOInputCount
@@ -454,6 +474,7 @@ func getExplainOption(options []tree.OptionElem) *ExplainOption {
 	return es
 }
 
+// makeExplainPhyPlanBuffer used to explain phyplan statement
 func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption) *bytes.Buffer {
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
@@ -462,47 +483,114 @@ func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInf
 
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
 
-	explainGlobalResources(queryResult, statsInfo, anal, option, buffer)
+	//explainGlobalResources(queryResult, statsInfo, anal, option, buffer)
+	explainResourceOverview(queryResult, statsInfo, anal, option, buffer)
 	explainScopes(ss, 0, receiverMap, option, buffer)
 	return buffer
 }
 
-func explainGlobalResources(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
-	if option.Analyze {
-		gblStats := extractPhyPlanGlbStats(anal.phyPlan)
-		buffer.WriteString(fmt.Sprintf("PhyPlan TimeConsumed:%dns, MemorySize:%dbytes, S3InputCount: %d, S3OutputCount: %d, AffectRows: %d",
-			gblStats.TimeConsumed,
+func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
+	if option.Analyze || option.Verbose {
+		gblStats := models.ExtractPhyPlanGlbStats(anal.phyPlan)
+		buffer.WriteString("Overview:\n")
+		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
 			gblStats.MemorySize,
-			anal.phyPlan.S3IOInputCount,
-			anal.phyPlan.S3IOOutputCount,
+			gblStats.DiskIOSize,
+			gblStats.NetWorkSize,
 			queryResult.AffectRows,
 		))
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
-			cpuTimeVal := gblStats.TimeConsumed + statsInfo.BuildReaderDuration +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOMergerTimeConsumption())
+			// Calculate the total sum of S3 requests for each stage
+			list, head, put, get, delete, deleteMul, writtenRows, deletedRows := models.CalcTotalS3Requests(gblStats, statsInfo)
 
-			buffer.WriteString(fmt.Sprintf("StatsInfo：CpuTime(%dns) = PhyTime(%d)+BuildReaderTime(%d)+ParseTime(%d)+CompileTime(%d)+PlanTime(%d)-IOAccessTime(%d)-IOMergeTime(%d)\n",
-				cpuTimeVal,
-				gblStats.TimeConsumed,
-				statsInfo.BuildReaderDuration,
-				statsInfo.ParseDuration,
-				statsInfo.CompileDuration,
-				statsInfo.PlanDuration,
+			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
+			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows((%d+%d)/8192):%.4f \n",
+				list, head, put, get, delete, deleteMul, writtenRows, deletedRows, s3InputEstByRows,
+			))
+
+			cpuTimeVal := gblStats.OperatorTimeConsumed +
+				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
+				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+
+			buffer.WriteString("\tCPU Usage: \n")
+			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d)\n",
+				statsInfo.ParseStage.ParseDuration,
+				statsInfo.PlanStage.PlanDuration,
+				statsInfo.CompileStage.CompileDuration,
+				gblStats.OperatorTimeConsumed,
+				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.IOMergerTimeConsumption()))
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
 
-			buffer.WriteString(fmt.Sprintf("PlanStatsDuration: %dns, PlanResolveVariableDuration: %dns\n",
-				statsInfo.BuildPlanStatsDuration,
-				statsInfo.BuildPlanResolveVarDuration,
-			))
+			//-------------------------------------------------------------------------------------------------------
+			if option.Analyze {
+				buffer.WriteString("\tQuery Build Plan Stage:\n")
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.PlanStage.PlanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.PlanStage.BuildPlanS3Request.List,
+					statsInfo.PlanStage.BuildPlanS3Request.Head,
+					statsInfo.PlanStage.BuildPlanS3Request.Put,
+					statsInfo.PlanStage.BuildPlanS3Request.Get,
+					statsInfo.PlanStage.BuildPlanS3Request.Delete,
+					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
+				))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
 
-			buffer.WriteString(fmt.Sprintf("CompileTableScanDuration: %dns",
-				statsInfo.CompileTableScanDuration,
-			))
+				//-------------------------------------------------------------------------------------------------------
+				buffer.WriteString("\tQuery Compile Stage:\n")
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.CompileStage.CompileS3Request.List,
+					statsInfo.CompileStage.CompileS3Request.Head,
+					statsInfo.CompileStage.CompileS3Request.Put,
+					statsInfo.CompileStage.CompileS3Request.Get,
+					statsInfo.CompileStage.CompileS3Request.Delete,
+					statsInfo.CompileStage.CompileS3Request.DeleteMul,
+				))
+				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration))
+
+				//-------------------------------------------------------------------------------------------------------
+				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
+				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
+				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
+				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Put,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Get,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
+					statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
+				))
+
+				//-------------------------------------------------------------------------------------------------------
+				buffer.WriteString("\tQuery Execution Stage:\n")
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.OperatorTimeConsumed))
+				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					gblStats.S3ListRequest,
+					gblStats.S3HeadRequest,
+					gblStats.S3PutRequest,
+					gblStats.S3GetRequest,
+					gblStats.S3DeleteRequest,
+					gblStats.S3DeleteMultiRequest,
+				))
+
+				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+					gblStats.MemorySize,
+					gblStats.DiskIOSize,
+					gblStats.NetWorkSize,
+				))
+			}
+			//-------------------------------------------------------------------------------------------------------
+			buffer.WriteString("Physical Plan Deployment:")
 		}
 	}
 }
@@ -513,7 +601,7 @@ func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, 
 	}
 }
 
-// showSingleScope generates and outputs a string representation of a single Scope.
+// explainSingleScope generates and outputs a string representation of a single Scope.
 // It includes header information of Scope, data source information, and pipeline tree information.
 // In addition, it recursively displays information from any PreScopes.
 func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
@@ -527,6 +615,11 @@ func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitR
 
 	if option.Verbose || option.Analyze {
 		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+		if scope.ScopeAnalyzer != nil {
+			buffer.WriteString(fmt.Sprintf(" PrepareTimeConsumed: %dns", scope.ScopeAnalyzer.TimeConsumed))
+		} else {
+			buffer.WriteString(" PrepareTimeConsumed: 0ns")
+		}
 	} else {
 		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
 	}
@@ -613,61 +706,4 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 	if isRoot {
 		trimLastNewline(buffer)
 	}
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-
-// Define a struct to hold the total time and wait time
-type GblStats struct {
-	TimeConsumed int64
-	MemorySize   int64
-}
-
-// Function to recursively process PhyScope and extract stats from PhyOperator
-func handlePhyOperator(op *models.PhyOperator, stats *GblStats) {
-	if op == nil {
-		return
-	}
-
-	// Accumulate stats from the current operator
-	if op.OpStats != nil && op.NodeIdx >= 0 {
-		stats.TimeConsumed += op.OpStats.TotalTimeConsumed
-		stats.MemorySize += op.OpStats.TotalWaitTimeConsumed
-	}
-
-	// Recursively process child operators
-	for _, childOp := range op.Children {
-		handlePhyOperator(childOp, stats)
-	}
-}
-
-// Function to process PhyScope (including PreScopes and RootOperator)
-func handlePhyScope(scope *models.PhyScope, stats *GblStats) {
-	// Process the RootOperator of the current scope
-	handlePhyOperator(scope.RootOperator, stats)
-
-	// Recursively process PreScopes (which are also PhyScopes)
-	for _, preScope := range scope.PreScopes {
-		handlePhyScope(&preScope, stats)
-	}
-}
-
-// Function to process all scopes in a PhyPlan (LocalScope and RemoteScope)
-func handlePhyPlanScopes(scopes []models.PhyScope, stats *GblStats) {
-	for _, scope := range scopes {
-		handlePhyScope(&scope, stats)
-	}
-}
-
-// Function to process the entire PhyPlan and extract the stats
-func extractPhyPlanGlbStats(plan *models.PhyPlan) GblStats {
-	var stats GblStats
-
-	// Process LocalScope
-	handlePhyPlanScopes(plan.LocalScope, &stats)
-
-	// Process RemoteScope
-	handlePhyPlanScopes(plan.RemoteScope, &stats)
-
-	return stats
 }

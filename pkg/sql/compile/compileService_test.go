@@ -44,16 +44,16 @@ func TestCompileService(t *testing.T) {
 	for _, p := range inputs {
 		wg.Add(1)
 
-		c := service.getCompile(p)
+		c := allocateNewCompile(p)
 		c.InitPipelineContextToExecuteQuery()
 
-		require.NoError(t, service.recordRunningCompile(c))
+		service.recordRunningCompile(c, nil)
 		go func(cc *Compile) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
-			_, _ = service.removeRunningCompile(cc)
-			service.putCompile(cc)
+			service.removeRunningCompile(cc, nil)
+			releaseCompile(cc)
 			wg.Done()
 		}(c)
 	}
@@ -61,7 +61,7 @@ func TestCompileService(t *testing.T) {
 
 	// 2. kill all running Compile.
 	service.PauseService()
-	service.KillAllQueriesWithError(nil)
+	service.KillAllQueriesWithError()
 	service.ResumeService()
 
 	require.Equal(t, int32(10), doneRoutine.Load())

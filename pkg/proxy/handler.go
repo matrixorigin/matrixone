@@ -20,6 +20,9 @@ import (
 	"net"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/petermattis/goid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 // handler is the proxy service handler.
@@ -205,19 +207,22 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}
 	h.logger.Debug("server conn created")
 	defer func() {
-		// This Close() function just disconnect from connManager,
-		// but do not close the real raw connection. The raw connection
-		// is closed if the server connection could not be pushed into
-		// the connection cache, which is in (*clientConn).handleQuitEvent()
-		// function.
-		_ = sc.Close()
+		// If the connCache is nil, means the connection cached feature is not
+		// enabled. Do close the server connection if the connection cache
+		// feature is not enabled.
+		if h.connCache == nil {
+			_ = sc.Close()
+		}
 	}()
+
+	goId := goid.Get()
 
 	h.logger.Info("build connection",
 		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
 		zap.String("proxy->server", fmt.Sprintf("%s -> %s", sc.RawConn().LocalAddr(), sc.RawConn().RemoteAddr())),
 		zap.Uint32("conn ID", cc.ConnID()),
 		zap.Uint64("session ID", c.ID()),
+		zap.Int64("goId", goId),
 	)
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
@@ -263,6 +268,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 			h.logger.Info("connection closed",
 				zap.Uint32("Conn ID", cc.ConnID()),
 				zap.Uint64("session ID", c.ID()),
+				zap.Int64("goId", goId),
 			)
 			return nil
 		}
@@ -270,6 +276,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.logger.Error("proxy handle error",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Uint64("session ID", c.ID()),
+			zap.Int64("goId", goId),
 			zap.Error(err),
 		)
 		return err

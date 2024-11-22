@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 type unnestTestCase struct {
@@ -196,7 +197,7 @@ func TestUnnestCall(t *testing.T) {
 			}
 
 			for i := 0; i < inputBat.RowCount(); i++ {
-				err = tvfst.start(ut.arg, ut.proc, i)
+				err = tvfst.start(ut.arg, ut.proc, i, nil)
 				require.Nil(t, err)
 				for {
 					res, err := tvfst.call(ut.arg, ut.proc)
@@ -235,7 +236,7 @@ func TestUnnestCall(t *testing.T) {
 			}
 
 			for i := 0; i < inputBat.RowCount(); i++ {
-				err = tvfst.start(ut.arg, ut.proc, i)
+				err = tvfst.start(ut.arg, ut.proc, i, nil)
 				require.Nil(t, err)
 				for {
 					res, err := tvfst.call(ut.arg, ut.proc)

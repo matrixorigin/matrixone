@@ -96,11 +96,11 @@ func (b *BlockInfo) String() string {
 	}
 
 	return fmt.Sprintf(
-		"[%s]ID-%s, MetaLoc: %s, PartitionNum: %d",
+		"[%s]ID-%s(%s)",
 		flag,
 		b.BlockID.ShortStringEx(),
-		b.MetaLocation().String(),
-		b.PartitionNum)
+		b.MetaLocation().Extent().String(),
+	)
 }
 
 func (b *BlockInfo) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {

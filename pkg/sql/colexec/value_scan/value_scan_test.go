@@ -19,6 +19,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -89,4 +92,50 @@ func TestValueScan(t *testing.T) {
 func resetBatchs(arg *ValueScan) {
 	bat := colexec.MakeMockBatchs()
 	arg.Batchs = append(arg.Batchs, bat)
+}
+
+func TestGenSubBatchFromOriginBatch(t *testing.T) {
+	testCases := []struct {
+		name      string
+		types     []types.Type
+		batchSize int
+		expected  int
+	}{
+		{"BatchSize8191", []types.Type{types.T_int32.ToType()}, 8191, 8191},
+		{"BatchSize8192", []types.Type{types.T_int32.ToType()}, 8192, 8192},
+		{"BatchSize8193", []types.Type{types.T_int32.ToType()}, 8193, 8193},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+			vs := &ValueScan{
+				Batchs: make([]*batch.Batch, 2),
+			}
+
+			// Create a mock batch with the specified size
+			bat := testutil.NewBatch(tc.types, false, tc.batchSize, proc.Mp())
+			vs.Batchs[0] = bat
+
+			// Generate sub-batch
+			rowCnt := 0
+			curValue := int32(0)
+			for {
+				subBatch, err := vs.genSubBatchFromOriginBatch(proc)
+				require.NoError(t, err)
+				if subBatch == nil {
+					break
+				}
+				require.LessOrEqual(t, subBatch.RowCount(), oneBatchMaxRow)
+				rowCnt += subBatch.RowCount()
+				for i := 0; i < subBatch.RowCount(); i++ {
+					vec := subBatch.GetVector(0)
+					v := vector.GetFixedAtNoTypeCheck[int32](vec, i)
+					require.Equal(t, curValue, v)
+					curValue++
+				}
+			}
+			require.Equal(t, rowCnt, tc.expected)
+		})
+	}
 }

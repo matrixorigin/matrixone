@@ -26,14 +26,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -42,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -637,13 +641,13 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
+		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
-				case "cast", "serial":
+				case "cast", "serial", "date_sub":
 					return extractColRefInFilter(exprImpl.F.Args[0])
 				}
 				return nil
@@ -777,6 +781,10 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
+
+	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" {
+		return true // in is always null rejecting
+	}
 
 	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
@@ -1045,11 +1053,11 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	case *plan.Expr_F:
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
-			switch arg.Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+			if isRuntimeConstExpr(arg) {
 				continue
+			} else {
+				isConst = false
 			}
-			isConst = false
 			isZonemappable := ExprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
@@ -1057,6 +1065,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 		}
 		if isConst {
 			return true
+		}
+
+		if exprImpl.F.Func.ObjName == "cast" {
+			switch exprImpl.F.Args[0].Typ.Id {
+			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp):
+				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
+					//this cast is monotonic, can safely pushdown to block filters
+					return true
+				}
+			}
 		}
 
 		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
@@ -1074,6 +1092,16 @@ func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.ClusterBy != nil {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
 	}
+
+	if tableDef.Pkey == nil {
+		// view has no pk
+		logutil.Warn("GetSortOrderByName table has no PK",
+			zap.String("dbName", tableDef.DbName),
+			zap.String("tableName", tableDef.Name),
+			zap.String("relKind", tableDef.TableType))
+		return -1
+	}
+
 	if catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
 		return -1
 	}
@@ -1174,11 +1202,11 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return expr, nil
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{bat})
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
-	defer vec.Free(proc.Mp())
+	defer free()
 
 	if isVec {
 		data, err := vec.MarshalBinary()
@@ -1470,7 +1498,7 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	return fpath
 }
 
-func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
+func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 
 	param.ScanType = tree.S3
 	param.S3Param = &tree.S3Parameter{}
@@ -1479,11 +1507,11 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 		return moerr.NewBadConfig(param.Ctx, "S3 URL Query does not support in ExternParam")
 	}
 
-	if s.Url.Scheme != function.S3_PROTOCOL {
+	if s.Url.Scheme != stage.S3_PROTOCOL {
 		return moerr.NewBadConfig(param.Ctx, "URL protocol is not S3")
 	}
 
-	bucket, prefix, _, err := function.ParseS3Url(s.Url)
+	bucket, prefix, _, err := stage.ParseS3Url(s.Url)
 	if err != nil {
 		return err
 	}
@@ -1493,28 +1521,28 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	param.Filepath = prefix
 
 	// mandatory
-	param.S3Param.APIKey, found = s.GetCredentials(function.PARAMKEY_AWS_KEY_ID, "")
+	param.S3Param.APIKey, found = s.GetCredentials(stage.PARAMKEY_AWS_KEY_ID, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_KEY_ID)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_KEY_ID)
 	}
-	param.S3Param.APISecret, found = s.GetCredentials(function.PARAMKEY_AWS_SECRET_KEY, "")
+	param.S3Param.APISecret, found = s.GetCredentials(stage.PARAMKEY_AWS_SECRET_KEY, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
-	}
-
-	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
-	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_SECRET_KEY)
 	}
 
-	param.S3Param.Endpoint, found = s.GetCredentials(function.PARAMKEY_ENDPOINT, "")
+	param.S3Param.Region, found = s.GetCredentials(stage.PARAMKEY_AWS_REGION, "")
 	if !found {
-		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", function.PARAMKEY_ENDPOINT)
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_AWS_REGION)
+	}
+
+	param.S3Param.Endpoint, found = s.GetCredentials(stage.PARAMKEY_ENDPOINT, "")
+	if !found {
+		return moerr.NewBadConfigf(param.Ctx, "Credentials %s not found", stage.PARAMKEY_ENDPOINT)
 	}
 
 	// optional
-	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
-	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
+	param.S3Param.Provider, _ = s.GetCredentials(stage.PARAMKEY_PROVIDER, stage.S3_PROVIDER_AMAZON)
+	param.CompressType, _ = s.GetCredentials(stage.PARAMKEY_COMPRESSION, "auto")
 
 	for i := 0; i < len(param.Option); i += 2 {
 		switch strings.ToLower(param.Option[i]) {
@@ -1552,11 +1580,11 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 
 	fpath := GetFilePathFromParam(param)
 
-	if !strings.HasPrefix(fpath, function.STAGE_PROTOCOL+"://") {
+	if !strings.HasPrefix(fpath, stage.STAGE_PROTOCOL+"://") {
 		return InitInfileParam(param)
 	}
 
-	s, err := function.UrlToStageDef(fpath, proc)
+	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
 		return err
 	}
@@ -1565,9 +1593,9 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 		return moerr.NewBadConfig(param.Ctx, "Invalid URL: query not supported in ExternParam")
 	}
 
-	if s.Url.Scheme == function.S3_PROTOCOL {
+	if s.Url.Scheme == stage.S3_PROTOCOL {
 		return InitStageS3Param(param, s)
-	} else if s.Url.Scheme == function.FILE_PROTOCOL {
+	} else if s.Url.Scheme == stage.FILE_PROTOCOL {
 
 		err := InitInfileParam(param)
 		if err != nil {
@@ -1648,11 +1676,10 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			if err != nil {
 				return nil, nil, err
 			}
-			entries, err := fs.List(param.Ctx, readPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, entry := range entries {
+			for entry, err := range fs.List(param.Ctx, readPath) {
+				if err != nil {
+					return nil, nil, err
+				}
 				if !entry.IsDir && i+1 != len(pathDir) {
 					continue
 				}
@@ -1687,12 +1714,14 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // GetUniqueColAndIdxFromTableDef
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) ([]map[string]int, map[string]bool) {
 	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+	uniqueColNames := make(map[string]bool)
 	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
 			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+			uniqueColNames[colName] = true
 		}
 		uniqueCols = append(uniqueCols, pkMap)
 	}
@@ -1702,11 +1731,12 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 			pkMap := make(map[string]int)
 			for _, part := range index.Parts {
 				pkMap[part] = int(tableDef.Name2ColIndex[part])
+				uniqueColNames[part] = true
 			}
 			uniqueCols = append(uniqueCols, pkMap)
 		}
 	}
-	return uniqueCols
+	return uniqueCols, uniqueColNames
 }
 
 // GenUniqueColJoinExpr
@@ -2146,6 +2176,31 @@ func MakeFalseExpr() *Expr {
 				Value:  &plan.Literal_Bval{Bval: false},
 			},
 		},
+	}
+}
+
+func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
+	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok {
+		panic("fail to convert runtime filter to composite primary key!")
+	}
+	col := expr.GetCol()
+	col.ColPos = cpkeyIdx
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: true,
+	}
+}
+
+func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        serialExpr,
+		MatchPrefix: matchPrefix,
 	}
 }
 
@@ -2654,4 +2709,13 @@ func offsetToString(offset int) string {
 		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
 	}
 	return fmt.Sprintf("+%02d:%02d", hours, minutes)
+}
+
+func getLockTableAtTheEnd(tableDef *TableDef) bool {
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
+		tableDef.Partition != nil || // unsupport partition table
+		len(tableDef.Pkey.Names) > 1 { // unsupport multi-column primary key
+		return false
+	}
+	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 }

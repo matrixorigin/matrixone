@@ -22,11 +22,15 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -184,7 +188,7 @@ type Conn struct {
 	allowedPacketSize int
 	timeout           time.Duration
 	allocator         *BufferAllocator
-	ses               *Session
+	ses               atomic.Pointer[holder[*Session]]
 	closeFunc         sync.Once
 	service           string
 }
@@ -270,9 +274,9 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			return
+			logutil.Error("close conn error", zap.Error(err))
 		}
-		c.ses = nil
+		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)
 		if rm != nil {
 			rm.Closed(c)
@@ -285,7 +289,7 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	var err error
 	if totalLength > c.allowedPacketSize {
 		errMsg := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
-		err = c.ses.GetResponser().MysqlRrWr().WriteERR(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
+		err = c.respErr(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
 		if err != nil {
 			return err
 		}
@@ -729,6 +733,7 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
+	c.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -741,7 +746,6 @@ func (c *Conn) Flush() error {
 			return err
 		}
 	}
-	c.ses.CountPacket(1)
 	c.packetInBuf = 0
 	return err
 }
@@ -784,6 +788,7 @@ func (c *Conn) WriteToConn(buf []byte) error {
 			return err
 		}
 		sendLength += n
+		c.CountOutputBytes(n)
 	}
 	return nil
 }
@@ -812,4 +817,58 @@ func (c *Conn) Reset() {
 	c.freeDynamicBuffUnsafe()
 	c.packetInBuf = 0
 	c.loadLocalBuf.freeBuffUnsafe(c.allocator)
+}
+
+func (c *Conn) CountFlushPackage(n int64) {
+	hld := c.ses.Load()
+	if hld != nil {
+		val := hld.value
+		if val != nil {
+			val.CountFlushPackage(n)
+		}
+	}
+}
+
+func (c *Conn) CountOutputBytes(n int) {
+	hld := c.ses.Load()
+	if hld != nil {
+		val := hld.value
+		if val != nil {
+			val.CountOutputBytes(n)
+		}
+	}
+}
+
+func (c *Conn) respErr(code uint16, state, msg string) error {
+	hld := c.ses.Load()
+	if hld != nil {
+		val := hld.value
+		if val != nil {
+			return val.GetResponser().MysqlRrWr().WriteERR(code, state, msg)
+		}
+	}
+	return nil
+}
+
+func (c *Conn) SetSession(ses *Session) {
+	c.ses.Store(&holder[*Session]{value: ses})
+}
+
+// ExecuteFuncWithRecover executes the function and recover the panic
+func ExecuteFuncWithRecover(fun func() error) (err error, hasRecovered bool) {
+	defer func() {
+		if rErr := recover(); rErr != nil {
+			hasRecovered = true
+			_, ok := rErr.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
+			} else {
+				err = errors.Join(err, rErr.(error))
+			}
+		}
+	}()
+	if err = fun(); err != nil {
+		return
+	}
+	return
 }

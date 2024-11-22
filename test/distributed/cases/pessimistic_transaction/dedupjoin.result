@@ -1,0 +1,30 @@
+drop table if exists t;
+create table t (a int, b int);
+insert into t select *, * from generate_series(1000) tf;
+select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
+Duplicate entry '1' for key ''
+select t2.a from t as t1 dedup join t as t2 on t1.a + 100 = t2.a;
+Duplicate entry '101' for key ''
+select t2.a from t as t1 dedup join t as t2 on t1.a + 100 = t2.a where t2.a < 10;
+a
+1
+2
+3
+4
+5
+6
+7
+8
+9
+insert into t select *, * from generate_series(10, 100) tf;
+select t2.a from t as t1 dedup join t as t2 on t1.a = t2.a;
+Duplicate entry '10' for key ''
+drop table t;
+create table t1(a int primary key);
+insert into t1 select result from generate_series(1000000) tf;
+select count(*) from t1 dedup join (select cast(result+999999 as int) result from generate_series(1000000) tmp) tf on a = result;
+Duplicate entry '1000000' for key ''
+select count(*) from t1 dedup join (select cast(result+1000000 as int) result from generate_series(1000000) tmp) tf on a = result;
+count(*)
+1000000
+drop table t1;

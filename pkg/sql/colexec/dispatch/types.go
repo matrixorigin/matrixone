@@ -15,9 +15,11 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -67,6 +69,8 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
+
+	marshalBuf bytes.Buffer
 }
 
 type Dispatch struct {
@@ -154,7 +158,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		dispatch.ctr.sp = nil
 	} else {
 		for _, reg := range dispatch.LocalRegs {
-			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, proc.Mp())
+			reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
 		}
 	}
 	dispatch.ctr = nil

@@ -24,6 +24,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"hash/crc32"
 	"io"
 	"math"
 	"runtime"
@@ -34,6 +36,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -590,41 +593,24 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
-		fs := proc.GetFileService()
 
-		moUrl, offsetSize, err := ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
 			return err
 		}
 
-		err = func() error {
-			r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
-			if err != nil {
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-
-			defer r.Close()
-
-			fileBytes, err := io.ReadAll(r)
-			if err != nil {
-				return err
-			}
-
-			if len(fileBytes) == 0 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				return nil
-			}
-
-			if err = rs.AppendBytes(fileBytes, false); err != nil {
-				return err
-			}
-
 			return nil
-		}()
+		}
 
-		if err != nil {
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
 	}
@@ -647,7 +633,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
 
-		moUrl, _, err := ParseDatalink(filePath, proc)
+		dl, err := datalink.NewDatalink(filePath, proc)
 		if err != nil {
 			return err
 		}
@@ -662,7 +648,7 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		content := util.UnsafeBytesToString(_content)
 
 		err = func() error {
-			writer, err := NewFileServiceWriter(moUrl, proc)
+			writer, err := dl.NewWriter(proc)
 			if err != nil {
 				return err
 			}
@@ -1072,6 +1058,29 @@ func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 }
 
+type crc32ExecContext struct {
+	hah hash.Hash32
+}
+
+func newCrc32ExecContext() *crc32ExecContext {
+	return &crc32ExecContext{
+		hah: crc32.NewIEEE(),
+	}
+}
+
+func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[uint32](
+		parameters,
+		result, proc, length, func(v []byte) (uint32, error) {
+			content.hah.Reset()
+			_, err := content.hah.Write(v)
+			if err != nil {
+				return 0, err
+			}
+			return content.hah.Sum32(), nil
+		}, selectList)
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
 		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
@@ -1372,7 +1381,7 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return proc.GetSessionInfo().LastInsertID
+		return proc.GetLastInsertID()
 	})
 }
 

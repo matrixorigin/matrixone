@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -85,6 +86,8 @@ type ExpressionExecutor interface {
 
 	// IsColumnExpr returns true if the expression is a column expression.
 	IsColumnExpr() bool
+
+	TypeName() string
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -125,10 +128,16 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
 		}
+		// [issue#19574]
+		// if < 0, it's special for agg or others.
+		if ce.relIndex < 0 {
+			ce.relIndex = 0
+		}
 		return ce, nil
 
 	case *plan.Expr_P:
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), types.T_text.ToType()), nil
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -205,41 +214,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
-// EvalExpressionOnce
-// todo: return (vector, free method, error) may be better.
-func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
-	executor, err := NewExpressionExecutor(proc, planExpr)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		executor.Free()
-	}()
-
-	vec, err := executor.Eval(proc, batches, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// some cases that we have no need to duplicate the result because we only use it once.
-	if e, ok := executor.(*FunctionExpressionExecutor); ok {
-		if !e.folded.canFold {
-			e.resultVector = nil
-			return vec, nil
-		} else {
-			e.folded.foldVector = nil
-			return vec, nil
-		}
-	}
-	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
-		e.resultVector = nil
-		return vec, nil
-	}
-
-	// I'm not sure if dup is good. but ok now.
-	return vec.Dup(proc.Mp())
-}
-
 // FixedVectorExpressionExecutor
 // the content of its vector is fixed.
 // e.g.
@@ -297,7 +271,13 @@ type ParamExpressionExecutor struct {
 	typ  types.Type
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if expr.vec != nil {
+		return expr.vec, nil
+	}
+	if expr.null != nil {
+		return expr.null, nil
+	}
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -520,8 +500,10 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+
+	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0]).GetValue(uint64(i))
+		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			expr.selectList1[i] = selectList[i]
 			expr.selectList2[i] = selectList[i]
@@ -562,8 +544,10 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
+			bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
+
 			for j := 0; j < rowCount; j++ {
-				b, null := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i]).GetValue(uint64(j))
+				b, null := bs.GetValue(uint64(j))
 				if !null && b {
 					expr.selectList1[j] = false
 					expr.selectList2[j] = true
@@ -617,7 +601,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		return nil, err
 	}
 
-	if len(expr.selectList.SelectList) < batches[0].RowCount() {
+	if selectList != nil && len(expr.selectList.SelectList) < batches[0].RowCount() {
 		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
 	}
 	if selectList == nil {
@@ -667,7 +651,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
-	expr.folded.reset(expr.m)
 
 	for _, p := range expr.parameterExecutor {
 		if p != nil {
@@ -694,11 +677,6 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
-	}
-
-	// [hack-#002] our `select * from external table` is `select * from EmptyForConstFoldBatch`.
-	if batches[relIndex] == batch.EmptyForConstFoldBatch {
-		return expr.getConstNullVec(expr.typ, 1), nil
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
@@ -837,7 +815,7 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 				}
 				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_datalink {
-				_, _, err1 := function.ParseDatalink(sval, proc)
+				_, _, err1 := datalink.ParseDatalink(sval, proc)
 				if err1 != nil {
 					return nil, err1
 				}
@@ -978,8 +956,6 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 	return nil
 }
 
-var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
-
 func getConstZM(
 	ctx context.Context,
 	expr *plan.Expr,
@@ -1099,20 +1075,18 @@ func EvaluateFilterByZoneMap(
 	}
 
 	if len(columnMap) == 0 {
-		// XXX should we need to check expr.oid = bool or not ?
-
-		vec, err := EvalExpressionOnce(proc, expr, noColumnBatchForZoneMap)
+		vec, free, err := GetReadonlyResultFromNoColumnExpression(proc, expr)
 		if err != nil {
 			return true
 		}
 		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
-				vec.Free(proc.Mp())
+				free()
 				return true
 			}
 		}
-		vec.Free(proc.Mp())
+		free()
 		return false
 	}
 
@@ -1394,11 +1368,14 @@ func GetExprZoneMap(
 						if vecs[arg.AuxId] != nil {
 							vecs[arg.AuxId].Free(proc.Mp())
 						}
-						if vecs[arg.AuxId], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
+						if vecs[arg.AuxId], _, err = GetReadonlyResultFromNoColumnExpression(proc, arg); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
 						}
-						ivecs[i] = vecs[arg.AuxId]
+						if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
 					}
 				} else {
 					if f() {

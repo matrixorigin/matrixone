@@ -17,6 +17,7 @@ package output
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,7 +44,7 @@ type Output struct {
 	ctr container
 
 	Data interface{}
-	Func func(*batch.Batch) error
+	Func func(*batch.Batch, *perfcounter.CounterSet) error
 
 	vm.OperatorBase
 }
@@ -78,7 +79,7 @@ func (output *Output) WithData(data interface{}) *Output {
 	return output
 }
 
-func (output *Output) WithFunc(Func func(*batch.Batch) error) *Output {
+func (output *Output) WithFunc(Func func(*batch.Batch, *perfcounter.CounterSet) error) *Output {
 	output.Func = Func
 	return output
 }
@@ -101,7 +102,7 @@ func (output *Output) Release() {
 
 func (output *Output) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
-		_ = output.Func(nil)
+		_ = output.Func(nil, nil)
 	}
 
 	if output.ctr.block {

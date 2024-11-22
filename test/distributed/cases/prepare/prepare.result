@@ -304,7 +304,7 @@ create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
 execute stmt1;
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '(.*)'
 select * from t1;
 a    b    c
 1    2    3
@@ -345,7 +345,7 @@ execute stmt1;
 a    b
 drop table t1;
 execute stmt1;
-internal error: table 't1' in prepare statement 'stmt1' does not exist anymore
+internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
 deallocate prepare stmt1;
 create database abc;
 use abc;
@@ -553,4 +553,55 @@ set @a=23456;
 execute s using @a;
 a    b    c    a    b
 46712    21712    46712    46712    23456
+drop table if exists prepare_test_t1;
+create table prepare_test_t1(col1 int, col2 int);
+prepare s_pre from insert into prepare_test_t1 values(1, ?);
+set @var = 2;
+execute s_pre using @var;
+select * from prepare_test_t1;
+col1    col2
+1    2
+alter table prepare_test_t1 add col3 int;
+execute s_pre using @var;
+internal error: table 'prepare_test_t1' has been changed, please reset prepare statement 's_pre'
+deallocate prepare s_pre;
+drop table prepare_test_t1;
 drop database if exists db1;
+create database db1;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+col1    col2
+drop database db1;
+execute s_pre;
+internal error: table 'prepare_t1' has been changed, please reset prepare statement 's_pre'
+create database db1;
+use db1;
+execute s_pre;
+internal error: table 'prepare_t1' has been changed, please reset prepare statement 's_pre'
+drop database db1;
+create database db1;
+drop database if exists db2;
+create database db2;
+use db1;
+create table prepare_t1(col1 int, col2 int);
+insert into prepare_t1 values(1, 2);
+prepare s_pre from select * from prepare_t1;
+execute s_pre;
+col1    col2
+1    2
+use db2;
+execute s_pre;
+col1    col2
+1    2
+drop database db1;
+drop database db2;
+drop account if exists prepare_acc01;
+create account prepare_acc01 admin_name = 'test_prepare_account' identified by '111';
+create database db1;
+use db1;
+prepare stmt1x from 'select count(*) from system.statement_info limit 0';
+execute stmt1x;
+count(*)
+drop account prepare_acc01;

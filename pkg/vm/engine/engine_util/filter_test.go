@@ -846,8 +846,8 @@ func TestConstructBlockPKFilter(t *testing.T) {
 			vector.AppendFixed(vec, float64(ub), false, mp)
 		}
 
-		sel1 := blkPKFilter.SortedSearchFunc([]*vector.Vector{vec})
-		sel2 := blkPKFilter.UnSortedSearchFunc([]*vector.Vector{vec})
+		sel1 := blkPKFilter.SortedSearchFunc(vec)
+		sel2 := blkPKFilter.UnSortedSearchFunc(vec)
 
 		require.Equal(t, sel1, sel2, basePKFilters[i].String())
 	}

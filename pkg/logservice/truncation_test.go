@@ -20,10 +20,11 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestTruncationExportSnapshot(t *testing.T) {
@@ -248,6 +249,98 @@ func TestHAKeeperTruncation(t *testing.T) {
 
 			}
 		}
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestTruncationImportSnapshot2(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+
+		tnID := uint64(100)
+		req := pb.Request{
+			Method: pb.CONNECT_RO,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				TNID:    tnID,
+			},
+		}
+		resp := s.handleConnect(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		for i := 0; i < 10; i++ {
+			data := make([]byte, 8)
+			cmd := getTestAppendCmd(tnID, data)
+			req = pb.Request{
+				Method: pb.APPEND,
+				LogRequest: pb.LogRequest{
+					ShardID: 1,
+				},
+			}
+			resp = s.handleAppend(ctx, req, cmd)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+			assert.Equal(t, uint64(4+i), resp.LogResponse.Lsn) // applied index is 4+i
+		}
+
+		req = pb.Request{
+			Method: pb.TRUNCATE,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+				Lsn:     4,
+			},
+		}
+		resp = s.handleTruncate(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
+
+		req = pb.Request{
+			Method: pb.GET_TRUNCATE,
+			LogRequest: pb.LogRequest{
+				ShardID: 1,
+			},
+		}
+		resp = s.handleGetTruncatedIndex(ctx, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
+
+		ctx2, cancel2 := context.WithTimeoutCause(context.Background(), time.Second, moerr.NewInternalErrorNoCtx("ut tester"))
+		defer cancel2()
+
+		// after this, snapshot index 14 is exported.
+		err := s.store.processShardTruncateLog(ctx2, 1)
+		assert.NoError(t, err)
+
+	}
+	runServiceTest(t, false, true, fn)
+}
+
+func TestHAKeeperTruncation2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.LOG_HEARTBEAT,
+			LogHeartbeat: &pb.LogStoreHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		for i := 0; i < 10; i++ {
+			resp := s.handleLogHeartbeat(ctx, req)
+			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		v, err := s.store.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.IndexQuery{})
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(12), v.(uint64))
+
+		//let ctx timeout
+		ctx2, cancel2 := context.WithTimeoutCause(context.Background(), 0, moerr.NewInternalErrorNoCtx("ut tester"))
+		defer cancel2()
+		err = s.store.processHAKeeperTruncation(ctx2)
+		assert.Error(t, err)
+
 	}
 	runServiceTest(t, true, true, fn)
 }

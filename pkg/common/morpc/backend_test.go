@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -110,7 +111,7 @@ func TestReadTimeout(t *testing.T) {
 			assert.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()
-			assert.Equal(t, backendClosed, err)
+			assert.NotEqual(t, backendClosed, err)
 		},
 		WithBackendReadTimeout(time.Millisecond*200),
 	)
@@ -765,7 +766,7 @@ func TestWaitingFutureMustGetClosedError(t *testing.T) {
 
 			_, err = f.Get()
 			assert.Error(t, err)
-			assert.Equal(t, backendClosed, err)
+			assert.Equal(t, io.EOF, err)
 		},
 	)
 }

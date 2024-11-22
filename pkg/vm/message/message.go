@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
@@ -235,7 +236,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		if mr.debug {
 			timeout = 1 * time.Second
 		}
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), timeout)
+		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseReceiveMessage)
 		select {
 		case <-timeoutCtx.Done():
 			timeoutCancel()

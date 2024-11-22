@@ -117,27 +117,24 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 
 		case SendLast:
-			if rightAnti.ctr.buf == nil {
-				rightAnti.ctr.lastpos = 0
-				setNil, err := ctr.sendLast(rightAnti, proc, analyzer)
+			if ctr.buf == nil {
+				ctr.lastPos = 0
+				err := ctr.finalize(rightAnti, proc)
 				if err != nil {
 					return result, err
 				}
-				if setNil {
-					ctr.state = End
-				}
-				continue
-			} else {
-				if rightAnti.ctr.lastpos >= len(rightAnti.ctr.buf) {
-					ctr.state = End
-					continue
-				}
-				result.Batch = rightAnti.ctr.buf[rightAnti.ctr.lastpos]
-				rightAnti.ctr.lastpos++
-				result.Status = vm.ExecHasMore
-				analyzer.Output(result.Batch)
-				return result, nil
 			}
+
+			if ctr.lastPos >= len(ctr.buf) {
+				ctr.state = End
+				continue
+			}
+
+			result.Batch = ctr.buf[ctr.lastPos]
+			ctr.lastPos++
+			result.Status = vm.ExecHasMore
+			analyzer.Output(result.Batch)
+			return result, nil
 
 		default:
 			result.Batch = nil
@@ -167,24 +164,24 @@ func (rightAnti *RightAnti) build(analyzer process.Analyzer, proc *process.Proce
 	return nil
 }
 
-func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer process.Analyzer) (bool, error) {
+func (ctr *container) finalize(ap *RightAnti, proc *process.Process) error {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
-		return true, nil
+		return nil
 	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
-			return true, nil
+			return nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
 					ctr.matched.Or(v)
 				} else {
-					return true, nil
+					return nil
 				}
 			}
 			close(ap.Channel)
@@ -207,28 +204,33 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 			ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 			for i, pos := range ap.Result {
-				ctr.rbat.Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
 			}
 		}
-
+		if err := ctr.rbat.PreExtend(proc.Mp(), len(sels)); err != nil {
+			return err
+		}
 		for j, pos := range ap.Result {
 			for _, sel := range sels {
 				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 				if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
-					return false, err
+					return err
 				}
 			}
 		}
 		ctr.rbat.AddRowCount(len(sels))
-		ap.ctr.buf = []*batch.Batch{ctr.rbat}
-		return false, nil
+		ctr.buf = []*batch.Batch{ctr.rbat}
+		return nil
 	} else {
 		n := (len(sels)-1)/colexec.DefaultBatchSize + 1
-		ap.ctr.buf = make([]*batch.Batch, n)
-		for k := range ap.ctr.buf {
-			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
+		ctr.buf = make([]*batch.Batch, n)
+		for k := range ctr.buf {
+			ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.ctr.buf[k].Vecs[i] = vector.NewVec(ap.RightTypes[pos])
+				ctr.buf[k].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[pos])
+			}
+			if err := ctr.buf[k].PreExtend(proc.Mp(), colexec.DefaultBatchSize); err != nil {
+				return err
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {
@@ -239,14 +241,14 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyzer pr
 			for j, pos := range ap.Result {
 				for _, sel := range newsels {
 					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-					if err := ap.ctr.buf[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
-						return false, err
+					if err := ctr.buf[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
+						return err
 					}
 				}
 			}
-			ap.ctr.buf[k].SetRowCount(len(newsels))
+			ctr.buf[k].SetRowCount(len(newsels))
 		}
-		return false, nil
+		return nil
 	}
 
 }
@@ -262,7 +264,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 	count := bat.RowCount()
-	mSels := ctr.mp.Sels()
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
@@ -277,7 +278,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
-			if ap.HashOnPK {
+			if ap.HashOnPK || ctr.mp.HashOnUnique() {
 				idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 				if ctr.matched.Contains(vals[k] - 1) {
 					continue
@@ -308,7 +309,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 				}
 				ctr.matched.Add(vals[k] - 1)
 			} else {
-				sels := mSels[vals[k]-1]
+				sels := ctr.mp.GetSels(vals[k] - 1)
 				for _, sel := range sels {
 					if ctr.matched.Contains(uint64(sel)) {
 						continue
