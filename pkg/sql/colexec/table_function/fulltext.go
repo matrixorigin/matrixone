@@ -184,7 +184,9 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	return st, err
 }
 
-func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
+var ft_runSql = ft_runSql_fn
+
+func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
