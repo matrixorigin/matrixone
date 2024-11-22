@@ -113,7 +113,6 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 desc mo_catalog.mo_indexes;
 -- @session
 
-select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;

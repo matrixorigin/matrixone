@@ -2444,4 +2444,24 @@ pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time
 drop publication publication02;
 drop database if exists database02;
 drop account acc_save;
+create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set save_query_result = on;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+select * from result_scan(last_query_id()) as t;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+set save_query_result = off;
+set save_query_result = on;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+select * from result_scan(last_query_id()) as t;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+set save_query_result = off;
+drop account acc_save;
 set save_query_result = off;

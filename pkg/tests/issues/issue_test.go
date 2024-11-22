@@ -35,9 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
@@ -743,4 +746,133 @@ func TestIssue19551(t *testing.T) {
 			require.NoError(t, err)
 		},
 	)
+}
+
+func TestSpeedupAbortAllTxn(t *testing.T) {
+	c, err := embed.NewCluster(
+		embed.WithPreStart(
+			func(so embed.ServiceOperator) {
+				if so.ServiceType() == metadata.ServiceType_CN {
+					so.Adjust(
+						func(sc *embed.ServiceConfig) {
+							sc.CN.Txn.MaxActive = 1
+						},
+					)
+				}
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
+	op, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	cn := op.RawService().(cnservice.Service)
+
+	c1 := make(chan struct{})
+	c2 := make(chan struct{})
+	actionC := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	taskservice.DebugCtlTaskFramework(true)
+
+	// active will commit failed
+	go func() {
+		defer wg.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+		defer cancel()
+		exec := cn.GetSQLExecutor()
+		err := exec.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				op := txn.Txn()
+				res, err := txn.Exec(
+					"create database TestSpeedupAbortAllTxn",
+					executor.StatementOption{},
+				)
+				require.NoError(t, err)
+				res.Close()
+				close(c1)
+
+				// wait txn in active
+				<-c2
+				close(actionC)
+
+				for {
+					s, err := op.Snapshot()
+					require.NoError(t, err)
+					if s.Flag&client.AbortedFlag != 0 {
+						break
+					}
+					time.Sleep(time.Second)
+				}
+
+				return nil
+			},
+			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
+		)
+		require.Error(t, err)
+	}()
+
+	// wait active txn will canceled
+	go func() {
+		defer wg.Done()
+
+		<-c1
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+		defer cancel()
+
+		tc := cn.GetTxnClient()
+		_, err := tc.New(
+			ctx,
+			timestamp.Timestamp{},
+			client.WithUserTxn(),
+			client.WithWaitActiveHandle(
+				func() {
+					close(c2)
+				},
+			),
+		)
+		require.Error(t, err)
+	}()
+
+	<-actionC
+	eng := cn.GetEngine().(*disttae.Engine)
+	logtailClient := eng.PushClient()
+	require.NoError(t, logtailClient.Disconnect())
+	waitLogtailResume(cn)
+
+	wg.Wait()
+}
+
+func waitLogtailResume(cn cnservice.Service) {
+	exec := cn.GetSQLExecutor()
+	fn := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		res, err := exec.Exec(
+			ctx,
+			"select * from mo_tables",
+			executor.Options{}.WithDatabase("mo_catalog"),
+		)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		return nil
+	}
+
+	for {
+		if err := fn(); err == nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
 }

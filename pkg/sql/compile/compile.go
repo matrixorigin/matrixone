@@ -2365,7 +2365,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		}
 	case plan.Node_DEDUP:
 		for i := range shuffleJoins {
-			op := constructDedupJoin(node, rightTyps, c.proc)
+			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
@@ -2575,7 +2575,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructDedupJoin(node, rightTyps, c.proc)
+			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}

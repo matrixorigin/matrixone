@@ -189,46 +189,60 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	}
 }
 
+func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
+	if ctx == nil {
+		return nil
+	}
+	newCtx := &plan.DedupJoinCtx{
+		OldColList:        slices.Clone(ctx.OldColList),
+		UpdateColIdxList:  slices.Clone(ctx.UpdateColIdxList),
+		UpdateColExprList: DeepCopyExprList(ctx.UpdateColExprList),
+	}
+
+	return newCtx
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:         node.NodeType,
-		NodeId:           node.NodeId,
-		ExtraOptions:     node.ExtraOptions,
-		Children:         slices.Clone(node.Children),
-		JoinType:         node.JoinType,
-		BuildOnLeft:      node.BuildOnLeft,
-		BindingTags:      slices.Clone(node.BindingTags),
-		Limit:            DeepCopyExpr(node.Limit),
-		Offset:           DeepCopyExpr(node.Offset),
-		ProjectList:      DeepCopyExprList(node.ProjectList),
-		OnList:           DeepCopyExprList(node.OnList),
-		FilterList:       DeepCopyExprList(node.FilterList),
-		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
-		GroupBy:          DeepCopyExprList(node.GroupBy),
-		GroupingFlag:     slices.Clone(node.GroupingFlag),
-		AggList:          DeepCopyExprList(node.AggList),
-		OrderBy:          make([]*plan.OrderBySpec, len(node.OrderBy)),
-		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
-		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
-		ReplaceCtx:       DeepCopyReplaceCtx(node.ReplaceCtx),
-		NotCacheable:     node.NotCacheable,
-		SourceStep:       node.SourceStep,
-		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreDeleteCtx:     DeepCopyPreDeleteCtx(node.PreDeleteCtx),
-		OnDuplicateKey:   DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
-		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:            node.IsEnd,
-		ExternScan:       node.ExternScan,
-		PartitionPrune:   DeepCopyPartitionPrune(node.PartitionPrune),
-		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
-		InsertDeleteCols: DeepCopyExprList(node.InsertDeleteCols),
-		DedupColName:     node.DedupColName,
-		DedupColTypes:    slices.Clone(node.DedupColTypes),
+		NodeType:        node.NodeType,
+		NodeId:          node.NodeId,
+		ExtraOptions:    node.ExtraOptions,
+		Children:        slices.Clone(node.Children),
+		JoinType:        node.JoinType,
+		BuildOnLeft:     node.BuildOnLeft,
+		BindingTags:     slices.Clone(node.BindingTags),
+		Limit:           DeepCopyExpr(node.Limit),
+		Offset:          DeepCopyExpr(node.Offset),
+		ProjectList:     DeepCopyExprList(node.ProjectList),
+		OnList:          DeepCopyExprList(node.OnList),
+		FilterList:      DeepCopyExprList(node.FilterList),
+		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
+		GroupBy:         DeepCopyExprList(node.GroupBy),
+		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		AggList:         DeepCopyExprList(node.AggList),
+		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
+		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
+		TblFuncExprList: DeepCopyExprList(node.TblFuncExprList),
+		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
+		NotCacheable:    node.NotCacheable,
+		SourceStep:      node.SourceStep,
+		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
+		OnDuplicateKey:  DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
+		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
+		IsEnd:           node.IsEnd,
+		ExternScan:      node.ExternScan,
+		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
+		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:   DeepCopyExprList(node.OnUpdateExprs),
+		DedupColName:    node.DedupColName,
+		DedupColTypes:   slices.Clone(node.DedupColTypes),
+		UpdateCtxList:   DeepCopyUpdateCtxList(node.UpdateCtxList),
+		DedupJoinCtx:    DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
