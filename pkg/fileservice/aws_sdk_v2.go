@@ -389,7 +389,6 @@ func (a *AwsSDKv2) Write(
 			MultipartUpload: completed,
 		})
 		if err != nil {
-			panic(err)
 			return err
 		}
 
