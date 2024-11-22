@@ -663,7 +663,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	sql3_1 := "select count.*att_constraint_type.* from `mo_catalog`.`mo_columns` where account_id = 0 and att_database = 'db1' and att_relname = 't2' and att_constraint_type = 'p'"
 	mock.ExpectQuery(sql3_1).WillReturnRows(sqlmock.NewRows([]string{"count(att_constraint_type)"}).AddRow(uint64(1)))
 
-	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",'{\"InitSnapshotSplitTxn\":false}',\"\",\"\",\"\",\"\".*"
+	sql4 := "insert into mo_catalog.mo_cdc_task values.*0,\".*\",\"task1\",\".*\",\"\",\".*\",\"mysql\",\".*\",\"\",\"\",\"\",\".*\",\".*\",\"\",\"common\",\"common\",\"\",\"\",\"\",\".*\",\"running\",0,\"0\",\"false\",\"\",'.*',\"\",\"\",\"\",\"\".*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 	////
 
@@ -701,7 +701,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc2.OpenDbConn, func(_, _, _ string, _ int) (*sql.DB, error) {
+	stubOpenDbConn := gostub.Stub(&cdc2.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
 		return nil, nil
 	})
 	defer stubOpenDbConn.Reset()
@@ -1148,7 +1148,11 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		tables,
 		filters,
 		true,
-		"{}",
+		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
+			cdc2.InitSnapshotSplitTxn, cdc2.DefaultInitSnapshotSplitTxn,
+			cdc2.SendSqlTimeout, cdc2.DefaultSendSqlTimeout,
+			cdc2.MaxSqlLength, cdc2.DefaultMaxSqlLength,
+		),
 	),
 	)
 

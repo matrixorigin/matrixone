@@ -791,7 +791,7 @@ func Test_openDbConn(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234)
+	conn, err := OpenDbConn("user", "password", "host", 1234, DefaultSendSqlTimeout)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
 }
@@ -802,7 +802,7 @@ func Test_openDbConnFailed(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234)
+	conn, err := OpenDbConn("user", "password", "host", 1234, DefaultSendSqlTimeout)
 	assert.Error(t, err)
 	assert.Nil(t, conn)
 }
