@@ -3638,6 +3638,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("profiling_history_size", 0, 100, false),
 		Default:           int64(15),
 	},
+	"optimizer_switch": {
+		Name:              "optimizer_switch",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("optimizer_switch"),
+		Default:           "index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,engine_condition_pushdown=off,index_condition_pushdown=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on,semijoin=on,loosescan=on,firstmatch=on,subquery_materialization_cost_based=on,use_index_extensions=on,condition_fanout_filter=on,derived_merge=on,derived_with_keys=on,firstmatch=on,block_nested_loop=on,batched_key_access=off,materialization=on",
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
