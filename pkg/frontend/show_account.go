@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
@@ -381,6 +382,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var eachAccountInfo []*batch.Batch
 	var tempBatch *batch.Batch
 	var specialTableCnt, specialDBCnt int64
+	var planCols *plan.ResultColDef
 
 	mp := ses.GetMemPool()
 
@@ -508,7 +510,9 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	}
 
 	ses.SetMysqlResultSet(outputRS)
-	ses.rs, _, _, err = mysqlColDef2PlanResultColDef(outputRS.Columns)
+	outCols := outputRS.Columns
+	planCols, _, _, err = mysqlColDef2PlanResultColDef(outCols)
+	ses.rs = planCols
 	if err != nil {
 		return err
 	}
