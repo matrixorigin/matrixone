@@ -24,7 +24,6 @@ import (
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
-	onDupAction := plan.Node_ERROR
 	builder.qry.LoadTag = true
 	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx)
 	if err != nil {
@@ -36,7 +35,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 		return -1, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, onDupAction)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
 }
 
 func (builder *QueryBuilder) bindExternalScan(
