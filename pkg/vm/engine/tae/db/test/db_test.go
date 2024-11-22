@@ -10334,7 +10334,7 @@ func TestDedup5(t *testing.T) {
 
 	tae.CompactBlocks(true)
 
-	err = tae.DoAppendWithTxn(bats[0], insertTxn, false)
+	err = tae.DoAppendWithTxn(bats[0], insertTxn, true)
 	assert.Error(t, err)
 	assert.NoError(t, insertTxn.Commit(ctx))
 }
