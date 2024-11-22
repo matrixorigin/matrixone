@@ -136,18 +136,22 @@ const (
 
 	getNextCheckAliveListSQL = `
 				select
-					%s  
-				from 
-				    %s.%s 
-				order by 
-				    update_time asc
-				group by
-				    %s 
+					%s
+				from (
+					select
+						%s, min(update_time) as min_update
+					from
+						%s.%s
+					group by
+						%s
+				) sub
+				order by
+				    min_update asc
 				limit %d;`
 
 	getCheckAliveSQL = `
 				select 
-					%s
+					distinct(%s)
 				from 
 					%s.%s
 				where
@@ -205,6 +209,8 @@ const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute * 30
 	defaultGetTableListLimit = 1000
+
+	logHeader = "MO-TABLE-STATS-TASK"
 )
 
 var TableStatsName = [TableStatsCnt]string{
@@ -228,7 +234,9 @@ func initMoTableStatsConfig(
 		defer func() {
 			dynamicCtx.defaultConf = dynamicCtx.conf
 			if err != nil {
-				logutil.Error("init mo table stats config failed", zap.Error(err))
+				logutil.Error(logHeader,
+					zap.String("source", "init mo table stats config"),
+					zap.Error(err))
 			}
 		}()
 
@@ -285,6 +293,8 @@ func initMoTableStatsConfig(
 		dynamicCtx.tblQueue = make(chan *tablePair,
 			min(100, dynamicCtx.conf.GetTableListLimit/5))
 
+		dynamicCtx.quickCleanQueue = make(chan struct{})
+
 		// registerMoTableSizeRows
 		{
 			ff1 := func() func(
@@ -330,7 +340,8 @@ var dynamicCtx struct {
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
-	tblQueue chan *tablePair
+	tblQueue        chan *tablePair
+	quickCleanQueue chan struct{}
 
 	de         *Engine
 	service    string
@@ -387,9 +398,9 @@ func checkMoveOnTask() bool {
 
 	disable := dynamicCtx.conf.DisableStatsTask
 
-	if disable {
-		logutil.Info("mo table stats task disabled")
-	}
+	logutil.Info(logHeader,
+		zap.String("source", "check move on"),
+		zap.Bool("disable", disable))
 
 	return disable
 }
@@ -420,7 +431,9 @@ func setMoveOnTask(newVal bool) string {
 	dynamicCtx.conf.DisableStatsTask = !newVal
 
 	ret := fmt.Sprintf("move on state, %v to %v", oldState, newVal)
-	logutil.Info(ret)
+	logutil.Info(logHeader,
+		zap.String("source", "set move on"),
+		zap.String("state", ret))
 
 	return ret
 }
@@ -434,7 +447,9 @@ func setUseOldImpl(newVal bool) string {
 	dynamicCtx.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl, %v to %v", oldState, newVal)
-	logutil.Info(ret)
+	logutil.Info(logHeader,
+		zap.String("source", "set use old impl"),
+		zap.String("state", ret))
 
 	return ret
 }
@@ -448,7 +463,9 @@ func setForceUpdate(newVal bool) string {
 	dynamicCtx.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update, %v to %v", oldState, newVal)
-	logutil.Info(ret)
+	logutil.Info(logHeader,
+		zap.String("source", "set force update"),
+		zap.String("state", ret))
 
 	return ret
 }
@@ -459,9 +476,9 @@ func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecRes
 
 	ret := exec.(ie.InternalExecutor).Query(ctx, sql, dynamicCtx.sqlOpts)
 	if ret.Error() != nil {
-		logutil.Info("stats task exec sql failed",
+		logutil.Info(logHeader,
+			zap.String("source", hint),
 			zap.Error(ret.Error()),
-			zap.String("hint", hint),
 			zap.String("sql", sql))
 	}
 
@@ -696,7 +713,9 @@ func queryStats(
 
 	if forceUpdate || resetUpdateTime {
 		if len(tbls) >= defaultGetTableListLimit {
-			logutil.Warn("query stats with force update", zap.Int("tbl-list-length", len(tbls)))
+			logutil.Warn(logHeader,
+				zap.String("op", "force update"),
+				zap.Int("tbl-list-length", len(tbls)))
 		}
 		return forceUpdateQuery(
 			newCtx, statsIdx, defaultVal,
@@ -893,7 +912,9 @@ func tableStatsExecutor(
 	for {
 		select {
 		case <-newCtx.Done():
-			logutil.Info("table stats executor exit by ctx.Done", zap.Error(newCtx.Err()))
+			logutil.Info(logHeader,
+				zap.String("source", "table stats top executor"),
+				zap.String("exit by ctx done", fmt.Sprintf("%v", newCtx.Err())))
 			return newCtx.Err()
 
 		case <-executeTicker.C:
@@ -910,7 +931,9 @@ func tableStatsExecutor(
 				dynamicCtx.tableStock.tbls,
 				dynamicCtx.tableStock.newest,
 			); err != nil {
-				logutil.Info("table stats alpha exit by err", zap.Error(err))
+				logutil.Info(logHeader,
+					zap.String("source", "table stats top executor"),
+					zap.String("exit by alpha err", err.Error()))
 				return err
 			}
 
@@ -1008,6 +1031,10 @@ func insertNewTables(
 				Format("2006-01-02 15:04:05.000000")))
 	}
 
+	if len(values) == 0 {
+		return
+	}
+
 	sql = fmt.Sprintf(insertNewTablesSQL,
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
@@ -1060,6 +1087,15 @@ func prepare(
 
 		// in case of all candidates have been deleted.
 		offsetTS = types.TimestampToTS(*ts[len(ts)-1])
+
+		if len(dynamicCtx.tableStock.tbls) == 0 && offsetTS.IsEmpty() {
+			// there exists a large number of deleted table which are new inserts
+			logutil.Info(logHeader,
+				zap.String("source", "prepare"),
+				zap.String("info", "found new inserts deletes, force clean"))
+			dynamicCtx.quickCleanQueue <- struct{}{}
+			break
+		}
 	}
 
 	return err
@@ -1087,8 +1123,10 @@ func alphaTask(
 	defer func() {
 		if len(tbls) == 0 {
 			dur := time.Since(now)
-			logutil.Info("alpha processed",
-				zap.Int("processed", processed), zap.Duration("takes", dur))
+			logutil.Info(logHeader,
+				zap.String("source", "alpha task"),
+				zap.Int("processed", processed),
+				zap.Duration("takes", dur))
 
 			v2.AlphaTaskDurationHistogram.Observe(dur.Seconds())
 			v2.AlphaTaskCountingHistogram.Observe(float64(processed))
@@ -1134,7 +1172,9 @@ func alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				logutil.Info("alpha send all, wait err", zap.Int("err left", errWaitToReceive))
+				logutil.Info(logHeader,
+					zap.String("source", "alpha task"),
+					zap.Int("alpha send all, wait err", errWaitToReceive))
 				dynamicCtx.tblQueue <- nil
 				ticker.Reset(time.Second)
 				continue
@@ -1144,7 +1184,7 @@ func alphaTask(
 			submitted := 0
 			for i := 0; i < batCnt && i < len(tbls); i++ {
 				if tbls[i] == nil {
-					panic("table pair expected not nil")
+					continue
 				}
 
 				submitted++
@@ -1158,8 +1198,9 @@ func alphaTask(
 					var pState *logtailreplay.PartitionState
 					if !curTbl.onlyUpdateTS {
 						if pState, err2 = subscribeTable(ctx, service, eng, curTbl); err2 != nil {
-							logutil.Info("alpha task subscribe failed",
-								zap.Error(err2),
+							logutil.Info(logHeader,
+								zap.String("source", "alpha task"),
+								zap.String("subscribe failed", err2.Error()),
 								zap.String("tbl", curTbl.String()))
 							return
 						}
@@ -1199,7 +1240,9 @@ func betaTask(
 ) (err error) {
 
 	defer func() {
-		logutil.Info("beta task exist", zap.Error(err))
+		logutil.Info(logHeader,
+			zap.String("source", "beta task"),
+			zap.Error(err))
 	}()
 
 	var (
@@ -1250,7 +1293,6 @@ func betaTask(
 
 			}); err != nil {
 				tbl.Done(err)
-				logutil.Info("stats beta task exist", zap.Error(err))
 				return
 			}
 		}
@@ -1285,7 +1327,6 @@ func gamaTask(
 
 		for i := range sqlRet.RowCount() {
 			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
 				continue
 			}
 			accIds = append(accIds, uint64(val.(int64)))
@@ -1295,7 +1336,6 @@ func gamaTask(
 			}
 
 			if val, err = sqlRet.Value(ctx, i, 1); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
 				continue
 			}
 			dbIds = append(dbIds, uint64(val.(int64)))
@@ -1305,7 +1345,6 @@ func gamaTask(
 			}
 
 			if val, err = sqlRet.Value(ctx, i, 2); err != nil {
-				logutil.Info("correction task failed", zap.Error(err))
 				continue
 			}
 
@@ -1320,9 +1359,6 @@ func gamaTask(
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
 		sqlRet := executeSQL(ctx, sql, "gama task: get null stats list")
 		if sqlRet.Error() != nil {
-			logutil.Info("correction task get null stats failed",
-				zap.String("sql", sql),
-				zap.Error(sqlRet.Error()))
 			return
 		}
 
@@ -1353,19 +1389,23 @@ func gamaTask(
 
 		if err = alphaTask(
 			ctx, service, eng, tbls, types.BuildTS(now.UnixNano(), 0)); err != nil {
-			logutil.Info("correction task failed", zap.Error(err))
+			return
 		}
 
-		logutil.Info("correction task force update",
-			zap.Int("tbl cnt", len(tbls)), zap.Duration("takes", time.Since(now)))
+		logutil.Info(logHeader,
+			zap.String("source", "gama task"),
+			zap.Int("force update table", len(tbls)))
+		zap.Duration("takes", time.Since(now))
 
 		v2.GamaTaskCountingHistogram.Observe(float64(len(tbls)))
 		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
 	}
 
+	//mo_account, mo_database, mo_tables col name
 	colName1 := []string{
 		"account_id", "dat_id", "rel_id",
 	}
+	// mo_table_stats col name
 	colName2 := []string{
 		"account_id", "database_id", "table_id",
 	}
@@ -1376,7 +1416,7 @@ func gamaTask(
 
 	deleteByStep := func(step int) {
 		sql := fmt.Sprintf(getNextCheckAliveListSQL,
-			colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+			colName2[step], colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 			colName2[step], options.DefaultBlockMaxRows)
 
 		sqlRet := executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-0", step))
@@ -1402,15 +1442,28 @@ func gamaTask(
 				continue
 			}
 
-			// remove alive acc from slice
-			idx := slices.Index(accIds, uint64(val.(int32)))
+			// remove alive id from slice
+			var aliveId uint64
+			if _, ok := val.(int32); ok {
+				aliveId = uint64(val.(int32))
+			} else {
+				aliveId = val.(uint64)
+			}
+
+			idx := slices.Index(accIds, aliveId)
 			accIds = append(accIds[:idx], accIds[idx+1:]...)
 		}
 
 		if len(accIds) != 0 {
 			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 				colName2[step], intsJoin(accIds, ","))
-			executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
+			sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
+			if sqlRet.Error() == nil {
+				logutil.Info(logHeader,
+					zap.String("source", "gama clean task"),
+					zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(accIds)),
+					zap.String("detail", intsJoin(accIds, ",")))
+			}
 		}
 	}
 
@@ -1438,6 +1491,11 @@ func gamaTask(
 			tickerA.Reset(gamaDur)
 
 		case <-tickerB.C:
+			opB()
+			tickerB.Reset(gamaDur)
+
+		case <-dynamicCtx.quickCleanQueue:
+			// emergence, do clean now
 			opB()
 			tickerB.Reset(gamaDur)
 		}
