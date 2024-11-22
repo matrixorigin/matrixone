@@ -689,6 +689,10 @@ func Test_handleCreateCdc(t *testing.T) {
 			"db2.t3,db2.t4",
 			cdc2.InitSnapshotSplitTxn,
 			"false",
+			cdc2.MaxSqlLength,
+			fmt.Sprintf("%d", cdc2.DefaultMaxSqlLength),
+			cdc2.SendSqlTimeout,
+			cdc2.DefaultSendSqlTimeout,
 		},
 	}
 
