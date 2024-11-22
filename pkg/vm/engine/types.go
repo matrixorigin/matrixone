@@ -831,6 +831,13 @@ type RangesShuffleParam struct {
 	Init               bool
 }
 
+func (rsp *RangesShuffleParam) NeedShuffleObj() bool {
+	if rsp == nil || rsp.Node == nil || rsp.CNCNT <= 1 {
+		return false
+	}
+	return true
+}
+
 type RangesParam struct {
 	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
 	PreAllocBlocks int          //estimated count of blocks

@@ -720,20 +720,23 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = engine_util.TryFastFilterBlocks(
-		ctx,
-		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
-		rangesParam.BlockFilters,
-		state,
-		nil,
-		uncommittedObjects,
-		outBlocks,
-		tbl.getTxn().engine.fs,
-	); err != nil {
-		return err
-	} else if done {
-		return nil
+	// if need to shuffle objects, don't go fast path
+	if !rangesParam.Rsp.NeedShuffleObj() {
+		if done, err = engine_util.TryFastFilterBlocks(
+			ctx,
+			tbl.db.op.SnapshotTS(),
+			tbl.tableDef,
+			rangesParam.BlockFilters,
+			state,
+			nil,
+			uncommittedObjects,
+			outBlocks,
+			tbl.getTxn().engine.fs,
+		); err != nil {
+			return err
+		} else if done {
+			return nil
+		}
 	}
 
 	if slowPathCounter.Add(1) >= 1000 {
@@ -789,7 +792,7 @@ func (tbl *txnTable) rangesOnePart(
 			skipObj = false
 
 			s3BlkCnt += obj.BlkCnt()
-			if auxIdCnt > 0 {
+			if auxIdCnt > 0 || rangesParam.Rsp.NeedShuffleObj() {
 				location := obj.ObjectLocation()
 				loadObjCnt++
 				if objMeta, err2 = objectio.FastLoadObjectMeta(

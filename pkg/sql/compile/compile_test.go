@@ -273,20 +273,6 @@ func GetFilePath() string {
 	return dir
 }
 
-func TestShuffleBlocksByHash(t *testing.T) {
-	s := objectio.BlockInfoSlice{}
-	stats := objectio.NewObjectStats()
-	for i := 0; i < 100; i++ {
-		var blk objectio.BlockInfo
-		stats.ConstructBlockInfoTo(uint16(0), &blk)
-		s.AppendBlockInfo(&blk)
-	}
-	reldata := &engine_util.BlockListRelData{}
-	reldata.SetBlockList(s)
-	newreldata := &engine_util.BlockListRelData{}
-	shuffleBlocksByHash(reldata, newreldata, 3, 1)
-}
-
 func TestPutBlocksInCurrentCN(t *testing.T) {
 	testCompile := NewMockCompile()
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Data: &engine_util.BlockListRelData{}}, engine.Node{Addr: "cn2:6001", Data: &engine_util.BlockListRelData{}}}
