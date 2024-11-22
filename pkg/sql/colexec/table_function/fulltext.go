@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -179,7 +178,6 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				st.limit = c.U64Val
-				os.Stderr.WriteString(fmt.Sprintf("\nTABLE LIMIT %d\n", st.limit))
 			}
 		}
 	}
