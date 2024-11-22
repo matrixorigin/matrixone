@@ -821,14 +821,24 @@ type ChangesHandle interface {
 	Close() error
 }
 
+type RangesParam struct {
+	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks int          //estimated count of blocks
+	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
+	Policy         DataCollectPolicy
+}
+
+var DefaultRangesParam RangesParam = RangesParam{
+	BlockFilters:   nil,
+	PreAllocBlocks: 2,
+	TxnOffset:      0,
+	Policy:         Policy_CollectAllData,
+}
+
 type Relation interface {
 	Statistics
 
-	// Ranges Parameters:
-	// first parameter: Context
-	// second parameter: Slice of expressions used to filter the data.
-	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
+	Ranges(context.Context, RangesParam) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 

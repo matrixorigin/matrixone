@@ -3998,26 +3998,31 @@ func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy) (engine.RelData, error) {
 
-	preAllocSize := 2
+	preAllocBlocks := 2
 	if policy&engine.Policy_CollectCommittedData != 0 {
 		if !c.IsTpQuery() {
 			if len(blockFilterList) > 0 {
-				preAllocSize = 64
+				preAllocBlocks = 64
 			} else {
-				preAllocSize = int(node.Stats.BlockNum)
+				preAllocBlocks = int(node.Stats.BlockNum)
 			}
 		}
 	}
 
 	counterSet := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
-	relData, err := rel.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
+	rangesParam := engine.RangesParam{
+		BlockFilters:   blockFilterList,
+		PreAllocBlocks: preAllocBlocks,
+		TxnOffset:      c.TxnOffset,
+		Policy:         policy,
+	}
+	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
 		return nil, err
 	}
 
 	if node.TableDef.Partition != nil {
-		preAllocSize = 2
 		begin := 0
 		if policy&engine.Policy_CollectUncommittedData != 0 {
 			begin = 1 //skip empty block info
@@ -4030,7 +4035,8 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
+				rangesParam.PreAllocBlocks = 2
+				subRelData, err := subrelation.Ranges(newCtx, rangesParam)
 				if err != nil {
 					return nil, err
 				}
@@ -4052,7 +4058,7 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.Ranges(newCtx, blockFilterList, preAllocSize, c.TxnOffset, policy)
+				subRelData, err := subrelation.Ranges(newCtx, rangesParam)
 				if err != nil {
 					return nil, err
 				}
