@@ -1,3 +1,4 @@
+set experimental_fulltext_index=1;
 drop table if exists t0;
 create table t0 (
   a int,
@@ -7,7 +8,6 @@ create table t0 (
 );
 insert into t0 select result, result, result || 'test' from generate_series(1, 100) g;
 create fulltext index ftidx on t0 (c);
-set experimental_fulltext_index=1;
 drop table if exists t1;
 create table t1 (
   a int,
