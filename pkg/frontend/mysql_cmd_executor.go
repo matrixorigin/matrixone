@@ -2517,6 +2517,8 @@ func executeStmtWithWorkspace(ses FeSession,
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
 		return nil
+	case *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
+		return nil
 	}
 
 	//in session migration, the txn forced to be autocommit.
