@@ -1465,7 +1465,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 modify col1 float;
-invalid argument operator cast, bad value [JSON FLOAT]
+not supported: currently unsupport change from original type JSON to FLOAT 
 alter table abnormal04 modify col2 int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
@@ -1717,4 +1717,23 @@ b    a
 abc    1
 database    2
 drop table t1;
+DROP TABLE IF EXISTS president;
+CREATE TABLE president (
+name VARCHAR(100) NOT NULL,
+nth INT NOT NULL,
+impeached BOOL
+);
+show create table president;
+Table    Create Table
+president    CREATE TABLE `president` (\n  `name` varchar(100) NOT NULL,\n  `nth` int NOT NULL,\n  `impeached` bool DEFAULT NULL\n)
+ALTER TABLE president MODIFY impeached INTEGER;
+show create table president;
+Table    Create Table
+president    CREATE TABLE `president` (\n  `name` varchar(100) NOT NULL,\n  `nth` int NOT NULL,\n  `impeached` int DEFAULT NULL\n)
+ALTER TABLE president MODIFY nth JSON;
+not supported: currently unsupport change from original type INT to JSON 
+show create table president;
+Table    Create Table
+president    CREATE TABLE `president` (\n  `name` varchar(100) NOT NULL,\n  `nth` int NOT NULL,\n  `impeached` int DEFAULT NULL\n)
+DROP TABLE president;
 drop database test;
