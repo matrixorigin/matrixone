@@ -16,7 +16,9 @@ package table_function
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -38,6 +41,8 @@ type fulltextState struct {
 	inited      bool
 	result_chan chan map[any]float32
 	errors      chan error
+	done        chan bool
+	limit       uint64
 
 	// holding output batch
 	batch *batch.Batch
@@ -53,6 +58,8 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
+
+	close(u.done)
 }
 
 func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -63,8 +70,16 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	u.batch.CleanOnlyData()
 
 	select {
-	case err := <-u.errors:
-		return vm.CancelResult, err
+	case <-proc.Ctx.Done():
+		return vm.CancelResult, nil
+	case err, ok := <-u.errors:
+		if ok {
+			// error
+			return vm.CancelResult, err
+		} else {
+			// channel closed
+			return vm.CancelResult, nil
+		}
 	case scoremap, ok = <-u.result_chan:
 		if !ok {
 			return vm.CancelResult, nil
@@ -118,6 +133,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.batch = tf.createResultBatch()
 		u.result_chan = make(chan map[any]float32, 2)
 		u.errors = make(chan error)
+		u.done = make(chan bool)
 		u.inited = true
 	}
 
@@ -157,6 +173,15 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 
 	for i := range tableFunction.Attrs {
 		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
+	}
+
+	if tableFunction.Limit != nil {
+		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				st.limit = c.U64Val
+				os.Stderr.WriteString(fmt.Sprintf("\nTABLE LIMIT %d\n", st.limit))
+			}
+		}
 	}
 	return st, err
 }
@@ -232,7 +257,8 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 
 	defer res.Close()
 	defer close(u.result_chan)
-
+	defer close(u.errors)
+	var n_result uint64 = 0
 	n_doc_id := 0
 	var last_doc_id any = nil
 	for _, bat := range res.Batches {
@@ -274,11 +300,38 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 					u.errors <- err
 					return
 				}
+
+				// check context cancel
+				select {
+				case <-proc.Ctx.Done():
+					return
+				case <-u.done:
+					return
+				default:
+				}
+
 				if len(scoremap) > 0 {
+					for len(u.result_chan) == cap(u.result_chan) {
+						select {
+						case <-proc.Ctx.Done():
+							return
+						case <-u.done:
+							return
+						default:
+							time.Sleep(10 * time.Millisecond)
+						}
+					}
 					u.result_chan <- scoremap
 				}
+
 				clear(s.WordAccums)
 				n_doc_id = 0
+
+				// check limit
+				n_result += uint64(len(scoremap))
+				if u.limit > 0 && n_result >= u.limit {
+					return
+				}
 			}
 
 			w, ok := s.WordAccums[word]
@@ -296,16 +349,34 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: positions, DocCount: 1}
 			}
 		}
-
 	}
 
 	scoremap, err := s.Eval()
 	if err != nil {
 		u.errors <- err
 		return
-
 	}
+
+	// check context cancel
+	select {
+	case <-proc.Ctx.Done():
+		return
+	case <-u.done:
+		return
+	default:
+	}
+
 	if len(scoremap) > 0 {
+		for len(u.result_chan) == cap(u.result_chan) {
+			select {
+			case <-proc.Ctx.Done():
+				return
+			case <-u.done:
+				return
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 		u.result_chan <- scoremap
 	}
 }
