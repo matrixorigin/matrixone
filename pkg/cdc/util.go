@@ -532,7 +532,7 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //	return
 //}
 
-var openDbConn = func(
+var OpenDbConn = func(
 	user, password string,
 	ip string,
 	port int) (db *sql.DB, err error) {
@@ -549,7 +549,7 @@ var openDbConn = func(
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("cdc task openDbConn failed")
+	logutil.Error("cdc task OpenDbConn failed")
 	return
 }
 

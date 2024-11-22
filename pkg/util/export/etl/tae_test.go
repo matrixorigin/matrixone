@@ -186,7 +186,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				Account:              "MO",
 				User:                 "moroot",
 				Database:             "system",
-				Statement:            "show tables",
+				Statement:            []byte("show tables"),
 				StatementFingerprint: "show tables",
 				StatementTag:         "",
 				ExecPlan:             nil,

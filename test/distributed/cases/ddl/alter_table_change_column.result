@@ -1312,7 +1312,7 @@ Table    Create Table
 primary08    CREATE TABLE `primary08` (\n  `col1New` double NOT NULL,\n  `col2New` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1New`,`col2New`)\n)
 insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
-internal error: column 'col2' not found in table 
+internal error: column 'col2' not found in table
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
 delete from primary08 where col1 = 1;
 invalid input: column col1 does not exist
@@ -1905,7 +1905,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 change col1 col1NewCOl float;
-invalid argument operator cast, bad value [JSON FLOAT]
+not supported: currently unsupport change from original type JSON to FLOAT
 alter table abnormal04 change col2 col2NewCOL int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
