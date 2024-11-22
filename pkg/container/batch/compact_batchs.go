@@ -101,7 +101,7 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 		return nil
 	}
 
-	copyBat, err = dupAndExpand(mpool, inBatch)
+	copyBat, err = inBatch.Dup(mpool)
 	if err != nil {
 		return err
 	}
@@ -211,24 +211,4 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 	}
 
 	return nil
-}
-
-func dupAndExpand(mpool *mpool.MPool, inBatch *Batch) (*Batch, error) {
-	tmpBat, err := inBatch.Dup(mpool)
-	if err != nil {
-		return nil, err
-	}
-	for i := range tmpBat.Vecs {
-		oldVec := tmpBat.Vecs[i]
-		if oldVec.IsConst() {
-			newVec := vector.NewVec(*oldVec.GetType())
-			err := vector.GetUnionAllFunction(*oldVec.GetType(), mpool)(newVec, oldVec)
-			if err != nil {
-				return nil, err
-			}
-			tmpBat.ReplaceVector(oldVec, newVec, 0)
-			tmpBat.Vecs[i] = newVec
-		}
-	}
-	return tmpBat, nil
 }
