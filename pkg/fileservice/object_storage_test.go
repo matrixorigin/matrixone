@@ -93,7 +93,7 @@ func testObjectStorage[T ObjectStorage](
 			// sub dirs
 			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
-			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
+			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), nil, nil)
 			assert.Nil(t, err)
 			err = storage.Write(ctx, "a/2", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
