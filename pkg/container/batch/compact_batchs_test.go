@@ -164,8 +164,9 @@ func TestCompactBatchsExtend(t *testing.T) {
 }
 
 func makeTestBatch(max int, mp *mpool.MPool) *Batch {
-	bat := NewWithSize(1)
+	bat := NewWithSize(2)
 	bat.Vecs[0] = makeTestVec(max, mp)
+	bat.Vecs[1] = makeConstTestVec(max, mp)
 	bat.rowCount = bat.Vecs[0].Length()
 	return bat
 }
@@ -180,5 +181,12 @@ func makeTestVec(max int, mp *mpool.MPool) *vector.Vector {
 			return nil
 		}
 	}
+	return vec
+}
+
+func makeConstTestVec(max int, mp *mpool.MPool) *vector.Vector {
+	typ := types.T_int32.ToType()
+	val := int32(10)
+	vec, _ := vector.NewConstFixed(typ, val, max, mp)
 	return vec
 }

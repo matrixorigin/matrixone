@@ -1469,7 +1469,8 @@ func appendPrimaryConstraintPlan(
 				Typ: pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						Name: tableDef.Pkey.PkeyColName,
+						Name:   tableDef.Pkey.PkeyColName,
+						ColPos: int32(pkPos),
 					},
 				},
 			}
