@@ -24,7 +24,9 @@ import (
 
 func TestCacheSetGet(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil, func(capacity int64) int64 {
+		return capacity / 10
+	})
 
 	cache.Set(ctx, 1, 1, 1)
 	n, ok := cache.Get(ctx, 1)
@@ -42,7 +44,9 @@ func TestCacheSetGet(t *testing.T) {
 
 func TestCacheEvict(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil, func(capacity int64) int64 {
+		return capacity / 10
+	})
 	for i := 0; i < 64; i++ {
 		cache.Set(ctx, i, i, 1)
 		if cache.used1+cache.used2 > cache.capacity() {
@@ -53,7 +57,9 @@ func TestCacheEvict(t *testing.T) {
 
 func TestCacheEvict2(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(2), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(2), ShardInt[int], nil, nil, nil, func(capacity int64) int64 {
+		return capacity / 10
+	})
 	cache.Set(ctx, 1, 1, 1)
 	cache.Set(ctx, 2, 2, 1)
 
@@ -93,6 +99,9 @@ func TestCacheEvict3(t *testing.T) {
 		},
 		func(_ context.Context, _ int, _ bool, _ int64) {
 			nEvict++
+		},
+		func(capacity int64) int64 {
+			return capacity / 10
 		},
 	)
 	for i := 0; i < 1024; i++ {
