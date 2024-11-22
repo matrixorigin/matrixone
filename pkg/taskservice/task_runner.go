@@ -217,7 +217,7 @@ func (r *taskRunner) adjust() {
 	if r.options.parallelism == 0 {
 		r.options.parallelism = runtime.NumCPU() / 4
 		if r.options.parallelism == 0 {
-			r.options.parallelism = 1
+			r.options.parallelism = 2
 		}
 	}
 	if r.options.fetchInterval == 0 {

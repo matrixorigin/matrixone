@@ -31,7 +31,7 @@ var levels = [6]int{
 }
 
 type objOverlapPolicy struct {
-	leveledObjects [6][]*catalog.ObjectEntry
+	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
 	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
@@ -60,9 +60,9 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 
 func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	for _, objects := range m.segments {
-		segLevel := segLevel(len(objects))
+		l := segLevel(len(objects))
 		for obj := range objects {
-			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
+			m.leveledObjects[l] = append(m.leveledObjects[l], obj)
 		}
 	}
 
@@ -72,22 +72,27 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 			continue
 		}
 
-		if rc.cpuPercent > 80 {
-			continue
-		}
-
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+		revisedResults := m.reviseLeveledObjs(i)
+		for _, result := range revisedResults {
+			if len(result.objs) < 2 {
+				continue
+			}
 
-		objs, taskHostKind := m.reviseLeveledObjs(i)
-		if len(objs) > 1 && rc.resourceAvailable(objs) {
-			rc.reserveResources(objs)
-			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+			if result.kind == taskHostDN {
+				if rc.resourceAvailable(result.objs) {
+					rc.reserveResources(result.objs)
+				} else {
+					continue
+				}
+			}
+			reviseResults[i] = result
 		}
 	}
 	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, taskHostKind) {
+func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
 	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
@@ -109,12 +114,11 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 			continue
 		}
 
-		// obj is not added in the set.
-		// either dismiss the set or add the set in m.overlappingObjsSet
+		// obj has no overlap with the set.
+		// if the set has more than one objects, add the set to m.overlappingObjsSet.
+		// else dismiss it.
 		if len(set.entries) > 1 {
-			objs := make([]*catalog.ObjectEntry, len(set.entries))
-			copy(objs, set.entries)
-			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
+			m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
 		}
 
 		set.reset()
@@ -122,30 +126,34 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 	}
 	// there is still more than one entry in set.
 	if len(set.entries) > 1 {
-		objs := make([]*catalog.ObjectEntry, len(set.entries))
-		copy(objs, set.entries)
-		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
+		m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
 		set.reset()
 	}
 	if len(m.overlappingObjsSet) == 0 {
-		return nil, taskHostDN
+		return nil
 	}
 
 	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
 		return cmp.Compare(len(a), len(b))
 	})
 
+	revisedResults := make([]reviseResult, 0, len(m.overlappingObjsSet))
 	// get the overlapping set with most objs.
-	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
-	if len(objs) < 2 {
-		return nil, taskHostDN
+	for i := len(m.overlappingObjsSet) - 1; i >= 0; i-- {
+		objs := m.overlappingObjsSet[i]
+		if len(objs) < 2 || originalRows(objs) < 8192*len(objs) {
+			continue
+		}
+		if level < 3 && len(objs) > levels[3] {
+			objs = objs[:levels[3]]
+		}
+		revisedResults = append(revisedResults, reviseResult{
+			objs: slices.Clone(objs),
+			kind: taskHostCN,
+		})
 	}
 
-	if level < 3 && len(objs) > levels[3] {
-		objs = objs[:levels[3]]
-	}
-
-	return objs, taskHostCN
+	return revisedResults
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
@@ -175,6 +183,12 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
 		s.maxValue = zm.GetMaxBuf()
 	}
+}
+
+func (s *entrySet) cloneEntries() []*catalog.ObjectEntry {
+	clone := make([]*catalog.ObjectEntry, len(s.entries))
+	copy(clone, s.entries)
+	return clone
 }
 
 func segLevel(length int) int {
