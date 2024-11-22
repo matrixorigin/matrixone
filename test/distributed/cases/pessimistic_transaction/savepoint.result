@@ -1,0 +1,8 @@
+set @@autocommit = 1;
+begin;
+savepoint a;
+release savepoint a;
+savepoint b;
+rollback to savepoint b;
+release savepoint b;
+commit;

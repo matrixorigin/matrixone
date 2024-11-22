@@ -145,7 +145,7 @@ func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeS
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
 		//transaction
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 		return true, nil
 		//show
 	case *tree.ShowCreateTable,
