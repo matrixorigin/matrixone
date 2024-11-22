@@ -2663,6 +2663,12 @@ func TestCdcTask_Restart(t *testing.T) {
 		db: db,
 	}
 
+	stub1 := gostub.Stub(&Start,
+		func(_ context.Context, _ *CdcTask, _ bool) error {
+			return nil
+		})
+	defer stub1.Reset()
+
 	tests := []struct {
 		name    string
 		fields  fields
