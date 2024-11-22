@@ -88,19 +88,6 @@ type MoTableStatsConfig struct {
 }
 
 const (
-	TableStatsTableSize = iota
-	TableStatsTableRows
-
-	TableStatsTObjectCnt
-	TableStatsDObjectCnt
-
-	TableStatsTBlockCnt
-	TableStatsDBlockCnt
-
-	TableStatsCnt
-)
-
-const (
 	bulkInsertOrUpdateStatsListSQL = `
 				insert into 
 				    %s.%s (account_id, database_id, table_id, database_name, table_name, table_stats, update_time, takes)
@@ -213,6 +200,19 @@ const (
 	logHeader = "MO-TABLE-STATS-TASK"
 )
 
+const (
+	TableStatsTableSize = iota
+	TableStatsTableRows
+
+	TableStatsTObjectCnt
+	TableStatsDObjectCnt
+
+	TableStatsTBlockCnt
+	TableStatsDBlockCnt
+
+	TableStatsCnt
+)
+
 var TableStatsName = [TableStatsCnt]string{
 	"table_size",
 	"table_rows",
@@ -220,6 +220,21 @@ var TableStatsName = [TableStatsCnt]string{
 	"dobject_cnt",
 	"tblock_cnt",
 	"dblock_cnt",
+}
+
+var defaultStatsVals = []any{
+	// table size
+	float64(0),
+	// table rows
+	float64(0),
+	// tombstone object cnt
+	int(0),
+	// data object cnt
+	int(0),
+	// tombstone blk cnt
+	int(0),
+	// data blk cnt
+	int(0),
 }
 
 func initMoTableStatsConfig(
@@ -325,7 +340,12 @@ func initMoTableStatsConfig(
 					return
 				}
 
+				dynamicCtx.beta.launchTimes++
 				dynamicCtx.beta.betaRunning = true
+
+				logutil.Info(logHeader,
+					zap.String("source", "launch beta task"),
+					zap.Int("times", dynamicCtx.beta.launchTimes))
 
 				go func() {
 					defer func() {
@@ -376,6 +396,7 @@ var dynamicCtx struct {
 		betaTaskPool *ants.Pool
 		betaRunning  bool
 		launchBeta   func()
+		launchTimes  int
 	}
 
 	alphaTaskPool *ants.Pool
@@ -521,12 +542,11 @@ func intsJoin(items []uint64, delimiter string) string {
 
 func forceUpdateQuery(
 	ctx context.Context,
-	statsIdx int,
-	defaultVal any,
+	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
 	resetUpdateTime bool,
 	eng *Engine,
-) (statsVals []any, err error) {
+) (statsVals [][]any, err error) {
 
 	if len(tbls) == 0 {
 		return
@@ -598,7 +618,7 @@ func forceUpdateQuery(
 	}
 
 	if statsVals, err = normalQuery(
-		ctx, statsIdx, defaultVal,
+		ctx, wantedStatsIdxes,
 		accs, dbs, tbls); err != nil {
 		return nil, err
 	}
@@ -608,10 +628,9 @@ func forceUpdateQuery(
 
 func normalQuery(
 	ctx context.Context,
-	statsIdx int,
-	defaultVal any,
+	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
-) (statsVals []any, err error) {
+) (statsVals [][]any, err error) {
 
 	if len(tbls) == 0 {
 		return
@@ -638,12 +657,10 @@ func normalQuery(
 		stats map[string]any
 
 		tblIdColIdx = uint64(0)
-		//updateColIdx = uint64(1)
 		statsColIdx = uint64(2)
-
-		//now     = time.Now()
-		//updates []time.Time
 	)
+
+	statsVals = make([][]any, len(wantedStatsIdxes))
 
 	for i := range sqlRet.RowCount() {
 		idxes = append(idxes, int(i))
@@ -660,8 +677,9 @@ func normalQuery(
 		idx, found := sort.Find(len(gotTIds), func(j int) int { return int(tbls[i]) - int(gotTIds[j]) })
 
 		if !found {
-			//updates = append(updates, now)
-			statsVals = append(statsVals, defaultVal)
+			for k := range wantedStatsIdxes {
+				statsVals[k] = append(statsVals[k], defaultStatsVals[wantedStatsIdxes[k]])
+			}
 			continue
 		}
 
@@ -673,36 +691,32 @@ func normalQuery(
 			return
 		}
 
-		ss := stats[TableStatsName[statsIdx]]
-		if ss == nil {
-			ss = defaultVal
+		for k := range wantedStatsIdxes {
+			ss := stats[TableStatsName[wantedStatsIdxes[k]]]
+			if ss == nil {
+				ss = defaultStatsVals[wantedStatsIdxes[k]]
+			}
+			statsVals[k] = append(statsVals[k], ss)
 		}
-		statsVals = append(statsVals, ss)
-
-		//if val, err = sqlRet.Value(ctx, uint64(idxes[idx]), updateColIdx); err != nil {
-		//	return nil, err
-		//}
-
-		//var ud time.Time
-		//if ud, err = time.Parse("2006-01-02 15:04:05.000000", val.(string)); err != nil {
-		//	return
-		//}
-
-		//updates = append(updates, ud)
 	}
 
 	return statsVals, nil
 }
 
-func queryStats(
+func QueryTableStats(
 	ctx context.Context,
-	statsIdx int,
-	defaultVal any,
+	wantedStatsIdxes []int,
 	accs, dbs, tbls []uint64,
 	forceUpdate bool,
 	resetUpdateTime bool,
 	eng engine.Engine,
-) (statsVals []any, err error) {
+) (statsVals [][]any, err error) {
+
+	if eng == nil {
+		dynamicCtx.Lock()
+		eng = dynamicCtx.de
+		dynamicCtx.Unlock()
+	}
 
 	var now = time.Now()
 	defer func() {
@@ -723,17 +737,18 @@ func queryStats(
 	if forceUpdate || resetUpdateTime {
 		if len(tbls) >= defaultGetTableListLimit {
 			logutil.Warn(logHeader,
-				zap.String("op", "force update"),
+				zap.String("source", "query with force update"),
 				zap.Int("tbl-list-length", len(tbls)))
 		}
+
 		return forceUpdateQuery(
-			newCtx, statsIdx, defaultVal,
+			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
 			resetUpdateTime,
 			eng.(*engine.EntireEngine).Engine.(*Engine))
 	}
 
-	return normalQuery(newCtx, statsIdx, defaultVal, accs, dbs, tbls)
+	return normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
 }
 
 func MTSTableSize(
@@ -744,16 +759,16 @@ func MTSTableSize(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := queryStats(
-		ctx, TableStatsTableSize, float64(0),
+	statsVals, err := QueryTableStats(
+		ctx, []int{TableStatsTableSize},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
 	if err != nil {
 		return nil, err
 	}
 
-	for i := range statsVals {
-		sizes = append(sizes, uint64(statsVals[i].(float64)))
+	for i := range statsVals[0] {
+		sizes = append(sizes, uint64(statsVals[0][i].(float64)))
 	}
 
 	return
@@ -767,16 +782,16 @@ func MTSTableRows(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := queryStats(
-		ctx, TableStatsTableRows, float64(0),
+	statsVals, err := QueryTableStats(
+		ctx, []int{TableStatsTableRows},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
 	if err != nil {
 		return nil, err
 	}
 
-	for i := range statsVals {
-		sizes = append(sizes, uint64(statsVals[i].(float64)))
+	for i := range statsVals[0] {
+		sizes = append(sizes, uint64(statsVals[0][i].(float64)))
 	}
 
 	return
@@ -786,7 +801,8 @@ func MTSTableRows(
 
 type tablePair struct {
 	waiter struct {
-		errQueue chan error
+		doneCounter int
+		errQueue    chan error
 	}
 
 	relKind    string
@@ -809,6 +825,7 @@ func allocateTablePair() *tablePair {
 		pair.tblName = ""
 		pair.dbName = ""
 		pair.pState = nil
+		pair.waiter.doneCounter = 0
 		pair.onlyUpdateTS = false
 		// pair can not close this channel
 		pair.waiter.errQueue = nil
@@ -856,6 +873,12 @@ func (tp *tablePair) String() string {
 }
 
 func (tp *tablePair) Done(err error) {
+	if tp.waiter.doneCounter > 0 {
+		return
+	}
+
+	tp.waiter.doneCounter++
+
 	if tp.waiter.errQueue != nil {
 		tp.waiter.errQueue <- err
 	}
@@ -1181,10 +1204,6 @@ func alphaTask(
 		v2.AlphaTaskCountingHistogram.Observe(float64(processed))
 	}()
 
-	if err != nil {
-		return err
-	}
-
 	wg := sync.WaitGroup{}
 
 	dynamicCtx.Lock()
@@ -1203,11 +1222,9 @@ func alphaTask(
 
 		case err = <-errQueue:
 			if err != nil {
-				for len(errQueue) != 0 {
-					<-errQueue
-				}
-				close(errQueue)
-				return err
+				logutil.Error(logHeader,
+					zap.String("source", "alpha task received err"),
+					zap.Error(err))
 			}
 
 			errWaitToReceive--
@@ -1260,6 +1277,8 @@ func alphaTask(
 								zap.String("source", "alpha task"),
 								zap.String("subscribe failed", err2.Error()),
 								zap.String("tbl", curTbl.String()))
+
+							curTbl.Done(err2)
 							return
 						}
 					}
@@ -1347,7 +1366,6 @@ func betaTask(
 				} else {
 					slBat.Store(tbl, sl)
 				}
-
 			}); err != nil {
 				tbl.Done(err)
 				return
@@ -1440,8 +1458,8 @@ func gamaTask(
 
 		logutil.Info(logHeader,
 			zap.String("source", "gama task"),
-			zap.Int("force update table", len(tbls)))
-		zap.Duration("takes", time.Since(now))
+			zap.Int("force update table", len(tbls)),
+			zap.Duration("takes", time.Since(now)))
 
 		v2.GamaTaskCountingHistogram.Observe(float64(len(tbls)))
 		v2.GamaTaskDurationHistogram.Observe(time.Since(now).Seconds())
@@ -1525,7 +1543,7 @@ func gamaTask(
 	}
 
 	randDuration := func() time.Duration {
-		return gamaDur + time.Minute*time.Duration(rand.Intn(10))
+		return gamaDur + time.Duration(time.Minute.Nanoseconds()*rand.Int63n(10))
 	}
 
 	tickerA := time.NewTicker(randDuration())
@@ -1999,7 +2017,7 @@ func bulkUpdateTableStatsList(
 			tbl.snapshot.ToTimestamp().
 				ToStdTime().
 				Format("2006-01-02 15:04:05.000000"),
-			sl.took))
+			sl.took.Microseconds()))
 
 		return true
 	})
