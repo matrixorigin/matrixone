@@ -217,6 +217,13 @@ func (proc *Process) ResetQueryContext() {
 	proc.doPrepareForRunningWithoutPipeline()
 }
 
+// ResetCloneTxnOperator cleans the clone txn operator for process reuse.
+func (proc *Process) ResetCloneTxnOperator() {
+	if proc.Base.CloneTxnOperator != nil {
+		proc.Base.CloneTxnOperator = nil
+	}
+}
+
 // Free do memory clean for the process.
 func (proc *Process) Free() {
 	if proc == nil {
