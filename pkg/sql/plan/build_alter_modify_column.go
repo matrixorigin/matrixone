@@ -126,6 +126,11 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 	if origin.Id == to.Id {
 		return nil
 	} else {
+		// The enumeration type has an independent cast function to handle it
+		if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
+			return nil
+		}
+
 		if supported := function.IfTypeCastSupported(types.T(origin.GetId()), types.T(to.GetId())); !supported {
 			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", types.T(origin.Id).String(), types.T(to.Id).String())
 		}
