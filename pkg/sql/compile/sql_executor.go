@@ -334,6 +334,9 @@ func (exec *txnExecutor) Exec(
 	})
 
 	result := executor.NewResult(exec.s.mp)
+
+	stream_chan, streaming := exec.opts.Streaming()
+
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,
@@ -347,9 +350,25 @@ func (exec *txnExecutor) Exec(
 				if err != nil {
 					return err
 				}
-				batches = append(batches, rows)
+				if streaming {
+					for len(stream_chan) == cap(stream_chan) {
+						select {
+						case <-proc.Ctx.Done():
+							return nil
+						default:
+							time.Sleep(10 * time.Millisecond)
+						}
+					}
+					stream_chan <- rows
+				} else {
+					batches = append(batches, rows)
+				}
+			} else {
+				// end of result
+				close(stream_chan)
 			}
 			return nil
+
 		})
 	if err != nil {
 		return executor.Result{}, err

@@ -41,6 +41,7 @@ type fulltextState struct {
 	result_chan chan map[any]float32
 	errors      chan error
 	done        chan bool
+	stream_chan chan *batch.Batch
 	limit       uint64
 
 	// holding output batch
@@ -133,6 +134,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.result_chan = make(chan map[any]float32, 2)
 		u.errors = make(chan error)
 		u.done = make(chan bool)
+		u.stream_chan = make(chan *batch.Batch, 2)
 		u.inited = true
 	}
 
@@ -203,6 +205,26 @@ func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
+var ft_runSql_streaming = ft_runSql_streaming_fn
+
+func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan *batch.Batch) (executor.Result, error) {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(proc.GetTxnOperator()).
+		WithDatabase(proc.GetSessionInfo().Database).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(proc.GetSessionInfo().AccountId).
+		WithStreaming(stream_chan)
+	return exec.Exec(proc.GetTopContext(), sql, opts)
+}
+
 // run SQL to get the (doc_id, pos) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	var union []string
@@ -245,7 +267,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	}
 	//logutil.Infof("SQL is %s", sql)
 
-	res, err := ft_runSql(proc, sql)
+	res, err := ft_runSql_streaming(proc, sql, u.stream_chan)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -253,14 +275,27 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	return res, nil
 }
 
-func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, res executor.Result) {
+func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) {
 
-	defer res.Close()
 	defer close(u.result_chan)
 	var n_result uint64 = 0
 	n_doc_id := 0
 	var last_doc_id any = nil
-	for _, bat := range res.Batches {
+
+	var bat *batch.Batch
+	var ok bool
+	for true {
+		select {
+		case bat, ok = <-u.stream_chan:
+			if !ok {
+				// channel closed
+				return
+			}
+		case <-u.done:
+			return
+		case <-proc.Ctx.Done():
+			return
+		}
 
 		if len(bat.Vecs) != 3 {
 			u.errors <- moerr.NewInternalError(proc.Ctx, "output vector columns not match")
@@ -421,13 +456,14 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	}
 	s.Nrow = nrow
 
+	go getResults(u, proc, s)
+
 	// get the statistic of search string ([]Pattern) and store in SearchAccum
-	res, err := runWordStats(u, proc, s)
+	_, err = runWordStats(u, proc, s)
 	if err != nil {
+		u.done <- true
 		return err
 	}
-
-	go getResults(u, proc, s, res)
 
 	return nil
 }

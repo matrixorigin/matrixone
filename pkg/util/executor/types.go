@@ -62,6 +62,8 @@ type Options struct {
 	txnOpts                 []client.TxnOption
 	enableTrace             bool
 	lower                   *int64
+	streaming               bool
+	stream_chan             chan *batch.Batch
 }
 
 // StatementOption statement execute option.
