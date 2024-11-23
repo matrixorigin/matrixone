@@ -17,6 +17,7 @@ package table_function
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -138,12 +139,21 @@ func TestFullTextCall(t *testing.T) {
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
 	require.Nil(t, err)
 
+	time.Sleep(1000 * time.Millisecond)
+
+	var result vm.CallResult
+
 	// first call receive data
-	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	for i := 0; i < 3; i++ {
+		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+		require.Nil(t, err)
+		require.Equal(t, result.Status, vm.ExecNext)
+		require.Equal(t, result.Batch.RowCount(), 8192)
+	}
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
 	require.Nil(t, err)
-
 	require.Equal(t, result.Status, vm.ExecNext)
-
 	require.Equal(t, result.Batch.RowCount(), 1)
 	//fmt.Printf("ROW COUNT = %d  BATCH = %v\n", result.Batch.RowCount(), result.Batch)
 
@@ -250,10 +260,18 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0))     // pos
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 256, 0)) // text
 
-	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
-	vector.AppendFixed[int32](bat.Vecs[1], int32(2), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[2], []byte("pattern"), false, proc.Mp())
+	nitem := 8192*3 + 1
+	for i := 0; i < nitem; i++ {
+		// doc_id
+		vector.AppendFixed[int32](bat.Vecs[0], int32(i), false, proc.Mp())
 
-	bat.SetRowCount(1)
+		// pos
+		vector.AppendFixed[int32](bat.Vecs[1], int32(i+1), false, proc.Mp())
+
+		// word
+		vector.AppendBytes(bat.Vecs[2], []byte("pattern"), false, proc.Mp())
+	}
+
+	bat.SetRowCount(nitem)
 	return bat
 }

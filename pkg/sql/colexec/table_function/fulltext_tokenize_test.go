@@ -34,26 +34,26 @@ type fulltextTokenizeTestCase struct {
 }
 
 var (
-	fttdefaultAttrs = []string{"doc_id", "pos", "word"}
+	fttdefaultAttrs = []string{"DOC_ID", "POS", "WORD"}
 
 	fftdefaultColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
-			Name: "doc_id",
+			Name: "DOC_ID",
 			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
-			Name: "pos",
+			Name: "POS",
 			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
-			Name: "word",
+			Name: "WORD",
 			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
@@ -63,7 +63,7 @@ var (
 	}
 )
 
-func newFTTTestCase(m *mpool.MPool, attrs []string) fulltextTokenizeTestCase {
+func newFTTTestCase(m *mpool.MPool, attrs []string, param string) fulltextTokenizeTestCase {
 	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
@@ -88,7 +88,7 @@ func newFTTTestCase(m *mpool.MPool, attrs []string) fulltextTokenizeTestCase {
 					IsLast:  false,
 				},
 			},
-			Params: []byte(""),
+			Params: []byte(param),
 		},
 	}
 	return ret
@@ -97,7 +97,7 @@ func newFTTTestCase(m *mpool.MPool, attrs []string) fulltextTokenizeTestCase {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCall(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs)
+	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "")
 
 	inbat := makeBatchFTT(ut.proc)
 
@@ -124,6 +124,82 @@ func TestFullTextTokenizeCall(t *testing.T) {
 	require.Equal(t, result.Status, vm.ExecNext)
 
 	require.Equal(t, 4, result.Batch.RowCount())
+
+	// reset
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+
+	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+// argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextTokenizeCallJSON(t *testing.T) {
+
+	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json\"}")
+
+	inbat := makeBatchJSONFTT(ut.proc)
+
+	ut.arg.Args = makeConstInputJSONExprsFTT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	// first call receive data
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+
+	require.Equal(t, result.Status, vm.ExecNext)
+
+	require.Equal(t, 1, result.Batch.RowCount())
+
+	// reset
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+
+	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+// argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextTokenizeCallJSONValue(t *testing.T) {
+
+	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json_value\"}")
+
+	inbat := makeBatchJSONFTT(ut.proc)
+
+	ut.arg.Args = makeConstInputJSONExprsFTT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	// first call receive data
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+
+	require.Equal(t, result.Status, vm.ExecNext)
+
+	require.Equal(t, 1, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -172,7 +248,56 @@ func makeBatchFTT(proc *process.Process) *batch.Batch {
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
 
-	vector.AppendBytes(bat.Vecs[0], []byte("this is a text"), false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte("this is a text"), false, proc.Mp())
+
+	bat.SetRowCount(1)
+	return bat
+}
+
+// JSON
+// create const input exprs
+func makeConstInputJSONExprsFTT() []*plan.Expr {
+
+	ret := []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_int32),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I32Val{
+						I32Val: 1,
+					},
+				},
+			},
+		},
+
+		{
+			Typ: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: "{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}",
+					},
+				},
+			},
+		}}
+
+	return ret
+}
+
+// create input vector for arg (id, text)
+func makeBatchJSONFTT(proc *process.Process) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
+
+	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[0], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat
