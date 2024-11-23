@@ -136,7 +136,7 @@ func TestFullTextTokenizeCall(t *testing.T) {
 func makeConstInputExprsFTT() []*plan.Expr {
 
 	ret := []*plan.Expr{
-		&plan.Expr{
+		{
 			Typ: plan.Type{
 				Id: int32(types.T_int32),
 			},
@@ -149,7 +149,7 @@ func makeConstInputExprsFTT() []*plan.Expr {
 			},
 		},
 
-		&plan.Expr{
+		{
 			Typ: plan.Type{
 				Id:    int32(types.T_varchar),
 				Width: 128,

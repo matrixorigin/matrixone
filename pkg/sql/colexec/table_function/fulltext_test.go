@@ -149,6 +149,7 @@ func TestFullTextCall(t *testing.T) {
 
 	// second call receive channel close
 	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
 	require.Equal(t, result.Status, vm.ExecStop)
 
 	// reset
@@ -162,7 +163,7 @@ func TestFullTextCall(t *testing.T) {
 func makeConstInputExprsFT() []*plan.Expr {
 
 	//ret := make([]*plan.Expr, 4)
-	ret := []*plan.Expr{&plan.Expr{
+	ret := []*plan.Expr{{
 		Typ: plan.Type{
 			Id:    int32(types.T_varchar),
 			Width: 256,
@@ -174,7 +175,7 @@ func makeConstInputExprsFT() []*plan.Expr {
 				},
 			},
 		},
-	}, &plan.Expr{
+	}, {
 		Typ: plan.Type{
 			Id:    int32(types.T_varchar),
 			Width: 256,
@@ -186,7 +187,7 @@ func makeConstInputExprsFT() []*plan.Expr {
 				},
 			},
 		},
-	}, &plan.Expr{
+	}, {
 		Typ: plan.Type{
 			Id:    int32(types.T_varchar),
 			Width: 256,
@@ -198,7 +199,7 @@ func makeConstInputExprsFT() []*plan.Expr {
 				},
 			},
 		},
-	}, &plan.Expr{
+	}, {
 		Typ: plan.Type{
 			Id: int32(types.T_int64),
 		},
