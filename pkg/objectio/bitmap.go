@@ -25,7 +25,7 @@ import (
 
 const (
 	BitmapBitsInPool = 8192
-	BitmapPoolSize   = 128
+	BitmapPoolSize   = 64
 )
 
 func BitmapPoolReport() string {

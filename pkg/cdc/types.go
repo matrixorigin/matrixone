@@ -47,7 +47,16 @@ const (
 	SASCommon = "common"
 	SASError  = "error"
 
-	InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
+	DefaultInitSnapshotSplitTxn = true
+
+	SendSqlTimeout        = "SendSqlTimeout"
+	DefaultSendSqlTimeout = "10m"
+	DefaultRetryTimes     = -1
+	DefaultRetryDuration  = 30 * time.Minute
+
+	MaxSqlLength        = "MaxSqlLength"
+	DefaultMaxSqlLength = 4 * 1024 * 1024
 )
 
 var (

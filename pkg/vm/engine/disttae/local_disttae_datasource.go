@@ -601,34 +601,31 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 		}
 
+		deletedMask := objectio.GetReusableBitmap()
+
 		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](physicalColumnPtr)
-		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
-		if err != nil {
+		if err = ls.batchApplyTombstoneObjects(
+			minTS, rowIds[applyOffset:], &deletedMask); err != nil {
+			deletedMask.Release()
 			return err
 		}
 
-		if len(deleted) > 0 {
-			delInFile += len(deleted)
+		if deletedMask.Count() > 0 {
+			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				for i := range deleted {
-					deleted[i] += int64(applyOffset)
-				}
-				physicalColumnPtr.Shrink(deleted, true)
-				for i := range deleted {
-					deleted[i] += int64(inputRowCnt)
-				}
+				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+
 				// negative shrink requires the bat sorted already
-				outBatch.Shrink(deleted, true)
+				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
 			} else {
-				for i := range deleted {
-					deleted[i] += int64(applyOffset)
-				}
-				outBatch.Shrink(deleted, true)
+				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
 			}
 		}
 
 		minTS = types.MaxTs()
 		applyOffset = physicalColumnPtr.Length()
+
+		deletedMask.Release()
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
@@ -1063,15 +1060,16 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	minTS types.TS,
 	rowIds []objectio.Rowid,
-) (deleted []int64, err error) {
+	deletedMask *objectio.Bitmap,
+) (err error) {
 
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
-		return nil, nil
+		return nil
 	}
 
 	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer iter.Close()
 
@@ -1093,9 +1091,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	cacheVectors := containers.NewVectors(len(attrs))
 
-	checkedObjCnt := 0
-
-	for iter.Next() && len(deleted) < len(rowIds) {
+	for iter.Next() && deletedMask.Count() < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1114,14 +1110,13 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 		}
 
-		sameObj := false
-		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
+		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > deletedMask.Count(); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = blockio.ReadDeletes(
 				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
-				return nil, err
+				return err
 			}
 
 			var deletedRowIds []objectio.Rowid
@@ -1139,13 +1134,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
-						deleted = append(deleted, int64(i))
-
-						if !sameObj {
-							checkedObjCnt++
-						}
-						sameObj = true
-
+						deletedMask.Add(uint64(i))
 						break
 					}
 				}
@@ -1155,7 +1144,5 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		}
 	}
 
-	slices.Sort(deleted)
-
-	return deleted, nil
+	return nil
 }
