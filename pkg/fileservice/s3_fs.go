@@ -417,41 +417,41 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	// size
-	var size int64
-	if len(vector.Entries) > 0 {
-		last := vector.Entries[len(vector.Entries)-1]
-		size = int64(last.Offset + last.Size)
+	// reader
+	var reader io.Reader
+	reader = newIOEntriesReader(ctx, vector.Entries)
+	var n atomic.Int64
+	reader = &countingReader{
+		R: reader,
+		C: &n,
 	}
 
-	// content
-	var content []byte
-	if len(vector.Entries) == 1 &&
-		vector.Entries[0].Size > 0 &&
-		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
-		// one piece of data
-		content = vector.Entries[0].Data
-
-	} else {
-		r := newIOEntriesReader(ctx, vector.Entries)
-		content, err = io.ReadAll(r)
-		if err != nil {
-			return 0, err
-		}
+	// disk cache
+	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
+	var diskCacheBuf *bytes.Buffer
+	if writeDiskCache {
+		diskCacheBuf = new(bytes.Buffer)
+		reader = io.TeeReader(reader, diskCacheBuf)
 	}
 
-	r := bytes.NewReader(content)
+	// some SDKs can't handle unknown reader type
+	size := vector.size()
+	if size != nil {
+		reader = io.LimitReader(reader, *size)
+	}
+
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt
 	}
 	key := s.pathToKey(path.File)
-	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
+	if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
 		return 0, err
 	}
 
 	// write to disk cache
-	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
+	if writeDiskCache {
+		content := diskCacheBuf.Bytes()
 		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
 		}); err != nil {
@@ -459,7 +459,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 	}
 
-	return len(content), nil
+	return int(n.Load()), nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {

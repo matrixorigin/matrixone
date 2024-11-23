@@ -76,10 +76,18 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 	content, err := os.ReadFile("s3.json")
 	if err == nil {
 		if len(content) > 0 {
-			var config _TestS3Config
+			var config struct {
+				Endpoint  string `json:"s3-test-endpoint"`
+				Region    string `json:"s3-test-region"`
+				APIKey    string `json:"s3-test-key"`
+				APISecret string `json:"s3-test-secret"`
+				Bucket    string `json:"s3-test-bucket"`
+				RoleARN   string `json:"role-arn"`
+			}
+
 			if err := json.Unmarshal(content, &config); err == nil {
 				ret = append(ret, ObjectStorageArguments{
-					Name:      defaultName,
+					Name:      "s3.json " + defaultName,
 					Endpoint:  config.Endpoint,
 					Region:    config.Region,
 					KeyID:     config.APIKey,
@@ -111,6 +119,9 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 	}
 
 	// envs
+	// examples
+	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
+	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
 	for _, pairs := range os.Environ() {
 		name, value, ok := strings.Cut(pairs, "=")
 		if !ok {

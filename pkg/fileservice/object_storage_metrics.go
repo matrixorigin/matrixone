@@ -95,7 +95,7 @@ func (o *objectStorageMetrics) Stat(ctx context.Context, key string) (size int64
 	return o.upstream.Stat(ctx, key)
 }
 
-func (o *objectStorageMetrics) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
+func (o *objectStorageMetrics) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
 	o.numWrite.Inc()
-	return o.upstream.Write(ctx, key, r, size, expire)
+	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
