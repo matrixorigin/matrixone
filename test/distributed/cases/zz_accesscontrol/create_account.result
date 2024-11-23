@@ -2,8 +2,8 @@ set global enable_privilege_cache = off;
 select enable_fault_injection();
 enable_fault_injection()
 true
-select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
-add_fault_point(fj/trace/partitionstate, :::, echo, 1, mo_tables)
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
+add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)
 true
 drop account if exists `test@123456`;
 drop account if exists testaccount;
