@@ -1088,25 +1088,25 @@ func Test_ShardingLocalReader(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
 	fault.Enable()
 	defer fault.Disable()
 	rmFault1, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
 	require.NoError(t, err)
 	defer rmFault1()
-	rmFault2, err := objectio.InjectLogRanges(catalog.MO_CATALOG, objectio.MO_TABLES, 0)
+	rmFault2, err := objectio.InjectLogRanges(ctx, catalog.MO_CATALOG, catalog.MO_TABLES)
 	require.NoError(t, err)
 	defer rmFault2()
-	rmFault3, err := objectio.InjectLogReader(catalog.FJ_EmptyTBL, objectio.MO_TABLES, 1)
+	rmFault3, err := objectio.InjectLogReader(objectio.FJ_EmptyTBL, catalog.MO_TABLES, 1)
 	require.NoError(t, err)
 	defer rmFault3()
-	rmFault4, err := objectio.InjectLogWorkspace(catalog.MO_CATALOG, objectio.MO_TABLES, 0)
+	rmFault4, err := objectio.InjectLogWorkspace(catalog.MO_CATALOG, catalog.MO_TABLES, 0)
 	require.NoError(t, err)
 	defer rmFault4()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
