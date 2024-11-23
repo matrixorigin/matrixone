@@ -302,6 +302,13 @@ func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorysto
 	}
 }
 
+func (c *Compile) addAllAffectedRows(s *Scope) {
+	for _, ps := range s.PreScopes {
+		c.addAllAffectedRows(ps)
+	}
+	c.addAffectedRows(s.affectedRows())
+}
+
 func (c *Compile) addAffectedRows(n uint64) {
 	c.affectRows.Add(n)
 }
@@ -349,12 +356,10 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		err := s.RemoteRun(c)
-		//@FIXME not a good choice
+		//@FIXME not a good choice after all DML refactor finish
 		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
-			if len(s.PreScopes) > 0 {
-				for _, ps := range s.PreScopes[0].PreScopes {
-					c.addAffectedRows(ps.affectedRows())
-				}
+			for _, ps := range s.PreScopes {
+				c.addAllAffectedRows(ps)
 			}
 		}
 		c.addAffectedRows(s.affectedRows())
