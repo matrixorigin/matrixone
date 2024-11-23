@@ -41,11 +41,11 @@ type Scheduler struct {
 }
 
 func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
-	policySlice := make([]policy, 0, 3)
-	policySlice = append(policySlice, newObjOverlapPolicy())
-	policySlice = append(policySlice, newObjCompactPolicy(rt.Fs.Service))
-	policySlice = append(policySlice, newTombstonePolicy())
-
+	policySlice := []policy{
+		newObjOverlapPolicy(),
+		newObjCompactPolicy(rt.Fs.Service),
+		newTombstonePolicy(),
+	}
 	op := &Scheduler{
 		LoopProcessor: new(catalog.LoopProcessor),
 		policies:      newPolicyGroup(policySlice...),

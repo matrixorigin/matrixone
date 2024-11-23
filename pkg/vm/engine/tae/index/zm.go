@@ -1852,3 +1852,57 @@ func StrictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2
 	}
 	return 1
 }
+
+func (zm ZM) Range() float64 {
+	switch types.T(zm[63]) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return float64(types.DecodeInt64(zm.GetMaxBuf()) - types.DecodeInt64(zm.GetMinBuf()))
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
+		return float64(types.DecodeUint64(zm.GetMaxBuf()) - types.DecodeUint64(zm.GetMinBuf()))
+	case types.T_float32, types.T_float64:
+		return types.DecodeFloat64(zm.GetMaxBuf()) - types.DecodeFloat64(zm.GetMinBuf())
+	case types.T_decimal64:
+		sub64, err := types.DecodeDecimal64(zm.GetMaxBuf()).Sub64(types.DecodeDecimal64(zm.GetMinBuf()))
+		if err != nil {
+			return 0
+		}
+		return types.Decimal64ToFloat64(sub64, zm.GetScale())
+	case types.T_decimal128:
+		sub128, err := types.DecodeDecimal128(zm.GetMaxBuf()).Sub128(types.DecodeDecimal128(zm.GetMinBuf()))
+		if err != nil {
+			return 0
+		}
+		return types.Decimal128ToFloat64(sub128, zm.GetScale())
+	case types.T_enum:
+		return float64(types.DecodeEnum(zm.GetMaxBuf()) - types.DecodeEnum(zm.GetMinBuf()))
+	case types.T_date:
+		return float64(types.DecodeDate(zm.GetMaxBuf()) - types.DecodeDate(zm.GetMinBuf()))
+	case types.T_datetime:
+		return float64(types.DecodeDatetime(zm.GetMaxBuf()) - types.DecodeDatetime(zm.GetMinBuf()))
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		maxBuf := make([]byte, 32)
+		minBuf := make([]byte, 32)
+		copy(maxBuf, zm.GetMaxBuf())
+		copy(minBuf, zm.GetMinBuf())
+		maxValue := types.Decimal256{
+			B0_63:    types.DecodeFixed[uint64](maxBuf[0:8]),
+			B64_127:  types.DecodeFixed[uint64](maxBuf[8:16]),
+			B128_191: types.DecodeFixed[uint64](maxBuf[16:24]),
+			B192_255: types.DecodeFixed[uint64](maxBuf[24:32]),
+		}
+		minValue := types.Decimal256{
+			B0_63:    types.DecodeFixed[uint64](minBuf[0:8]),
+			B64_127:  types.DecodeFixed[uint64](minBuf[8:16]),
+			B128_191: types.DecodeFixed[uint64](minBuf[16:24]),
+			B192_255: types.DecodeFixed[uint64](minBuf[24:32]),
+		}
+		sub, err := maxValue.Sub256(minValue)
+		if err != nil {
+			panic(err)
+		}
+		return types.Decimal256ToFloat64(sub, zm.GetScale())
+	default:
+		return 0
+	}
+}
