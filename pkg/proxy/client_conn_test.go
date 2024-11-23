@@ -26,8 +26,6 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/stretchr/testify/require"
 )
 
 type mockNetConn struct {
@@ -214,10 +213,28 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 	}
 }
 
+func copyCNServer(dst, src *CNServer) {
+	dst.connID = src.connID
+	dst.salt = make([]byte, len(src.salt))
+	copy(dst.salt, src.salt[:])
+	dst.reqLabel = src.reqLabel
+	dst.cnLabel = make(map[string]metadata.LabelList)
+	for k, v := range src.cnLabel {
+		dst.cnLabel[k] = v
+	}
+	dst.hash = src.hash
+	dst.uuid = src.uuid
+	dst.addr = src.addr
+	dst.internalConn = src.internalConn
+	dst.clientAddr = src.clientAddr
+}
+
 func testStartNClients(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer, n int) func() {
 	var cleanFns []func()
 	for i := 0; i < n; i++ {
-		c := testStartClient(t, tp, ci, cn)
+		newCN := &CNServer{}
+		copyCNServer(newCN, cn)
+		c := testStartClient(t, tp, ci, newCN)
 		cleanFns = append(cleanFns, c)
 	}
 	return func() {
