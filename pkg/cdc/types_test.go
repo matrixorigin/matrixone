@@ -593,3 +593,13 @@ func TestUriInfo_String(t *testing.T) {
 		})
 	}
 }
+
+func TestActiveRoutine_ClosePause(t *testing.T) {
+	ar := NewCdcActiveRoutine()
+	ar.ClosePause()
+}
+
+func TestActiveRoutine_CloseCancel(t *testing.T) {
+	ar := NewCdcActiveRoutine()
+	ar.CloseCancel()
+}
