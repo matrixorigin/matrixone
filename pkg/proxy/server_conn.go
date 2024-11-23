@@ -261,9 +261,6 @@ func (s *serverConn) Quit() error {
 
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
-	if s == nil {
-		return nil
-	}
 	s.closeOnce.Do(func() {
 		if s.mysqlProto != nil {
 			tcpConn := s.mysqlProto.GetTcpConnection()
