@@ -131,10 +131,10 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		u.batch = tf.createResultBatch()
-		u.result_chan = make(chan map[any]float32, 2)
+		u.result_chan = make(chan map[any]float32, 8)
 		u.errors = make(chan error)
 		u.done = make(chan bool)
-		u.stream_chan = make(chan *batch.Batch, 2)
+		u.stream_chan = make(chan *batch.Batch, 8)
 		u.inited = true
 	}
 
@@ -282,14 +282,20 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 	n_doc_id := 0
 	var last_doc_id any = nil
 
+	score_array := make([]map[any]float32, 0, 512)
+
+	// first receive the batch and calculate the scoremap
+	// We don't need to calculate mini-batch?????
+	stream_closed := false
 	var bat *batch.Batch
 	var ok bool
-	for true {
+	for !stream_closed {
 		select {
 		case bat, ok = <-u.stream_chan:
 			if !ok {
 				// channel closed
-				return
+				stream_closed = true
+				continue
 			}
 		case <-u.done:
 			return
@@ -335,37 +341,12 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 					return
 				}
 
-				// check context cancel
-				select {
-				case <-proc.Ctx.Done():
-					return
-				case <-u.done:
-					return
-				default:
-				}
-
 				if len(scoremap) > 0 {
-					for len(u.result_chan) == cap(u.result_chan) {
-						select {
-						case <-proc.Ctx.Done():
-							return
-						case <-u.done:
-							return
-						default:
-							time.Sleep(10 * time.Millisecond)
-						}
-					}
-					u.result_chan <- scoremap
+					score_array = append(score_array, scoremap)
 				}
 
 				clear(s.WordAccums)
 				n_doc_id = 0
-
-				// check limit
-				n_result += uint64(len(scoremap))
-				if u.limit > 0 && n_result >= u.limit {
-					return
-				}
 			}
 
 			w, ok := s.WordAccums[word]
@@ -385,22 +366,19 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 		}
 	}
 
+	// SQL sends all batch and now call() will activate to receive scoremap
+
 	scoremap, err := s.Eval()
 	if err != nil {
 		u.errors <- err
 		return
 	}
-
-	// check context cancel
-	select {
-	case <-proc.Ctx.Done():
-		return
-	case <-u.done:
-		return
-	default:
+	if len(scoremap) > 0 {
+		score_array = append(score_array, scoremap)
 	}
 
-	if len(scoremap) > 0 {
+	for _, s := range score_array {
+
 		for len(u.result_chan) == cap(u.result_chan) {
 			select {
 			case <-proc.Ctx.Done():
@@ -408,10 +386,15 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 			case <-u.done:
 				return
 			default:
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(1 * time.Millisecond)
 			}
 		}
-		u.result_chan <- scoremap
+
+		u.result_chan <- s
+		n_result += uint64(len(s))
+		if u.limit > 0 && n_result >= u.limit {
+			return
+		}
 	}
 }
 
