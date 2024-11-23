@@ -1905,7 +1905,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 change col1 col1NewCOl float;
-invalid argument operator cast, bad value [JSON FLOAT]
+not supported: currently unsupport change from original type JSON to FLOAT
 alter table abnormal04 change col2 col2NewCOL int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
