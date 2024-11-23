@@ -356,7 +356,7 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		err := s.RemoteRun(c)
-		//@FIXME not a good choice after all DML refactor finish
+		//@FIXME not a good choice
 		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
 			for _, ps := range s.PreScopes {
 				c.addAllAffectedRows(ps)
