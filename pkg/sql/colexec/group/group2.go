@@ -28,15 +28,19 @@ func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 	return r.Batch, err
 }
 
-// GroupOperatorReturnIntermediateResult
+// noneBlockCall
 // if there is a mergeGroup operator behinds this group operator,
-// the group operator has no need to return the final result but only aggregation's middle result.
+// the group operator has no need to return the final result but only aggregation's intermediate result.
+// the behind mergeGroup operator will merge all the intermediate and flush its final result.
 //
 // for this situation,
-// we do not engage in any blocking actions.
+// we do not engage in any blocking actions at this operator,
 // once a batch is received, the corresponding aggregation's intermediate result will be returned.
-func (group *Group) GroupOperatorReturnIntermediateResult(proc *process.Process) (*batch.Batch, error) {
+func (group *Group) noneBlockCall(proc *process.Process) (*batch.Batch, error) {
 	group.cleanLastOutput(proc)
+	if group.ctr.state == vm.End {
+		return nil, nil
+	}
 
 	for {
 		r, err := group.getInputBatch(proc)
@@ -53,6 +57,8 @@ func (group *Group) GroupOperatorReturnIntermediateResult(proc *process.Process)
 					return nil, errRes
 				}
 				res.SetRowCount(1)
+
+				group.ctr.state = vm.End
 				return res, nil
 			}
 			return nil, nil
@@ -80,9 +86,7 @@ func (group *Group) GroupOperatorReturnIntermediateResult(proc *process.Process)
 		}
 
 		// probe.
-
-		count := r.RowCount()
-		for i := 0; i < count; i += hashmap.UnitLimit {
+		for i, count := 0, r.RowCount(); i < count; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
 				runtime.Gosched()
 			}
@@ -91,15 +95,68 @@ func (group *Group) GroupOperatorReturnIntermediateResult(proc *process.Process)
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
+
+			originGroup := hah.GroupCount()
 			vals, _, er := itr.Insert(i, n, group.ctr.groupVecs.Vec)
 			if er != nil {
 				return nil, er
 			}
 
+			if err = group.updateBatch(proc, res, vals[:n], originGroup, i); err != nil {
+				return nil, err
+			}
 		}
 
+		return res, nil
+	}
+}
+
+// blockCall
+// if this group operator should return the final result, we should block here until all data were received.
+// and flush the result for return.
+func (group *Group) blockCall(proc *process.Process) (*batch.Batch, error) {
+	group.cleanLastOutput(proc)
+	if group.ctr.state == vm.End {
+		return nil, nil
 	}
 
+	for {
+		if group.ctr.state == vm.Eval {
+			if group.ctr.blocking.IsEmpty() {
+				group.ctr.state = vm.End
+				return nil, nil
+			}
+			return group.ctr.blocking.PopResult(proc.Mp())
+		}
+
+		b, err := group.getInputBatch(proc)
+		if err != nil {
+			return nil, err
+		}
+		if b == nil {
+			group.ctr.state = vm.Eval
+			continue
+		}
+
+		if len(group.Exprs) == 0 {
+			err = group.consumeInputBatchOnlyAgg(b)
+		} else {
+			err = group.consumeInputBatchOnlyAgg(b)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (group *Group) consumeInputBatchOnlyAgg(
+	bat *batch.Batch) error {
+	return nil
+}
+
+func (group *Group) consumeInputBatch(
+	proc *process.Process, bat *batch.Batch) error {
+	return nil
 }
 
 func (group *Group) cleanLastOutput(proc *process.Process) {
@@ -109,76 +166,20 @@ func (group *Group) cleanLastOutput(proc *process.Process) {
 	}
 }
 
-type groupHashRelated struct {
-	hah hashmap.HashMap
-	itr hashmap.Iterator
-}
-
 func (group *Group) getNewHashTable() (hashmap.HashMap, hashmap.Iterator, error) {
-	if group.ctr.hret.hah != nil {
-		group.ctr.hret.hah.Free()
-		group.ctr.hret.hah = nil
-	}
-
-	if group.ctr.typ == H8 {
-		h, err := hashmap.NewIntHashMap(group.ctr.groupVecsNullable)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if group.ctr.hret.itr == nil {
-			group.ctr.hret.itr = h.NewIterator()
-		}
-		group.ctr.hret.hah = h
-		return h, group.ctr.hret.itr, nil
-	}
-
-	h, err := hashmap.NewStrMap(group.ctr.groupVecsNullable)
-	if err != nil {
+	if err := group.ctr.hashr.BuildHashTable(
+		true, group.ctr.typ == HStr, group.ctr.groupVecsNullable, 0); err != nil {
 		return nil, nil, err
 	}
-	if group.ctr.hret.itr == nil {
-		group.ctr.hret.itr = h.NewIterator()
-	}
-	group.ctr.hret.hah = h
-	return h, group.ctr.hret.itr, nil
+	return group.ctr.hashr.Hash, group.ctr.hashr.Itr, nil
 }
 
 func (group *Group) getLastHashTable() (hashmap.HashMap, hashmap.Iterator, error) {
-	if group.ctr.hret.hah != nil {
-		return group.ctr.hret.hah, group.ctr.hret.itr, nil
-	}
-
-	if group.ctr.typ == H8 {
-		h, err := hashmap.NewStrMap(group.ctr.groupVecsNullable)
-		if err != nil {
-			return nil, nil, err
-		}
-		group.ctr.hret.itr = h.NewIterator()
-		group.ctr.hret.hah = h
-
-		if group.PreAllocSize > 0 {
-			if err = h.PreAlloc(group.PreAllocSize); err != nil {
-				return nil, nil, err
-			}
-		}
-		return h, group.ctr.hret.itr, nil
-	}
-
-	h, err := hashmap.NewStrMap(group.ctr.groupVecsNullable)
-	if err != nil {
+	if err := group.ctr.hashr.BuildHashTable(
+		false, group.ctr.typ == HStr, group.ctr.groupVecsNullable, group.PreAllocSize); err != nil {
 		return nil, nil, err
 	}
-	if group.ctr.hret.itr == nil {
-		group.ctr.hret.itr = h.NewIterator()
-	}
-
-	if group.PreAllocSize > 0 {
-		if err = h.PreAlloc(group.PreAllocSize); err != nil {
-			return nil, nil, err
-		}
-	}
-	return h, group.ctr.hret.itr, nil
+	return group.ctr.hashr.Hash, group.ctr.hashr.Itr, nil
 }
 
 func (group *Group) setInitialBatch(proc *process.Process) (*batch.Batch, error) {
@@ -189,6 +190,36 @@ func (group *Group) setInitialBatch(proc *process.Process) (*batch.Batch, error)
 	group.ctr.bat = batch.NewOffHeapEmpty()
 	group.ctr.bat.Aggs = aggPart
 	return group.ctr.bat, nil
+}
+
+// updateBatch append new group to dst and update all the group.
+func (group *Group) updateBatch(
+	proc *process.Process,
+	dst *batch.Batch,
+	groupList []uint64, originGroup uint64, offset int) error {
+
+	insertList, howMuchNew := group.ctr.hashr.GetNewList(groupList, originGroup)
+
+	if howMuchNew != 0 {
+		for j, vec := range dst.Vecs {
+			if err := vec.UnionBatch(group.ctr.groupVecs.Vec[j], int64(offset), len(insertList), insertList, proc.Mp()); err != nil {
+				return err
+			}
+		}
+
+		for _, ag := range dst.Aggs {
+			if err := ag.GroupGrow(int(howMuchNew)); err != nil {
+				return err
+			}
+		}
+	}
+
+	for j, ag := range dst.Aggs {
+		if err := ag.BatchFill(offset, groupList, group.ctr.aggVecs[j].Vec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // calculateAggColumnsAndGroupByColumns calculate the x and y of `select(x) group by y`.
@@ -214,6 +245,7 @@ func (group *Group) calculateAggColumnsAndGroupByColumns(
 	return nil
 }
 
+// generateAggStructure init and return the specified type aggregators.
 func (group *Group) generateAggStructure(proc *process.Process, isForFinalResult bool) ([]aggexec.AggFuncExec, error) {
 	var err error
 	execs := make([]aggexec.AggFuncExec, len(group.Aggs))

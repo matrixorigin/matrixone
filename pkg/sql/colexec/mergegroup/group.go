@@ -74,19 +74,19 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 					return vm.CancelResult, err
 				}
 			}
-			if err := ctr.res.dealPartialResult(mergeGroup.PartialResults); err != nil {
+			if err := ctr.res.DealPartialResult(mergeGroup.PartialResults); err != nil {
 				return vm.CancelResult, err
 			}
 			ctr.state = Eval
 
 		case Eval:
-			if !ctr.res.hasMoreResult() {
+			if ctr.res.IsEmpty() {
 				ctr.state = End
 				continue
 			}
 
 			result := vm.NewCallResult()
-			b, err := ctr.res.popOneResult()
+			b, err := ctr.res.BlockingGroupRelated.PopResult(proc.Mp())
 			if err != nil {
 				return result, err
 			}
@@ -161,7 +161,8 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	if ctr.typ == H0 {
 		return ctr.res.consumeInputBatchOnlyAgg(bat)
 	}
-	if err = ctr.res.tryToInitHashTable(ctr.typ == HStr, ctr.keyNullability); err != nil {
+
+	if err = ctr.res.BuildHashTable(false, ctr.typ == HStr, ctr.keyNullability, 0); err != nil {
 		return err
 	}
 	return ctr.res.consumeInputBatch(proc, bat)

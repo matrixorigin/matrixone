@@ -170,10 +170,18 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer.Start()
 	defer analyzer.Stop()
 
-	result, err := group.ctr.processGroupByAndAgg(group, proc, analyzer)
-	if err != nil {
-		return result, err
+	var b *batch.Batch
+	var err error
+	result := vm.NewCallResult()
+	if group.NeedEval {
+		b, err = group.blockCall(proc)
+	} else {
+		b, err = group.noneBlockCall(proc)
 	}
+	if err != nil {
+		return vm.CancelResult, err
+	}
+	result.Batch = b
 
 	if group.ProjectList != nil {
 		result.Batch, err = group.EvalProjection(result.Batch, proc)

@@ -77,7 +77,8 @@ func (ev *ExprEvalVector) ResetForNextQuery() {
 }
 
 type container struct {
-	hret groupHashRelated
+	hashr    ResHashRelated
+	blocking BlockingGroupRelated
 
 	// if skipInitReusableMem is true, we will skip some initialization of reusable.
 	skipInitReusableMem bool
