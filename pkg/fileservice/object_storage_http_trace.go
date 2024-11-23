@@ -71,11 +71,11 @@ func (o *objectStorageHTTPTrace) Stat(ctx context.Context, key string) (size int
 	return o.upstream.Stat(ctx, key)
 }
 
-func (o *objectStorageHTTPTrace) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
+func (o *objectStorageHTTPTrace) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
 	traceInfo := o.newTraceInfo()
 	defer o.closeTraceInfo(traceInfo)
 	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
-	return o.upstream.Write(ctx, key, r, size, expire)
+	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
 
 func (o *objectStorageHTTPTrace) newTraceInfo() *traceInfo {
