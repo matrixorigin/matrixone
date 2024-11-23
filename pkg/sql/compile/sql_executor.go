@@ -356,16 +356,13 @@ func (exec *txnExecutor) Exec(
 						case <-proc.Ctx.Done():
 							return nil
 						default:
-							time.Sleep(10 * time.Millisecond)
+							time.Sleep(1 * time.Millisecond)
 						}
 					}
 					stream_chan <- rows
 				} else {
 					batches = append(batches, rows)
 				}
-			} else {
-				// end of result
-				close(stream_chan)
 			}
 			return nil
 
@@ -393,6 +390,10 @@ func (exec *txnExecutor) Exec(
 			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
+	}
+
+	if streaming {
+		close(stream_chan)
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()
