@@ -90,3 +90,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 	}
 	projection.ctr.projExecutors = nil
 }
+
+func (projection *Projection) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
