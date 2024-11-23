@@ -234,10 +234,22 @@ func (r *bufferExportReq) callback(err error) {}
 
 // getGenerateReq get req to do generate logic
 // return nil, if b.buffer is nil
-func (b *bufferHolder) getGenerateReq() generateReq {
+func (b *bufferHolder) getGenerateReq() (req generateReq) {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	defer b.resetTrigger()
+	defer func() {
+		if err := recover(); err != nil {
+			_ = moerr.ConvertPanicError(b.ctx, err)
+			logutil.Error("catch panic #19755")
+			if b.buffer != nil {
+				b.putBuffer(b.buffer)
+			}
+			b.buffer = nil
+			req = nil
+		}
+	}()
+
 	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
@@ -253,7 +265,7 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	}
 	// END> handle aggr
 
-	req := &bufferGenerateReq{
+	req = &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
 		// impl generateReq.typ()

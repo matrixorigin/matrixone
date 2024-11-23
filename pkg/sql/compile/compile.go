@@ -302,6 +302,13 @@ func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorysto
 	}
 }
 
+func (c *Compile) addAllAffectedRows(s *Scope) {
+	for _, ps := range s.PreScopes {
+		c.addAllAffectedRows(ps)
+	}
+	c.addAffectedRows(s.affectedRows())
+}
+
 func (c *Compile) addAffectedRows(n uint64) {
 	c.affectRows.Add(n)
 }
@@ -351,10 +358,8 @@ func (c *Compile) run(s *Scope) error {
 		err := s.RemoteRun(c)
 		//@FIXME not a good choice
 		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
-			if len(s.PreScopes) > 0 {
-				for _, ps := range s.PreScopes[0].PreScopes {
-					c.addAffectedRows(ps.affectedRows())
-				}
+			for _, ps := range s.PreScopes {
+				c.addAllAffectedRows(ps)
 			}
 		}
 		c.addAffectedRows(s.affectedRows())

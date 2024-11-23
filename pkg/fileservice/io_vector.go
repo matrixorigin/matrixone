@@ -70,3 +70,17 @@ func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 
 	return
 }
+
+func (i *IOVector) size() *int64 {
+	if len(i.Entries) == 0 {
+		return nil
+	}
+	var ret int64
+	for _, entry := range i.Entries {
+		if entry.Size < 0 {
+			return nil
+		}
+		ret = max(ret, entry.Offset+entry.Size)
+	}
+	return &ret
+}
