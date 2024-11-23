@@ -40,23 +40,6 @@ func (MockTxnExecutor) LockTable(table string) error {
 }
 
 func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	if sql == getPubInfosSql {
-		bat := batch.New([]string{"a", "b", "c", "d", "e", "f", "g", "h"})
-		bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil)
-		bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil)
-		bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
-		bat.Vecs[3] = testutil.MakeVarcharVector([]string{"TablesStr"}, nil)
-		bat.Vecs[4] = testutil.MakeVarcharVector([]string{"SubAccountsStr"}, nil)
-		bat.Vecs[5] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil)
-		bat.Vecs[6] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil)
-		bat.Vecs[7] = testutil.MakeVarcharVector([]string{"Comment"}, nil)
-		bat.SetRowCount(1)
-		return executor.Result{
-			Batches: []*batch.Batch{bat},
-			Mp:      testutil.TestUtilMp,
-		}, nil
-	}
-
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil)
@@ -355,19 +338,4 @@ func TestGetAccounts(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nameInfoMap))
 	assert.Equal(t, 1, len(idInfoMap))
-}
-
-func TestGetPubInfos(t *testing.T) {
-	infos, err := GetPubInfos(&MockTxnExecutor{}, 0, "sys")
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(infos))
-}
-
-func TestGetAllPubInfos(t *testing.T) {
-	accNameInfoMap := map[string]*AccountInfo{
-		"sys": {Id: 0, Name: "sys"},
-	}
-	infos, err := GetAllPubInfos(&MockTxnExecutor{}, accNameInfoMap)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(infos))
 }

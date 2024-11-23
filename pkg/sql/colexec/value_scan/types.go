@@ -100,6 +100,15 @@ func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 	}
 }
 
+func (valueScan *ValueScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if valueScan.ProjectList != nil {
+		batch, err = valueScan.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
 	for _, bat := range valueScan.Batchs {
 		if bat != nil {

@@ -176,13 +176,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 }
 
 func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := preInsert.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -223,7 +217,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

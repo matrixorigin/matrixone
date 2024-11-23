@@ -55,22 +55,14 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return
 	}
-	err = apply.PrepareProjection(proc)
 	return
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := apply.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	ctr := &apply.ctr
 	for {
@@ -87,7 +79,6 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if ctr.inbat.Last() {
 				result.Batch = ctr.inbat
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if ctr.inbat.IsEmpty() {
@@ -111,17 +102,11 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.rbat.CleanOnlyData()
 		}
 
-		err = ctr.probe(apply, proc, &probeResult, analyzer)
+		err = ctr.probe(apply, proc, &result, analyzer)
 		if err != nil {
 			return result, err
 		}
 
-		result.Batch, err = apply.EvalProjection(probeResult.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-
-		analyzer.Output(result.Batch)
 		return result, nil
 
 	}

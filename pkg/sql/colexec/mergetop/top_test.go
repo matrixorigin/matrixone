@@ -86,7 +86,7 @@ func TestTop(t *testing.T) {
 		resetChildren(tc.arg, bats)
 
 		for {
-			ok, err := tc.arg.Call(tc.proc)
+			ok, err := vm.Exec(tc.arg, tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
@@ -106,7 +106,7 @@ func TestTop(t *testing.T) {
 		resetChildren(tc.arg, bats)
 
 		for {
-			ok, err := tc.arg.Call(tc.proc)
+			ok, err := vm.Exec(tc.arg, tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
@@ -139,7 +139,7 @@ func BenchmarkTop(b *testing.B) {
 			resetChildren(tc.arg, bats)
 
 			for {
-				ok, err := tc.arg.Call(tc.proc)
+				ok, err := vm.Exec(tc.arg, tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
