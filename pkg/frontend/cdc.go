@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -362,7 +363,7 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	if err != nil {
 		return
 	}
-	if _, err = cdc2.OpenDbConn(sinkUriInfo.User, sinkUriInfo.Password, sinkUriInfo.Ip, sinkUriInfo.Port); err != nil {
+	if _, err = cdc2.OpenDbConn(sinkUriInfo.User, sinkUriInfo.Password, sinkUriInfo.Ip, sinkUriInfo.Port, cdc2.DefaultSendSqlTimeout); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
 		return
 	}
@@ -373,10 +374,25 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 	}
 
 	additionalConfig := make(map[string]any)
-	additionalConfig[cdc2.InitSnapshotSplitTxn] = true
+	additionalConfig[cdc2.InitSnapshotSplitTxn] = cdc2.DefaultInitSnapshotSplitTxn
 	if cdcTaskOptionsMap[cdc2.InitSnapshotSplitTxn] == "false" {
 		additionalConfig[cdc2.InitSnapshotSplitTxn] = false
 	}
+	additionalConfig[cdc2.MaxSqlLength] = cdc2.DefaultMaxSqlLength
+	if val, ok := cdcTaskOptionsMap[cdc2.MaxSqlLength]; ok {
+		if additionalConfig[cdc2.MaxSqlLength], err = strconv.ParseUint(val, 10, 64); err != nil {
+			return
+		}
+	}
+	additionalConfig[cdc2.SendSqlTimeout] = cdc2.DefaultSendSqlTimeout
+	if val, ok := cdcTaskOptionsMap[cdc2.SendSqlTimeout]; ok {
+		// check duration format
+		if _, err = time.ParseDuration(val); err != nil {
+			return
+		}
+		additionalConfig[cdc2.SendSqlTimeout] = val
+	}
+
 	additionalConfigBytes, err := json.Marshal(additionalConfig)
 	if err != nil {
 		return err
@@ -983,12 +999,12 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri              cdc2.UriInfo
-	tables               cdc2.PatternTuples
-	filters              cdc2.PatternTuples
-	startTs              types.TS
-	noFull               string
-	initSnapshotSplitTxn bool
+	sinkUri          cdc2.UriInfo
+	tables           cdc2.PatternTuples
+	filters          cdc2.PatternTuples
+	startTs          types.TS
+	noFull           string
+	additionalConfig map[string]interface{}
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
@@ -1214,6 +1230,8 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc2.DefaultRetryTimes,
 		cdc2.DefaultRetryDuration,
 		cdc.activeRoutine,
+		uint64(cdc.additionalConfig[cdc2.MaxSqlLength].(float64)),
+		cdc.additionalConfig[cdc2.SendSqlTimeout].(string),
 	)
 	if err != nil {
 		return err
@@ -1231,7 +1249,7 @@ func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client
 		cdc.sunkWatermarkUpdater,
 		tableDef,
 		cdc.resetWatermarkForTable,
-		cdc.initSnapshotSplitTxn,
+		cdc.additionalConfig[cdc2.InitSnapshotSplitTxn].(bool),
 	)
 	go reader.Run(ctx, cdc.activeRoutine)
 
@@ -1425,17 +1443,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	additionalConfig := make(map[string]interface{})
-	if err = json.Unmarshal([]byte(additionalConfigStr), &additionalConfig); err != nil {
-		return err
-	}
-
-	cdc.initSnapshotSplitTxn = true
-	if val, ok := additionalConfig[cdc2.InitSnapshotSplitTxn]; ok {
-		cdc.initSnapshotSplitTxn = val.(bool)
-	}
-
-	return nil
+	return json.Unmarshal([]byte(additionalConfigStr), &cdc.additionalConfig)
 }
 
 func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string, tblIdStrMap map[string]bool) (*cdc2.DbTableInfo, error) {
