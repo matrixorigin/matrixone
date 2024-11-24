@@ -73,35 +73,34 @@ func TestTruncatedOverlap(t *testing.T) {
 	require.True(t, zm1.FastIntersect(zm2))
 
 	// Not overlapped!
-	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm2.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm2.GetScale()))
+	require.Negative(t, zm1.StrictlyCompareZmMaxAndMin(zm2))
 
-	require.Negative(t, StrictlyCompareZmMaxAndMin(zm1.GetMaxBuf(), zm3.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+	require.Negative(t, zm1.StrictlyCompareZmMaxAndMin(zm3))
 
-	require.Negative(t, StrictlyCompareZmMaxAndMin(
+	require.Negative(t, strictlyCompareZmMaxAndMin(
 		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x00),
 		bytes.Repeat([]byte{0xff}, 28),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
 
-	require.Positive(t, StrictlyCompareZmMaxAndMin(
+	require.Positive(t, strictlyCompareZmMaxAndMin(
 		append(bytes.Repeat([]byte{0xff}, 28), 0x00, 0x01),
 		bytes.Repeat([]byte{0xff}, 28),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
 
-	require.Negative(t, StrictlyCompareZmMaxAndMin(
+	require.Negative(t, strictlyCompareZmMaxAndMin(
 		bytes.Repeat([]byte{0xff}, 30),
 		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
 
-	require.Positive(t, StrictlyCompareZmMaxAndMin(
+	require.Positive(t, strictlyCompareZmMaxAndMin(
 		append(bytes.Repeat([]byte{0xff}, 29), 0x22),
 		append(bytes.Repeat([]byte{0xff}, 29), 0x20),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
 
-	require.Positive(t, StrictlyCompareZmMaxAndMin(
+	require.Positive(t, strictlyCompareZmMaxAndMin(
 		bytes.Repeat([]byte{0xff}, 30),
 		bytes.Repeat([]byte{0x20}, 30),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
-
 }
 
 type testArithRes struct {
@@ -516,10 +515,10 @@ func TestZMRange(t *testing.T) {
 	testIntRange(t, types.T_int16)
 	testIntRange(t, types.T_int32)
 	testIntRange(t, types.T_int64)
-	testUIntSum(t, types.T_uint8)
-	testUIntSum(t, types.T_uint16)
-	testUIntSum(t, types.T_uint32)
-	testUIntSum(t, types.T_uint64)
+	testUintRange(t, types.T_uint8)
+	testUintRange(t, types.T_uint16)
+	testUintRange(t, types.T_uint32)
+	testUintRange(t, types.T_uint64)
 	testFloatRange(t, types.T_float32)
 	testFloatRange(t, types.T_float64)
 	testVarcharRange(t, types.T_varchar)

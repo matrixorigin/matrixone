@@ -16,11 +16,11 @@ package merge
 
 import (
 	"cmp"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -101,17 +101,36 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
 		}
 		return zmA.CompareMax(zmB)
 	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
+	set := entrySet{entries: make([]*catalog.ObjectEntry, 0)}
 	for _, obj := range m.leveledObjects[level] {
 		if len(set.entries) == 0 {
 			set.add(obj)
 			continue
 		}
 
-		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
+		if zm := obj.SortKeyZoneMap(); set.setZM.StrictlyCompareZmMaxAndMin(zm) > 0 {
 			// zm is overlapped
-			set.add(obj)
-			continue
+			r := zm.Range()
+			if math.IsNaN(r) {
+				set.add(obj)
+				continue
+			}
+			averageRowCnt := set.rows / uint32(len(set.entries))
+			if averageRowCnt/3 < obj.Rows() && obj.Rows() < averageRowCnt*3 {
+				if set.setZM.CompareMax(zm) >= 0 {
+					set.add(obj)
+					continue
+				} else {
+					newRate := index.RangeBetween(set.setZM.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale()) /
+						(set.rangeSum + r) * float64(len(set.entries)+1)
+					if newRate > set.overlapRate {
+						set.add(obj)
+						set.rangeSum += r
+						set.overlapRate = newRate
+						continue
+					}
+				}
+			}
 		}
 
 		// obj has no overlap with the set.
@@ -141,11 +160,8 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
 	// get the overlapping set with most objs.
 	for i := len(m.overlappingObjsSet) - 1; i >= 0; i-- {
 		objs := m.overlappingObjsSet[i]
-		if len(objs) < 2 || originalRows(objs) < 8192*len(objs) {
+		if len(objs) < 2 {
 			continue
-		}
-		if level < 3 && len(objs) > levels[3] {
-			objs = objs[:levels[3]]
 		}
 		revisedResults = append(revisedResults, reviseResult{
 			objs: slices.Clone(objs),
@@ -165,24 +181,32 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig
 }
 
 type entrySet struct {
-	entries  []*catalog.ObjectEntry
-	maxValue []byte
-	size     int
+	entries     []*catalog.ObjectEntry
+	overlapRate float64
+	rangeSum    float64
+	rows        uint32
+	setZM       index.ZM
 }
 
 func (s *entrySet) reset() {
 	s.entries = s.entries[:0]
-	s.maxValue = []byte{}
-	s.size = 0
+	s.overlapRate = 0
+	s.rangeSum = 0
+	s.rows = 0
+	s.setZM = nil
 }
 
 func (s *entrySet) add(obj *catalog.ObjectEntry) {
+	zm := obj.SortKeyZoneMap()
 	s.entries = append(s.entries, obj)
-	s.size += int(obj.OriginSize())
-	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 ||
-		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
-		s.maxValue = zm.GetMaxBuf()
+	if s.setZM == nil || !s.setZM.IsInited() {
+		s.setZM = zm.Clone()
+	} else {
+		if s.setZM.CompareMax(zm) < 0 {
+			s.setZM.Update(zm.GetMax())
+		}
 	}
+	s.rows += obj.Rows()
 }
 
 func (s *entrySet) cloneEntries() []*catalog.ObjectEntry {

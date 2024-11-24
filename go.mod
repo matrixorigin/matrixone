@@ -47,6 +47,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/hayageek/threadsafe v1.0.1
+	github.com/holiman/uint256 v1.3.1
 	github.com/itchyny/gojq v0.12.16
 	github.com/jhump/protoreflect v1.15.2
 	github.com/json-iterator/go v1.1.12

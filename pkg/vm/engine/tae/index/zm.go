@@ -24,6 +24,8 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/holiman/uint256"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1821,7 +1823,11 @@ func VectorToZM(vec *vector.Vector, zm ZM) ZM {
 //
 // In this case, StrictlyCompareZmMaxAndMin will return -1 even when truncated,
 // indicating a possibly false negative response to the declaration that two ZMs intersect
-func StrictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2 int32) int {
+func (zm ZM) StrictlyCompareZmMaxAndMin(o ZM) int {
+	return strictlyCompareZmMaxAndMin(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
+}
+
+func strictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2 int32) int {
 	if t.FixedLength() >= 0 || len(maxBuf) != 30 {
 		return compute.Compare(maxBuf, minBuf, t, scale1, scale2)
 	}
@@ -1854,55 +1860,43 @@ func StrictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2
 }
 
 func (zm ZM) Range() float64 {
-	switch types.T(zm[63]) {
+	return RangeBetween(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale())
+}
+
+func RangeBetween(fromBuf, toBuf []byte, t types.T, scale int32) float64 {
+	switch t {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return float64(types.DecodeInt64(zm.GetMaxBuf()) - types.DecodeInt64(zm.GetMinBuf()))
+		return float64(types.DecodeInt64(toBuf) - types.DecodeInt64(fromBuf) + 1)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
-		return float64(types.DecodeUint64(zm.GetMaxBuf()) - types.DecodeUint64(zm.GetMinBuf()))
+		return float64(types.DecodeUint64(toBuf) - types.DecodeUint64(fromBuf) + 1)
 	case types.T_float32, types.T_float64:
-		return types.DecodeFloat64(zm.GetMaxBuf()) - types.DecodeFloat64(zm.GetMinBuf())
+		return types.DecodeFloat64(toBuf) - types.DecodeFloat64(fromBuf) + 1
 	case types.T_decimal64:
-		sub64, err := types.DecodeDecimal64(zm.GetMaxBuf()).Sub64(types.DecodeDecimal64(zm.GetMinBuf()))
+		sub64, err := types.DecodeDecimal64(toBuf).Sub64(types.DecodeDecimal64(fromBuf))
 		if err != nil {
 			return 0
 		}
-		return types.Decimal64ToFloat64(sub64, zm.GetScale())
+		return types.Decimal64ToFloat64(sub64, scale) + 1
 	case types.T_decimal128:
-		sub128, err := types.DecodeDecimal128(zm.GetMaxBuf()).Sub128(types.DecodeDecimal128(zm.GetMinBuf()))
+		sub128, err := types.DecodeDecimal128(toBuf).Sub128(types.DecodeDecimal128(fromBuf))
 		if err != nil {
 			return 0
 		}
-		return types.Decimal128ToFloat64(sub128, zm.GetScale())
+		return types.Decimal128ToFloat64(sub128, scale) + 1
 	case types.T_enum:
-		return float64(types.DecodeEnum(zm.GetMaxBuf()) - types.DecodeEnum(zm.GetMinBuf()))
+		return float64(types.DecodeEnum(toBuf)-types.DecodeEnum(fromBuf)) + 1
 	case types.T_date:
-		return float64(types.DecodeDate(zm.GetMaxBuf()) - types.DecodeDate(zm.GetMinBuf()))
+		return float64(types.DecodeDate(toBuf)-types.DecodeDate(fromBuf)) + 1
 	case types.T_datetime:
-		return float64(types.DecodeDatetime(zm.GetMaxBuf()) - types.DecodeDatetime(zm.GetMinBuf()))
+		return float64(types.DecodeDatetime(toBuf)-types.DecodeDatetime(fromBuf)) + 1
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		maxBuf := make([]byte, 32)
-		minBuf := make([]byte, 32)
-		copy(maxBuf, zm.GetMaxBuf())
-		copy(minBuf, zm.GetMinBuf())
-		maxValue := types.Decimal256{
-			B0_63:    types.DecodeFixed[uint64](maxBuf[0:8]),
-			B64_127:  types.DecodeFixed[uint64](maxBuf[8:16]),
-			B128_191: types.DecodeFixed[uint64](maxBuf[16:24]),
-			B192_255: types.DecodeFixed[uint64](maxBuf[24:32]),
-		}
-		minValue := types.Decimal256{
-			B0_63:    types.DecodeFixed[uint64](minBuf[0:8]),
-			B64_127:  types.DecodeFixed[uint64](minBuf[8:16]),
-			B128_191: types.DecodeFixed[uint64](minBuf[16:24]),
-			B192_255: types.DecodeFixed[uint64](minBuf[24:32]),
-		}
-		sub, err := maxValue.Sub256(minValue)
-		if err != nil {
-			panic(err)
-		}
-		return types.Decimal256ToFloat64(sub, zm.GetScale())
+		minValue, maxValue, sub := &uint256.Int{}, &uint256.Int{}, &uint256.Int{}
+		minValue.SetBytes(fromBuf)
+		maxValue.SetBytes(toBuf)
+		sub.Sub(maxValue, minValue)
+		return sub.Float64() + 1
 	default:
-		return 0
+		return math.NaN()
 	}
 }
