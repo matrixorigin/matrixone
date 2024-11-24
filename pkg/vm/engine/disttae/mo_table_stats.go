@@ -1372,18 +1372,20 @@ func betaTask(
 				continue
 			}
 
+			curTbl := *tbl
 			bulkWait.Add(1)
 			if err = dynamicCtx.beta.betaTaskPool.Submit(func() {
 				defer bulkWait.Done()
 
-				sl, err2 := statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
+				sl, err2 := statsCalculateOp(ctx, service, de.fs, curTbl.snapshot, curTbl.pState)
 				if err2 != nil {
-					tbl.Done(err2)
+					curTbl.Done(err2)
 				} else {
-					slBat.Store(tbl, sl)
+					slBat.Store(&curTbl, sl)
 				}
 			}); err != nil {
-				tbl.Done(err)
+				bulkWait.Done()
+				curTbl.Done(err)
 				return
 			}
 		}
