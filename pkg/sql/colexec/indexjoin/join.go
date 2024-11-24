@@ -51,14 +51,7 @@ func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := indexJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	ap := indexJoin
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
@@ -93,21 +86,12 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			result.Batch = indexJoin.ctr.buf
-			if indexJoin.ProjectList != nil {
-				var err error
-				result.Batch, err = indexJoin.EvalProjection(result.Batch, proc)
-				if err != nil {
-					return result, err
-				}
-			}
 
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

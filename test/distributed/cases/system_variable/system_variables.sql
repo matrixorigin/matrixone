@@ -218,3 +218,11 @@ select @@profiling_history_size;
 select @@global.profiling_history_size;
 show variables like 'profiling_history_size';
 SET profiling_history_size = default;
+
+select @@optimizer_switch;
+select @@global.optimizer_switch;
+show variables like 'optimizer_switch';
+set optimizer_switch='semijoin=off';
+select @@optimizer_switch;
+show variables like 'optimizer_switch';
+SET profiling_history_size = default;

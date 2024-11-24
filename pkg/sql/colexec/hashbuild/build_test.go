@@ -82,7 +82,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-		ok, err := tc.arg.Call(tc.proc)
+		ok, err := vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, ok.Status == vm.ExecStop)
 
@@ -98,7 +98,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 
-		ok, err = tc.arg.Call(tc.proc)
+		ok, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, ok.Status == vm.ExecStop)
 
@@ -124,7 +124,7 @@ func BenchmarkBuild(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 			for {
-				ok, err := tc.arg.Call(tc.proc)
+				ok, err := vm.Exec(tc.arg, tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
