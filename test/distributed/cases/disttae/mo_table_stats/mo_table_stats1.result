@@ -34,6 +34,9 @@ mo_table_rows(mts_db, mts_t1)
 select mo_ctl("cn", "MoTableStats", "force_update:false");
 mo_ctl(cn, MoTableStats, force_update:true)
 {\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "force update, true to false"\n  }\n}\n
+select count(*) from mts_t1;
+count(*)
+1001
 drop table mts_t1;
 create table mts_t2 (a int);
 insert into mts_t2 select * from generate_series(1, 1000)g;
@@ -62,5 +65,8 @@ mo_table_rows(mts_db, mts_t2)
 select mo_ctl("cn", "MoTableStats", "restore_default_setting:true");
 mo_ctl(cn, MoTableStats, restore_default_setting:true)
 {\n  "method": "MOTABLESTATS",\n  "result": {\n    "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf": "move_on(true), use_old_impl(false), force_update(false)"\n  }\n}\n
+select count(*) from mts_t2;
+count(*)
+1002
 drop table mts_t2;
 drop database mts_db;
