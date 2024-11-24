@@ -411,6 +411,11 @@ var dynamicCtx struct {
 
 func HandleMoTableStatsCtl(cmd string) string {
 	cmds := strings.Split(cmd, ":")
+
+	if len(cmds) != 2 {
+		return "invalid command"
+	}
+
 	typ, val := cmds[0], cmds[1]
 
 	typ = strings.TrimSpace(typ)
@@ -767,6 +772,10 @@ func MTSTableSize(
 		return nil, err
 	}
 
+	if len(statsVals) == 0 {
+		return
+	}
+
 	for i := range statsVals[0] {
 		sizes = append(sizes, uint64(statsVals[0][i].(float64)))
 	}
@@ -788,6 +797,10 @@ func MTSTableRows(
 		forceUpdate, resetUpdateTime, eng)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(statsVals) == 0 {
+		return
 	}
 
 	for i := range statsVals[0] {
