@@ -32,4 +32,5 @@ select mo_table_rows("mts_db", "mts_t2");
 drop table mts_t2;
 drop database mts_db;
 
-
+-- @session
+drop account acc_mts;
