@@ -84,3 +84,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Free(proc *process.Process, pipelineFail
 	}
 	preInsertSecIdx.packers.Free()
 }
+
+func (preInsertSecIdx *PreInsertSecIdx) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}

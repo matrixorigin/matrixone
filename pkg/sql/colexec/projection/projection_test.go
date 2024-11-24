@@ -91,14 +91,14 @@ func TestProjection(t *testing.T) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = tc.arg.Call(tc.proc)
+		_, _ = vm.Exec(tc.arg, tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
 		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = tc.arg.Call(tc.proc)
+		_, _ = vm.Exec(tc.arg, tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

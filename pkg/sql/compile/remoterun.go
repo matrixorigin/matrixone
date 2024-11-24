@@ -832,7 +832,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColList:   colList,
 			Types:     convertToPlanTypes(t.Typs),
 		}
-		in.ProjectList = t.ProjectList
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.TableFunction.Attrs,
 			Rets:   t.TableFunction.Rets,
@@ -1361,7 +1360,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.ProjectList = opr.ProjectList
 		arg.TableFunction = table_function.NewArgument()
 		arg.TableFunction.Attrs = opr.TableFunction.Attrs
 		arg.TableFunction.Rets = opr.TableFunction.Rets

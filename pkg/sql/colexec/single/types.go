@@ -133,6 +133,15 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 	singleJoin.FreeProjection(proc)
 }
 
+func (singleJoin *SingleJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if singleJoin.ProjectList != nil {
+		batch, err = singleJoin.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) resetExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.ResetForNextQuery()

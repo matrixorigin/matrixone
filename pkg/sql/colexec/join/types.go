@@ -153,7 +153,15 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanBatch(proc)
 
 	innerJoin.FreeProjection(proc)
+}
 
+func (innerJoin *InnerJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if innerJoin.ProjectList != nil {
+		batch, err = innerJoin.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (ctr *container) resetExprExecutor() {

@@ -172,6 +172,15 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	group.FreeProjection(proc)
 }
 
+func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if group.ProjectList != nil {
+		batch, err = group.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)

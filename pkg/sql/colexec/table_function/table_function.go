@@ -35,13 +35,7 @@ const (
 )
 
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := tableFunction.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	// we know this cannot be true but check anyway
 	if tableFunction.ctr.state == nil {
@@ -59,7 +53,6 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 
 			tableFunction.ctr.inputBatch = input.Batch
 			if input.Batch.IsDone() {
-				analyzer.Output(input.Batch)
 				return input, nil
 			}
 
@@ -93,7 +86,6 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 			}
 			continue
 		}
-		analyzer.Output(res.Batch)
 		return res, nil
 	} // end of loop
 }
