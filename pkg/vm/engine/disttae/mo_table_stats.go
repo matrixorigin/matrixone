@@ -737,7 +737,10 @@ func QueryTableStats(
 		}
 	}()
 
+	var cancel context.CancelFunc
 	newCtx := turn2SysCtx(ctx)
+	newCtx, cancel = context.WithTimeout(newCtx, time.Minute*5)
+	defer cancel()
 
 	if forceUpdate || resetUpdateTime {
 		if len(tbls) >= defaultGetTableListLimit {
