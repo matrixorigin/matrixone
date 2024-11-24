@@ -1875,7 +1875,8 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+			tbl,
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),

@@ -23,13 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/gops/agent"
-
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -462,6 +463,126 @@ func TestMOCollector_calculateDefaultWorker(t *testing.T) {
 			require.Equal(t, tt.wants.collectorCnt, c.collectorCnt)
 			require.Equal(t, tt.wants.generatorCnt, c.generatorCnt)
 			require.Equal(t, tt.wants.exporterCnt, c.exporterCnt)
+		})
+	}
+}
+
+func Test_bufferHolder_getGenerateReq(t *testing.T) {
+	c := &MOCollector{}
+	c.bufferCond = sync.NewCond(&c.bufferMux)
+	c.logger = runtime.GetLogger("dummy_id")
+
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	impl := NewMockPipeImpl(ctrl)
+	aggr := NewMockAggregator(ctrl)
+	impl.EXPECT().NewAggregator(gomock.Any(), gomock.Any()).Return(aggr).AnyTimes()
+	//impl.EXPECT().NewItemBuffer(gomock.Any()).Return().AnyTimes()
+
+	reminder := NewMockReminder(ctrl)
+	reminder.EXPECT().RemindNextAfter().Return(5 * time.Second).AnyTimes()
+	aggr.EXPECT().AddItem(gomock.Any()).DoAndReturn(func() (table.Item, any) {
+		panic("Aggregator::AddItem panic")
+	}).AnyTimes()
+	aggr.EXPECT().GetWindow().Return(5 * time.Second).AnyTimes()
+	aggr.EXPECT().PopResultsBeforeWindow(gomock.Any()).Return([]table.Item{nil}).AnyTimes()
+
+	// not empty case.
+	bufferMock := NewMockBuffer(ctrl)
+	bufferMock.EXPECT().IsEmpty().Return(false).AnyTimes()
+	bufferMock.EXPECT().Reset().Return().AnyTimes()
+	bufferMock.EXPECT().Add(gomock.Any()).DoAndReturn(func(any) {
+		panic("Buffer::Add panic")
+	}).AnyTimes()
+	// empty buffer case.
+	emtpyBufferMock := NewMockBuffer(ctrl)
+	emtpyBufferMock.EXPECT().IsEmpty().Return(true).AnyTimes()
+
+	dummyBufferPool := &sync.Pool{
+		New: func() any { return bufferMock },
+	}
+	type fields struct {
+		c          *MOCollector
+		ctx        context.Context
+		name       string
+		buffer     motrace.Buffer
+		bufferPool *sync.Pool
+		reminder   batchpipe.Reminder
+		signal     bufferSignalFunc
+		impl       motrace.PipeImpl
+		trigger    *time.Timer
+		aggr       table.Aggregator
+		stopped    bool
+	}
+	tests := []struct {
+		name          string
+		fields        fields
+		wantReqNil    bool
+		wantBufferCnt int32
+	}{
+		{
+			name: "nil",
+			fields: fields{
+				c:          c,
+				ctx:        ctx,
+				name:       "dummy",
+				buffer:     emtpyBufferMock,
+				bufferPool: dummyBufferPool,
+				//bufferCnt:  atomic.Int32{},
+				//discardCnt: atomic.Int32{},
+				reminder: reminder,
+				signal:   nil,
+				impl:     impl,
+				trigger:  time.NewTimer(time.Hour),
+				aggr:     aggr,
+				stopped:  false,
+			},
+			wantReqNil:    true,
+			wantBufferCnt: 0,
+		},
+		{
+			name: "panic",
+			fields: fields{
+				c:          c,
+				ctx:        ctx,
+				name:       "dummy",
+				buffer:     bufferMock,
+				bufferPool: dummyBufferPool,
+				//bufferCnt:  atomic.Int32{},
+				//discardCnt: atomic.Int32{},
+				reminder: reminder,
+				signal:   nil,
+				impl:     impl,
+				trigger:  time.NewTimer(time.Hour),
+				aggr:     aggr,
+				stopped:  false,
+			},
+			wantReqNil:    true,
+			wantBufferCnt: -1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &bufferHolder{
+				c:          tt.fields.c,
+				ctx:        tt.fields.ctx,
+				name:       tt.fields.name,
+				buffer:     tt.fields.buffer,
+				bufferPool: tt.fields.bufferPool,
+				reminder:   tt.fields.reminder,
+				signal:     tt.fields.signal,
+				impl:       tt.fields.impl,
+				trigger:    tt.fields.trigger,
+				aggr:       tt.fields.aggr,
+				stopped:    tt.fields.stopped,
+			}
+			got := b.getGenerateReq()
+			if tt.wantReqNil {
+				require.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+			}
+			require.Equal(t, tt.wantBufferCnt, b.bufferCnt.Load())
 		})
 	}
 }
