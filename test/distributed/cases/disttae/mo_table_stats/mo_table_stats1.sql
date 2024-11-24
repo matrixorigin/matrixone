@@ -30,6 +30,8 @@ select mo_table_rows("mts_db", "mts_t1");
 -- @ignore:0
 select mo_ctl("cn", "MoTableStats", "force_update:false");
 
+select count(*) from mts_t1;
+
 drop table mts_t1;
 
 --- test variables
@@ -57,6 +59,8 @@ select mo_table_rows("mts_db", "mts_t2");
 
 -- @ignore:0
 select mo_ctl("cn", "MoTableStats", "restore_default_setting:true");
+
+select count(*) from mts_t2;
 
 drop table mts_t2;
 drop database mts_db;
