@@ -21,6 +21,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"math"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -1677,6 +1678,9 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			}
 			for entry, err := range fs.List(param.Ctx, readPath) {
 				if err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
 					return nil, nil, err
 				}
 				if !entry.IsDir && i+1 != len(pathDir) {
