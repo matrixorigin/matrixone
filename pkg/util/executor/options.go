@@ -192,6 +192,11 @@ func (opts Options) WithDisableWaitPaused() Options {
 	return opts
 }
 
+func (opts Options) WithUserTxn() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithUserTxn())
+	return opts
+}
+
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
