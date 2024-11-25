@@ -916,17 +916,6 @@ func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
 }
 
-func (p *PartitionState) LogAllEntryRows() string {
-	var buf bytes.Buffer
-	p.rows.Scan(func(item RowEntry) bool {
-		buf.WriteString(item.String())
-		buf.WriteString("\n")
-		return true
-	})
-
-	return buf.String()
-}
-
 func (p *PartitionState) ScanRows(
 	reverse bool,
 	onItem func(entry RowEntry) (bool, error),

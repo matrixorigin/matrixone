@@ -64,6 +64,10 @@ func getUseOldImplVariable(proc *process.Process) bool {
 		useOldImpl interface{}
 	)
 
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+
 	if useOldImpl, err = proc.GetResolveVariableFunc()(
 		moTableRowSizeUseOldImpl, true, false); err != nil {
 		logutil.Info("get sys variable failed",
@@ -82,6 +86,10 @@ func getForceUpdateVariable(proc *process.Process) bool {
 		forceUpdate interface{}
 	)
 
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+
 	if forceUpdate, err = proc.GetResolveVariableFunc()(
 		moTableRowsSizeForceUpdate, true, false); err != nil {
 		logutil.Info("get sys variable failed",
@@ -99,6 +107,10 @@ func getResetUpdateTimeVariable(proc *process.Process) bool {
 		err             error
 		resetUpdateTime interface{}
 	)
+
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
 
 	if resetUpdateTime, err = proc.GetResolveVariableFunc()(
 		moTableRowSizeResetUpdateTime, true, false); err != nil {
