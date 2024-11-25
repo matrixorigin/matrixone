@@ -1265,7 +1265,7 @@ func alphaTask(
 		select {
 		case <-ctx.Done():
 			err = ctx.Err()
-			return nil
+			return err
 
 		case err = <-errQueue:
 			if err != nil {
