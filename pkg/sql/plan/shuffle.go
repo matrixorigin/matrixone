@@ -550,6 +550,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 }
 
 func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+	if ncpu <= 4 {
+		ncpu = 4
+	}
 	maxret := ncpu * 4
 	if maxret > 64 {
 		maxret = 64 // to avoid a hang bug, fix this in the future

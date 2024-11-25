@@ -26,12 +26,15 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
-
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/stretchr/testify/require"
 )
 
 type mockNetConn struct {
@@ -210,10 +213,28 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 	}
 }
 
+func copyCNServer(dst, src *CNServer) {
+	dst.connID = src.connID
+	dst.salt = make([]byte, len(src.salt))
+	copy(dst.salt, src.salt[:])
+	dst.reqLabel = src.reqLabel
+	dst.cnLabel = make(map[string]metadata.LabelList)
+	for k, v := range src.cnLabel {
+		dst.cnLabel[k] = v
+	}
+	dst.hash = src.hash
+	dst.uuid = src.uuid
+	dst.addr = src.addr
+	dst.internalConn = src.internalConn
+	dst.clientAddr = src.clientAddr
+}
+
 func testStartNClients(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer, n int) func() {
 	var cleanFns []func()
 	for i := 0; i < n; i++ {
-		c := testStartClient(t, tp, ci, cn)
+		newCN := &CNServer{}
+		copyCNServer(newCN, cn)
+		c := testStartClient(t, tp, ci, newCN)
 		cleanFns = append(cleanFns, c)
 	}
 	return func() {
@@ -549,4 +570,141 @@ func TestClientConn_SendErrToClient(t *testing.T) {
 	require.NotNil(t, cc.GetHandshakePack())
 	cc.SendErrToClient(moerr.NewInternalErrorNoCtx("msg1"))
 	wg.Wait()
+}
+
+var _ Router = &testRouter{}
+
+const (
+	routerReturnErrSecondTime = 1
+)
+
+type testRouter struct {
+	mod int
+	cnt int
+}
+
+func (router *testRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	if router.mod == routerReturnErrSecondTime {
+		if router.cnt >= 1 {
+			return nil, moerr.NewInternalErrorNoCtx("route return error")
+		}
+		router.cnt++
+	}
+	return &CNServer{}, nil
+}
+
+func (router *testRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (router *testRouter) AllServers(sid string) ([]*CNServer, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (router *testRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	return newMockServerConn(nil), nil, nil
+}
+
+var _ client.QueryClient = &testQueryClient{}
+
+type testQueryClient struct {
+}
+
+func (client *testQueryClient) ServiceID() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (client *testQueryClient) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
+	return nil, moerr.NewInternalErrorNoCtx("return error")
+}
+
+func (client *testQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{}
+}
+
+func (client *testQueryClient) Release(response *query.Response) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (client *testQueryClient) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+var _ clusterservice.MOCluster = &testCluster{}
+
+type testCluster struct {
+}
+
+func (cluster *testCluster) GetCNService(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
+}
+
+func (cluster *testCluster) GetTNService(selector clusterservice.Selector, apply func(metadata.TNService) bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) GetAllTNServices() []metadata.TNService {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) GetCNServiceWithoutWorkingState(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) ForceRefresh(sync bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) Close() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) DebugUpdateCNWorkState(uuid string, state int) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) RemoveCN(id string) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) AddCN(service metadata.CNService) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (cluster *testCluster) UpdateCN(service metadata.CNService) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_connectToBackend(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	cConn := &clientConn{
+		ctx:         context.Background(),
+		router:      &testRouter{mod: routerReturnErrSecondTime},
+		mysqlProto:  &frontend.MysqlProtocolImpl{},
+		queryClient: &testQueryClient{},
+		moCluster:   &testCluster{},
+		log:         logger,
+	}
+	sConn, err := cConn.connectToBackend("127.0.0.1")
+	require.Error(t, err)
+	require.Nil(t, sConn)
 }

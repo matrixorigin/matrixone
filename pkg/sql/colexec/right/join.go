@@ -65,13 +65,7 @@ func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := rightJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
@@ -122,7 +116,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if ctr.lastPos == startRow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case Finalize:
@@ -137,7 +130,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Status = vm.ExecNext
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

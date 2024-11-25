@@ -16,6 +16,7 @@ package mergecte
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,13 +50,7 @@ func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 }
 
 func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeCTE.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	var err error
@@ -182,7 +177,6 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result.Batch = mergeCTE.ctr.buf
 	result.Status = vm.ExecHasMore
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

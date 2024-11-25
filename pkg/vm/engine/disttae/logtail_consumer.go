@@ -97,6 +97,10 @@ const (
 	FakeLogtailServerAddress = "fake address for ut"
 )
 
+var (
+	defaultGetLogTailAddrTimeoutDuration = time.Minute * 10
+)
+
 // PushClient is a structure responsible for all operations related to the log tail push model.
 // It provides the following methods:
 //
@@ -802,7 +806,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				c.pause(false)
 				time.Sleep(time.Second)
 
-				tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
+				tnLogTailServerBackend := e.getLogTailServiceAddr()
 				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
@@ -834,7 +838,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 			return
 		}
 
-		tnLogTailServerBackend := e.GetTNServices()[0].LogTailServiceAddress
+		tnLogTailServerBackend := e.getLogTailServiceAddr()
 		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
@@ -1237,12 +1241,6 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	return true, Subscribing, nil
 }
 
-func (c *PushClient) Disconnect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.subscriber.logTailClient.Close()
-}
-
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -1532,13 +1530,48 @@ func waitServerReady(addr string) {
 	}
 }
 
-func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
-	tnStores := e.GetTNServices()
-	if len(tnStores) == 0 {
-		return moerr.NewInternalError(ctx, "no TN store found")
+func (e *Engine) getLogTailServiceAddr() string {
+	getFn := func() string {
+		tnServices := e.GetTNServices()
+		if len(tnServices) != 0 {
+			return tnServices[0].LogTailServiceAddress
+		}
+		return ""
 	}
 
-	logTailServerAddr := tnStores[0].LogTailServiceAddress
+	var addr string
+	logutil.Infof("%s try to get logtail service address", logTag)
+	addr = getFn()
+	if len(addr) > 0 {
+		logutil.Infof("%s got logtail service address: %s",
+			logTag, addr)
+		return addr
+	}
+	logutil.Warnf("%s cannot get logtail service address", logTag)
+
+	timeout := time.NewTimer(defaultGetLogTailAddrTimeoutDuration)
+	defer timeout.Stop()
+	ticker := time.NewTicker(time.Millisecond * 20)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timeout.C:
+			panic(fmt.Sprintf("cannot get logtail service address, timeout %s",
+				defaultGetLogTailAddrTimeoutDuration))
+
+		case <-ticker.C:
+			addr = getFn()
+			logutil.Infof("%s got logtail service address: %s",
+				logTag, addr)
+			if len(addr) > 0 {
+				return addr
+			}
+		}
+	}
+}
+
+func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
+	logTailServerAddr := e.getLogTailServiceAddr()
 
 	// Wait for logtail server is ready.
 	waitServerReady(logTailServerAddr)

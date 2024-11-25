@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -100,4 +101,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.hashmapBuilder.Free(proc)
+}
+
+func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }

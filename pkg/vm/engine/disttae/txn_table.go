@@ -624,7 +624,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			)
 		}
 
-		if objectio.RangesInjected(tbl.tableDef.Name) {
+		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok {
 			logutil.Info(
 				"INJECT-TRACE-RANGES",
 				zap.String("name", tbl.tableDef.Name),

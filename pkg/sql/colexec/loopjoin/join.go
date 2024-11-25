@@ -74,18 +74,11 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 }
 
 func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := loopJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &loopJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.state {
@@ -142,21 +135,15 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil {
-				err = ctr.emptyProbe(loopJoin, proc, &probeResult)
+				err = ctr.emptyProbe(loopJoin, proc, &result)
 			} else {
-				err = ctr.probe(loopJoin, proc, &probeResult)
+				err = ctr.probe(loopJoin, proc, &result)
 			}
 
 			if err != nil {
 				return result, err
 			}
 
-			result.Batch, err = loopJoin.EvalProjection(probeResult.Batch, proc)
-			if err != nil {
-				return result, err
-			}
-
-			analyzer.Output(result.Batch)
 			return result, err
 		default:
 			result.Batch = nil

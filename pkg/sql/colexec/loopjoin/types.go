@@ -127,6 +127,15 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 }
 
+func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if loopJoin.ProjectList != nil {
+		batch, err = loopJoin.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
