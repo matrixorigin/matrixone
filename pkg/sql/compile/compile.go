@@ -3730,35 +3730,35 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newShuffleJoinScopeList(ps, bs []*Scope, node *plan.Node) []*Scope {
 	cnlist := c.cnList
 	if len(cnlist) <= 1 {
-		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	if !reuse {
-		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
+		ps = c.mergeShuffleScopesIfNeeded(ps, true)
 	}
-	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+	bs = c.mergeShuffleScopesIfNeeded(bs, true)
+	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
 		//merge build side to avoid bugs
-		if !c.IsSingleScope(probeScopes) {
-			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		if !c.IsSingleScope(ps) {
+			ps = []*Scope{c.newMergeScope(ps)}
 		}
-		if !c.IsSingleScope(buildScopes) {
-			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		if !c.IsSingleScope(bs) {
+			bs = []*Scope{c.newMergeScope(bs)}
 		}
 	}
 
-	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
+	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), node.Stats.HashmapStats.HashmapSize)
 
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
-	lenLeft := len(probeScopes)
-	lenRight := len(buildScopes)
+	lenLeft := len(ps)
+	lenRight := len(bs)
 
 	if !reuse {
 		for _, cn := range cnlist {
@@ -3786,7 +3786,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 			shuffleBuilds = append(shuffleBuilds, builds...)
 		}
 	} else {
-		shuffleProbes = probeScopes
+		shuffleProbes = ps
 		for i := range shuffleProbes {
 			buildscope := newScope(Remote)
 			buildscope.NodeInfo = shuffleProbes[i].NodeInfo
@@ -3803,24 +3803,24 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
-		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), n, true)
+		for i := range ps {
+			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			probeScopes[i].setRootOperator(shuffleProbeOp)
+			ps[i].setRootOperator(shuffleProbeOp)
 
-			if len(cnlist) > 1 && probeScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
-				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
+			if len(cnlist) > 1 && ps[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+				ps[i] = c.newMergeScopeByCN([]*Scope{ps[i]}, ps[i].NodeInfo)
 			}
 
-			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], n, true)
+			dispatchArg := constructDispatch(i, shuffleProbes, ps[i], node, true)
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			probeScopes[i].setRootOperator(dispatchArg)
-			probeScopes[i].IsEnd = true
+			ps[i].setRootOperator(dispatchArg)
+			ps[i].IsEnd = true
 
 			for _, js := range shuffleProbes {
-				if isSameCN(js.NodeInfo.Addr, probeScopes[i].NodeInfo.Addr) {
-					js.PreScopes = append(js.PreScopes, probeScopes[i])
+				if isSameCN(js.NodeInfo.Addr, ps[i].NodeInfo.Addr) {
+					js.PreScopes = append(js.PreScopes, ps[i])
 					break
 				}
 			}
@@ -3828,24 +3828,24 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	}
 
 	c.anal.isFirst = currentFirstFlag
-	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
+	for i := range bs {
+		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		buildScopes[i].setRootOperator(shuffleBuildOp)
+		bs[i].setRootOperator(shuffleBuildOp)
 
-		if len(cnlist) > 1 && buildScopes[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
-			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
+		if len(cnlist) > 1 && bs[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
+			bs[i] = c.newMergeScopeByCN([]*Scope{bs[i]}, bs[i].NodeInfo)
 		}
 
-		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], n, false)
+		dispatchArg := constructDispatch(i, shuffleBuilds, bs[i], node, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		buildScopes[i].setRootOperator(dispatchArg)
-		buildScopes[i].IsEnd = true
+		bs[i].setRootOperator(dispatchArg)
+		bs[i].IsEnd = true
 
 		for _, js := range shuffleBuilds {
-			if isSameCN(js.NodeInfo.Addr, buildScopes[i].NodeInfo.Addr) {
-				js.PreScopes = append(js.PreScopes, buildScopes[i])
+			if isSameCN(js.NodeInfo.Addr, bs[i].NodeInfo.Addr) {
+				js.PreScopes = append(js.PreScopes, bs[i])
 				break
 			}
 		}
