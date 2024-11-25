@@ -304,7 +304,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		}
 
 		if info.ShuffleRanges[i] != nil {
-			if s.MinValMap[colName] != s.MaxValMap[colName] && s.AccurateObjectNumber > 16 {
+			if s.MinValMap[colName] != s.MaxValMap[colName] && s.AccurateObjectNumber > 4 {
 				info.ShuffleRanges[i].Eval()
 				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]

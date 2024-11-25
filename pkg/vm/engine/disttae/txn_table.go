@@ -788,6 +788,10 @@ func (tbl *txnTable) rangesOnePart(
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			//if need to shuffle objects
+			if plan2.ShouldSkipObjByShuffle(&rangesParam, obj.ObjectStats.SortKeyZoneMap(), obj.ObjectLocation().ObjectId()) {
+				return
+			}
 			var meta objectio.ObjectDataMeta
 			skipObj = false
 
@@ -802,11 +806,6 @@ func (tbl *txnTable) rangesOnePart(
 				}
 
 				meta = objMeta.MustDataMeta()
-
-				//if need to shuffle objects
-				if plan2.ShouldSkipObjByShuffle(&rangesParam, meta, location.ObjectId()) {
-					return
-				}
 
 				// here we only eval expr on the object meta if it has more than one blocks
 				if meta.BlockCount() > 2 {

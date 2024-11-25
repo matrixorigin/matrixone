@@ -98,13 +98,12 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func ShouldSkipObjByShuffle(rp *engine.RangesParam, objMeta objectio.ObjectDataMeta, objID objectio.ObjectId) bool {
+func ShouldSkipObjByShuffle(rp *engine.RangesParam, zm objectio.ZoneMap, objID objectio.ObjectId) bool {
 	rsp := rp.Rsp
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		zm := objMeta.MustGetColumn(uint16(rsp.Node.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		if !zm.IsInited() {
 			// an object with all null will send to first CN
 			return rsp.CNIDX != 0
