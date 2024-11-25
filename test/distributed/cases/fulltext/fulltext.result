@@ -470,7 +470,6 @@ drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
 create fulltext index ftidx on articles (title, body);
 alter table articles drop column title;
-internal error: cannot drop column with multiple parts index
 drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
 create fulltext index ftidx on articles (title);
