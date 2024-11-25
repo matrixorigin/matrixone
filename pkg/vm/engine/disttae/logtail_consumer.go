@@ -874,7 +874,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		c.waitTimestamp()
 
 		if err := c.replayCatalogCache(ctx, e); err != nil {
-			panic(err)
+			c.pause(false)
+			logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
+			continue
 		}
 
 		e.setPushClientStatus(true)
