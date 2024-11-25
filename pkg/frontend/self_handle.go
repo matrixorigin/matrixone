@@ -32,6 +32,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		RecordStatementTxnID(execCtx.reqCtx, ses)
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
+	case *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 	case *tree.SetRole:
 		ses.EnterFPrint(FPSetRole)
 		defer ses.ExitFPrint(FPSetRole)
