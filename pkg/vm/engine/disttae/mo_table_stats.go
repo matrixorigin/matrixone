@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -194,7 +195,7 @@ const (
 
 const (
 	defaultAlphaCycleDur     = time.Minute
-	defaultGamaCycleDur      = time.Minute * 30
+	defaultGamaCycleDur      = time.Minute * 1
 	defaultGetTableListLimit = 1000
 
 	logHeader = "MO-TABLE-STATS-TASK"
@@ -244,8 +245,6 @@ func initMoTableStatsConfig(
 
 	dynamicCtx.once.Do(func() {
 
-		newCtx := turn2SysCtx(ctx)
-
 		defer func() {
 			dynamicCtx.defaultConf = dynamicCtx.conf
 			if err != nil {
@@ -254,6 +253,8 @@ func initMoTableStatsConfig(
 					zap.Error(err))
 			}
 		}()
+
+		dynamicCtx.de = eng
 
 		if dynamicCtx.alphaTaskPool, err = ants.NewPool(
 			runtime.NumCPU(),
@@ -301,7 +302,8 @@ func initMoTableStatsConfig(
 
 		dynamicCtx.tblQueue = make(chan *tablePair, options.DefaultBlockMaxRows*2)
 
-		dynamicCtx.quickCleanQueue = make(chan struct{})
+		dynamicCtx.cleanDeletesQueue = make(chan struct{})
+		dynamicCtx.updateForgottenQueue = make(chan struct{})
 
 		// registerMoTableSizeRows
 		{
@@ -354,6 +356,9 @@ func initMoTableStatsConfig(
 
 						dynamicCtx.beta.betaRunning = false
 					}()
+
+					// there should not have a deadline
+					newCtx := turn2SysCtx(ctx)
 					_ = betaTask(newCtx, eng.service, eng)
 				}()
 			}
@@ -361,6 +366,8 @@ func initMoTableStatsConfig(
 
 		{
 			go func() {
+				// there should not have a deadline
+				newCtx := turn2SysCtx(ctx)
 				_ = gamaTask(newCtx, eng.service, eng)
 			}()
 		}
@@ -378,8 +385,9 @@ var dynamicCtx struct {
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
-	tblQueue        chan *tablePair
-	quickCleanQueue chan struct{}
+	tblQueue             chan *tablePair
+	cleanDeletesQueue    chan struct{}
+	updateForgottenQueue chan struct{}
 
 	de         *Engine
 	service    string
@@ -479,7 +487,7 @@ func setMoveOnTask(newVal bool) string {
 	oldState := !dynamicCtx.conf.DisableStatsTask
 	dynamicCtx.conf.DisableStatsTask = !newVal
 
-	ret := fmt.Sprintf("move on state, %v to %v", oldState, newVal)
+	ret := fmt.Sprintf("move on: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
 		zap.String("source", "set move on"),
 		zap.String("state", ret))
@@ -495,7 +503,7 @@ func setUseOldImpl(newVal bool) string {
 	function.MoTableRowsSizeUseOldImpl.Store(newVal)
 	dynamicCtx.conf.StatsUsingOldImpl = newVal
 
-	ret := fmt.Sprintf("use old impl, %v to %v", oldState, newVal)
+	ret := fmt.Sprintf("use old impl: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
 		zap.String("source", "set use old impl"),
 		zap.String("state", ret))
@@ -511,7 +519,7 @@ func setForceUpdate(newVal bool) string {
 	function.MoTableRowsSizeForceUpdate.Store(newVal)
 	dynamicCtx.conf.ForceUpdate = newVal
 
-	ret := fmt.Sprintf("force update, %v to %v", oldState, newVal)
+	ret := fmt.Sprintf("force update: %v to %v", oldState, newVal)
 	logutil.Info(logHeader,
 		zap.String("source", "set force update"),
 		zap.String("state", ret))
@@ -523,7 +531,17 @@ func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecRes
 	exec := dynamicCtx.executorPool.Get()
 	defer dynamicCtx.executorPool.Put(exec)
 
-	ret := exec.(ie.InternalExecutor).Query(ctx, sql, dynamicCtx.sqlOpts)
+	var (
+		newCtx = ctx
+		cancel context.CancelFunc
+	)
+
+	if _, exist := ctx.Deadline(); !exist {
+		newCtx, cancel = context.WithTimeout(ctx, time.Minute*2)
+		defer cancel()
+	}
+
+	ret := exec.(ie.InternalExecutor).Query(newCtx, sql, dynamicCtx.sqlOpts)
 	if ret.Error() != nil {
 		logutil.Info(logHeader,
 			zap.String("source", hint),
@@ -717,6 +735,13 @@ func QueryTableStats(
 	eng engine.Engine,
 ) (statsVals [][]any, err error) {
 
+	dynamicCtx.Lock()
+	useOld := dynamicCtx.conf.StatsUsingOldImpl
+	dynamicCtx.Unlock()
+	if useOld {
+		return
+	}
+
 	if eng == nil {
 		dynamicCtx.Lock()
 		eng = dynamicCtx.de
@@ -737,10 +762,7 @@ func QueryTableStats(
 		}
 	}()
 
-	var cancel context.CancelFunc
 	newCtx := turn2SysCtx(ctx)
-	newCtx, cancel = context.WithTimeout(newCtx, time.Minute*5)
-	defer cancel()
 
 	if forceUpdate || resetUpdateTime {
 		if len(tbls) >= defaultGetTableListLimit {
@@ -749,11 +771,18 @@ func QueryTableStats(
 				zap.Int("tbl-list-length", len(tbls)))
 		}
 
+		var de *Engine
+		if val, ok := eng.(*engine.EntireEngine); ok {
+			de = val.Engine.(*Engine)
+		} else {
+			de = eng.(*Engine)
+		}
+
 		return forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
 			resetUpdateTime,
-			eng.(*engine.EntireEngine).Engine.(*Engine))
+			de)
 	}
 
 	return normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
@@ -1130,18 +1159,6 @@ func prepare(
 	eng engine.Engine,
 ) (err error) {
 
-	var (
-		//lastUpdateTS types.TS
-
-		newCtx context.Context
-		cancel context.CancelFunc
-	)
-
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel = context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-	}
-
 	if err = insertNewTables(ctx, service, eng); err != nil {
 		return
 	}
@@ -1158,7 +1175,7 @@ func prepare(
 		}
 
 		err = getChangedTableList(
-			newCtx, service, eng, accs, dbs, tbls, ts,
+			ctx, service, eng, accs, dbs, tbls, ts,
 			&dynamicCtx.tableStock.tbls,
 			&dynamicCtx.tableStock.newest)
 
@@ -1174,7 +1191,8 @@ func prepare(
 			logutil.Info(logHeader,
 				zap.String("source", "prepare"),
 				zap.String("info", "found new inserts deletes, force clean"))
-			dynamicCtx.quickCleanQueue <- struct{}{}
+
+			NotifyCleanDeletes()
 			break
 		}
 	}
@@ -1332,8 +1350,11 @@ func betaTask(
 ) (err error) {
 
 	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(ctx, e)
+		}
 		logutil.Info(logHeader,
-			zap.String("source", "beta task"),
+			zap.String("source", "beta task exit"),
 			zap.Error(err))
 	}()
 
@@ -1348,6 +1369,7 @@ func betaTask(
 	for {
 		select {
 		case <-ctx.Done():
+			err = ctx.Err()
 			return
 
 		case tbl := <-dynamicCtx.tblQueue:
@@ -1390,6 +1412,14 @@ func betaTask(
 			}
 		}
 	}
+}
+
+func NotifyCleanDeletes() {
+	dynamicCtx.cleanDeletesQueue <- struct{}{}
+}
+
+func NotifyUpdateForgotten() {
+	dynamicCtx.updateForgottenQueue <- struct{}{}
 }
 
 func gamaTask(
@@ -1448,6 +1478,8 @@ func gamaTask(
 	// may leave some tables never been updated.
 	// this opA does such correction.
 	opA := func() {
+		now = time.Now()
+
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
 		sqlRet := executeSQL(ctx, sql, "gama task: get null stats list")
 		if sqlRet.Error() != nil {
@@ -1542,7 +1574,7 @@ func gamaTask(
 			sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
 			if sqlRet.Error() == nil {
 				logutil.Info(logHeader,
-					zap.String("source", "gama clean task"),
+					zap.String("source", "gama task"),
 					zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(accIds)),
 					zap.String("detail", intsJoin(accIds, ",")))
 			}
@@ -1576,11 +1608,15 @@ func gamaTask(
 			opA()
 			tickerA.Reset(randDuration())
 
+		case <-dynamicCtx.updateForgottenQueue:
+			opA()
+			tickerA.Reset(randDuration())
+
 		case <-tickerB.C:
 			opB()
 			tickerB.Reset(randDuration())
 
-		case <-dynamicCtx.quickCleanQueue:
+		case <-dynamicCtx.cleanDeletesQueue:
 			// emergence, do clean now
 			opB()
 			tickerB.Reset(randDuration())
@@ -1728,17 +1764,28 @@ func getChangedTableList(
 		return list, nil
 	}
 
+	var (
+		newCtx = ctx
+		cancel context.CancelFunc
+	)
+
+	if _, ok := ctx.Deadline(); !ok {
+		newCtx, cancel = context.WithTimeout(ctx, time.Minute*2)
+		defer cancel()
+	}
+
 	de := eng.(*Engine)
-	txnOperator, err := de.cli.New(ctx, timestamp.Timestamp{})
+	txnOperator, err := de.cli.New(newCtx, timestamp.Timestamp{})
 	if err != nil {
 		return
 	}
 
 	defer func() {
-		err = txnOperator.Commit(ctx)
+		err = txnOperator.Commit(newCtx)
 	}()
 
-	proc := process.NewTopProcess(ctx,
+	proc := process.NewTopProcess(
+		newCtx,
 		de.mp, de.cli, txnOperator,
 		de.fs, de.ls,
 		de.qc, de.hakeeper,
