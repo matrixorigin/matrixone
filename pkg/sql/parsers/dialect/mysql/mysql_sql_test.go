@@ -3101,6 +3101,38 @@ var (
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
+		{
+			input:  "savepoint abc",
+			output: "savepoint abc",
+		},
+		{
+			input:  "savepoint `abc.abc`",
+			output: "savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint `abc.abc`",
+			output: "release savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint abc",
+			output: "release savepoint abc",
+		},
+		{
+			input:  "rollback to savepoint abc",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to savepoint `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback to `abc`",
+			output: "rollback to savepoint abc",
+		},
 	}
 )
 
