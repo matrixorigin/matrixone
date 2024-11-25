@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -103,14 +102,16 @@ func newFTTestCase(m *mpool.MPool, attrs []string) fulltextTestCase {
 
 func fake_runSql(proc *process.Process, sql string) (executor.Result, error) {
 
-	//fmt.Printf(sql)
-	if strings.Contains(sql, "COUNT") {
-		// give count
-		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
+	// give count
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
+}
 
-	} else {
-		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}, nil
-	}
+func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result) (executor.Result, error) {
+
+	defer close(ch)
+	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}
+	ch <- res
+	return executor.Result{}, nil
 }
 
 // argvec [src_tbl, index_tbl, pattern, mode int64]
@@ -134,6 +135,7 @@ func TestFullTextCall(t *testing.T) {
 
 	// stub runSql function
 	ft_runSql = fake_runSql
+	ft_runSql_streaming = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
