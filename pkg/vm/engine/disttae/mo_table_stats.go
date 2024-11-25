@@ -25,7 +25,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -867,9 +866,7 @@ func MTSTableRows(
 /////////////// MoTableStats Implementation ///////////////
 
 type tablePair struct {
-	waiter struct {
-		errChan atomic.Pointer[chan error]
-	}
+	errChan chan error
 
 	relKind    string
 	pkSequence int
@@ -893,7 +890,7 @@ func allocateTablePair() *tablePair {
 		pair.pState = nil
 		pair.onlyUpdateTS = false
 		// pair can not close this channel
-		pair.waiter.errChan.Store(nil)
+		pair.errChan = nil
 		dynamicCtx.tablePairPool.Put(pair)
 	}
 	return pair
@@ -938,10 +935,8 @@ func (tp *tablePair) String() string {
 }
 
 func (tp *tablePair) Done(err error) {
-
-	if tp.waiter.errChan.Load() != nil {
-		ch := tp.waiter.errChan.Load()
-		*ch <- err
+	if tp.errChan != nil {
+		tp.errChan <- err
 	}
 
 	tp.reuse()
@@ -1032,7 +1027,7 @@ func tableStatsExecutor(
 
 	newCtx := turn2SysCtx(ctx)
 
-	tickerDur := time.Minute
+	tickerDur := time.Second
 	executeTicker := time.NewTicker(tickerDur)
 
 	for {
@@ -1243,6 +1238,7 @@ func alphaTask(
 	now := time.Now()
 	defer func() {
 		dur := time.Since(now)
+
 		logutil.Info(logHeader,
 			zap.String("source", "alpha task"),
 			zap.Int("processed", processed),
@@ -1268,6 +1264,7 @@ func alphaTask(
 	for {
 		select {
 		case <-ctx.Done():
+			err = ctx.Err()
 			return nil
 
 		case err = <-errQueue:
@@ -1316,10 +1313,6 @@ func alphaTask(
 			start := time.Now()
 			submitted := 0
 			for i := 0; i < batCnt && i < len(tbls); i++ {
-				if tbls[i] == nil {
-					errWaitToReceive--
-					continue
-				}
 
 				submitted++
 				wg.Add(1)
@@ -1343,7 +1336,7 @@ func alphaTask(
 					}
 
 					curTbl.pState = pState
-					curTbl.waiter.errChan.Store(&errQueue)
+					curTbl.errChan = errQueue
 					dynamicCtx.tblQueue <- &curTbl
 				})
 
@@ -1852,7 +1845,7 @@ func getChangedTableList(
 	}
 
 	for i := range req.AccIds {
-		if idx := slices.Index(resp.TableIds, req.AccIds[i]); idx != -1 {
+		if idx := slices.Index(resp.TableIds, req.TableIds[i]); idx != -1 {
 			// need calculate, already in it
 			continue
 		}
@@ -1860,7 +1853,7 @@ func getChangedTableList(
 		// has no changes, only update TS
 		tp := buildTablePairFromCache(de, req.AccIds[i],
 			req.DatabaseIds[i], req.TableIds[i], *to, true)
-		if tp != nil {
+		if tp == nil {
 			continue
 		}
 
