@@ -139,6 +139,15 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	semiJoin.FreeProjection(proc)
 }
 
+func (semiJoin *SemiJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if semiJoin.ProjectList != nil {
+		batch, err = semiJoin.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) resetExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.ResetForNextQuery()

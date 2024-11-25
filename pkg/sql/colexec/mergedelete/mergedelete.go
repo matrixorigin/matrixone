@@ -58,13 +58,7 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 }
 
 func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeDelete.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	var err error
 	var name string
@@ -129,6 +123,5 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		mergeDelete.ctr.affectedRows += uint64(vector.GetFixedAtWithTypeCheck[uint32](resBat.GetVector(4), 0))
 	}
 
-	analyzer.Output(input.Batch)
 	return input, nil
 }

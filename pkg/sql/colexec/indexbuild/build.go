@@ -47,12 +47,7 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 }
 
 func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
 	analyzer := indexBuild.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ctr := &indexBuild.ctr
@@ -72,7 +67,6 @@ func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error)
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

@@ -18,7 +18,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"regexp"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func IsRetryableError(err error) bool {
@@ -81,4 +84,27 @@ func catch(ptr *error) {
 	} else {
 		*ptr = e.err
 	}
+}
+
+var httpBadLengthPattern = regexp.MustCompile(`transport connection broken: http: ContentLength=[0-9]* with Body length [0-9]*`)
+
+func wrapSizeMismatchErr(p *error) {
+	if *p == nil {
+		return
+	}
+	str := (*p).Error()
+
+	if strings.Contains(str, "size does not match") ||
+		httpBadLengthPattern.MatchString(str) {
+		*p = moerr.NewSizeNotMatchNoCtx("")
+	}
+
+}
+
+func isDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	str := err.Error()
+	return strings.Contains(str, "disk quota exceeded")
 }

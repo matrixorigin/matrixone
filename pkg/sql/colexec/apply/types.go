@@ -56,7 +56,6 @@ type Apply struct {
 
 	TableFunction *table_function.TableFunction
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (apply *Apply) GetOperatorBase() *vm.OperatorBase {
@@ -98,12 +97,6 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 
 	ctr.inbat = nil
 	apply.TableFunction.Reset(proc, pipelineFailed, err)
-
-	if apply.ProjectList != nil {
-		apply.OpAnalyzer.Alloc(apply.ProjectAllocSize)
-		apply.ResetProjection(proc)
-	}
-
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -113,11 +106,10 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	ctr.sels = nil
 
 	apply.TableFunction.Free(proc, pipelineFailed, err)
+}
 
-	if apply.ProjectList != nil {
-		apply.FreeProjection(proc)
-	}
-
+func (apply *Apply) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

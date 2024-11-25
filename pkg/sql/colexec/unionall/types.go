@@ -16,6 +16,7 @@ package unionall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,6 +31,10 @@ func (unionall *UnionAll) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (unionall *UnionAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
+}
+
+func (unionall *UnionAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (unionall *UnionAll) Release() {

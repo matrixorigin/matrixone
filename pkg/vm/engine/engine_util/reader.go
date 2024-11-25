@@ -409,7 +409,7 @@ func (r *reader) Read(
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
-		if injected, logLevel := objectio.LogReaderInjected(r.name); injected || err != nil {
+		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
 				logutil.Error(
 					"LOGREADER-ERROR",

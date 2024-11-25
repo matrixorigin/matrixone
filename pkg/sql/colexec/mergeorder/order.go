@@ -208,12 +208,7 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 }
 
 func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
 	analyzer := mergeOrder.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &mergeOrder.ctr
 	for {
@@ -269,7 +264,6 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				ctr.batchList[0] = nil
 				result := vm.NewCallResult()
 				result.Batch = ctr.buf
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			return vm.CancelResult, nil
@@ -282,7 +276,6 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 			result.Status = vm.ExecHasMore
-			analyzer.Output(result.Batch)
 			return result, err
 
 		case finish:
