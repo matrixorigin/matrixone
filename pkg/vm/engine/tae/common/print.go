@@ -20,13 +20,14 @@ import (
 	"strconv"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type PPLevel int8
