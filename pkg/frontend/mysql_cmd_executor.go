@@ -2495,8 +2495,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
 		return nil
-	case *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
+	case *tree.SavePoint, *tree.ReleaseSavePoint:
 		return nil
+	case *tree.RollbackToSavePoint:
+		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
 	//in session migration, the txn forced to be autocommit.
