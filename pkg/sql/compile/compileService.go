@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +33,6 @@ var compileService *ServiceOfCompile
 
 func init() {
 	compileService = InitCompileService()
-	txnClient.SetRunningPipelineManagement(compileService)
 }
 
 func GetCompileService() *ServiceOfCompile {
