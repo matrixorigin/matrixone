@@ -198,8 +198,12 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 		w.Pending.Add(-1)
 		return false
 	}
-	w.OpC <- op
-	return true
+	select {
+	case w.OpC <- op:
+		return true
+	default:
+	}
+	return false
 }
 
 func (w *OpWorker) opCancelOp(op iops.IOp) {
