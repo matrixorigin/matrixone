@@ -113,6 +113,7 @@ import (
     selectStatement tree.SelectStatement
     selectExprs tree.SelectExprs
     selectExpr tree.SelectExpr
+    selectOptions string
 
     insert *tree.Insert
     replace *tree.Replace
@@ -331,7 +332,7 @@ import (
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
-%token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
+%token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_CALC_FOUND_ROWS
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
@@ -562,6 +563,7 @@ import (
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
+%type <selectOptions> select_options_opt
 %type <tableExprs> table_name_wild_list
 %type <joinTableExpr>  join_table
 %type <applyTableExpr> apply_table
@@ -5626,7 +5628,7 @@ simple_select_clause:
             Having: $7,
         }
     }
-|    SELECT select_option_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+|    SELECT select_options_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
     {
         $$ = &tree.SelectClause{
             Distinct: false,
@@ -5637,6 +5639,16 @@ simple_select_clause:
             Having: $7,
             Option: $2,
         }
+    }
+
+select_options_opt:
+    select_option_opt
+    {
+        $$ = $1
+    }
+|   select_options_opt select_option_opt
+    {
+        $$ = $1 +" "+ $2
     }
 
 select_option_opt:
@@ -5652,6 +5664,23 @@ select_option_opt:
 	{
     	$$ = strings.ToLower($1)
     }
+|   STRAIGHT_JOIN
+    {
+    	$$ = strings.ToLower($1)
+    }
+|   HIGH_PRIORITY
+    {
+    	$$ = strings.ToLower($1)
+    }
+|   SQL_CALC_FOUND_ROWS
+    {
+    	$$ = strings.ToLower($1)
+    }
+|   SQL_NO_CACHE
+    {
+    	$$ = strings.ToLower($1)
+    }
+
 
 distinct_opt:
     {
@@ -12628,7 +12657,7 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-
+|   SQL_BUFFER_RESULT
 
 func_not_keyword:
     DATE_ADD
