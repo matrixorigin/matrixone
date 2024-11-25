@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -867,8 +868,7 @@ func MTSTableRows(
 
 type tablePair struct {
 	waiter struct {
-		doneCounter int
-		errQueue    chan error
+		errChan atomic.Pointer[chan error]
 	}
 
 	relKind    string
@@ -891,10 +891,9 @@ func allocateTablePair() *tablePair {
 		pair.tblName = ""
 		pair.dbName = ""
 		pair.pState = nil
-		pair.waiter.doneCounter = 0
 		pair.onlyUpdateTS = false
 		// pair can not close this channel
-		pair.waiter.errQueue = nil
+		pair.waiter.errChan.Store(nil)
 		dynamicCtx.tablePairPool.Put(pair)
 	}
 	return pair
@@ -939,14 +938,10 @@ func (tp *tablePair) String() string {
 }
 
 func (tp *tablePair) Done(err error) {
-	if tp.waiter.doneCounter > 0 {
-		return
-	}
 
-	tp.waiter.doneCounter++
-
-	if tp.waiter.errQueue != nil {
-		tp.waiter.errQueue <- err
+	if tp.waiter.errChan.Load() != nil {
+		ch := tp.waiter.errChan.Load()
+		*ch <- err
 	}
 
 	tp.reuse()
@@ -1233,6 +1228,9 @@ func alphaTask(
 		return
 	}
 
+	// maybe the task exited, need to launch a new one
+	dynamicCtx.beta.launchBeta()
+
 	var (
 		errWaitToReceive = len(tbls)
 		ticker           *time.Ticker
@@ -1304,8 +1302,6 @@ func alphaTask(
 				}
 
 				if waitErrDur%(time.Second*10) == 0 {
-					// maybe the task exited, need to launch a new one
-					dynamicCtx.beta.launchBeta()
 					logutil.Warn(logHeader,
 						zap.String("source", "alpha task"),
 						zap.String("event", "waited err another 10s"),
@@ -1328,14 +1324,14 @@ func alphaTask(
 				submitted++
 				wg.Add(1)
 
-				curTbl := tbls[i]
+				curTbl := *tbls[i]
 				err = dynamicCtx.alphaTaskPool.Submit(func() {
 					defer wg.Done()
 
 					var err2 error
 					var pState *logtailreplay.PartitionState
 					if !curTbl.onlyUpdateTS {
-						if pState, err2 = subscribeTable(ctx, service, eng, curTbl); err2 != nil {
+						if pState, err2 = subscribeTable(ctx, service, eng, &curTbl); err2 != nil {
 							logutil.Info(logHeader,
 								zap.String("source", "alpha task"),
 								zap.String("subscribe failed", err2.Error()),
@@ -1347,8 +1343,8 @@ func alphaTask(
 					}
 
 					curTbl.pState = pState
-					curTbl.waiter.errQueue = errQueue
-					dynamicCtx.tblQueue <- curTbl
+					curTbl.waiter.errChan.Store(&errQueue)
+					dynamicCtx.tblQueue <- &curTbl
 				})
 
 				if err != nil {
