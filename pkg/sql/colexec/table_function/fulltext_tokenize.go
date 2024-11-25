@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/datalink"
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
@@ -96,9 +95,6 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
-	}
 	return st, err
 
 }
