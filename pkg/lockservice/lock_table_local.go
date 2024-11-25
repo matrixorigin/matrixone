@@ -652,6 +652,20 @@ func (l *localLockTable) addRangeLockLocked(
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
+
+	if n := len(mc.mergedLocks); n > 0 {
+		h := c.txn.getHoldLocksLocked(l.bind.Group)
+		v, ok := h.tableKeys[l.bind.Table]
+		if ok {
+			l.logger.Info("range lock merged",
+				zap.Uint64("table", l.bind.OriginTable),
+				zap.String("txn", c.txn.txnKey),
+				zap.Int("merged", n),
+				zap.Int("current", v.mustGet().len()),
+			)
+		}
+	}
+
 	return nil, Lock{}, nil
 }
 
@@ -766,6 +780,7 @@ func (c *mergeContext) commit(
 	for k := range c.mergedLocks {
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
+
 	txn.lockRemoved(
 		bind.Group,
 		bind.Table,
