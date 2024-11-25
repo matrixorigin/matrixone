@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1350,9 +1349,6 @@ func betaTask(
 ) (err error) {
 
 	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(ctx, e)
-		}
 		logutil.Info(logHeader,
 			zap.String("source", "beta task exit"),
 			zap.Error(err))
