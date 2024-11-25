@@ -86,19 +86,19 @@ func TestNewSinker(t *testing.T) {
 		},
 	}
 
-	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration) (Sink, error) {
+	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string) (Sink, error) {
 		return nil, nil
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(_ Sink, _ *DbTableInfo, _ *WatermarkUpdater, _ *plan.TableDef, _ *ActiveRoutine, _ uint64) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, DefaultMaxSqlLength, DefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -226,19 +226,20 @@ func TestNewMysqlSink(t *testing.T) {
 				port:          3306,
 				retryTimes:    3,
 				retryDuration: 3 * time.Second,
+				timeout:       DefaultSendSqlTimeout,
 			},
 			wantErr: assert.NoError,
 		},
 	}
 
-	stub := gostub.Stub(&openDbConn, func(_, _, _ string, _ int) (_ *sql.DB, _ error) {
+	stub := gostub.Stub(&OpenDbConn, func(_, _, _ string, _ int, _ string) (_ *sql.DB, _ error) {
 		return nil, nil
 	})
 	defer stub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)
+			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, DefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -291,7 +292,7 @@ func Test_mysqlSink_Send(t *testing.T) {
 func TestNewMysqlSinker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxAllowedPacket))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -320,7 +321,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine())
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), DefaultMaxSqlLength)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -445,7 +446,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxAllowedPacket))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -489,7 +490,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar)
+	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength)
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -668,7 +669,6 @@ func Test_mysqlSinker_sinkDelete(t *testing.T) {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
 		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
@@ -699,7 +699,6 @@ func Test_mysqlSinker_sinkDelete(t *testing.T) {
 				mysql:            tt.fields.mysql,
 				dbTblInfo:        tt.fields.dbTblInfo,
 				watermarkUpdater: tt.fields.watermarkUpdater,
-				maxAllowedPacket: tt.fields.maxAllowedPacket,
 				sqlBuf:           tt.fields.sqlBuf,
 				rowBuf:           tt.fields.rowBuf,
 				insertPrefix:     tt.fields.insertPrefix,
@@ -722,7 +721,6 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
 		watermarkUpdater *WatermarkUpdater
-		maxAllowedPacket uint64
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
@@ -753,7 +751,6 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 				mysql:            tt.fields.mysql,
 				dbTblInfo:        tt.fields.dbTblInfo,
 				watermarkUpdater: tt.fields.watermarkUpdater,
-				maxAllowedPacket: tt.fields.maxAllowedPacket,
 				sqlBuf:           tt.fields.sqlBuf,
 				rowBuf:           tt.fields.rowBuf,
 				insertPrefix:     tt.fields.insertPrefix,
