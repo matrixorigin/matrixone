@@ -466,3 +466,12 @@ delete from nation where n_nationkey = 0;
 select * from nation where match(n_comment) against('china');
 n_nationkey    n_name    n_regionkey    n_comment    n_dummy
 drop table nation;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+internal error: cannot drop column with multiple parts index
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;
