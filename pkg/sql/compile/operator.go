@@ -889,6 +889,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.Limit = n.Limit
 	return arg
 }
 

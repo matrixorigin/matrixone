@@ -503,8 +503,6 @@ github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76/go.mod h1:yvyXLpo0QaGE59Y7hDTsTzDD25JYBZ4mHgHUZ8lrOI0=
-github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78 h1:1NvZ4SBw0lH7h38VhCVxYEa61K8N+0DBv9JQhAwU48Q=
-github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78/go.mod h1:RQQhaM4xSocKuNi0ZvKZZAiErpINJgZrPB+vZDvBkeU=
 github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d h1:27vD3JGbrFmaQtDYQT/W1jFFr0xvipdwH5R4bZPGQdE=
 github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d/go.mod h1:RJNMd/LBgWRCpGanqXvqjVaoYXeYBS+i0MSeoN3hBMo=
 github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd h1:DvqhuH3kOpsE6vXZA5WEaRNAUUUcf44S1p5VInbjdfU=
