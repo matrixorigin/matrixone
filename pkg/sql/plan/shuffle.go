@@ -101,12 +101,13 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func ShouldSkipObjByShuffle(rp *engine.RangesParam, zm objectio.ZoneMap, objID objectio.ObjectId) bool {
+func ShouldSkipObjByShuffle(rp *engine.RangesParam, objstats *objectio.ObjectStats) bool {
 	rsp := rp.Rsp
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+		zm := objstats.SortKeyZoneMap()
 		if !zm.IsInited() {
 			// an object with all null will send to first CN
 			return rsp.CNIDX != 0
@@ -121,19 +122,20 @@ func ShouldSkipObjByShuffle(rp *engine.RangesParam, zm objectio.ZoneMap, objID o
 			}
 		}
 
-		var index uint64
+		var shuffleIDX uint64
 		if rsp.ShuffleRangeUint64 != nil {
-			index = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
+			shuffleIDX = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
 		} else if rsp.ShuffleRangeInt64 != nil {
-			index = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
+			shuffleIDX = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
 		} else {
-			index = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
+			shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
 		}
-		return index != uint64(rsp.CNIDX)
+		return shuffleIDX != uint64(rsp.CNIDX)
 
 	}
 
 	//shuffle by hash
+	objID := objstats.ObjectLocation().ObjectId()
 	index := SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT))
 	return index != uint64(rsp.CNIDX)
 }

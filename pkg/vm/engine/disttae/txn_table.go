@@ -720,23 +720,20 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	// if need to shuffle objects, don't go fast path
-	if !rangesParam.Rsp.NeedShuffleObj() {
-		if done, err = engine_util.TryFastFilterBlocks(
-			ctx,
-			tbl.db.op.SnapshotTS(),
-			tbl.tableDef,
-			rangesParam.BlockFilters,
-			state,
-			nil,
-			uncommittedObjects,
-			outBlocks,
-			tbl.getTxn().engine.fs,
-		); err != nil {
-			return err
-		} else if done {
-			return nil
-		}
+	if done, err = engine_util.TryFastFilterBlocks(
+		ctx,
+		tbl.db.op.SnapshotTS(),
+		tbl.tableDef,
+		rangesParam,
+		state,
+		nil,
+		uncommittedObjects,
+		outBlocks,
+		tbl.getTxn().engine.fs,
+	); err != nil {
+		return err
+	} else if done {
+		return nil
 	}
 
 	if slowPathCounter.Add(1) >= 1000 {
@@ -789,7 +786,7 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(&rangesParam, obj.ObjectStats.SortKeyZoneMap(), obj.ObjectLocation().ObjectId()) {
+			if plan2.ShouldSkipObjByShuffle(&rangesParam, &obj.ObjectStats) {
 				return
 			}
 			var meta objectio.ObjectDataMeta

@@ -191,7 +191,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		ctx,
 		h.end.ToTimestamp(),
 		tblDef,
-		nil,
+		engine.DefaultRangesParam,
 		part,
 		nil,
 		nil,
