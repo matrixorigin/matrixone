@@ -214,13 +214,6 @@ func WithSkipPushClientReady() TxnOption {
 	}
 }
 
-// WithTxnMode set txn mode
-func WithWaitActiveHandle(fn func()) TxnOption {
-	return func(tc *txnOperator) {
-		tc.mu.waitActiveHandle = fn
-	}
-}
-
 type txnOperator struct {
 	sid             string
 	logger          *log.MOLogger
@@ -231,16 +224,15 @@ type txnOperator struct {
 
 	mu struct {
 		sync.RWMutex
-		waitActive       bool
-		waitActiveHandle func()
-		closed           bool
-		txn              txn.TxnMeta
-		cachedWrites     map[uint64][]txn.TxnRequest
-		lockTables       []lock.LockTable
-		callbacks        map[EventType][]func(TxnEvent)
-		retry            bool
-		lockSeq          uint64
-		waitLocks        map[uint64]Lock
+		waitActive   bool
+		closed       bool
+		txn          txn.TxnMeta
+		cachedWrites map[uint64][]txn.TxnRequest
+		lockTables   []lock.LockTable
+		callbacks    map[EventType][]func(TxnEvent)
+		retry        bool
+		lockSeq      uint64
+		waitLocks    map[uint64]Lock
 		//read-only txn operators for supporting snapshot read feature.
 		children []*txnOperator
 		flag     uint32
@@ -344,7 +336,6 @@ func (tc *txnOperator) initReset() {
 
 func (tc *txnOperator) initProtectedFields() {
 	tc.mu.waitActive = false
-	tc.mu.waitActiveHandle = nil
 	tc.mu.closed = false
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
@@ -413,22 +404,21 @@ func newTxnOperatorWithSnapshot(
 	return tc
 }
 
+func (tc *txnOperator) setWaitActive(v bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.waitActive = v
+}
+
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	if tc.reset.waiter == nil {
 		return nil
 	}
 
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	tc.mu.waitActive = true
-	if tc.mu.waitActiveHandle != nil {
-		tc.mu.waitActiveHandle()
-	}
-
+	tc.setWaitActive(true)
 	defer func() {
 		tc.reset.waiter.close()
-		tc.mu.waitActive = false
+		tc.setWaitActive(false)
 	}()
 
 	cost, err := tc.doCostAction(
@@ -437,7 +427,7 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 		func() error {
 			return tc.reset.waiter.wait(ctx)
 		},
-		true)
+		false)
 	tc.reset.waitActiveCost = cost
 	v2.TxnWaitActiveDurationHistogram.Observe(cost.Seconds())
 	return err

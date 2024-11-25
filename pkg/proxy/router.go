@@ -245,7 +245,7 @@ func (r *router) Connect(
 	// with CN server.
 	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
 	if err != nil {
-		_ = sc.RawConn().Close()
+		_ = sc.Close()
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.

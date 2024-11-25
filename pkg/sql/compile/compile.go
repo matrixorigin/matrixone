@@ -144,6 +144,7 @@ func (c *Compile) Release() {
 	}
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
+		c.proc.ResetCloneTxnOperator()
 	}
 	releaseCompile(c)
 }
@@ -169,6 +170,7 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
+	proc.ResetCloneTxnOperator()
 	c.proc = proc
 
 	c.fill = fill
@@ -300,6 +302,13 @@ func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorysto
 	}
 }
 
+func (c *Compile) addAllAffectedRows(s *Scope) {
+	for _, ps := range s.PreScopes {
+		c.addAllAffectedRows(ps)
+	}
+	c.addAffectedRows(s.affectedRows())
+}
+
 func (c *Compile) addAffectedRows(n uint64) {
 	c.affectRows.Add(n)
 }
@@ -349,10 +358,8 @@ func (c *Compile) run(s *Scope) error {
 		err := s.RemoteRun(c)
 		//@FIXME not a good choice
 		if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
-			if len(s.PreScopes) > 0 {
-				for _, ps := range s.PreScopes[0].PreScopes {
-					c.addAffectedRows(ps.affectedRows())
-				}
+			for _, ps := range s.PreScopes {
+				c.addAllAffectedRows(ps)
 			}
 		}
 		c.addAffectedRows(s.affectedRows())
@@ -4120,8 +4127,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 
-			txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-			c.proc.SetCloneTxnOperator(txnOp)
+			if c.proc.GetCloneTxnOperator() != nil {
+				txnOp = c.proc.GetCloneTxnOperator()
+			} else {
+				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+				c.proc.SetCloneTxnOperator(txnOp)
+			}
 
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)

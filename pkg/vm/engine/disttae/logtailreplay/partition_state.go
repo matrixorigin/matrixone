@@ -108,34 +108,34 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
 			}
 			p.HandleDataObjectList(ctx, entry, fs, pool)
 		} else if IsTombstoneObjectList(entry.TableName) {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
 			}
 			p.HandleTombstoneObjectList(ctx, entry, fs, pool)
 		} else {
-			if objectio.PartitionStateInjected(entry.TableName) {
+			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
 		}
 
 	case api.Entry_Delete:
-		if objectio.PartitionStateInjected(entry.TableName) {
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
 		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
 	case api.Entry_DataObject:
-		if objectio.PartitionStateInjected(entry.TableName) {
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
 		}
 		p.HandleDataObjectList(ctx, entry, fs, pool)
 	case api.Entry_TombstoneObject:
-		if objectio.PartitionStateInjected(entry.TableName) {
+		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-DEL")
 		}
 		p.HandleTombstoneObjectList(ctx, entry, fs, pool)
