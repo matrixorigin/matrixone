@@ -63,7 +63,7 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 		u.batch.Clean(proc.Mp())
 	}
 
-	for true {
+	for {
 		select {
 		case res, ok := <-u.stream_chan:
 			if !ok {
