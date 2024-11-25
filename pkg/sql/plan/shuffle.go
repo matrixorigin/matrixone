@@ -19,6 +19,9 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -172,6 +175,7 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), GetCenterValueForZMUnsigned(zm), upplerLimit)
 	}
+	logutil.Infof("unsupported zm type %v", zm.GetType())
 	panic("unsupported shuffle type!")
 }
 
@@ -595,6 +599,11 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 2 { // always go hashshuffle for scan
 		return
 	}
+
+	if n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return
+	}
+
 	s := builder.getStatsInfoByTableID(n.TableDef.TblId)
 	if s == nil {
 		return
