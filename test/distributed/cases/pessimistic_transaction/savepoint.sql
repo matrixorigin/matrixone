@@ -8,7 +8,7 @@ savepoint a;
 release savepoint a;
 -- no error
 savepoint b;
--- no error
+-- error
 rollback to savepoint b;
 -- no error
 release savepoint b;
