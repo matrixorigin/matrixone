@@ -17,7 +17,6 @@ package executor
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -223,12 +222,12 @@ func (opts Options) LowerCaseTableNames() int64 {
 	return 1
 }
 
-func (opts Options) WithStreaming(stream_chan chan *batch.Batch) Options {
+func (opts Options) WithStreaming(stream_chan chan Result) Options {
 	opts.stream_chan = stream_chan
 	opts.streaming = true
 	return opts
 }
 
-func (opts Options) Streaming() (chan *batch.Batch, bool) {
+func (opts Options) Streaming() (chan Result, bool) {
 	return opts.stream_chan, opts.streaming
 }

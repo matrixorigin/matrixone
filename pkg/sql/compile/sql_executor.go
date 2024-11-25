@@ -351,6 +351,7 @@ func (exec *txnExecutor) Exec(
 					return err
 				}
 				if streaming {
+					stream_result := executor.NewResult(exec.s.mp)
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
@@ -359,7 +360,9 @@ func (exec *txnExecutor) Exec(
 							time.Sleep(1 * time.Millisecond)
 						}
 					}
-					stream_chan <- rows
+					stream_batches := []*batch.Batch{rows}
+					stream_result.Batches = stream_batches
+					stream_chan <- stream_result
 				} else {
 					batches = append(batches, rows)
 				}
@@ -394,6 +397,7 @@ func (exec *txnExecutor) Exec(
 
 	if streaming {
 		close(stream_chan)
+		return executor.Result{}, nil
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()

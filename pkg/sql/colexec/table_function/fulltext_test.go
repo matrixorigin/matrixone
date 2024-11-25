@@ -37,19 +37,19 @@ type fulltextTestCase struct {
 }
 
 var (
-	ftdefaultAttrs = []string{"doc_id", "score"}
+	ftdefaultAttrs = []string{"DOC_ID", "SCORE"}
 
 	ftdefaultColdefs = []*plan.ColDef{
 		// row_id type should be same as index type
 		{
-			Name: "doc_id",
+			Name: "DOC_ID",
 			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
-			Name: "score",
+			Name: "SCORE",
 			Typ: plan.Type{
 				Id:          int32(types.T_float32),
 				NotNullable: false,

@@ -63,7 +63,7 @@ type Options struct {
 	enableTrace             bool
 	lower                   *int64
 	streaming               bool
-	stream_chan             chan *batch.Batch
+	stream_chan             chan Result
 }
 
 // StatementOption statement execute option.
