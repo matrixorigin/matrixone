@@ -162,7 +162,8 @@ var (
     		)`, catalog.MO_CATALOG, catalog.MO_RETENTION)
 
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
-    		pub_name varchar(64) primary key,
+    		account_id int not null,
+    		pub_name varchar(64),
     		database_name varchar(5000),
     		database_id bigint unsigned,
     		all_table bool,
@@ -172,8 +173,9 @@ var (
     		update_time timestamp default NULL,
     		owner int unsigned,
     		creator int unsigned,
-    		comment text
-    		)`
+    		comment text,
+			primary key (account_id, pub_name)
+	)`
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
 			sub_account_id INT NOT NULL, 
@@ -247,7 +249,7 @@ var (
     			no_full bool,
     			incr_config varchar(1000),
     			additional_config text,
-    			reserved1 text,
+    			err_msg varchar(256),
     			reserved2 text,
     			reserved3 text,
     			reserved4 text,
@@ -259,7 +261,10 @@ var (
     			account_id bigint unsigned,			
     			task_id uuid,
     			table_id varchar(64),			
+				db_name varchar(256),
+				table_name varchar(256),
     			watermark varchar(128),			
+				err_msg varchar(256),
     			primary key(account_id,task_id,table_id)
 			)`
 

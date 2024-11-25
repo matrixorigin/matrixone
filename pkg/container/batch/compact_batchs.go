@@ -70,7 +70,7 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 
 	// fast path 1
 	lastBatRowCount := bats.batchs[batLen-1].rowCount
-	if lastBatRowCount == 0 {
+	if lastBatRowCount == DefaultBatchMaxRow {
 		bats.batchs = append(bats.batchs, inBatch)
 		return nil
 	}
@@ -94,24 +94,44 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 	batLen := bats.Length()
 	var err error
-	var tmpBat *Batch
+	var copyBat *Batch
 
 	// empty input
 	if inBatch.rowCount == 0 {
 		return nil
 	}
 
+	copyBat, err = inBatch.Dup(mpool)
+	if err != nil {
+		return err
+	}
+
 	// empty bats
 	if batLen == 0 {
-		tmpBat, err = inBatch.Dup(mpool)
-		if err != nil {
-			return err
-		}
-		bats.batchs = append(bats.batchs, tmpBat)
+		bats.batchs = append(bats.batchs, copyBat)
 		return nil
 	}
 
-	return bats.fillData(mpool, inBatch)
+	// fast path 1
+	lastIdx := batLen - 1
+	if bats.batchs[lastIdx].rowCount == DefaultBatchMaxRow {
+		bats.batchs = append(bats.batchs, copyBat)
+		return nil
+	}
+
+	// fast path 2
+	if copyBat.rowCount == DefaultBatchMaxRow {
+		lastBat := bats.batchs[lastIdx]
+		bats.batchs[lastIdx] = copyBat
+		bats.batchs = append(bats.batchs, lastBat)
+		return nil
+	}
+
+	defer func() {
+		copyBat.Clean(mpool)
+	}()
+
+	return bats.fillData(mpool, copyBat)
 }
 
 func (bats *CompactBatchs) RowCount() int {

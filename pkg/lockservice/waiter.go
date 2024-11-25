@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,10 +40,17 @@ const (
 	completed
 )
 
-func acquireWaiter(txn pb.WaitTxn) *waiter {
+func acquireWaiter(
+	txn pb.WaitTxn,
+	info string,
+	logger *log.MOLogger,
+) *waiter {
 	w := reuse.Alloc[waiter](nil)
 	w.txn = txn
-	if w.ref() != 1 {
+	if w.enableChecker {
+		logRefWaiter(logger, "acquire waiter from pool", w.txn.TxnID, w)
+	}
+	if w.ref(info, logger) != 1 {
 		panic("BUG: invalid ref count")
 	}
 	w.beforeSwapStatusAdjustFunc = func() {}
@@ -49,12 +58,21 @@ func acquireWaiter(txn pb.WaitTxn) *waiter {
 }
 
 func newWaiter() *waiter {
+	enableChecker := false
+	enable, ok := os.LookupEnv("mo_reuse_enable_checker")
+	if ok {
+		switch strings.ToLower(enable) {
+		case "true":
+			enableChecker = true
+		}
+	}
 	w := &waiter{
-		conflictKey: &atomic.Pointer[[]byte]{},
-		lt:          &atomic.Pointer[localLockTable]{},
-		status:      &atomic.Int32{},
-		refCount:    &atomic.Int32{},
-		c:           make(chan notifyValue, 1),
+		conflictKey:   &atomic.Pointer[[]byte]{},
+		lt:            &atomic.Pointer[localLockTable]{},
+		status:        &atomic.Int32{},
+		refCount:      &atomic.Int32{},
+		c:             make(chan notifyValue, 1),
+		enableChecker: enableChecker,
 	}
 	w.setStatus(ready)
 	return w
@@ -68,15 +86,16 @@ func (w waiter) TypeName() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn         pb.WaitTxn
-	waitFor     [][]byte
-	conflictKey *atomic.Pointer[[]byte]
-	lt          *atomic.Pointer[localLockTable]
-	status      *atomic.Int32
-	refCount    *atomic.Int32
-	c           chan notifyValue
-	event       event
-	waitAt      atomic.Value
+	txn           pb.WaitTxn
+	waitFor       [][]byte
+	conflictKey   *atomic.Pointer[[]byte]
+	lt            *atomic.Pointer[localLockTable]
+	status        *atomic.Int32
+	refCount      *atomic.Int32
+	c             chan notifyValue
+	event         event
+	waitAt        atomic.Value
+	enableChecker bool
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -100,11 +119,20 @@ func (w *waiter) isTxn(txnID []byte) bool {
 	return bytes.Equal(w.txn.TxnID, txnID)
 }
 
-func (w *waiter) ref() int32 {
+func (w *waiter) ref(info string, logger *log.MOLogger) int32 {
+	if w.enableChecker {
+		logRefWaiter(logger, info, w.txn.TxnID, w)
+	}
 	return w.refCount.Add(1)
 }
 
-func (w *waiter) close() {
+func (w *waiter) close(
+	info string,
+	logger *log.MOLogger,
+) {
+	if w.enableChecker {
+		logCloseWaiter(logger, info, w.txn.TxnID, w)
+	}
 	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())

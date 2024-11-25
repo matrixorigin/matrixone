@@ -6359,9 +6359,8 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	common.RuntimeMaxMergeObjN.Store(0)
-	common.RuntimeOsizeRowsQualified.Store(0)
-	common.RuntimeMaxObjOsize.Store(0)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
@@ -6749,6 +6748,8 @@ func TestSnapshotMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
+	merge.StopMerge.Store(true)
+	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
@@ -10294,4 +10295,42 @@ func TestS3TransferInMerge(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CheckRowsByScan(9, true)
+}
+
+func TestDedup5(t *testing.T) {
+	/*
+		delete start
+		insert start
+		delete end
+		aobj flush(no transfer)
+		insert end
+	*/
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	bats := bat.Split(5)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	insertTxn, _ := tae.StartTxn(nil)
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = txn.Commit(context.Background())
+	assert.NoError(t, err)
+
+	tae.CompactBlocks(true)
+
+	err = tae.DoAppendWithTxn(bats[0], insertTxn, true)
+	assert.Error(t, err)
+	assert.NoError(t, insertTxn.Commit(ctx))
 }

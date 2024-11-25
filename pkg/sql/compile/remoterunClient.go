@@ -307,7 +307,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		dispatchAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := s.RootOp.Call(s.Proc)
+		result, errCall := vm.Exec(s.RootOp, s.Proc)
 		bat.Clean(mp)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall

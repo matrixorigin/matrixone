@@ -110,6 +110,16 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 				)`,
 			want: "CREATE TABLE `t` (\n  `a` timestamp NOT NULL DEFAULT current_timestamp(),\n  `b` timestamp(3) DEFAULT current_timestamp(3),\n  `c` datetime DEFAULT current_timestamp(),\n  `d` datetime(4) DEFAULT current_timestamp(4),\n  `e` varchar(20) DEFAULT 'cUrrent_tImestamp',\n  `f` datetime(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `g` timestamp(2) DEFAULT current_timestamp(2) ON UPDATE current_timestamp(2),\n  `h` date DEFAULT '2024-01-01'\n)",
 		},
+		{
+			name: "test7",
+			sql: `CREATE TABLE src (id bigint NOT NULL,
+				json1 json DEFAULT NULL,
+				json2 json DEFAULT NULL,
+				PRIMARY KEY (id),
+				FULLTEXT(json1) WITH PARSER json,
+				FULLTEXT(json1,json2) WITH PARSER json)`,
+			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json,\n FULLTEXT(`json1`,`json2`) WITH PARSER json\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

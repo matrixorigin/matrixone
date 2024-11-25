@@ -37,9 +37,13 @@ var (
 )
 
 var dnsResolver = dns.NewCachingResolver(
-	net.DefaultResolver,
+	nil,
 	dns.MaxCacheEntries(128),
 )
+
+func init() {
+	net.DefaultResolver = dnsResolver
+}
 
 var httpDialer = &net.Dialer{
 	Timeout:  connectTimeout,
@@ -58,6 +62,7 @@ var httpTransport = &http.Transport{
 		InsecureSkipVerify: true,
 		RootCAs:            caPool,
 	},
+	Proxy: http.ProxyFromEnvironment,
 }
 
 var caPool = func() *x509.CertPool {

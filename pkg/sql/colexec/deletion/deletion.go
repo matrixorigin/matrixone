@@ -92,10 +92,6 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 
 // the bool return value means whether it completed its work or not
 func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	if deletion.RemoteDelete {
 		return deletion.remoteDelete(proc)
 	}
@@ -104,8 +100,6 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
 	analyzer := deletion.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	var err error
 	if deletion.ctr.state == vm.Build {
@@ -209,7 +203,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 		}
 		result.Batch = deletion.ctr.resBat
 		deletion.ctr.state = vm.End
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -223,8 +216,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
 	analyzer := deletion.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -269,6 +260,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 					deletion.ctr.resBat.Clean(proc.Mp())
 					return result, err
 				}
+				analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
 				analyzer.AddS3RequestCount(crs)
 				analyzer.AddDiskIO(crs)
 			}
@@ -287,6 +279,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 			if err != nil {
 				return result, err
 			}
+			analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 		}
@@ -295,6 +288,5 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&deletion.ctr.affectedRows, affectedRows)
 	}
-	analyzer.Output(result.Batch)
 	return result, nil
 }

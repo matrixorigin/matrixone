@@ -25,19 +25,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-type mockSQLWorker struct{}
+const (
+	workerModeReturnError int = 1
+)
+
+type mockSQLWorker struct {
+	mod int
+}
 
 func newMockSQLWorker() *mockSQLWorker {
 	return &mockSQLWorker{}
 }
 
 func (w *mockSQLWorker) GetCNServerByConnID(_ uint32) (*CNServer, error) {
+	if w.mod == workerModeReturnError {
+		return nil, moerr.NewInternalErrorNoCtx("return err")
+	}
 	return nil, nil
 }
 
@@ -668,4 +678,14 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.True(t, isRetryableErr(err))
+}
+
+func Test_router(t *testing.T) {
+	rt := &router{
+		sqlRouter: &mockSQLWorker{
+			mod: workerModeReturnError,
+		},
+	}
+	_, err := rt.SelectByConnID(123)
+	require.Error(t, err)
 }

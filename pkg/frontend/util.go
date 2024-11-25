@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,7 +22,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +31,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -103,20 +102,16 @@ func Max(a int, b int) int {
 }
 
 const (
-	invalidGoroutineId = math.MaxUint64
+	invalidGoroutineId = math.MaxInt64
 )
 
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	data := make([]byte, 64)
-	data = data[:runtime.Stack(data, false)]
-	data = bytes.TrimPrefix(data, []byte("goroutine "))
-	data = data[:bytes.IndexByte(data, ' ')]
-	id, _ := strconv.ParseUint(string(data), 10, 64)
+	id := goid.Get()
 	if id == 0 {
 		id = invalidGoroutineId
 	}
-	return id
+	return uint64(id)
 }
 
 type Timeout struct {
@@ -489,19 +484,27 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
-	var stmtStr string
-	stm := ses.GetStmtInfo()
-	if stm == nil {
-		stmtStr = ses.GetSqlOfStmt()
-	} else {
-		stmtStr = stm.Statement
-	}
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
+	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
+// logStatementStringStatus
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// This op is aim to avoid string copy in 'status == success' case.
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
+	var getFormatedSqlStr = func() string {
+		var str = stmtStr
+		if len(stmtStr) == 0 {
+			if stm := ses.GetStmtInfo(); stm == nil {
+				str = ses.GetSqlOfStmt()
+			} else {
+				// case `execute __prepared_stmt_id__;`: this value holds the raw prepare statement and raw args.
+				str = stm.CopyStatementInfo()
+			}
+		}
+		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		return str
+	}
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
@@ -509,9 +512,13 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		if ses.LogDebug() {
+			str := getFormatedSqlStr()
+			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		}
 		err = nil // make sure: it is nil for EndStatement
 	} else {
+		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
 			"query trace status",

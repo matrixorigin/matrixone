@@ -1025,7 +1025,6 @@ var (
 		`drop table if exists mo_catalog.mo_snapshots;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
-	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
@@ -1504,7 +1503,6 @@ const (
 	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
-	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
@@ -1878,14 +1876,6 @@ func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType
 
 func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
 	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
-}
-
-func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getDbPubCountFormat, dbName), nil
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -3752,13 +3742,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoPubsSql)
-		// drop table mo_pubs
-		rtnErr = bh.Exec(deleteCtx, dropMoPubsSql)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
@@ -5482,7 +5465,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.SetVar:
@@ -7504,6 +7487,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	isSysOnlyDb := func(sql string) bool {
 		// only the SYS tenant has the table mo_account/mo_subs
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {

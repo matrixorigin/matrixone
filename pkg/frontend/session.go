@@ -138,10 +138,6 @@ type Session struct {
 
 	errInfo *errInfo
 
-	//fromRealUser distinguish the sql that the user inputs from the one
-	//that the internal or background program executes
-	fromRealUser bool
-
 	cache *privilegeCache
 
 	mu sync.Mutex
@@ -254,10 +250,6 @@ type Session struct {
 
 	// create version
 	createVersion string
-
-	//reused backExec
-	backExecReused         *backExec
-	shareTxnBackExecReused *backExec
 }
 
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
@@ -603,6 +595,8 @@ func NewSession(
 
 // ReserveConnAndClose closes the session with the connection is reserved.
 func (ses *Session) ReserveConnAndClose() {
+	rm := ses.getRoutineManager()
+	rm.sessionManager.RemoveSession(ses)
 	ses.ReserveConn()
 	ses.Close()
 }
@@ -661,12 +655,6 @@ func (ses *Session) Close() {
 		ses.buf.Free()
 		ses.buf = nil
 	}
-
-	//clean reused backExec
-	ses.backExecReused.Close()
-	ses.backExecReused = nil
-	ses.shareTxnBackExecReused.Close()
-	ses.shareTxnBackExecReused = nil
 
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -782,10 +770,10 @@ func (ses *Session) InvalidatePrivilegeCache() {
 }
 
 // GetBackgroundExec generates a background executor
-func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (ses *Session) GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec {
 	ses.EnterFPrint(FPGetBackgroundExec)
 	defer ses.ExitFPrint(FPGetBackgroundExec)
-	return NewBackgroundExec(ctx, ses)
+	return NewBackgroundExec(ctx, ses, opts...)
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
@@ -806,34 +794,20 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		callback = fakeDataSetFetcher2
 	}
 
-	ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
+	be := ses.InitBackExec(txnOp, ses.respr.GetStr(DBNAME), callback)
 	//the derived statement execute in a shared transaction in background session
-	ses.shareTxnBackExecReused.backSes.ReplaceDerivedStmt(true)
-	return ses.shareTxnBackExecReused
+	be.(*backExec).backSes.ReplaceDerivedStmt(true)
+	return be
 }
 
-func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec {
-	if txnOp != nil {
-		if ses.shareTxnBackExecReused == nil {
-			ses.shareTxnBackExecReused = &backExec{}
-		} else if ses.shareTxnBackExecReused.inUse {
-			panic("Session.ShareBackExec already in use")
-		}
-		ses.shareTxnBackExecReused.init(ses, txnOp, db, callBack)
-		ses.shareTxnBackExecReused.backSes.upstream = ses
-		ses.shareTxnBackExecReused.inUse = true
-		return ses.shareTxnBackExecReused
-	} else {
-		if ses.backExecReused == nil {
-			ses.backExecReused = &backExec{}
-		} else if ses.backExecReused.inUse {
-			panic("Session.BackExec already in use")
-		}
-		ses.backExecReused.init(ses, txnOp, db, callBack)
-		ses.backExecReused.backSes.upstream = ses
-		ses.backExecReused.inUse = true
-		return ses.backExecReused
+func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
+	be := &backExec{}
+	be.init(ses, txnOp, db, callBack)
+	be.backSes.upstream = ses
+	if len(opts) > 0 && opts[0] != nil {
+		be.backSes.fromRealUser = opts[0].fromRealUser
 	}
+	return be
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
@@ -1165,7 +1139,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{fromRealUser: true})
 	defer bh.Close()
 
 	//step1 : check tenant exists or not in SYS tenant context
@@ -1964,6 +1938,14 @@ func (ses *Session) Fatal(ctx context.Context, msg string, fields ...zap.Field) 
 
 func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	ses.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (ses *Session) LogDebug() bool {
+	if ses == nil {
+		return false
+	}
+	ses.initLogger()
+	return ses.logLevel.Enabled(zap.DebugLevel)
 }
 
 func (ses *Session) Infof(ctx context.Context, format string, args ...any) {

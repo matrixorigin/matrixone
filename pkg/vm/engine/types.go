@@ -588,8 +588,9 @@ const (
 type DataCollectPolicy uint64
 
 const (
-	Policy_CollectAllData       = 0
-	Policy_CollectCommittedData = 1
+	Policy_CollectCommittedData = 1 << iota
+	Policy_CollectUncommittedData
+	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
 )
 
 type TombstoneCollectPolicy uint64
@@ -906,6 +907,8 @@ type Relation interface {
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)

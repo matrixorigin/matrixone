@@ -783,6 +783,10 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
+	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" {
+		return true // in is always null rejecting
+	}
+
 	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
 		return false

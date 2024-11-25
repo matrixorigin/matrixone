@@ -17,13 +17,13 @@ drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
 -- @ignore:5,6
 show publications;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
 
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 show databases;
 use republication01;
@@ -82,7 +82,7 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
 -- @ignore:5,6
 show publications;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -98,7 +98,7 @@ select * from aff01;
 restore account sys from snapshot sp02;
 -- @ignore:5,6
 show publications;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 show databases;
 use repub02;
@@ -161,7 +161,7 @@ show subscriptions;
 show databases;
 drop snapshot sp01;
 -- @session
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 show databases;
 -- @ignore:5,6
@@ -190,7 +190,7 @@ create snapshot sp02 for account acc01;
 
 drop publication if exists pub03;
 create publication pub04 database db01 account acc01 comment 'create pub04';
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 -- @ignore:5,6
 show publications;
@@ -336,7 +336,7 @@ create snapshot sp11 for account acc01;
 
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 -- @session
 
@@ -357,7 +357,7 @@ restore account acc01 from snapshot sp11;
 show publications;
 show databases;
 drop database db10;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 -- @session
 
@@ -386,7 +386,7 @@ create snapshot sp100 for account sys;
 
 drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 
 drop snapshot if exists sp101;
@@ -407,7 +407,7 @@ use sub07;
 -- @session
 
 restore account sys from snapshot sp101;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -571,7 +571,7 @@ create snapshot sp105 for account acc02;
 -- @session:id=1&user=acc01:test_account&password=111
 drop publication if exists pub10;
 create publication pub10 database test04 account acc02 comment 'publish test03';
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 -- @session
 
@@ -584,7 +584,7 @@ select * from t1;
 -- @session
 
 restore account acc02 from snapshot sp105 to account acc03;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 
 -- @session:id=4&user=acc03:test_account&password=111
@@ -594,7 +594,7 @@ select * from t1;
 -- @ignore:5,6
 show publications;
 drop database sub09;
--- @ignore:2,6
+-- @ignore:0,3,7
 select * from mo_catalog.mo_pubs;
 -- @session
 

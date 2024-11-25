@@ -1,0 +1,9 @@
+set @@autocommit = 1;
+begin;
+savepoint a;
+release savepoint a;
+savepoint b;
+rollback to savepoint b;
+internal error: savepoint has not been implemented yet. please rollback the transaction.
+release savepoint b;
+commit;

@@ -123,13 +123,7 @@ func printShuffleResult(dispatch *Dispatch) {
 }
 
 func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := dispatch.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 	if err != nil {
