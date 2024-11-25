@@ -195,7 +195,7 @@ const (
 
 const (
 	defaultAlphaCycleDur     = time.Minute
-	defaultGamaCycleDur      = time.Minute * 1
+	defaultGamaCycleDur      = time.Minute * 30
 	defaultGetTableListLimit = 1000
 
 	logHeader = "MO-TABLE-STATS-TASK"
