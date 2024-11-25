@@ -51,7 +51,7 @@ type ObjectStorage interface {
 		ctx context.Context,
 		key string,
 		r io.Reader,
-		size int64,
+		sizeHint *int64,
 		expire *time.Time,
 	) (
 		err error,

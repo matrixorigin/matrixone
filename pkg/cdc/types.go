@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,7 +47,16 @@ const (
 	SASCommon = "common"
 	SASError  = "error"
 
-	InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
+	DefaultInitSnapshotSplitTxn = true
+
+	SendSqlTimeout        = "SendSqlTimeout"
+	DefaultSendSqlTimeout = "10m"
+	DefaultRetryTimes     = -1
+	DefaultRetryDuration  = 30 * time.Minute
+
+	MaxSqlLength        = "MaxSqlLength"
+	DefaultMaxSqlLength = 4 * 1024 * 1024
 )
 
 var (
@@ -83,8 +93,23 @@ type Sink interface {
 }
 
 type ActiveRoutine struct {
+	sync.Mutex
 	Pause  chan struct{}
 	Cancel chan struct{}
+}
+
+func (ar *ActiveRoutine) ClosePause() {
+	ar.Lock()
+	defer ar.Unlock()
+	close(ar.Pause)
+	// can't set to nil, because some goroutines may still be running, when it goes next round loop,
+	// it found the channel is nil, not closed, will hang there forever
+}
+
+func (ar *ActiveRoutine) CloseCancel() {
+	ar.Lock()
+	defer ar.Unlock()
+	close(ar.Cancel)
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
