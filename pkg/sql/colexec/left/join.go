@@ -67,13 +67,7 @@ func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := leftJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &leftJoin.ctr
 	input := vm.NewCallResult()
@@ -147,7 +141,6 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

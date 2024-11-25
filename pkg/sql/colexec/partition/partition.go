@@ -73,13 +73,7 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 }
 
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := partition.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &partition.ctr
 	for {
@@ -126,10 +120,8 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
-				analyzer.Output(result.Batch)
 				return result, err
 			}
-			analyzer.Output(result.Batch)
 			return result, err
 
 		}

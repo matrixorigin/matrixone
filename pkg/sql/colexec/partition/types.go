@@ -112,6 +112,10 @@ func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err
 	}
 }
 
+func (partition *Partition) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) freeBatch(mp *mpool.MPool) {
 	for _, bat := range ctr.batchList {
 		if bat != nil {

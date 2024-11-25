@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +65,7 @@ func TestMergeCTE(t *testing.T) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, err = tc.arg.Call(tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 
 		tc.arg.Reset(tc.proc, false, nil)
@@ -72,7 +73,7 @@ func TestMergeCTE(t *testing.T) {
 		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, err = tc.arg.Call(tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()

@@ -149,7 +149,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			for {
-				result, err := tc.arg.Call(tc.proc)
+				result, err := vm.Exec(tc.arg, tc.proc)
 
 				if result.Status != vm.ExecStop {
 					if IfCanUseRoaringFilter(tc.types[0].Oid) {
@@ -171,7 +171,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			for {
-				result, err := tc.arg.Call(tc.proc)
+				result, err := vm.Exec(tc.arg, tc.proc)
 				if result.Status != vm.ExecStop {
 					if IfCanUseRoaringFilter(tc.types[0].Oid) {
 						require.Error(t, err)

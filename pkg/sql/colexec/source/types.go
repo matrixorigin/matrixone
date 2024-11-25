@@ -103,3 +103,12 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 	source.FreeProjection(proc)
 }
+
+func (source *Source) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if source.ProjectList != nil {
+		batch, err = source.EvalProjection(input, proc)
+	}
+	return batch, err
+}

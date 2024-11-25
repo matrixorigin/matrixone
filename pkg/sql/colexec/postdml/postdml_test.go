@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -102,14 +103,14 @@ func TestFullText(t *testing.T) {
 	resetChildren(&arg)
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
 	arg.Reset(proc, false, nil)
 
 	err = arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
 	sqls := []string{"DELETE FROM `testDb`.`index_tblan` WHERE doc_id IN (1,1000)",

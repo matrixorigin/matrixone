@@ -78,13 +78,7 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 }
 
 func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := preInsertUnique.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(preInsertUnique.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -133,6 +127,5 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		}
 	}
 	result.Batch = preInsertUnique.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }

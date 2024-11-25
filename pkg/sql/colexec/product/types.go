@@ -103,6 +103,15 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 	product.FreeProjection(proc)
 }
 
+func (product *Product) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if product.ProjectList != nil {
+		batch, err = product.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
