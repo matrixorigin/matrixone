@@ -107,6 +107,8 @@ type txnTable struct {
 	tombstoneTable *baseTable
 	transferedTS   types.TS
 
+	dedupTS types.TS
+
 	idx int
 }
 
@@ -901,7 +903,7 @@ func (tbl *txnTable) GetByFilter(
 	pks := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 	defer pks.Close()
 	pks.Append(filter.Val, false)
-	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks, false, false)
+	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks, false)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
@@ -1070,7 +1072,15 @@ func (tbl *txnTable) DedupSnapByPK(
 ) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
-	rowIDs, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, dedupAfterSnapshotTS, true)
+	var rowIDs containers.Vector
+	if dedupAfterSnapshotTS {
+		if tbl.dedupTS.IsEmpty() {
+			tbl.dedupTS = tbl.store.rt.Now()
+		}
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, keys, tbl.store.txn.GetStartTS(), tbl.dedupTS, false)
+	} else {
+		rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, true)
+	}
 	if err != nil {
 		return
 	}
@@ -1164,7 +1174,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 ) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).preCommitGetRowsByPK(tbl.store.ctx, pks)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), tbl.store.rt.Now(), true)
 		if err != nil {
 			return
 		}
@@ -1234,7 +1244,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		defer closeFunc()
 		defer pks.Close()
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).preCommitGetRowsByPK(ctx, pks)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, tbl.store.rt.Now(), true)
 		if err != nil {
 			return
 		}

@@ -124,7 +124,24 @@ func (entry *ObjectEntry) GetUpdateEntry(
 	dropped.DeleteNode = *txnbase.NewTxnMVCCNodeWithTxn(txn)
 	return
 }
-
+func (entry *ObjectEntry) VisibleByTS(ts types.TS) bool {
+	needWait, txn := entry.CreateNode.NeedWaitCommitting(ts)
+	if needWait {
+		txn.GetTxnState(true)
+	}
+	needWait, txn = entry.DeleteNode.NeedWaitCommitting(ts)
+	if needWait {
+		txn.GetTxnState(true)
+	}
+	// visible by end
+	if entry.CreatedAt.GT(&ts) {
+		return false
+	}
+	if entry.DeleteBefore(ts) {
+		return false
+	}
+	return true
+}
 func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	deleteTS := entry.GetDeleteAt()
 	if deleteTS.IsEmpty() {
