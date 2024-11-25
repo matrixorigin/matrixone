@@ -99,13 +99,9 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return lockOp.GetChildren(0).Call(proc)
+		return vm.Exec(lockOp.GetChildren(0), proc)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -117,8 +113,6 @@ func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -126,14 +120,15 @@ func callNonBlocking(
 	}
 
 	if result.Batch == nil {
-		if lockOp.ctr.retryError != nil {
-			return result, lockOp.ctr.retryError
+		if lockOp.ctr.retryError == nil {
+			err := lockTalbeIfLockCountIsZero(proc, lockOp)
+			if err != nil {
+				return result, err
+			}
 		}
-		err := lockTalbeIfLockCountIsZero(proc, lockOp)
-		return result, err
+		return result, lockOp.ctr.retryError
 	}
 	if result.Batch.IsEmpty() {
-		analyzer.Output(result.Batch)
 		return result, err
 	}
 
@@ -142,7 +137,6 @@ func callNonBlocking(
 		return result, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -930,6 +924,10 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 	lockOp.cleanParker()
 }
 
+func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (lockOp *LockOp) resetParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Reset()
@@ -1006,8 +1004,8 @@ func lockTalbeIfLockCountIsZero(
 	proc *process.Process,
 	lockOp *LockOp,
 ) error {
-	rt := lockOp.ctr
-	if rt.lockCount != 0 {
+	ctr := lockOp.ctr
+	if ctr.lockCount != 0 {
 		return nil
 	}
 	for idx := 0; idx < len(lockOp.targets); idx++ {
@@ -1035,11 +1033,6 @@ func lockTalbeIfLockCountIsZero(
 			err = performLock(bat, proc, lockOp, anal, idx)
 			if err != nil {
 				return err
-			} else if rt.retryError != nil {
-				if rt.defChanged {
-					rt.retryError = retryWithDefChangedError
-				}
-				return rt.retryError
 			}
 		} else {
 			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
@@ -1048,7 +1041,7 @@ func lockTalbeIfLockCountIsZero(
 			}
 		}
 	}
-	rt.lockCount = 1
+	ctr.lockCount = 1
 
 	return nil
 }

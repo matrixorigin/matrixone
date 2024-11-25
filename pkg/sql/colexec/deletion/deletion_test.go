@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -94,14 +95,14 @@ func TestNormalDeletion(t *testing.T) {
 	resetChildren(&arg)
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
 	arg.Reset(proc, false, nil)
 
 	err = arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
 	proc.Free()

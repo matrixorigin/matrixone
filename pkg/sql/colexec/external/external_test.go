@@ -198,17 +198,17 @@ func Test_Call(t *testing.T) {
 				},
 			}
 			param.FileSize = []int64{1}
-			end, err := tcs.arg.Call(tcs.proc)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 		}
@@ -273,14 +273,14 @@ func Test_Call2(t *testing.T) {
 			var err error
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err := tcs.arg.Call(tcs.proc)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 			tcs.arg.Reset(tcs.proc, false, nil)
 
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 			tcs.arg.Free(tcs.proc, false, nil)
@@ -363,7 +363,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err := tcs.arg.Call(tcs.proc)
+		end, err := vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Reset(tcs.proc, false, nil)
@@ -373,7 +373,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err = tcs.arg.Call(tcs.proc)
+		end, err = vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Free(tcs.proc, false, nil)

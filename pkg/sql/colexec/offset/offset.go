@@ -61,13 +61,7 @@ func (offset *Offset) Prepare(proc *process.Process) error {
 }
 
 func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := offset.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	for {
 		input, err := vm.ChildrenCall(offset.GetChildren(0), proc, analyzer)
@@ -81,7 +75,6 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 		}
 		if offset.ctr.seen > offset.ctr.offset {
-			analyzer.Output(input.Batch)
 			return input, nil
 		}
 
@@ -99,7 +92,6 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			proc.Mp().PutSels(sels)
 			offset.ctr.seen += uint64(length)
 
-			analyzer.Output(offset.ctr.buf)
 			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
 		}
 		offset.ctr.seen += uint64(length)

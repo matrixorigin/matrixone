@@ -516,7 +516,7 @@ func TestRequestMultipleCn2(t *testing.T) {
 
 	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
 	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)
+		ctx, cancel := context.WithTimeout(context.Background(), 0)
 		cancel()
 
 		//////

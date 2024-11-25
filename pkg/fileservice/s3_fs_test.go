@@ -18,14 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"encoding/xml"
-	"fmt"
-	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,54 +32,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
-
-type _TestS3Config struct {
-	Endpoint  string `json:"s3-test-endpoint"`
-	Region    string `json:"s3-test-region"`
-	APIKey    string `json:"s3-test-key"`
-	APISecret string `json:"s3-test-secret"`
-	Bucket    string `json:"s3-test-bucket"`
-	RoleARN   string `json:"role-arn"`
-}
-
-func loadS3TestConfig(t testing.TB) (config _TestS3Config, err error) {
-
-	defer func() {
-		// default to disk S3
-		if config.Endpoint == "" {
-			config.Endpoint = "disk"
-			config.Bucket = t.TempDir()
-		}
-	}()
-
-	// load from s3.json
-	content, err := os.ReadFile("s3.json")
-	if err == nil {
-		if len(content) > 0 {
-			if err := json.Unmarshal(content, &config); err == nil {
-				return config, nil
-			}
-		}
-	}
-	err = nil // ignore errors
-
-	// load from env
-	loadEnv := func(name string, ptr *string) {
-		if *ptr != "" {
-			return
-		}
-		if value := os.Getenv(name); value != "" {
-			*ptr = value
-		}
-	}
-	loadEnv("endpoint", &config.Endpoint)
-	loadEnv("region", &config.Region)
-	loadEnv("apikey", &config.APIKey)
-	loadEnv("apisecret", &config.APISecret)
-	loadEnv("bucket", &config.Bucket)
-
-	return
-}
 
 func TestS3FS(
 	t *testing.T,
@@ -100,25 +48,22 @@ func testS3FS(
 	t *testing.T,
 	policy Policy,
 ) {
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
 
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+	getArgs := func(t *testing.T, name string) ObjectStorageArguments {
+		return ObjectStorageArguments{
+			Name:      name,
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		}
+	}
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, policy, func(name string) FileService {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				ObjectStorageArguments{
-					Name:      name,
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
-				},
+				getArgs(t, name),
 				DisabledCacheConfig,
 				nil,
 				true,
@@ -140,13 +85,7 @@ func testS3FS(
 		ctx := context.Background()
 		fs, err := NewS3FS(
 			ctx,
-			ObjectStorageArguments{
-				Name:      "s3",
-				Endpoint:  config.Endpoint,
-				Bucket:    config.Bucket,
-				RoleARN:   config.RoleARN,
-				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			},
+			getArgs(t, "test"),
 			DisabledCacheConfig,
 			nil,
 			true,
@@ -181,13 +120,7 @@ func testS3FS(
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
-				},
+				getArgs(t, "test"),
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 				},
@@ -205,13 +138,7 @@ func testS3FS(
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
-				},
+				getArgs(t, "name"),
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](1),
 					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
@@ -231,13 +158,7 @@ func testS3FS(
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
-				},
+				getArgs(t, "test"),
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
@@ -256,50 +177,16 @@ func testS3FS(
 
 func TestDynamicS3(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
 			"s3",
-			config.Endpoint,
-			config.Region,
-			config.Bucket,
-			config.APIKey,
-			config.APISecret,
-			time.Now().Format("2006-01-02.15:04:05.000000"),
-			name,
-		})
-		assert.Nil(t, err)
-		w.Flush()
-		fs, path, err := GetForETL(ctx, nil, JoinPath(
-			buf.String(),
-			"foo/bar/baz",
-		))
-		assert.Nil(t, err)
-		assert.Equal(t, path, "foo/bar/baz")
-		return fs
-	})
-}
-
-func TestDynamicS3NoKey(t *testing.T) {
-	ctx := context.Background()
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, 0, func(name string) FileService {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		err := w.Write([]string{
-			"s3-no-key",
-			config.Endpoint,
-			config.Region,
-			config.Bucket,
+			"disk",
+			"",
+			t.TempDir(),
+			"",
+			"",
 			time.Now().Format("2006-01-02.15:04:05.000000"),
 			name,
 		})
@@ -317,20 +204,13 @@ func TestDynamicS3NoKey(t *testing.T) {
 
 func TestDynamicS3Opts(t *testing.T) {
 	ctx := context.Background()
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
 			"s3-opts",
-			"endpoint=" + config.Endpoint,
-			"region=" + config.Region,
-			"bucket=" + config.Bucket,
+			"endpoint=disk",
+			"bucket=" + t.TempDir(),
 			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
 			"name=" + name,
 		})
@@ -341,95 +221,13 @@ func TestDynamicS3Opts(t *testing.T) {
 			"foo/bar/baz",
 		))
 		assert.Nil(t, err)
-		assert.Equal(t, path, "foo/bar/baz")
-		return fs
-	})
-}
-
-func TestDynamicS3OptsRoleARN(t *testing.T) {
-	ctx := context.Background()
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, 0, func(name string) FileService {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		err := w.Write([]string{
-			"s3-opts",
-			"endpoint=" + config.Endpoint,
-			"bucket=" + config.Bucket,
-			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
-			"name=" + name,
-			"role-arn=" + config.RoleARN,
-		})
-		assert.Nil(t, err)
-		w.Flush()
-		fs, path, err := GetForETL(ctx, nil, JoinPath(
-			buf.String(),
-			"foo/bar/baz",
-		))
-		if err != nil {
-			t.Fatal(err)
-		}
-		assert.Equal(t, path, "foo/bar/baz")
-		return fs
-	})
-}
-
-func TestDynamicS3OptsNoRegion(t *testing.T) {
-	ctx := context.Background()
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	// only AWS supports this
-	if !strings.Contains(config.Endpoint, "amazonaws") {
-		t.Skip()
-	}
-
-	t.Setenv("AWS_REGION", "")
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, 0, func(name string) FileService {
-		buf := new(strings.Builder)
-		w := csv.NewWriter(buf)
-		err := w.Write([]string{
-			"s3-opts",
-			"bucket=" + config.Bucket,
-			"prefix=" + time.Now().Format("2006-01-02.15:04:05.000000"),
-			"name=" + name,
-			"role-arn=" + config.RoleARN,
-		})
-		assert.Nil(t, err)
-		w.Flush()
-		fs, path, err := GetForETL(ctx, nil, JoinPath(
-			buf.String(),
-			"foo/bar/baz",
-		))
-		if err != nil {
-			t.Fatal(err)
-		}
 		assert.Equal(t, path, "foo/bar/baz")
 		return fs
 	})
 }
 
 func BenchmarkS3FS(b *testing.B) {
-	config, err := loadS3TestConfig(b)
-	assert.Nil(b, err)
-	if config.Endpoint == "" {
-		// no config
-		b.Skip()
-	}
-
-	b.Setenv("AWS_REGION", config.Region)
-	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
 	cacheDir := b.TempDir()
-
 	b.ResetTimer()
 
 	ctx := context.Background()
@@ -437,11 +235,10 @@ func BenchmarkS3FS(b *testing.B) {
 		fs, err := NewS3FS(
 			ctx,
 			ObjectStorageArguments{
-				Name:      "s3",
-				Endpoint:  config.Endpoint,
-				Bucket:    config.Bucket,
+				Name:      "bench",
+				Endpoint:  "disk",
+				Bucket:    b.TempDir(),
 				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-				RoleARN:   config.RoleARN,
 			},
 			CacheConfig{
 				DiskPath: ptrTo(cacheDir),
@@ -456,23 +253,15 @@ func BenchmarkS3FS(b *testing.B) {
 }
 
 func TestS3FSWithSubPath(t *testing.T) {
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
 	testFileService(t, 0, func(name string) FileService {
 		ctx := context.Background()
 		fs, err := NewS3FS(
 			ctx,
 			ObjectStorageArguments{
 				Name:      name,
-				Endpoint:  config.Endpoint,
-				Bucket:    config.Bucket,
+				Endpoint:  "disk",
+				Bucket:    t.TempDir(),
 				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-				RoleARN:   config.RoleARN,
 			},
 			DisabledCacheConfig,
 			nil,
@@ -482,75 +271,18 @@ func TestS3FSWithSubPath(t *testing.T) {
 		assert.Nil(t, err)
 		return SubPath(fs, "foo/")
 	})
-
 }
 
 func BenchmarkS3ConcurrentRead(b *testing.B) {
-	config, err := loadS3TestConfig(b)
-	if err != nil {
-		b.Fatal(err)
-	}
-	if config.Endpoint == "" {
-		// no config
-		b.Skip()
-	}
-	b.Setenv("AWS_REGION", config.Region)
-	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
 	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			//fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			}
-			//fmt.Printf("got conn: %+v\n", info)
-		},
-
-		PutIdleConn: func(err error) {
-			//if err != nil {
-			//	fmt.Printf("put idle conn failed: %v\n", err)
-			//}
-		},
-
-		ConnectStart: func(network, addr string) {
-			numConnect.Add(1)
-			//fmt.Printf("connect %v %v\n", network, addr)
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
 			Name:      "bench",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
+			Endpoint:  "disk",
+			Bucket:    b.TempDir(),
 			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
 		},
 		DisabledCacheConfig,
 		nil,
@@ -599,7 +331,6 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 				if err != nil {
 					panic(err)
 				}
-				numRead.Add(1)
 			}()
 		}
 		for i := 0; i < cap(sem); i++ {
@@ -610,72 +341,15 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 }
 
 func TestSequentialS3Read(t *testing.T) {
-	config, err := loadS3TestConfig(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
-	var numRead atomic.Int64
-	var numGotConn, numReuse, numConnect atomic.Int64
-	var numTLSHandshake atomic.Int64
 	ctx := context.Background()
-	trace := &httptrace.ClientTrace{
-
-		GetConn: func(hostPort string) {
-			fmt.Printf("get conn: %s\n", hostPort)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			numGotConn.Add(1)
-			if info.Reused {
-				numReuse.Add(1)
-			} else {
-				fmt.Printf("got conn not reuse: %+v\n", info)
-			}
-		},
-
-		PutIdleConn: func(err error) {
-			if err != nil {
-				fmt.Printf("put idle conn failed: %v\n", err)
-			}
-		},
-
-		ConnectDone: func(network string, addr string, err error) {
-			numConnect.Add(1)
-			fmt.Printf("connect done: %v %v\n", network, addr)
-			if err != nil {
-				fmt.Printf("connect error: %v\n", err)
-			}
-		},
-
-		TLSHandshakeStart: func() {
-			numTLSHandshake.Add(1)
-		},
-	}
-
-	ctx = httptrace.WithClientTrace(ctx, trace)
-	defer func() {
-		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
-			numRead.Load(),
-			numGotConn.Load(),
-			numReuse.Load(),
-			numConnect.Load(),
-			numTLSHandshake.Load(),
-		)
-	}()
 
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
 			Name:      "bench",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
 			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
 		},
 		DisabledCacheConfig,
 		nil,
@@ -715,7 +389,6 @@ func TestSequentialS3Read(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		numRead.Add(1)
 	}
 
 }
@@ -724,22 +397,14 @@ func TestS3RestoreFromCache(t *testing.T) {
 	t.Skip("no longer valid since we delete cache files when calling Delete")
 	ctx := context.Background()
 
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
 	cacheDir := t.TempDir()
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
 			Name:      "s3",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
 			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
 		},
 		CacheConfig{
 			DiskPath: ptrTo(cacheDir),
@@ -816,22 +481,14 @@ func TestS3PrefetchFile(t *testing.T) {
 	var pcSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
 
-	config, err := loadS3TestConfig(t)
-	assert.Nil(t, err)
-
-	t.Setenv("AWS_REGION", config.Region)
-	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
-	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-
 	cacheDir := t.TempDir()
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
 			Name:      "s3",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
 			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
 		},
 		CacheConfig{
 			DiskPath:     ptrTo(cacheDir),
@@ -1071,41 +728,12 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 	})
 }
 
-func TestS3FSFromEnv(t *testing.T) {
+func TestS3FSFromSpecs(t *testing.T) {
 
-	// test disk backed S3
-	t.Setenv("TEST_S3FS_DISK", "name=disk,endpoint=disk,bucket="+t.TempDir())
+	for _, args := range objectStorageArgumentsForTest("test", t) {
 
-	// examples
-	//t.Setenv("TEST_S3FS_ALIYUN", "name=aliyun,endpoint=oss-cn-shenzhen.aliyuncs.com,region=oss-cn-shenzhen,bucket=reus-test,key-id=aaa,key-secret=bbb")
-	//t.Setenv("TEST_S3FS_QCLOUD", "name=qcloud,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou,bucket=mofstest-1251598405,key-id=aaa,key-secret=bbb")
-
-	// emulate env vars and get test specs
-	for _, pairs := range os.Environ() {
-		name, value, ok := strings.Cut(pairs, "=")
-		if !ok {
-			continue
-		}
-		// env vars begin with TEST_S3FS_
-		if !strings.HasPrefix(name, "TEST_S3FS_") {
-			continue
-		}
-
-		// parse args
-		reader := csv.NewReader(strings.NewReader(value))
-		argStrs, err := reader.Read()
-		if err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
-			continue
-		}
-		var args ObjectStorageArguments
-		if err := args.SetFromString(argStrs); err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
-			continue
-		}
-
-		// test
 		t.Run(args.Name, func(t *testing.T) {
+
 			testFileService(t, 0, func(name string) FileService {
 				args.Name = name
 				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
@@ -1128,7 +756,9 @@ func TestS3FSFromEnv(t *testing.T) {
 
 				return fs
 			})
+
 		})
 
 	}
+
 }

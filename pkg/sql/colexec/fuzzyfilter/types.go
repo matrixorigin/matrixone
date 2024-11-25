@@ -143,6 +143,10 @@ func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool,
 
 }
 
+func (fuzzyFilter *FuzzyFilter) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (fuzzyFilter *FuzzyFilter) add(pkCol *vector.Vector) {
 	ctr := &fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
