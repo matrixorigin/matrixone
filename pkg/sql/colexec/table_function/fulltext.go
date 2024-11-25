@@ -196,10 +196,6 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
 
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
-
 	if tableFunction.Limit != nil {
 		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
