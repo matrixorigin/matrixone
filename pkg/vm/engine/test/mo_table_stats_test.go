@@ -123,12 +123,22 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	disttae.NotifyCleanDeletes()
 	disttae.NotifyUpdateForgotten()
 
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Name = "test1"
+
+	txnop := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(txnop, "db1", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
 	ret := disttae.HandleMoTableStatsCtl("restore_default_setting:true")
 	require.Equal(t, "move_on(true), use_old_impl(false), force_update(false)", ret)
 
+	dbId := rel.GetDBID(p.Ctx)
+	tblId := rel.GetTableID(p.Ctx)
+
 	_, err := disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
-		[]uint64{0}, []uint64{1}, []uint64{2},
+		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
 	require.NotNil(t, err)
 
@@ -137,7 +147,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 
 	_, err = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
-		[]uint64{0}, []uint64{1}, []uint64{2},
+		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
 	require.NoError(t, err)
 
@@ -149,7 +159,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 
 	_, err = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
-		[]uint64{0}, []uint64{1}, []uint64{2},
+		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		true, false, nil)
 	require.NotNil(t, err)
 
@@ -158,7 +168,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 
 	_, err = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
-		[]uint64{0}, []uint64{1}, []uint64{2},
+		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, true, nil)
 	require.NotNil(t, err)
 }

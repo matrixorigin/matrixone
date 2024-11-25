@@ -261,6 +261,12 @@ func initMoTableStatsConfig(
 			return
 		}
 
+		if dynamicCtx.gamaTaskPool, err = ants.NewPool(
+			runtime.NumCPU(),
+			ants.WithNonblocking(false)); err != nil {
+			return
+		}
+
 		dynamicCtx.conf = eng.config.statsConf
 
 		function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.DisableStatsTask)
@@ -357,8 +363,8 @@ func initMoTableStatsConfig(
 					}()
 
 					// there should not have a deadline
-					newCtx := turn2SysCtx(ctx)
-					_ = betaTask(newCtx, eng.service, eng)
+					betaCtx := turn2SysCtx(context.Background())
+					_ = betaTask(betaCtx, eng.service, eng)
 				}()
 			}
 		}
@@ -366,11 +372,26 @@ func initMoTableStatsConfig(
 		{
 			go func() {
 				// there should not have a deadline
-				newCtx := turn2SysCtx(ctx)
-				_ = gamaTask(newCtx, eng.service, eng)
+				gamaCtx := turn2SysCtx(context.Background())
+				gamaTask(gamaCtx, eng.service, eng)
 			}()
 		}
 
+		//go func() {
+		//	select {
+		//	case <-ctx.Done():
+		//		if gamaCancel != nil {
+		//			fmt.Println("gama canceled")
+		//			gamaCancel()
+		//		}
+		//
+		//		if betaCancel != nil {
+		//			fmt.Println("beta canceled")
+		//			betaCancel()
+		//		}
+		//		return
+		//	}
+		//}()
 	})
 
 	return err
@@ -407,6 +428,7 @@ var dynamicCtx struct {
 	}
 
 	alphaTaskPool *ants.Pool
+	gamaTaskPool  *ants.Pool
 
 	tablePairPool sync.Pool
 	executorPool  sync.Pool
@@ -1211,9 +1233,6 @@ func alphaTask(
 		return
 	}
 
-	// if beta task exit, need to launch a new one
-	dynamicCtx.beta.launchBeta()
-
 	var (
 		errWaitToReceive = len(tbls)
 		ticker           *time.Ticker
@@ -1284,6 +1303,17 @@ func alphaTask(
 					return nil
 				}
 
+				if waitErrDur%(time.Second*10) == 0 {
+					// maybe the task exited, need to launch a new one
+					dynamicCtx.beta.launchBeta()
+					logutil.Warn(logHeader,
+						zap.String("source", "alpha task"),
+						zap.String("event", "waited err another 10s"),
+						zap.String("caller", caller),
+						zap.Int("total", processed),
+						zap.Int("left", errWaitToReceive))
+				}
+
 				continue
 			}
 
@@ -1299,7 +1329,7 @@ func alphaTask(
 				wg.Add(1)
 
 				curTbl := tbls[i]
-				dynamicCtx.alphaTaskPool.Submit(func() {
+				err = dynamicCtx.alphaTaskPool.Submit(func() {
 					defer wg.Done()
 
 					var err2 error
@@ -1320,6 +1350,11 @@ func alphaTask(
 					curTbl.waiter.errQueue = errQueue
 					dynamicCtx.tblQueue <- curTbl
 				})
+
+				if err != nil {
+					wg.Done()
+					curTbl.Done(err)
+				}
 			}
 
 			if submitted == 0 {
@@ -1422,15 +1457,10 @@ func gamaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-) (err error) {
+) {
 
 	var (
-		val  any
-		de   = eng.(*Engine)
-		tbls []*tablePair
-		now  time.Time
-
-		accIds, dbIds, tblIds []uint64
+		de = eng.(*Engine)
 	)
 
 	dynamicCtx.Lock()
@@ -1438,11 +1468,10 @@ func gamaTask(
 	gamaLimit := max(dynamicCtx.conf.GetTableListLimit/100, 100)
 	dynamicCtx.Unlock()
 
-	decodeIdsFromSqlRet := func(sqlRet ie.InternalExecResult) {
-		accIds = accIds[:0]
-		dbIds = dbIds[:0]
-		tblIds = tblIds[:0]
-
+	decodeIdsFromSqlRet := func(
+		sqlRet ie.InternalExecResult,
+	) (accIds, dbIds, tblIds []uint64, err error) {
+		var val any
 		for i := range sqlRet.RowCount() {
 			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 				continue
@@ -1468,13 +1497,15 @@ func gamaTask(
 
 			tblIds = append(tblIds, uint64(val.(int64)))
 		}
+
+		return
 	}
 
 	// incremental update tables with heartbeat update_time
 	// may leave some tables never been updated.
 	// this opA does such correction.
 	opA := func() {
-		now = time.Now()
+		now := time.Now()
 
 		sql := fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, gamaLimit)
 		sqlRet := executeSQL(ctx, sql, "gama task: get null stats list")
@@ -1483,11 +1514,19 @@ func gamaTask(
 		}
 
 		to := types.BuildTS(time.Now().UnixNano(), 0)
-		tbls = tbls[:0]
 
-		decodeIdsFromSqlRet(sqlRet)
+		accIds, dbIds, tblIds, err := decodeIdsFromSqlRet(sqlRet)
+		if err != nil {
+			return
+		}
 
-		//cc = de.GetLatestCatalogCache()
+		var tbls []*tablePair
+		defer func() {
+			for i := range tbls {
+				tbls[i].Done(nil)
+			}
+		}()
+
 		for i := range tblIds {
 			tbl := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
 			if tbl == nil {
@@ -1525,6 +1564,8 @@ func gamaTask(
 	}
 
 	deleteByStep := func(step int) {
+		now := time.Now()
+
 		sql := fmt.Sprintf(getNextCheckAliveListSQL,
 			colName2[step], colName2[step], catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 			colName2[step], options.DefaultBlockMaxRows)
@@ -1534,19 +1575,20 @@ func gamaTask(
 			return
 		}
 
-		decodeIdsFromSqlRet(sqlRet)
-		if len(accIds) == 0 {
+		ids, _, _, err := decodeIdsFromSqlRet(sqlRet)
+		if len(ids) == 0 || err != nil {
 			return
 		}
 
 		sql = fmt.Sprintf(getCheckAliveSQL,
 			colName1[step], catalog.MO_CATALOG, tblName[step],
-			colName1[step], intsJoin(accIds, ","))
+			colName1[step], intsJoin(ids, ","))
 		sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-1", step))
 		if sqlRet.Error() != nil {
 			return
 		}
 
+		var val any
 		for i := range sqlRet.RowCount() {
 			if val, err = sqlRet.Value(ctx, i, 0); err != nil {
 				continue
@@ -1560,19 +1602,20 @@ func gamaTask(
 				aliveId = val.(uint64)
 			}
 
-			idx := slices.Index(accIds, aliveId)
-			accIds = append(accIds[:idx], accIds[idx+1:]...)
+			idx := slices.Index(ids, aliveId)
+			ids = append(ids[:idx], ids[idx+1:]...)
 		}
 
-		if len(accIds) != 0 {
+		if len(ids) != 0 {
 			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-				colName2[step], intsJoin(accIds, ","))
+				colName2[step], intsJoin(ids, ","))
 			sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
 			if sqlRet.Error() == nil {
 				logutil.Info(logHeader,
 					zap.String("source", "gama task"),
-					zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(accIds)),
-					zap.String("detail", intsJoin(accIds, ",")))
+					zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(ids)),
+					zap.Duration("takes", time.Since(now)),
+					zap.String("detail", intsJoin(ids, ",")))
 			}
 		}
 	}
@@ -1598,23 +1641,26 @@ func gamaTask(
 	for {
 		select {
 		case <-ctx.Done():
+			logutil.Info(logHeader,
+				zap.String("source", "gama task exit"),
+				zap.Error(ctx.Err()))
 			return
 
 		case <-tickerA.C:
-			opA()
+			dynamicCtx.gamaTaskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
 		case <-dynamicCtx.updateForgottenQueue:
-			opA()
+			dynamicCtx.gamaTaskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
 		case <-tickerB.C:
-			opB()
+			dynamicCtx.gamaTaskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 
 		case <-dynamicCtx.cleanDeletesQueue:
 			// emergence, do clean now
-			opB()
+			dynamicCtx.gamaTaskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 		}
 	}
