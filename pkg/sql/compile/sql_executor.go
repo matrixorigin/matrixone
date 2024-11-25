@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -336,6 +337,9 @@ func (exec *txnExecutor) Exec(
 	result := executor.NewResult(exec.s.mp)
 
 	stream_chan, streaming := exec.opts.Streaming()
+	if streaming {
+		defer close(stream_chan)
+	}
 
 	var batches []*batch.Batch
 	err = c.Compile(
@@ -355,13 +359,12 @@ func (exec *txnExecutor) Exec(
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
-							return nil
+							return moerr.NewInternalError(proc.Ctx, "context cancelled")
 						default:
 							time.Sleep(1 * time.Millisecond)
 						}
 					}
-					stream_batches := []*batch.Batch{rows}
-					stream_result.Batches = stream_batches
+					stream_result.Batches = []*batch.Batch{rows}
 					stream_chan <- stream_result
 				} else {
 					batches = append(batches, rows)
@@ -393,11 +396,6 @@ func (exec *txnExecutor) Exec(
 			zap.Int("retry-times", c.retryTimes),
 			zap.Uint64("AffectedRows", runResult.AffectRows),
 		)
-	}
-
-	if streaming {
-		close(stream_chan)
-		return executor.Result{}, nil
 	}
 
 	result.LastInsertID = proc.GetLastInsertID()
