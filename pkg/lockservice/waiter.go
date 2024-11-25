@@ -106,10 +106,12 @@ func (w *waiter) String() string {
 	if w == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("%s-%p(%d)",
+	return fmt.Sprintf("%s-%p(%d)(%d)",
 		hex.EncodeToString(w.txn.TxnID),
 		w,
-		w.refCount.Load())
+		w.refCount.Load(),
+		w.getStatus(),
+	)
 }
 
 func (w *waiter) isTxn(txnID []byte) bool {

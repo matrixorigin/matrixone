@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/petermattis/goid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -200,16 +202,17 @@ func logLocalLockWaitOnResult(
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log(
 			"lock wait on local result",
-			getLogOptions(zap.DebugLevel),
+			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
 			zap.Stringer("result", notify),
+			zap.Int64("gid", goid.Get()),
 		)
 	}
 }
