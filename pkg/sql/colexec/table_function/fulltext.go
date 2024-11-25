@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,10 +36,8 @@ const (
 )
 
 type fulltextState struct {
-	inited bool
-	//result_chan chan map[any]float32
-	errors chan error
-	//done        chan bool
+	inited      bool
+	errors      chan error
 	stream_chan chan executor.Result
 	score_array []map[any]float32
 	n_doc_id    int
@@ -66,7 +63,6 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 		u.batch.Clean(proc.Mp())
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("FREE NROWS = %d\n", u.nrows))
 	for true {
 		select {
 		case res, ok := <-u.stream_chan:
@@ -127,18 +123,18 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	var scoremap map[any]float32
 	u.batch.CleanOnlyData()
 
-	if u.sacc == nil {
-		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "SearchAccum is nil")
-	}
-
+	// number of result more than pushdown limit and exit
 	if u.limit > 0 && u.n_result >= u.limit {
 		return vm.CancelResult, nil
 	}
 
+	// return scoremap when array is not empty
 	if len(u.score_array) > 0 {
 		scoremap, u.score_array = u.score_array[0], u.score_array[1:]
 		return u.returnResult(proc, scoremap)
 	}
+
+	// array is empty, try to get batch from SQL executor
 	for !u.sql_closed {
 		sql_closed, err := getResults(u, proc, u.sacc)
 		if err != nil {
@@ -160,9 +156,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		u.batch = tf.createResultBatch()
-		//u.result_chan = make(chan map[any]float32, 8)
 		u.errors = make(chan error)
-		//u.done = make(chan bool)
 		u.stream_chan = make(chan executor.Result, 8)
 		u.score_array = make([]map[any]float32, 0, 512)
 		u.inited = true
@@ -237,6 +231,7 @@ func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 
 var ft_runSql_streaming = ft_runSql_streaming_fn
 
+// run SQL in WithStreaming() and pass the channel to SQL executor
 func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -305,6 +300,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	return res, nil
 }
 
+// get one batch and evaluate the result in mini batches with size 8192
 func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (stream_closed bool, err error) {
 
 	// first receive the batch and calculate the scoremap
@@ -334,7 +330,6 @@ func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum
 	bat := res.Batches[0]
 	defer res.Close()
 
-	os.Stderr.WriteString(fmt.Sprintf("FULLTEXT RECEIVED len= %d , %d\n", len(res.Batches), bat.RowCount()))
 	if len(bat.Vecs) != 3 {
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
@@ -447,12 +442,9 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		_, err = runWordStats(u, proc, u.sacc)
 		if err != nil {
-			os.Stderr.WriteString(fmt.Sprintf("SQL EXITED WITH ERROR %v\n", err))
 			u.errors <- err
 			return
 		}
-
-		os.Stderr.WriteString("SQL EXITED\n")
 	}()
 
 	return nil
