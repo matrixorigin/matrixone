@@ -121,7 +121,7 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 		db: tae,
 	}
 	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
-
+	h.interceptMatchRegexp.Store(regexp.MustCompile(`.*bmsql_stock.*`))
 	h.GCManager = gc.NewManager(
 		gc.WithCronJob(
 			"clean-txn-cache",
@@ -145,9 +145,6 @@ func (h *Handle) GetDB() *db.DB {
 }
 
 func (h *Handle) IsInterceptTable(name string) bool {
-	if name == "bmsql_stock" {
-		return true
-	}
 	printMatchRegexp := h.getInterceptMatchRegexp()
 	if printMatchRegexp == nil {
 		return false
