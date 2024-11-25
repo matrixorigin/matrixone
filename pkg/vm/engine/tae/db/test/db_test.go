@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -80,6 +81,26 @@ const (
 	smallCheckpointSize            = 1024
 	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
+
+func TestPrintVector(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	vec1 := vector.NewVec(types.T_uint32.ToType())
+	defer vec1.Free(mp)
+	for i := 0; i < 10; i++ {
+		err = vector.AppendFixed[uint32](vec1, math.MaxUint32, false, mp)
+		assert.NoError(t, err)
+	}
+
+	vec1.Reset(types.T_varchar.ToType())
+	err = vector.AppendBytes(vec1, nil, true, mp)
+	require.NoError(t, err)
+	s := common.MoVectorToString(vec1, 10)
+	t.Log(s)
+}
 
 func TestAppend1(t *testing.T) {
 	defer testutils.AfterTest(t)()
