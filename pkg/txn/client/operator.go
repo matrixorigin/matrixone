@@ -214,6 +214,13 @@ func WithSkipPushClientReady() TxnOption {
 	}
 }
 
+// WithTxnMode set txn mode
+func WithWaitActiveHandle(fn func()) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.waitActiveHandle = fn
+	}
+}
+
 type txnOperator struct {
 	sid             string
 	logger          *log.MOLogger
@@ -264,6 +271,7 @@ type txnOperator struct {
 		coordinator        bool
 		skipWaitPushClient bool
 		options            txn.TxnOptions
+		waitActiveHandle   func()
 	}
 }
 
@@ -404,18 +412,16 @@ func newTxnOperatorWithSnapshot(
 	return tc
 }
 
-func (tc *txnOperator) setWaitActive(v bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.waitActive = v
-}
-
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	if tc.reset.waiter == nil {
 		return nil
 	}
 
 	tc.setWaitActive(true)
+	if tc.opts.waitActiveHandle != nil {
+		tc.opts.waitActiveHandle()
+	}
+
 	defer func() {
 		tc.reset.waiter.close()
 		tc.setWaitActive(false)
@@ -609,8 +615,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() {
-		tc.logger.Fatal("commit on running txn")
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
 	}
 
 	tc.reset.commitCounter.addEnter()
@@ -1457,6 +1464,18 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	}
 }
 
+func (tc *txnOperator) markAborted() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.markAbortedLocked()
+}
+
 func (tc *txnOperator) markAbortedLocked() bool {
 	return tc.mu.flag&AbortedFlag != 0
+}
+
+func (tc *txnOperator) setWaitActive(v bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.waitActive = v
 }
