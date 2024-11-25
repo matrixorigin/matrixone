@@ -15,19 +15,17 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"math"
 	"math/bits"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const (
@@ -603,30 +601,15 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	var firstSortColName string
-	if n.TableDef.ClusterBy != nil {
-		firstSortColName = util.GetClusterByFirstColumn(n.TableDef.ClusterBy.Name)
-	} else if n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return
-	} else {
-		firstSortColName = n.TableDef.Pkey.Names[0]
-	}
-
-	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
-		return
-	}
-	firstSortColID, ok := n.TableDef.Name2ColIndex[firstSortColName]
-	if !ok {
-		return
-	}
-	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
+	pkPos := n.TableDef.Name2ColIndex[n.TableDef.Pkey.PkeyColName]
+	switch types.T(n.TableDef.Cols[pkPos].Typ.Id) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
-		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
-		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
+		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[pkPos].Seqnum)
+		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[n.TableDef.Pkey.PkeyColName])
+		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[n.TableDef.Pkey.PkeyColName])
+		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[n.TableDef.Pkey.PkeyColName], n.TableDef.Pkey.PkeyColName)
+		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[n.TableDef.Pkey.PkeyColName])
 	}
 }
 

@@ -640,9 +640,10 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	if err != nil {
 		return err
 	}
-	if commited.DataCnt() < plan2.BlockThresholdForOneCN(c.ncpu)/2 {
-		logutil.Warnf("workload  table %v should be on only one CN! total blocks %v stats blocks %v",
-			s.DataSource.TableDef.Name, commited.DataCnt(), s.DataSource.node.Stats.BlockNum)
+	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
+	if commited.DataCnt() < int(average*0.7) || commited.DataCnt() > int(average*1.3) {
+		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
+			s.DataSource.TableDef.Name, s.DataSource.node.Stats.BlockNum, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX, average, commited.DataCnt())
 	}
 
 	//collect uncommited data if it's local cn
