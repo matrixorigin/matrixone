@@ -510,62 +510,6 @@ func testDecimal64Sum(t *testing.T) {
 	require.Equal(t, sum, zm.GetSum())
 }
 
-func TestZMRange(t *testing.T) {
-	testIntRange(t, types.T_int8)
-	testIntRange(t, types.T_int16)
-	testIntRange(t, types.T_int32)
-	testIntRange(t, types.T_int64)
-	testUintRange(t, types.T_uint8)
-	testUintRange(t, types.T_uint16)
-	testUintRange(t, types.T_uint32)
-	testUintRange(t, types.T_uint64)
-	testFloatRange(t, types.T_float32)
-	testFloatRange(t, types.T_float64)
-	testVarcharRange(t, types.T_varchar)
-}
-
-func testIntRange(t *testing.T, zmType types.T) {
-	zm := NewZM(zmType, 0)
-	zm.setInited()
-	require.Equal(t, float64(0), zm.Range())
-	zm.updateMaxFixed(types.EncodeFixed(int64(100)))
-	require.Equal(t, float64(100), zm.Range())
-	zm.updateMinFixed(types.EncodeFixed(int64(50)))
-	require.Equal(t, float64(50), zm.Range())
-}
-
-func testUintRange(t *testing.T, zmType types.T) {
-	zm := NewZM(zmType, 0)
-	zm.setInited()
-	require.Equal(t, float64(0), zm.Range())
-	zm.updateMaxFixed(types.EncodeFixed(uint64(100)))
-	require.Equal(t, float64(100), zm.Range())
-	zm.updateMinFixed(types.EncodeFixed(uint64(50)))
-	require.Equal(t, float64(50), zm.Range())
-}
-
-func testFloatRange(t *testing.T, zmType types.T) {
-	zm := NewZM(zmType, 0)
-	zm.setInited()
-	require.Equal(t, float64(0), zm.Range())
-	zm.updateMaxFixed(types.EncodeFixed(float64(100)))
-	require.Equal(t, float64(100), zm.Range())
-	zm.updateMinFixed(types.EncodeFixed(float64(50)))
-	require.Equal(t, float64(50), zm.Range())
-}
-
-func testVarcharRange(t *testing.T, zmType types.T) {
-	zm := NewZM(zmType, 0)
-	zm.setInited()
-	require.Equal(t, float64(0), zm.Range())
-	s1 := "z"
-	zm.updateMaxString([]byte(s1))
-	require.Equal(t, float64(122), zm.Range())
-	s2 := "a"
-	zm.updateMinString([]byte(s2))
-	require.Equal(t, float64(25), zm.Range())
-}
-
 func BenchmarkZM(b *testing.B) {
 	vec := containers.MockVector(types.T_char.ToType(), 10000, true, nil)
 	defer vec.Close()

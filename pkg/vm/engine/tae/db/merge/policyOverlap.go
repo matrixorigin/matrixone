@@ -16,7 +16,6 @@ package merge
 
 import (
 	"cmp"
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -80,6 +79,10 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 			}
 
 			if result.kind == taskHostDN {
+				if rc.cpuPercent > 80 {
+					continue
+				}
+
 				if rc.resourceAvailable(result.objs) {
 					rc.reserveResources(result.objs)
 				} else {
@@ -110,26 +113,10 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
 
 		if zm := obj.SortKeyZoneMap(); set.setZM.StrictlyCompareZmMaxAndMin(zm) > 0 {
 			// zm is overlapped
-			r := zm.Range()
-			if math.IsNaN(r) {
-				set.add(obj)
-				continue
-			}
 			averageRowCnt := set.rows / uint32(len(set.entries))
 			if averageRowCnt/3 < obj.Rows() && obj.Rows() < averageRowCnt*3 {
-				if set.setZM.CompareMax(zm) >= 0 {
-					set.add(obj)
-					continue
-				} else {
-					newRate := index.RangeBetween(set.setZM.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale()) /
-						(set.rangeSum + r) * float64(len(set.entries)+1)
-					if newRate > set.overlapRate {
-						set.add(obj)
-						set.rangeSum += r
-						set.overlapRate = newRate
-						continue
-					}
-				}
+				set.add(obj)
+				continue
 			}
 		}
 
@@ -165,7 +152,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
 		}
 		revisedResults = append(revisedResults, reviseResult{
 			objs: slices.Clone(objs),
-			kind: taskHostCN,
+			kind: taskHostDN,
 		})
 	}
 
@@ -181,19 +168,16 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig
 }
 
 type entrySet struct {
-	entries     []*catalog.ObjectEntry
-	overlapRate float64
-	rangeSum    float64
-	rows        uint32
-	setZM       index.ZM
+	entries []*catalog.ObjectEntry
+	setZM   index.ZM
+
+	rows uint32
 }
 
 func (s *entrySet) reset() {
 	s.entries = s.entries[:0]
-	s.overlapRate = 0
-	s.rangeSum = 0
-	s.rows = 0
 	s.setZM = nil
+	s.rows = 0
 }
 
 func (s *entrySet) add(obj *catalog.ObjectEntry) {

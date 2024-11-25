@@ -24,8 +24,6 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/holiman/uint256"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1857,46 +1855,4 @@ func strictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2
 		return -1
 	}
 	return 1
-}
-
-func (zm ZM) Range() float64 {
-	return RangeBetween(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale())
-}
-
-func RangeBetween(fromBuf, toBuf []byte, t types.T, scale int32) float64 {
-	switch t {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return float64(types.DecodeInt64(toBuf) - types.DecodeInt64(fromBuf) + 1)
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
-		return float64(types.DecodeUint64(toBuf) - types.DecodeUint64(fromBuf) + 1)
-	case types.T_float32, types.T_float64:
-		return types.DecodeFloat64(toBuf) - types.DecodeFloat64(fromBuf) + 1
-	case types.T_decimal64:
-		sub64, err := types.DecodeDecimal64(toBuf).Sub64(types.DecodeDecimal64(fromBuf))
-		if err != nil {
-			return 0
-		}
-		return types.Decimal64ToFloat64(sub64, scale) + 1
-	case types.T_decimal128:
-		sub128, err := types.DecodeDecimal128(toBuf).Sub128(types.DecodeDecimal128(fromBuf))
-		if err != nil {
-			return 0
-		}
-		return types.Decimal128ToFloat64(sub128, scale) + 1
-	case types.T_enum:
-		return float64(types.DecodeEnum(toBuf)-types.DecodeEnum(fromBuf)) + 1
-	case types.T_date:
-		return float64(types.DecodeDate(toBuf)-types.DecodeDate(fromBuf)) + 1
-	case types.T_datetime:
-		return float64(types.DecodeDatetime(toBuf)-types.DecodeDatetime(fromBuf)) + 1
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		minValue, maxValue, sub := &uint256.Int{}, &uint256.Int{}, &uint256.Int{}
-		minValue.SetBytes(fromBuf)
-		maxValue.SetBytes(toBuf)
-		sub.Sub(maxValue, minValue)
-		return sub.Float64() + 1
-	default:
-		return math.NaN()
-	}
 }
