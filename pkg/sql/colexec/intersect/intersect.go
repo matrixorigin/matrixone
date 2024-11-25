@@ -51,13 +51,7 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 }
 
 func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := intersect.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	for {
 		switch intersect.ctr.state {
@@ -82,7 +76,6 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 				intersect.ctr.state = end
 				continue
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case end:

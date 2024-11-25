@@ -100,6 +100,10 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 	}
 }
 
+func (intersect *Intersect) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) cleanHashMap() {
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()

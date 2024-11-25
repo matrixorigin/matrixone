@@ -166,18 +166,12 @@ func (external *External) Prepare(proc *process.Process) error {
 }
 
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
 
 	analyzer := external.OpAnalyzer
-	analyzer.Start()
 	defer func() {
-		analyzer.Stop()
 		analyzer.AddScanTime(t1)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
@@ -214,13 +208,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
-	if external.ProjectList != nil {
-		result.Batch, err = external.EvalProjection(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-	}
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

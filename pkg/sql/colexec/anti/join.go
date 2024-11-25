@@ -66,18 +66,11 @@ func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := antiJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ap := antiJoin
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
-	probeResult := vm.NewCallResult()
 	var err error
 	ctr := &ap.ctr
 	for {
@@ -101,7 +94,6 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if inbat.Last() {
 				result.Batch = inbat
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 			if inbat.IsEmpty() {
@@ -123,20 +115,14 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil {
-				err = ctr.emptyProbe(ap, inbat, proc, &probeResult)
+				err = ctr.emptyProbe(ap, inbat, proc, &result)
 			} else {
-				err = ctr.probe(ap, inbat, proc, &probeResult)
+				err = ctr.probe(ap, inbat, proc, &result)
 			}
 			if err != nil {
 				return result, err
 			}
 
-			result.Batch, err = ap.EvalProjection(probeResult.Batch, proc)
-			if err != nil {
-				return result, err
-			}
-
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

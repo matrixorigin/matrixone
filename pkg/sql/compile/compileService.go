@@ -16,10 +16,9 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,6 +26,18 @@ import (
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// todo: Move it to a CN level structure next day.
+var compileService *ServiceOfCompile
+
+func init() {
+	compileService = InitCompileService()
+	txnClient.SetRunningPipelineManagement(compileService)
+}
+
+func GetCompileService() *ServiceOfCompile {
+	return compileService
+}
 
 // ServiceOfCompile is used to manage the lifecycle of Compile structures,
 // including their creation and deletion.

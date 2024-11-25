@@ -104,7 +104,7 @@ func BenchmarkParallelEvict(b *testing.B) {
 		ch := make(chan int64, 1)
 		for i := 0; pb.Next(); i++ {
 			cache.Set(ctx, i%nElements, i, int64(1+i%3))
-			cache.Evict(ctx, ch)
+			cache.Evict(ctx, ch, 0)
 			target := <-ch
 			if target != 65536 {
 				panic(fmt.Sprintf("got %v", target))

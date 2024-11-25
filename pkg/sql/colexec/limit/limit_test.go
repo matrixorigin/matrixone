@@ -115,7 +115,7 @@ func TestLimit(t *testing.T) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		res, _ := tc.arg.Call(tc.proc)
+		res, _ := vm.Exec(tc.arg, tc.proc)
 		if tc.getRowCount > 0 {
 			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
 		} else {
@@ -126,7 +126,7 @@ func TestLimit(t *testing.T) {
 		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		res, _ = tc.arg.Call(tc.proc)
+		res, _ = vm.Exec(tc.arg, tc.proc)
 		if tc.getRowCount > 0 {
 			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
 		} else {
@@ -155,7 +155,7 @@ func BenchmarkLimit(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			resetChildren(tc.arg)
-			_, _ = tc.arg.Call(tc.proc)
+			_, _ = vm.Exec(tc.arg, tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 		}
 	}

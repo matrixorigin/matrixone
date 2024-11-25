@@ -80,10 +80,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		nil)
 
 	analyzer := tableScan.OpAnalyzer
-	analyzer.Start()
 	defer func() {
-		analyzer.Stop()
-
 		cost := time.Since(start)
 
 		trace.GetService(proc.GetService()).AddTxnDurationAction(
@@ -151,13 +148,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	analyzer.Input(tableScan.ctr.buf)
+	retBatch := tableScan.ctr.buf
 
-	retBatch, err := tableScan.EvalProjection(tableScan.ctr.buf, proc)
-	if err != nil {
-		e = err
-		return vm.CancelResult, err
-	}
-	analyzer.Output(retBatch)
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
-
 }
