@@ -83,6 +83,9 @@ func TestQueryType(t *testing.T) {
 					&BeginTransaction{}:    QueryTypeTCL,
 					&CommitTransaction{}:   QueryTypeTCL,
 					&RollbackTransaction{}: QueryTypeTCL,
+					&SavePoint{}:           QueryTypeTCL,
+					&ReleaseSavePoint{}:    QueryTypeTCL,
+					&RollbackToSavePoint{}: QueryTypeTCL,
 					// Other
 					&AnalyzeStmt{}:    QueryTypeOth,
 					&ExplainAnalyze{}: QueryTypeOth,
