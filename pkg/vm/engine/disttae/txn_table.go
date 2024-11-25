@@ -796,7 +796,7 @@ func (tbl *txnTable) rangesOnePart(
 			skipObj = false
 
 			s3BlkCnt += obj.BlkCnt()
-			if auxIdCnt > 0 || rangesParam.Rsp.NeedShuffleObj() {
+			if auxIdCnt > 0 {
 				location := obj.ObjectLocation()
 				loadObjCnt++
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
