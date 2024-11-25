@@ -175,6 +175,10 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	update.ctr.updateCtxInfos = nil
 }
 
+func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (update *MultiUpdate) GetAffectedRows() uint64 {
 	return update.ctr.affectedRows
 }

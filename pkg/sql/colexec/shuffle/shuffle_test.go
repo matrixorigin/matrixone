@@ -291,7 +291,7 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 	require.NoError(t, err)
 	resetChildren(tc.arg, getInputBats(tc, hasnull))
 	for {
-		result, err = tc.arg.Call(tc.proc)
+		result, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		if result.Batch == nil || result.Batch.RowCount() == 0 || result.Status == vm.ExecStop {
 			break

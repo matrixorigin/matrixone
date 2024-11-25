@@ -16,6 +16,7 @@ package postdml
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -94,6 +95,10 @@ func (postdml *PostDml) Reset(proc *process.Process, pipelineFailed bool, err er
 }
 
 func (postdml *PostDml) Free(proc *process.Process, pipelineFailed bool, err error) {
+}
+
+func (postdml *PostDml) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (postdml *PostDml) AffectedRows() uint64 {

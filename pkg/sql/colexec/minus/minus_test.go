@@ -49,7 +49,7 @@ func TestMinus(t *testing.T) {
 	require.NoError(t, err)
 	cnt := 0
 	for {
-		end, err = c.arg.Call(c.proc)
+		end, err = vm.Exec(c.arg, c.proc)
 		if end.Status == vm.ExecStop {
 			break
 		}
@@ -69,7 +69,7 @@ func TestMinus(t *testing.T) {
 	require.NoError(t, err)
 	cnt = 0
 	for {
-		end, err = c.arg.Call(c.proc)
+		end, err = vm.Exec(c.arg, c.proc)
 		if end.Status == vm.ExecStop {
 			break
 		}

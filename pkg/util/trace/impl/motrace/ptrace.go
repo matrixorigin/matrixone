@@ -36,6 +36,8 @@ func defaultMOTracerProvider() *MOTracerProvider {
 			resource:       trace.NewResource(),
 			idGenerator:    &moIDGenerator{},
 			batchProcessor: NoopBatchProcessor{},
+			// default: 10K
+			MaxStatementSize: 10240,
 		},
 	}
 	WithNode("node_uuid", trace.NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)

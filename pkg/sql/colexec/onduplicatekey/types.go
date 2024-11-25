@@ -121,3 +121,7 @@ func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed
 	}
 	onDuplicatekey.ctr.uniqueCheckExes = nil
 }
+
+func (onDuplicatekey *OnDuplicatekey) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}

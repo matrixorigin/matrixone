@@ -94,6 +94,10 @@ func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) 
 	minus.ctr.cleanHashMap()
 }
 
+func (minus *Minus) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)

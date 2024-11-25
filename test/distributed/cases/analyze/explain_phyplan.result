@@ -18,8 +18,7 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.dept[deptno dname loc]
   Pipeline: └── output
                 └── projection
-                    └── projection
-                        └── tablescan
+                    └── tablescan
 DROP TABLE IF EXISTS emp;
 create table emp(
 empno int unsigned auto_increment,
@@ -52,8 +51,7 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[empno ename job mgr hiredate sal comm deptno]
   Pipeline: └── output
                 └── projection
-                    └── projection
-                        └── tablescan
+                    └── tablescan
 explain phyplan select empno, ename, job from emp where sal > 2000;
 tp query phyplan
 Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
@@ -68,16 +66,13 @@ tp query phyplan
 Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
   DataSource: db1.emp[ename deptno]
   Pipeline: └── output
-                └── projection
-                    └── left
-                        └── projection
-                            └── tablescan
+                └── left
+                    └── tablescan
   PreScopes: {
     Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
       DataSource: db1.dept[deptno dname]
       Pipeline: └── hash build
-                    └── projection
-                        └── tablescan
+                    └── tablescan
   }
 drop table emp;
 drop table dept;
