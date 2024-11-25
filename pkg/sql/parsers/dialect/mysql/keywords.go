@@ -647,5 +647,6 @@ func init() {
 		"rollup":                     ROLLUP,
 		"apply":                      APPLY,
 		"dedup":                      DEDUP,
+		"savepoint":                  SAVEPOINT,
 	}
 }
