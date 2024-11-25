@@ -1627,7 +1627,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
 			// set parser ngram
 			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
 		}
