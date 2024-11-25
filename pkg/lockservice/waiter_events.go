@@ -31,7 +31,7 @@ import (
 
 var (
 	defaultLazyCheckDuration atomic.Value
-	waitTooLong              = time.Minute
+	waitTooLong              = time.Minute * 10
 )
 
 func init() {
