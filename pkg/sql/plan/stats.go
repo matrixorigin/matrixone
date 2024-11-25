@@ -304,7 +304,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		}
 
 		if info.ShuffleRanges[i] != nil {
-			if s.MinValMap[colName] != s.MaxValMap[colName] && s.AccurateObjectNumber > 4 {
+			if s.MinValMap[colName] != s.MaxValMap[colName] && s.BlockNumber > 32 {
 				info.ShuffleRanges[i].Eval()
 				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
@@ -1639,7 +1639,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel
 	}
 	overlap := getOverlap(s, colname)
-	if overlap < overlapThreshold/2 {
+	if overlap < overlapThreshold/3 {
 		//very good overlap
 		return sel
 	}
