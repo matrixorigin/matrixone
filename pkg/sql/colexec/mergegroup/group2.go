@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cmsgroup"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
@@ -50,8 +50,8 @@ func (r *GroupResult) consumeInputBatch(
 	}
 
 	// first time.
-	if r.BlockingGroupRelated.IsEmpty() {
-		r.BlockingGroupRelated.Init(aggexec.GetChunkSizeOfAggregator(bat.Aggs[0]), bat.Aggs, bat)
+	if r.GroupResultBuffer.IsEmpty() {
+		r.GroupResultBuffer.Init(aggexec.GetChunkSizeOfAggregator(bat.Aggs[0]), bat.Aggs, bat)
 		bat.Aggs = nil
 	}
 
@@ -70,7 +70,7 @@ func (r *GroupResult) consumeInputBatch(
 		if err != nil {
 			return err
 		}
-		insertList, _ := r.GetNewList(vals, rowCount)
+		insertList, _ := r.GetBinaryInsertList(vals, rowCount)
 
 		more, err = r.AppendBatch(proc.Mp(), bat, i, insertList)
 		if err != nil {
@@ -90,10 +90,10 @@ func (r *GroupResult) consumeInputBatchOnlyAgg(
 		return nil
 	}
 
-	if r.BlockingGroupRelated.IsEmpty() {
-		r.BlockingGroupRelated.Init(math.MaxInt32, bat.Aggs, bat)
+	if r.GroupResultBuffer.IsEmpty() {
+		r.GroupResultBuffer.Init(math.MaxInt32, bat.Aggs, bat)
 		bat.Aggs = nil
-		r.BlockingGroupRelated.ToPopped[0].SetRowCount(1)
+		r.GroupResultBuffer.ToPopped[0].SetRowCount(1)
 	}
 
 	for i, agg := range r.AggList {
@@ -105,8 +105,8 @@ func (r *GroupResult) consumeInputBatchOnlyAgg(
 }
 
 type GroupResult struct {
-	group.ResHashRelated
-	group.BlockingGroupRelated
+	cmsgroup.ResHashRelated
+	cmsgroup.GroupResultBuffer
 }
 
 func (r *GroupResult) reset(m *mpool.MPool) {
@@ -115,7 +115,7 @@ func (r *GroupResult) reset(m *mpool.MPool) {
 
 func (r *GroupResult) free(m *mpool.MPool) {
 	r.ResHashRelated.Free0()
-	r.BlockingGroupRelated.Free0(m)
+	r.GroupResultBuffer.Free0(m)
 }
 
 func (r *GroupResult) updateAgg(

@@ -1,0 +1,254 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cmsgroup
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+func (group *Group) Prepare(proc *process.Process) (err error) {
+	group.ctr.state = vm.Build
+	group.prepareAnalyzer()
+	if err = group.prepareAgg(proc); err != nil {
+		return err
+	}
+	if err = group.prepareGroup(proc); err != nil {
+		return err
+	}
+	return group.PrepareProjection(proc)
+}
+
+func (group *Group) prepareAnalyzer() {
+	if group.OpAnalyzer != nil {
+		group.OpAnalyzer.Reset()
+		return
+	}
+	group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
+}
+
+func (group *Group) prepareAgg(proc *process.Process) error {
+	if len(group.ctr.aggregateEvaluate) == len(group.Aggs) {
+		return nil
+	}
+
+	group.ctr.freeAggEvaluate()
+	group.ctr.aggregateEvaluate = make([]ExprEvalVector, 0, len(group.Aggs))
+	for _, ag := range group.Aggs {
+		e, err := MakeEvalVector(proc, ag.GetArgExpressions())
+		if err != nil {
+			return err
+		}
+		group.ctr.aggregateEvaluate = append(group.ctr.aggregateEvaluate, e)
+	}
+	return nil
+}
+
+func (group *Group) prepareGroup(proc *process.Process) (err error) {
+	if len(group.ctr.groupByEvaluate.Executor) == len(group.Exprs) {
+		return nil
+	}
+
+	group.ctr.freeGroupEvaluate()
+	// calculate the key width and key nullable.
+	group.ctr.keyWidth, group.ctr.keyNullable = 0, false
+	for _, expr := range group.Exprs {
+		group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
+	}
+	for _, expr := range group.Exprs {
+		width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
+		group.ctr.keyWidth += width
+	}
+
+	if group.ctr.keyWidth == 0 {
+		group.ctr.mtyp = H0
+	} else if group.ctr.keyWidth <= 8 {
+		group.ctr.mtyp = H8
+	} else {
+		group.ctr.mtyp = HStr
+	}
+	for _, flag := range group.GroupingFlag {
+		if !flag {
+			group.ctr.mtyp = HStr
+			break
+		}
+	}
+	group.ctr.groupByEvaluate, err = MakeEvalVector(proc, group.Exprs)
+	return err
+}
+
+func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
+	if id.FixedLength() < 0 {
+		width = 128
+		if width0 > 0 {
+			width = int(width0)
+		}
+
+		if id == types.T_array_float32 {
+			width *= 4
+		}
+		if id == types.T_array_float64 {
+			width *= 8
+		}
+	}
+
+	if nullable {
+		width++
+	}
+	return width
+}
+
+func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	var b *batch.Batch
+	var err error
+	if group.NeedEval {
+		b, err = group.callToGetFinalResult(proc)
+	} else {
+		b, err = group.callToGetIntermediateResult(proc)
+	}
+	if err != nil {
+		return vm.CancelResult, err
+	}
+
+	res := vm.NewCallResult()
+	res.Batch = b
+	return res, nil
+}
+
+func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
+	r, err := vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
+	return r.Batch, err
+}
+
+// callToGetFinalResult
+// if this operator need to eval the final result for `agg(y) group by x`,
+// we are looping to receive all the data to fill the aggregate functions with every group,
+// flush the final result as vectors once data was over.
+//
+// To avoid a single batch being too large,
+// we split the result as many part of vector, and send them in order.
+func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
+	group.ctr.result1.cleanLastPopped(proc.Mp())
+	if group.ctr.state == vm.End {
+		return nil, nil
+	}
+
+	for {
+		if group.ctr.state == vm.Eval {
+			if group.ctr.result1.IsEmpty() {
+				group.ctr.state = vm.End
+				return nil, nil
+			}
+			return group.ctr.result1.PopResult(proc.Mp())
+		}
+
+		res, err := group.getInputBatch(proc)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			group.ctr.state = vm.Eval
+			continue
+		}
+		if res.IsEmpty() {
+			continue
+		}
+		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (group *Group) consumeBatchToGetFinalResult(
+	proc *process.Process, bat *batch.Batch) error {
+
+	switch group.ctr.mtyp {
+	case H0:
+		// without group by.
+		if group.ctr.result1.IsEmpty() {
+			aggs, err := group.generateAggExec(proc, 1)
+			if err != nil {
+				return err
+			}
+			limit := aggexec.SyncAggregatorsChunkSize(aggs)
+
+			group.ctr.result1.Init(limit, aggs, bat)
+			for i := range group.ctr.result1.AggList {
+				if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
+					return err
+				}
+			}
+		}
+
+		group.ctr.result1.ToPopped[0].SetRowCount(1)
+		for i := range group.ctr.result1.AggList {
+			if err := group.ctr.result1.AggList[0].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+				return err
+			}
+		}
+
+	default:
+		// with group by.
+	}
+
+	return nil
+}
+
+func (group *Group) generateAggExec(proc *process.Process, preAllocated uint64) ([]aggexec.AggFuncExec, error) {
+	var err error
+	execs := make([]aggexec.AggFuncExec, 0, len(group.Aggs))
+	defer func() {
+		if err != nil {
+			for _, exec := range execs {
+				exec.Free()
+			}
+		}
+	}()
+
+	for i, ag := range group.Aggs {
+		exec := aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		execs = append(execs, exec)
+
+		if config := ag.GetExtraConfig(); config != nil {
+			if err = exec.SetExtraInformation(config, 0); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if allocate := int(preAllocated); allocate > 0 {
+		for _, exec := range execs {
+			if err = exec.PreAllocateGroups(allocate); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return execs, nil
+}
+
+// callToGetIntermediateResult
+// if this operator should only return aggregations' intermediate results because one MergeGroup operator was behind.
+// we do not engage in any waiting actions at this operator,
+// once a batch is received, a batch with the corresponding intermediate result will be returned.
+func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
+	return nil, nil
+}
