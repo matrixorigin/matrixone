@@ -2170,7 +2170,6 @@ func (tbl *txnTable) MergeObjects(
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
-		fmt.Println(info.ObjectStats.String())
 		objectio.SetObjectStats(&objstat, &info.ObjectStats)
 		fullObjStats[i] = objstat
 	}
