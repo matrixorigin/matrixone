@@ -600,7 +600,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if n.TableDef.Pkey == nil || n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return
 	}
 
