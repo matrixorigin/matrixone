@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/petermattis/goid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -197,6 +196,7 @@ func logLocalLockWaitOnResult(
 	opts LockOptions,
 	waiter *waiter,
 	notify notifyValue,
+	gid int64,
 ) {
 	if logger == nil {
 		return
@@ -204,7 +204,7 @@ func logLocalLockWaitOnResult(
 
 	if logger.Enabled(zap.InfoLevel) {
 		logger.Log(
-			"lock wait on local result",
+			"ready to lock wait on local result",
 			getLogOptions(zap.InfoLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
@@ -212,7 +212,61 @@ func logLocalLockWaitOnResult(
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
 			zap.Stringer("result", notify),
-			zap.Int64("gid", goid.Get()),
+			zap.Int64("gid", gid),
+		)
+	}
+}
+
+func logLocalLockWait(
+	logger *log.MOLogger,
+	txn *activeTxn,
+	tableID uint64,
+	key []byte,
+	opts LockOptions,
+	waiter *waiter,
+	gid int64,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Log(
+			"wait on local",
+			getLogOptions(zap.InfoLevel),
+			txnField(txn),
+			zap.Uint64("table", tableID),
+			bytesField("wait-on-key", key),
+			zap.String("opts", opts.DebugString()),
+			zap.Stringer("waiter", waiter),
+			zap.Int64("gid", gid),
+		)
+	}
+}
+
+func logAsyncLocalLockWait(
+	logger *log.MOLogger,
+	txn *activeTxn,
+	tableID uint64,
+	key []byte,
+	opts LockOptions,
+	waiter *waiter,
+	gid int64,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Log(
+			"async wait on local",
+			getLogOptions(zap.InfoLevel),
+			txnField(txn),
+			zap.Uint64("table", tableID),
+			bytesField("wait-on-key", key),
+			zap.String("opts", opts.DebugString()),
+			zap.Stringer("waiter", waiter),
+			zap.Int64("gid", gid),
 		)
 	}
 }

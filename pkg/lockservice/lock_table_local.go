@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 )
 
@@ -96,6 +97,7 @@ func (l *localLockTable) lock(
 func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
+	gid := goid.Get()
 	var old *waiter
 	var err error
 	table := l.bind.Table
@@ -132,6 +134,7 @@ func (l *localLockTable) doLock(
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
 			if c.opts.async {
+				logAsyncLocalLockWait(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, gid)
 				return
 			}
 		}
@@ -142,10 +145,13 @@ func (l *localLockTable) doLock(
 		oldTxnID := c.txn.txnID
 		old = c.w
 		c.txn.Unlock()
+
+		logLocalLockWait(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, gid)
+
 		v := c.w.wait(c.ctx, l.logger)
 		c.txn.Lock()
 
-		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v)
+		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v, gid)
 
 		// txn closed between Unlock and get Lock again
 		e := v.err

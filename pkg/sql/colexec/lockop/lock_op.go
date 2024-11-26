@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/petermattis/goid"
 )
 
 var (
@@ -88,6 +89,11 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 		}
 	}
 	lockOp.ctr.parker = types.NewPacker()
+	tableIDs := make([]string, len(lockOp.targets))
+	for i, target := range lockOp.targets {
+		tableIDs[i] = string(target.tableID)
+	}
+	logutil.Infof("lock_op.prepare txnid=%s, lock_op=%p, goroutineid=%d, tableIDs=[%s]", proc.GetTxnOperator().Txn().DebugString(), lockOp, goid.Get(), strings.Join(tableIDs, ","))
 	return nil
 }
 
