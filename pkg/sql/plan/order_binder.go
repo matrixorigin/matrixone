@@ -29,64 +29,64 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
-		//if frequency, ok := b.ctx.aliasFrequency[colRef.ColName()]; ok && frequency > 1 {
-		//	return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
-		//}
-		//
-		//if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
-		//	return &plan.Expr{
-		//		Typ: b.ctx.projects[selectItem.idx].Typ,
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: b.ctx.projectTag,
-		//				ColPos: selectItem.idx,
-		//			},
-		//		},
-		//	}, nil
-		//} else {
-		var matchedFields []int32  // SelectField index used to record matches
-		var matchedExpr *plan.Expr // Used to save matched expr
-
-		for _, selectField := range b.ctx.projectByAst {
-			if selectField.aliasName != "" {
-				if selectField.aliasName == colRef.ColName() {
-					// Record the selectField index that matches
-					matchedFields = append(matchedFields, selectField.pos)
-					// Save matching expr
-					matchedExpr = b.ctx.projects[selectField.pos]
-				} else {
-					continue
-				}
-			} else if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
-				// Record the selectField index that matches
-				matchedFields = append(matchedFields, selectField.pos)
-				// Save matching expr
-				matchedExpr = &plan.Expr{
-					Typ: b.ctx.projects[selectField.pos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: b.ctx.projectTag,
-							ColPos: selectField.pos,
-						},
-					},
-				}
-				continue
-				//col := colRef.ColName()
-				//table := colRef.TblName()
-				//name := tree.String(astExpr, dialect.MYSQL)
-			}
-		}
-
-		// If multiple selectFields are matched, an error occurs
-		if len(matchedFields) > 1 {
+		if frequency, ok := b.ctx.aliasFrequency[colRef.ColName()]; ok && frequency > 1 {
 			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
 		}
 
-		// If there is only one matching expr, return that expr
-		if matchedExpr != nil {
-			return matchedExpr, nil
+		if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
+			return &plan.Expr{
+				Typ: b.ctx.projects[selectItem.idx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.projectTag,
+						ColPos: selectItem.idx,
+					},
+				},
+			}, nil
+		} else {
+			var matchedFields []int32  // SelectField index used to record matches
+			var matchedExpr *plan.Expr // Used to save matched expr
+
+			for _, selectField := range b.ctx.projectByAst {
+				if selectField.aliasName != "" {
+					if selectField.aliasName == colRef.ColName() {
+						// Record the selectField index that matches
+						matchedFields = append(matchedFields, selectField.pos)
+						// Save matching expr
+						matchedExpr = b.ctx.projects[selectField.pos]
+					} else {
+						continue
+					}
+				} else if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
+					// Record the selectField index that matches
+					matchedFields = append(matchedFields, selectField.pos)
+					// Save matching expr
+					matchedExpr = &plan.Expr{
+						Typ: b.ctx.projects[selectField.pos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: b.ctx.projectTag,
+								ColPos: selectField.pos,
+							},
+						},
+					}
+					continue
+					//col := colRef.ColName()
+					//table := colRef.TblName()
+					//name := tree.String(astExpr, dialect.MYSQL)
+				}
+			}
+
+			// If multiple selectFields are matched, an error occurs
+			if len(matchedFields) > 1 {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
+			}
+
+			// If there is only one matching expr, return that expr
+			if matchedExpr != nil {
+				return matchedExpr, nil
+			}
 		}
-		//}
 	}
 
 	if numVal, ok := astExpr.(*tree.NumVal); ok {
