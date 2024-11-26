@@ -184,6 +184,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
 		tc.proc.ReplaceTopCtx(ctx)
+		system.SetGoMaxProcs(0)
 		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
