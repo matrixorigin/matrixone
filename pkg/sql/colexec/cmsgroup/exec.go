@@ -306,5 +306,21 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 // we do not engage in any waiting actions at this operator,
 // once a batch is received, a batch with the corresponding intermediate result will be returned.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
-	return nil, nil
+	if group.ctr.state == vm.End {
+		return nil, nil
+	}
+
+	for {
+		res, err := group.getInputBatch(proc)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			group.ctr.state = vm.End
+			return nil, nil
+		}
+		if res.IsEmpty() {
+			continue
+		}
+	}
 }

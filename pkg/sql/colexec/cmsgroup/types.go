@@ -15,6 +15,7 @@
 package cmsgroup
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -70,6 +71,40 @@ type Group struct {
 	Aggs []aggexec.AggFuncExecExpression
 }
 
+// requireDefaultAggResult
+// see the comments for the filed `alreadyOutputAnything` of container.
+func (group *Group) requireDefaultAggResult(proc *process.Process) (*batch.Batch, bool, error) {
+	if !group.NeedEval {
+		return nil, false, nil
+	}
+	if group.ctr.alreadyOutputAnything || len(group.Exprs) > 0 {
+		return nil, false, nil
+	}
+	group.ctr.result1.cleanLastPopped(proc.Mp())
+
+	aggs, err := group.generateAggExec(proc)
+	if err != nil {
+		return nil, false, err
+	}
+	b := batch.NewOffHeapEmpty()
+	group.ctr.result1.Popped = b
+	b.Aggs = aggs
+	b.SetRowCount(1)
+	for i := range b.Aggs {
+		if err = b.Aggs[i].GroupGrow(1); err != nil {
+			return nil, false, err
+		}
+	}
+	for i := range b.Aggs {
+		vs, er := b.Aggs[i].Flush()
+		if er != nil {
+			return nil, false, er
+		}
+		b.Vecs = append(b.Vecs, vs...)
+	}
+	return group.ctr.result1.Popped, true, nil
+}
+
 // container
 // running context.
 type container struct {
@@ -90,6 +125,11 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	// alreadyOutputAnything is a special flag for the case
+	// `select agg(x) from data_source` and data_source is empty.
+	// we should return 0 for count, and return NULL for the others.
+	alreadyOutputAnything bool
 }
 
 func (ctr *container) freeAggEvaluate() {
