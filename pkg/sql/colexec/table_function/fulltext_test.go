@@ -171,6 +171,63 @@ func TestFullTextCall(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
+// argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextCallOneAttr(t *testing.T) {
+
+	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1])
+
+	inbat := makeBatchFT(ut.proc)
+
+	ut.arg.Args = makeConstInputExprsFT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// stub runSql function
+	ft_runSql = fake_runSql
+	ft_runSql_streaming = fake_runSql_streaming
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	time.Sleep(1000 * time.Millisecond)
+
+	var result vm.CallResult
+
+	// first call receive data
+	for i := 0; i < 3; i++ {
+		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+		require.Nil(t, err)
+		require.Equal(t, result.Status, vm.ExecNext)
+		require.Equal(t, result.Batch.RowCount(), 8192)
+	}
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecNext)
+	require.Equal(t, result.Batch.RowCount(), 1)
+	//fmt.Printf("ROW COUNT = %d  BATCH = %v\n", result.Batch.RowCount(), result.Batch)
+
+	// second call receive channel close
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecStop)
+
+	// reset
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+
+	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
 // create const input exprs
 func makeConstInputExprsFT() []*plan.Expr {
 
