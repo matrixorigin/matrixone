@@ -154,7 +154,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
-		convertToCPKey := false
+		convertCPKey := false
 		tableDef := leftChild.TableDef
 		probeCol := probeExprs[0].GetCol()
 		if probeCol == nil {
@@ -172,7 +172,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				}
 			} else {
 				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
-					convertToCPKey = true
+					convertCPKey = true
 				}
 			}
 			//todo: need to fix this in the future
@@ -185,7 +185,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 
-		if convertToCPKey {
+		if convertCPKey {
 			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef))
 		} else {
 			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
@@ -204,7 +204,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
-		if convertToCPKey {
+		if convertCPKey {
 			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr))
 		} else {
 			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
