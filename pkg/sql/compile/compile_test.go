@@ -184,9 +184,11 @@ func TestCompile(t *testing.T) {
 		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
 		tc.proc.ReplaceTopCtx(ctx)
+		savedMaxProcs := system.GoMaxProcs()
 		system.SetGoMaxProcs(0)
 		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
+		system.SetGoMaxProcs(savedMaxProcs)
 		require.NoError(t, err)
 		c.getAffectedRows()
 		_, err = c.Run(0)
