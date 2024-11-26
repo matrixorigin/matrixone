@@ -16,6 +16,8 @@ package plan
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"math/rand"
 	"testing"
 	"unsafe"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -291,6 +294,28 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	ShouldSkipObjByShuffle(rp, stats)
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	node.Stats.HashmapStats.ShuffleColMin = 0
-	node.Stats.HashmapStats.ShuffleColMax = 100
+	node.Stats.HashmapStats.ShuffleColMax = 10000
 	ShouldSkipObjByShuffle(rp, stats)
+	zm := index2.NewZM(types.T_int32, 0)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, 0)
+	index2.UpdateZM(zm, bs)
+	binary.LittleEndian.PutUint32(bs, 10)
+	index2.UpdateZM(zm, bs)
+	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+	ShouldSkipObjByShuffle(rp, stats)
+}
+
+func TestGetRangeShuffleIndexForZM(t *testing.T) {
+	zm := index2.NewZM(types.T_datetime, 0)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, 0)
+	index2.UpdateZM(zm, bs)
+	binary.LittleEndian.PutUint32(bs, 10)
+	index2.UpdateZM(zm, bs)
+	defer func() {
+		r := recover()
+		fmt.Println("panic recover", r)
+	}()
+	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
 }

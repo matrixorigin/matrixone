@@ -1878,9 +1878,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var rel engine.Relation
 	var txnOp client.TxnOperator
 
-	n := s.DataSource.node
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
+	node := s.DataSource.node
+	attrs := make([]string, len(node.TableDef.Cols))
+	for j, col := range node.TableDef.Cols {
 		attrs[j] = col.GetOriginCaseName()
 	}
 
@@ -1891,18 +1891,18 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if err != nil {
 		return err
 	}
-	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
+		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 			if c.proc.GetCloneTxnOperator() != nil {
 				txnOp = c.proc.GetCloneTxnOperator()
 			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 
-			if n.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+			if node.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
 			}
 		}
 	}
@@ -1916,20 +1916,20 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
-		if n.ObjRef.PubInfo != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
+		if node.ObjRef.PubInfo != nil {
+			ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
 		}
-		if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+		db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
 		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
 			if txnOp.IsSnapOp() {
 				return err
@@ -1939,7 +1939,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if e != nil {
 				panic(e)
 			}
-			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
 			if e != nil {
 				panic(e)
 			}
@@ -1949,18 +1949,18 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 
 	// prcoess partitioned table
 	var partitionRelNames []string
-	if n.TableDef.Partition != nil {
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for _, partition := range n.PartitionPrune.SelectedPartitions {
+	if node.TableDef.Partition != nil {
+		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
+			for _, partition := range node.PartitionPrune.SelectedPartitions {
 				partitionRelNames = append(partitionRelNames, partition.PartitionTableName)
 			}
 		} else {
-			partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+			partitionRelNames = append(partitionRelNames, node.TableDef.Partition.PartitionTableNames...)
 		}
 	}
 
-	if len(n.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(n.FilterList)
+	if len(node.FilterList) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -1976,8 +1976,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(n.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(n.BlockFilterList)
+	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
+		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -1990,12 +1990,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
 	s.DataSource.Rel = rel
-	s.DataSource.RelationName = n.TableDef.Name
+	s.DataSource.RelationName = node.TableDef.Name
 	s.DataSource.PartitionRelationNames = partitionRelNames
-	s.DataSource.SchemaName = n.ObjRef.SchemaName
-	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
-	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
-	s.DataSource.OrderBy = n.OrderBy
+	s.DataSource.SchemaName = node.ObjRef.SchemaName
+	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
+	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
+	s.DataSource.OrderBy = node.OrderBy
 
 	return nil
 }
