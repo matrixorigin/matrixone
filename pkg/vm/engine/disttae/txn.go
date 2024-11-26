@@ -138,7 +138,9 @@ func (txn *Transaction) WriteBatch(
 		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
-	if injected, logLevel := objectio.LogWorkspaceInjected(tableName); injected {
+	if injected, logLevel := objectio.LogWorkspaceInjected(
+		databaseName, tableName,
+	); injected {
 		if logLevel == 0 {
 			rowCnt := 0
 			if bat != nil {
@@ -147,6 +149,7 @@ func (txn *Transaction) WriteBatch(
 			logutil.Info(
 				"INJECT-LOG-WORKSPACE",
 				zap.String("table", tableName),
+				zap.String("db", databaseName),
 				zap.String("txn", txn.op.Txn().DebugString()),
 				zap.String("typ", typesNames[typ]),
 				zap.Int("offset", len(txn.writes)),
@@ -164,6 +167,7 @@ func (txn *Transaction) WriteBatch(
 			logutil.Info(
 				"INJECT-LOG-WORKSPACE",
 				zap.String("table", tableName),
+				zap.String("db", databaseName),
 				zap.String("txn", txn.op.Txn().DebugString()),
 				zap.String("typ", typesNames[typ]),
 				zap.Int("offset", len(txn.writes)),

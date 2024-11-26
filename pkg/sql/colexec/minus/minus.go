@@ -55,13 +55,7 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
 func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := minus.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	var err error
 	for {
@@ -91,7 +85,6 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 				minus.ctr.state = operatorEnd
 				continue
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case operatorEnd:

@@ -74,13 +74,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := dedupJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &dedupJoin.ctr
 	result := vm.NewCallResult()
@@ -123,7 +117,6 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case Finalize:
@@ -143,7 +136,6 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 			dedupJoin.ctr.lastPos++
 			result.Status = vm.ExecHasMore
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:

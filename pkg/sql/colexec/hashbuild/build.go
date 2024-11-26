@@ -53,14 +53,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := hashBuild.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	result := vm.NewCallResult()
 	ap := hashBuild
 	ctr := &ap.ctr
@@ -68,7 +61,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, analyzer); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
@@ -76,7 +68,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				analyzer.Output(result.Batch)
 				return result, err
 			}
 			ctr.state = SendJoinMap
@@ -101,7 +92,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendSucceed:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

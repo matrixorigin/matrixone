@@ -934,7 +934,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool) {
+func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -946,57 +946,57 @@ func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool) {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		shrinkFixedByMask[bool](v, sels, negate)
+		shrinkFixedByMask[bool](v, sels, negate, offset)
 	case types.T_bit:
-		shrinkFixedByMask[uint64](v, sels, negate)
+		shrinkFixedByMask[uint64](v, sels, negate, offset)
 	case types.T_int8:
-		shrinkFixedByMask[int8](v, sels, negate)
+		shrinkFixedByMask[int8](v, sels, negate, offset)
 	case types.T_int16:
-		shrinkFixedByMask[int16](v, sels, negate)
+		shrinkFixedByMask[int16](v, sels, negate, offset)
 	case types.T_int32:
-		shrinkFixedByMask[int32](v, sels, negate)
+		shrinkFixedByMask[int32](v, sels, negate, offset)
 	case types.T_int64:
-		shrinkFixedByMask[int64](v, sels, negate)
+		shrinkFixedByMask[int64](v, sels, negate, offset)
 	case types.T_uint8:
-		shrinkFixedByMask[uint8](v, sels, negate)
+		shrinkFixedByMask[uint8](v, sels, negate, offset)
 	case types.T_uint16:
-		shrinkFixedByMask[uint16](v, sels, negate)
+		shrinkFixedByMask[uint16](v, sels, negate, offset)
 	case types.T_uint32:
-		shrinkFixedByMask[uint32](v, sels, negate)
+		shrinkFixedByMask[uint32](v, sels, negate, offset)
 	case types.T_uint64:
-		shrinkFixedByMask[uint64](v, sels, negate)
+		shrinkFixedByMask[uint64](v, sels, negate, offset)
 	case types.T_float32:
-		shrinkFixedByMask[float32](v, sels, negate)
+		shrinkFixedByMask[float32](v, sels, negate, offset)
 	case types.T_float64:
-		shrinkFixedByMask[float64](v, sels, negate)
+		shrinkFixedByMask[float64](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
-		shrinkFixedByMask[types.Varlena](v, sels, negate)
+		shrinkFixedByMask[types.Varlena](v, sels, negate, offset)
 	case types.T_date:
-		shrinkFixedByMask[types.Date](v, sels, negate)
+		shrinkFixedByMask[types.Date](v, sels, negate, offset)
 	case types.T_datetime:
-		shrinkFixedByMask[types.Datetime](v, sels, negate)
+		shrinkFixedByMask[types.Datetime](v, sels, negate, offset)
 	case types.T_time:
-		shrinkFixedByMask[types.Time](v, sels, negate)
+		shrinkFixedByMask[types.Time](v, sels, negate, offset)
 	case types.T_timestamp:
-		shrinkFixedByMask[types.Timestamp](v, sels, negate)
+		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
 	case types.T_enum:
-		shrinkFixedByMask[types.Enum](v, sels, negate)
+		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
 	case types.T_decimal64:
-		shrinkFixedByMask[types.Decimal64](v, sels, negate)
+		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
 	case types.T_decimal128:
-		shrinkFixedByMask[types.Decimal128](v, sels, negate)
+		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
 	case types.T_uuid:
-		shrinkFixedByMask[types.Uuid](v, sels, negate)
+		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
 	case types.T_TS:
-		shrinkFixedByMask[types.TS](v, sels, negate)
+		shrinkFixedByMask[types.TS](v, sels, negate, offset)
 	case types.T_Rowid:
-		shrinkFixedByMask[types.Rowid](v, sels, negate)
+		shrinkFixedByMask[types.Rowid](v, sels, negate, offset)
 	case types.T_Blockid:
-		shrinkFixedByMask[types.Blockid](v, sels, negate)
+		shrinkFixedByMask[types.Blockid](v, sels, negate, offset)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -3307,21 +3307,21 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool, offset uint64) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	itr := sels.Iterator()
 	if !negate {
 		idx := 0
 		for itr.HasNext() {
-			vs[idx] = vs[itr.Next()]
+			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
 		nulls.FilterByMask(&v.gsp, sels, false)
 		nulls.FilterByMask(&v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
-		sel := itr.Next()
+		sel := itr.Next() + offset
 		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
 			if oldIdx != int(sel) {
 				vs[newIdx] = vs[oldIdx]
@@ -3334,7 +3334,7 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 					}
 					break
 				}
-				sel = itr.Next()
+				sel = itr.Next() + offset
 			}
 		}
 		nulls.FilterByMask(&v.gsp, sels, true)

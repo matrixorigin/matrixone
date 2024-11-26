@@ -49,7 +49,7 @@ func TestIntersectAll(t *testing.T) {
 	require.NoError(t, err)
 	cnt := 0
 	for {
-		end, err = c.arg.Call(c.proc)
+		end, err = vm.Exec(c.arg, c.proc)
 		require.NoError(t, err)
 		result := end.Batch
 		if result != nil && !result.IsEmpty() {
@@ -71,7 +71,7 @@ func TestIntersectAll(t *testing.T) {
 	require.NoError(t, err)
 	cnt = 0
 	for {
-		end, err = c.arg.Call(c.proc)
+		end, err = vm.Exec(c.arg, c.proc)
 		require.NoError(t, err)
 		result := end.Batch
 		if result != nil && !result.IsEmpty() {

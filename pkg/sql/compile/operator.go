@@ -532,7 +532,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.ProjectList = t.ProjectList
 		op.TableFunction = table_function.NewArgument()
 		op.TableFunction.FuncName = t.TableFunction.FuncName
 		op.TableFunction.Args = t.TableFunction.Args

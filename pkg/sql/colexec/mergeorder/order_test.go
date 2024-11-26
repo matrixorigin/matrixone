@@ -80,7 +80,7 @@ func TestOrder(t *testing.T) {
 		require.NoError(t, err)
 		var bat *batch.Batch
 		for {
-			ok, err := tc.arg.Call(tc.proc)
+			ok, err := vm.Exec(tc.arg, tc.proc)
 			if ok.Batch != nil {
 				bat = ok.Batch
 				continue
@@ -146,7 +146,7 @@ func BenchmarkOrder(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			for {
-				ok, err := tc.arg.Call(tc.proc)
+				ok, err := vm.Exec(tc.arg, tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}

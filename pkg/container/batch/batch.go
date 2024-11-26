@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -290,6 +291,22 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		}
 	}
 	return nil
+}
+
+func (bat *Batch) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+	if !negate {
+		if sels.Count() == bat.rowCount {
+			return
+		}
+	}
+	for _, vec := range bat.Vecs {
+		vec.ShrinkByMask(sels, negate, offset)
+	}
+	if negate {
+		bat.rowCount -= sels.Count()
+		return
+	}
+	bat.rowCount = sels.Count()
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool) {
