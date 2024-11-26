@@ -36,7 +36,7 @@ func NewDataCache(
 ) *DataCache {
 	return &DataCache{
 		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict, func(capacity int64) int64 {
-			return capacity / 5
+			return capacity / 10
 		}),
 	}
 }
