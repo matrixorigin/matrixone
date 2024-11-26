@@ -15,6 +15,7 @@
 package cmsgroup
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -185,7 +186,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 	case H0:
 		// without group by.
 		if group.ctr.result1.IsEmpty() {
-			aggs, err := group.generateAggExec(proc, 1)
+			aggs, err := group.generateAggExec(proc)
 			if err != nil {
 				return err
 			}
@@ -208,12 +209,64 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 	default:
 		// with group by.
+		if group.ctr.result1.IsEmpty() {
+			err := group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
+			if err != nil {
+				return err
+			}
+
+			aggs, err := group.generateAggExec(proc)
+			if err != nil {
+				return err
+			}
+			limit := aggexec.SyncAggregatorsChunkSize(aggs)
+			group.ctr.result1.Init(limit, aggs, bat)
+			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
+				return err
+			}
+		}
+
+		count := bat.RowCount()
+		more := 0
+		aggList := group.ctr.result1.GetAggList()
+		for i := 0; i < count; i += hashmap.UnitLimit {
+			n := count - i
+			if n > hashmap.UnitLimit {
+				n = hashmap.UnitLimit
+			}
+
+			originGroupCount := group.ctr.hr.Hash.GroupCount()
+			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			if err != nil {
+				return err
+			}
+			insertList, _ := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+
+			more, err = group.ctr.result1.AppendBatch(proc.Mp(), bat, i, insertList)
+			if err != nil {
+				return err
+			}
+
+			if more > 0 {
+				for _, agg := range aggList {
+					if err = agg.GroupGrow(more); err != nil {
+						return err
+					}
+				}
+			}
+
+			for j := range aggList {
+				if err = aggList[j].BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
-func (group *Group) generateAggExec(proc *process.Process, preAllocated uint64) ([]aggexec.AggFuncExec, error) {
+func (group *Group) generateAggExec(proc *process.Process) ([]aggexec.AggFuncExec, error) {
 	var err error
 	execs := make([]aggexec.AggFuncExec, 0, len(group.Aggs))
 	defer func() {
@@ -234,15 +287,18 @@ func (group *Group) generateAggExec(proc *process.Process, preAllocated uint64) 
 			}
 		}
 	}
+	return execs, nil
+}
 
+func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err error) {
 	if allocate := int(preAllocated); allocate > 0 {
 		for _, exec := range execs {
 			if err = exec.PreAllocateGroups(allocate); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	return execs, nil
+	return nil
 }
 
 // callToGetIntermediateResult

@@ -150,6 +150,10 @@ func (buf *GroupResultBuffer) AppendBatch(
 	return toIncrease, err
 }
 
+func (buf *GroupResultBuffer) GetAggList() []aggexec.AggFuncExec {
+	return buf.AggList
+}
+
 func (buf *GroupResultBuffer) unionToSpecificBatch(
 	mp *mpool.MPool,
 	idx int, bat *batch.Batch, offset int64, insertList []uint8, rowIncrease int) error {
