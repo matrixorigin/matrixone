@@ -17,7 +17,6 @@ package ctl
 import (
 	"context"
 	"github.com/google/uuid"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -70,16 +69,16 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	a3.parameter = "all.enable_fault_injection"
 	ret, err = handleAddFaultPoint(a3.proc, a3.service, a3.parameter, a3.sender)
 	require.NoError(t, err)
-	res := Response{
+	res := CNResponse{
+		CNid:      id,
 		ReturnStr: "fault injection enabled, previous status: disabled",
 	}
 
-	data, err := jsoniter.Marshal(res)
-	require.NoError(t, err)
-
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
-		Data:   id + ":" + string(data) + "; ",
+		Data: AddFaultResponse{
+			Res: []CNResponse{res},
+		},
 	})
 
 	a4.proc = proc
@@ -89,12 +88,12 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	res.ReturnStr = "OK"
-	data, err = jsoniter.Marshal(res)
-	require.NoError(t, err)
 
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
-		Data:   id + ":" + string(data) + "; ",
+		Data: AddFaultResponse{
+			Res: []CNResponse{res},
+		},
 	})
 
 }

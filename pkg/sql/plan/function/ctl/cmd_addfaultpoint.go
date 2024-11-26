@@ -16,9 +16,7 @@ package ctl
 
 import (
 	"context"
-	"fmt"
 	"github.com/fagongzi/util/protoc"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -81,9 +79,14 @@ func handleTNAddFaultPoint() handleFunc {
 		})
 }
 
-type Response struct {
+type CNResponse struct {
+	CNid      string `json:"cn_id,omitempty"`
 	ReturnStr string `json:"return_str,omitempty"`
 	ErrorStr  string `json:"error_str,omitempty"`
+}
+
+type AddFaultResponse struct {
+	Res []CNResponse `json:"res"`
 }
 
 func handleAddFaultPoint(
@@ -114,9 +117,13 @@ func handleAddFaultPoint(
 		})
 	}
 
-	info := map[string]string{}
+	cnRes := AddFaultResponse{
+		Res: make([]CNResponse, 0),
+	}
 	for idx := range cns {
-		res := Response{}
+		res := CNResponse{
+			CNid: cns[idx],
+		}
 		// the current cn also need to process this span cmd
 		if cns[idx] == proc.GetQueryClient().ServiceID() {
 			res.ReturnStr = HandleCnFaultInjection(proc.Ctx, name, freq, action, iarg, sarg)
@@ -137,22 +144,12 @@ func handleAddFaultPoint(
 				res.ReturnStr = resp.TraceSpanResponse.Resp
 			}
 		}
-		data, err := jsoniter.Marshal(res)
-		if err != nil {
-			info[cns[idx]] = fmt.Sprintf("Error serializing:%v", err)
-		} else {
-			info[cns[idx]] = string(data)
-		}
-	}
-
-	data := ""
-	for k, v := range info {
-		data += fmt.Sprintf("%s:%s; ", k, v)
+		cnRes.Res = append(cnRes.Res, res)
 	}
 
 	return Result{
 		Method: AddFaultPointMethod,
-		Data:   data,
+		Data:   cnRes,
 	}, nil
 }
 
