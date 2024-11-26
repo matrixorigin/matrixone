@@ -21,6 +21,8 @@ import (
 	"slices"
 	"sort"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -77,6 +79,16 @@ func NewLocalDataSource(
 			return nil, err
 		}
 		source.pState = state
+		if ok, _ := objectio.PartitionStateInjected(table.db.databaseName, table.tableName); ok {
+			logutil.Info(
+				"INJECT-TRACE-PS-NEW-LOCAL-DS",
+				zap.String("table-name", table.tableName),
+				zap.String("tbl", fmt.Sprintf("%p", table)),
+				zap.String("ps", fmt.Sprintf("%p", state)),
+				zap.Bool("is-snap", table.db.op.IsSnapOp()),
+				zap.String("txn", table.db.op.Txn().DebugString()),
+			)
+		}
 	}
 
 	source.table = table

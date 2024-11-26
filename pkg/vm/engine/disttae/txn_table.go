@@ -640,9 +640,11 @@ func (tbl *txnTable) doRanges(
 			logutil.Info(
 				"INJECT-TRACE-RANGES",
 				zap.String("name", tbl.tableDef.Name),
+				zap.String("tbl", fmt.Sprintf("%p", tbl)),
 				zap.String("exprs", plan2.FormatExprs(exprs)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.Bool("is-snap", tbl.db.op.IsSnapOp()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
 				zap.Error(err),

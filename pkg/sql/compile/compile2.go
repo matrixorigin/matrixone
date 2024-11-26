@@ -298,8 +298,18 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
-	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
-		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	if c.uid != "mo_logger" &&
+		strings.Contains(strings.ToLower(c.sql), "insert") &&
+		(strings.Contains(c.sql, "{MO_TS =") ||
+			strings.Contains(c.sql, "{SNAPSHOT =")) {
+		txn := ""
+		if txnOperator != nil {
+			txn = txnOperator.Txn().DebugString()
+		}
+		getLogger(c.proc.GetService()).Info("insert into with snapshot",
+			zap.String("sql", c.sql),
+			zap.String("txn", txn),
+			zap.Uint64("affectRows", queryResult.AffectRows))
 	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
