@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"math/rand"
 	"strconv"
 	"time"
@@ -49,6 +50,12 @@ func WithFileService(fs fileservice.FileService) ProcOptions {
 			proc.GetFileService().Close(proc.Ctx)
 		}
 		proc.SetFileService(fs)
+	}
+}
+
+func WithQueryClient(queryClient client.QueryClient) ProcOptions {
+	return func(proc *process.Process) {
+		proc.Base.QueryClient = queryClient
 	}
 }
 

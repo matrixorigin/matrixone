@@ -339,7 +339,8 @@ func (h *Handle) HandleGetChangedTableList(
 			continue
 		}
 
-		if !isTheTblIWant(req.TableIds[i], types.MaxTs()) {
+		// prev() for ut
+		if !isTheTblIWant(req.TableIds[i], types.MaxTs().Prev()) {
 			continue
 		}
 
