@@ -150,11 +150,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		MarkQueryDone(c, txnOperator)
 	}()
 
-	// check if there is any action to cancel this query.
-	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
-		return nil, err
-	}
-
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
 
