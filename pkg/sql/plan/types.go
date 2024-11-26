@@ -270,9 +270,12 @@ type BindContext struct {
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
 
+	projectByAst []SelectField
+
 	timeAsts []tree.Expr
 
-	aliasMap map[string]*aliasItem
+	aliasMap       map[string]*aliasItem
+	aliasFrequency map[string]int
 
 	bindings       []*Binding
 	bindingByTag   map[int32]*Binding //rel_pos
@@ -301,6 +304,15 @@ type BindContext struct {
 	lower int64
 
 	groupingFlag []bool
+}
+
+type SelectField struct {
+	ast        tree.Expr
+	selectExpr tree.SelectExpr
+	astStr     string
+	// AsName is alias name for Expr
+	aliasName string
+	pos       int32
 }
 
 type NameTuple struct {
