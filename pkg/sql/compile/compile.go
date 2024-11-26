@@ -3755,6 +3755,9 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	}
 
 	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
+	if n.JoinType == plan.Node_DEDUP && dop > c.ncpu && c.ncpu > 4 {
+		dop = c.ncpu
+	}
 
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
