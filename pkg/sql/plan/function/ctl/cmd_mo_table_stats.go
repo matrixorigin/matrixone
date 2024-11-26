@@ -31,6 +31,7 @@ import (
 	mo_ctl("cn", "MoTableStats", "force_update:false|true");
 	mo_ctl("cn", "MoTableStats", "move_on:false|true");
 	mo_ctl("cn", "MoTableStats", "restore_default_setting:true");
+	mo_ctl("cn", "MoTableStats", "echo_current_setting:true");
 */
 
 func handleMoTableStats(
