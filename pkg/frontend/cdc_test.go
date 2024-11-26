@@ -2594,7 +2594,7 @@ func TestCdcTask_Resume(t *testing.T) {
 	}
 
 	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
 	defer stub1.Reset()
@@ -2637,6 +2637,7 @@ func TestCdcTask_Resume(t *testing.T) {
 			}
 
 			err := cdc.Resume()
+			time.Sleep(5 * time.Second)
 			assert.NoErrorf(t, err, "Resume()")
 		})
 	}
@@ -2672,7 +2673,7 @@ func TestCdcTask_Restart(t *testing.T) {
 	}
 
 	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
 	defer stub1.Reset()
@@ -2720,18 +2721,25 @@ func TestCdcTask_Restart(t *testing.T) {
 			}
 
 			err = cdc.Restart()
+			time.Sleep(5 * time.Second)
 			assert.NoErrorf(t, err, "Restart()")
 		})
 	}
 }
 
 func TestCdcTask_Pause(t *testing.T) {
+	holdCh := make(chan int, 1)
+	go func() {
+		<-holdCh
+	}()
+
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		isRunning: true,
+		holdCh:    holdCh,
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")
