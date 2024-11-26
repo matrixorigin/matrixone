@@ -2299,9 +2299,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	//issue3976
 	quitC := make(chan int)
 	go func(ctx context.Context, reader *io.PipeReader) {
-		if ctx == nil || reader == nil {
-			return
-		}
 		select {
 		case <-ctx.Done():
 			//close reader
