@@ -145,9 +145,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	GetCompileService().recordRunningCompile(c, txnOperator)
+	MarkQueryRunning(c, txnOperator)
 	defer func() {
-		GetCompileService().removeRunningCompile(c, txnOperator)
+		MarkQueryDone(c, txnOperator)
 	}()
 
 	// check if there is any action to cancel this query.
