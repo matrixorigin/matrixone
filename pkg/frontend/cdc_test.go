@@ -2637,10 +2637,10 @@ func TestCdcTask_Resume(t *testing.T) {
 			}
 
 			err := cdc.Resume()
-			time.Sleep(5 * time.Second)
 			assert.NoErrorf(t, err, "Resume()")
 		})
 	}
+	time.Sleep(5 * time.Second)
 }
 
 func TestCdcTask_Restart(t *testing.T) {
@@ -2721,10 +2721,10 @@ func TestCdcTask_Restart(t *testing.T) {
 			}
 
 			err = cdc.Restart()
-			time.Sleep(5 * time.Second)
 			assert.NoErrorf(t, err, "Restart()")
 		})
 	}
+	time.Sleep(5 * time.Second)
 }
 
 func TestCdcTask_Pause(t *testing.T) {
