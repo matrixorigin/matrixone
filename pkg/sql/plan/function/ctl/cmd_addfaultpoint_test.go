@@ -72,7 +72,7 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
-		Data:   fmt.Sprintf("%v:OK; ", id),
+		Data:   fmt.Sprintf("%v:fault injection enabled, previous status: disabled; ", id),
 	})
 
 	a4.proc = proc
@@ -134,11 +134,26 @@ func Test_CanTransferCnFaultInjection(t *testing.T) {
 		qs2.Close()
 	}()
 
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.status_fault_injection", a1.sender)
+	require.NoError(t, err)
+
 	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.enable_fault_injection", a1.sender)
+	require.NoError(t, err)
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.enable_fault_injection", a1.sender)
+	require.NoError(t, err)
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.status_fault_injection", a1.sender)
 	require.NoError(t, err)
 
 	_, err = handleAddFaultPoint(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.disable_fault_injection", a1.sender)
+	require.NoError(t, err)
+
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.disable_fault_injection", a1.sender)
+	require.NoError(t, err)
 }
 
 func mockHandleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {

@@ -187,6 +187,7 @@ func getInputs(ctx context.Context, input string) (
 const (
 	enable  = "enable_fault_injection"
 	disable = "disable_fault_injection"
+	status  = "status_fault_injection"
 )
 
 func HandleCnFaultInjection(
@@ -196,16 +197,33 @@ func HandleCnFaultInjection(
 	action string,
 	iarg int64,
 	sarg string,
-) string {
+) (res string) {
 	switch name {
 	case enable:
-		fault.Enable()
+		res = "fault injection enabled, previous status: "
+		if fault.Enable() {
+			res += "disabled"
+		} else {
+			res += "enabled"
+		}
 	case disable:
-		fault.Disable()
+		res = "fault injection disabled, previous status: "
+		if fault.Disable() {
+			res += "enabled"
+		} else {
+			res += "disabled"
+		}
+	case status:
+		if fault.Status() {
+			res = "fault injection is enabled"
+		} else {
+			res = "fault injection is disabled"
+		}
 	default:
 		if err := fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg); err != nil {
 			return err.Error()
 		}
+		res = "OK"
 	}
-	return "OK"
+	return res
 }
