@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -243,6 +242,4 @@ func TestLocate(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
-
-	frontend.NewSession()
 }

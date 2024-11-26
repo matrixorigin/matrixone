@@ -17,7 +17,6 @@ package testutil
 import (
 	"context"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"math/rand"
 	"strconv"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

@@ -1298,7 +1298,7 @@ func alphaTask(
 					return nil
 				}
 
-				if waitErrDur%(time.Second*10) == 0 {
+				if waitErrDur > 0 && waitErrDur%(time.Second*10) == 0 {
 					logutil.Warn(logHeader,
 						zap.String("source", "alpha task"),
 						zap.String("event", "waited err another 10s"),
