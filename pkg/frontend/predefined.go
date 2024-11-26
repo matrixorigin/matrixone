@@ -249,7 +249,7 @@ var (
     			no_full bool,
     			incr_config varchar(1000),
     			additional_config text,
-    			reserved1 text,
+    			err_msg varchar(256),
     			reserved2 text,
     			reserved3 text,
     			reserved4 text,
@@ -261,7 +261,10 @@ var (
     			account_id bigint unsigned,			
     			task_id uuid,
     			table_id varchar(64),			
+				db_name varchar(256),
+				table_name varchar(256),
     			watermark varchar(128),			
+				err_msg varchar(256),
     			primary key(account_id,task_id,table_id)
 			)`
 

@@ -259,7 +259,18 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Blockid](v)[:printN], v)
 	}
 	if v.GetType().IsVarlen() {
-		return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
+		if !v.HasNull() {
+			return vec2Str(vector.InefficientMustBytesCol(v)[:printN], v, opts...)
+		}
+		vs := make([][]byte, 0, printN)
+		for i := 0; i < printN; i++ {
+			if v.GetNulls().Contains(uint64(i)) {
+				vs = append(vs, nil)
+			} else {
+				vs = append(vs, v.GetBytesAt(i))
+			}
+		}
+		return vec2Str(vs, v, opts...)
 	}
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
 }
