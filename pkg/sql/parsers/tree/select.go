@@ -343,6 +343,10 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	if node.Option != 0 {
 		for i := uint64(1); i <= 10; i++ {
 			opt := uint64(1 << i)
+			//distinct printed already
+			if opt == QuerySpecOptionDistinct || opt == QuerySpecOptionDistinctRow {
+				continue
+			}
 
 			if node.Option&opt != 0 {
 				ctx.WriteString(QuerySpecOptionNames[opt])
