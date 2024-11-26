@@ -181,6 +181,24 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, true, nil)
 	require.NotNil(t, err)
+
+	ret = disttae.HandleMoTableStatsCtl("echo_current_setting:false")
+	require.Equal(t, "noop", ret)
+
+	ret = disttae.HandleMoTableStatsCtl("echo_current_setting:true")
+	require.Equal(t, "move_on(false), use_old_impl(false), force_update(true)", ret)
+
+	{
+		ret = disttae.HandleMoTableStatsCtl("no_such_cmd:true")
+		require.Equal(t, "failed, cmd invalid", ret)
+
+		ret = disttae.HandleMoTableStatsCtl("force_update:yes")
+		require.Equal(t, "failed, cmd invalid", ret)
+
+		ret = disttae.HandleMoTableStatsCtl("force_update:true:false")
+		require.Equal(t, "invalid command", ret)
+	}
+
 }
 
 func TestHandleGetChangedList(t *testing.T) {
@@ -210,7 +228,7 @@ func TestHandleGetChangedList(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	var dbId uint64
-	var tblIds []uint64
+	var tblIds = make([]uint64, 0, len(tblNames))
 
 	for i := range tblNames {
 		schema.Name = tblNames[i]

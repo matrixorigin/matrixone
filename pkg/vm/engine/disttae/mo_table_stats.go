@@ -75,6 +75,7 @@ import (
 //	mo_ctl("cn", "MoTableStats", "force_update:false|true");
 //	mo_ctl("cn", "MoTableStats", "move_on:false|true");
 //	mo_ctl("cn", "MoTableStats", "restore_default_setting:true|false");
+//  mo_ctl("cn", "MoTableStats", "echo_current_setting:true|false");
 //
 // bootstrap config
 
@@ -194,7 +195,7 @@ const (
 
 const (
 	defaultAlphaCycleDur     = time.Minute
-	defaultGamaCycleDur      = time.Minute * 30
+	defaultGamaCycleDur      = time.Minute * 60
 	defaultGetTableListLimit = 1000
 
 	logHeader = "MO-TABLE-STATS-TASK"
@@ -457,13 +458,18 @@ func HandleMoTableStatsCtl(cmd string) string {
 	switch typ {
 	case "use_old_impl":
 		return setUseOldImpl(val == "true")
+
 	case "force_update":
 		return setForceUpdate(val == "true")
+
 	case "move_on":
 		return setMoveOnTask(val == "true")
 
 	case "restore_default_setting":
 		return restoreDefaultSetting(val == "true")
+
+	case "echo_current_setting":
+		return echoCurrentSetting(val == "true")
 
 	default:
 		return "failed, cmd invalid"
@@ -481,6 +487,20 @@ func checkMoveOnTask() bool {
 		zap.Bool("disable", disable))
 
 	return disable
+}
+
+func echoCurrentSetting(ok bool) string {
+	if !ok {
+		return "noop"
+	}
+
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
+
+	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
+		!dynamicCtx.conf.DisableStatsTask,
+		dynamicCtx.conf.StatsUsingOldImpl,
+		dynamicCtx.conf.ForceUpdate)
 }
 
 func restoreDefaultSetting(ok bool) string {
@@ -1599,14 +1619,16 @@ func gamaTask(
 			sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 				colName2[step], intsJoin(ids, ","))
 			sqlRet = executeSQL(ctx, sql, fmt.Sprintf("gama task-%d-2", step))
-			if sqlRet.Error() == nil {
-				logutil.Info(logHeader,
-					zap.String("source", "gama task"),
-					zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(ids)),
-					zap.Duration("takes", time.Since(now)),
-					zap.String("detail", intsJoin(ids, ",")))
+			if sqlRet.Error() != nil {
+				return
 			}
 		}
+
+		logutil.Info(logHeader,
+			zap.String("source", "gama task"),
+			zap.Int(fmt.Sprintf("deleted %s", colName2[step]), len(ids)),
+			zap.Duration("takes", time.Since(now)),
+			zap.String("detail", intsJoin(ids, ",")))
 	}
 
 	// clear deleted tbl, db, account
@@ -1620,8 +1642,9 @@ func gamaTask(
 		deleteByStep(2) // clean tables
 	}
 
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	randDuration := func() time.Duration {
-		return gamaDur + time.Duration(time.Minute.Nanoseconds()*rand.Int63n(10))
+		return gamaDur + time.Duration(rnd.Intn(10))*time.Minute
 	}
 
 	tickerA := time.NewTicker(randDuration())
