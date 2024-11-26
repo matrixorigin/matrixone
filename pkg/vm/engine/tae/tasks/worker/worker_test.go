@@ -24,19 +24,17 @@ import (
 
 type testOp struct{}
 
-func (t testOp) OnExec(ctx context.Context) error {
+func (t testOp) OnExec(context.Context) error {
 	return nil
 }
 
-func (t testOp) SetError(err error) {
-	return
-}
+func (t testOp) SetError(error) {}
 
 func (t testOp) GetError() error {
 	return nil
 }
 
-func (t testOp) WaitDone(ctx context.Context) error {
+func (t testOp) WaitDone(context.Context) error {
 	return nil
 }
 
@@ -60,9 +58,7 @@ func (t testOp) GetExecutTime() int64 {
 	return 0
 }
 
-func (t testOp) AddObserver(observer iops.Observer) {
-	return
-}
+func (t testOp) AddObserver(iops.Observer) {}
 
 func TestOpWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
