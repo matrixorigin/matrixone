@@ -17,7 +17,14 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"testing"
+	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -76,7 +83,8 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 		txnop = p.StartCNTxn()
 		_, err := exec.Exec(
 			p.Ctx,
-			fmt.Sprintf("select mo_table_rows('%s','%s');", databaseName, tableName),
+			fmt.Sprintf("select mo_table_rows('%s','%s'), mo_table_size('%s','%s');",
+				databaseName, tableName, databaseName, tableName),
 			executor.Options{}.WithTxn(txnop))
 		require.NotNil(t, err)
 		require.Contains(t, err.Error(), fmt.Sprintf(catalog2.MO_TABLE_STATS))
@@ -92,7 +100,8 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 		txnop = p.StartCNTxn()
 		_, err := exec.Exec(
 			p.Ctx,
-			fmt.Sprintf("select mo_table_rows('%s','%s');", databaseName, tableName),
+			fmt.Sprintf("select mo_table_rows('%s','%s'), mo_table_size('%s','%s');",
+				databaseName, tableName, databaseName, tableName),
 			executor.Options{}.WithTxn(txnop))
 		require.NotNil(t, err)
 		require.Contains(t, err.Error(), fmt.Sprintf(catalog2.MO_TABLE_STATS))
@@ -108,7 +117,8 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 		txnop = p.StartCNTxn()
 		_, err := exec.Exec(
 			p.Ctx,
-			fmt.Sprintf("select mo_table_rows('%s','%s');", databaseName, tableName),
+			fmt.Sprintf("select mo_table_rows('%s','%s'), mo_table_size('%s','%s');",
+				databaseName, tableName, databaseName, tableName),
 			executor.Options{}.WithTxn(txnop))
 		require.NoError(t, err)
 	}
@@ -171,4 +181,70 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, true, nil)
 	require.NotNil(t, err)
+}
+
+func TestHandleGetChangedList(t *testing.T) {
+
+	opt, err := testutil.GetS3SharedFileServiceOption(
+		context.Background(), testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	var opts testutil.TestOptions
+	opts.TaeEngineOptions = opt
+	p := testutil.InitEnginePack(opts, t)
+	defer p.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+
+	rowsCnt := 81920
+
+	dbBatch := catalog.MockBatch(schema, rowsCnt)
+	defer dbBatch.Close()
+	bat := containers.ToCNBatch(dbBatch)
+
+	dbName := "db1"
+	tblNames := []string{"test1", "test2", "test3", "test4"}
+
+	txnop := p.StartCNTxn()
+	p.CreateDB(txnop, dbName)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	var dbId uint64
+	var tblIds []uint64
+
+	for i := range tblNames {
+		schema.Name = tblNames[i]
+		txnop = p.StartCNTxn()
+		rel := p.CreateTableInDB(txnop, dbName, schema)
+		require.NoError(t, rel.Write(p.Ctx, bat))
+		require.NoError(t, txnop.Commit(p.Ctx))
+
+		testutil2.CompactBlocks(t, 0, p.T.GetDB(), dbName, schema, false)
+		txn, _ := p.T.StartTxn()
+		ts := txn.GetStartTS()
+		require.NoError(t, p.T.GetDB().ForceCheckpoint(p.Ctx, ts.Next(), time.Second*10))
+		require.NoError(t, txn.Commit(p.Ctx))
+
+		dbId = rel.GetDBID(p.Ctx)
+		tblIds = append(tblIds, rel.GetTableID(p.Ctx))
+	}
+
+	req := &cmd_util.GetChangedTableListReq{}
+	resp := &cmd_util.GetChangedTableListResp{}
+
+	for i := range tblIds {
+		ts := timestamp.Timestamp{}
+		req.From = append(req.From, &ts)
+		req.AccIds = append(req.AccIds, 0)
+		req.TableIds = append(req.TableIds, tblIds[i])
+		req.DatabaseIds = append(req.DatabaseIds, dbId)
+	}
+
+	ts := types.MaxTs().ToTimestamp()
+	req.From[len(tblNames)-1] = &ts
+
+	_, err = p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
+	require.NoError(t, err)
+
+	require.Equal(t, tblIds[:len(tblIds)-1], resp.TableIds)
 }
