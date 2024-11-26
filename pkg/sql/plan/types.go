@@ -307,9 +307,7 @@ type BindContext struct {
 }
 
 type SelectField struct {
-	ast        tree.Expr
-	selectExpr tree.SelectExpr
-	astStr     string
+	ast tree.Expr
 	// AsName is alias name for Expr
 	aliasName string
 	pos       int32

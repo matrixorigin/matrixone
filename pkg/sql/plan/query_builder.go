@@ -2836,12 +2836,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				ctx.aliasFrequency[selectList[i].As.Compare()]++
 			}
 
-			// 保存 AST 和索引位置到 selectListByAst
 			field := SelectField{
-				ast:        selectList[i].Expr,
-				selectExpr: selectList[i],
-				astStr:     tree.String(selectList[i].Expr, dialect.MYSQL),
-				pos:        int32(i),
+				ast: selectList[i].Expr,
+				pos: int32(i),
 			}
 
 			if selectList[i].As != nil && !selectList[i].As.Empty() {
@@ -3683,19 +3680,6 @@ func bindProjectionList(
 		if err != nil {
 			return err
 		}
-
-		//// 保存 AST 和索引位置到 selectListByAst
-		//field := SelectField{
-		//	ast:        selectList[i].Expr,
-		//	selectExpr: selectList[i],
-		//	astStr:     tree.String(selectList[i].Expr, dialect.MYSQL),
-		//	pos:        int32(i),
-		//}
-		//
-		//if selectList[i].As != nil && !selectList[i].As.Empty() {
-		//	field.aliasName = selectList[i].As.Compare()
-		//}
-		//ctx.projectByAst = append(ctx.projectByAst, field)
 
 		ctx.projects = append(ctx.projects, expr)
 	}
