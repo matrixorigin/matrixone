@@ -37,14 +37,6 @@ func originalSize(objs []*catalog.ObjectEntry) int {
 	return size
 }
 
-func originalRows(objs []*catalog.ObjectEntry) int {
-	rows := 0
-	for _, o := range objs {
-		rows += int(o.Rows())
-	}
-	return rows
-}
-
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
