@@ -114,7 +114,7 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	minRow,maxRow uint32,
+	minRow,maxRow int32,
 	skipFn func(uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
@@ -255,7 +255,7 @@ func (node *memoryNode) ApplyAppendLocked(
 func (node *memoryNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	minVisibleRow,maxVisibleRow uint32,
+	minVisibleRow,maxVisibleRow int32,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,

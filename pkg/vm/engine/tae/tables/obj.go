@@ -102,7 +102,6 @@ func (obj *object) GetDuplicatedRows(
 		keysZM,
 		rowIDs,
 		false, /*is ablk*/
-		0,
 		mp,
 	)
 }

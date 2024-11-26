@@ -62,7 +62,7 @@ func (node *persistedNode) Contains(
 func (node *persistedNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	min, maxVisibleRow uint32,
+	min, maxVisibleRow int32,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,

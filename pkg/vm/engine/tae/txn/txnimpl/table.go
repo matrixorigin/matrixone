@@ -912,7 +912,7 @@ func (tbl *txnTable) GetByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	err = tbl.findDeletes(tbl.store.ctx, rowIDs, false, false)
+	err = tbl.findDeletes(tbl.store.ctx, rowIDs, types.TS{}, types.MaxTs())
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
@@ -1085,8 +1085,12 @@ func (tbl *txnTable) DedupSnapByPK(
 		return
 	}
 	defer rowIDs.Close()
+	from, to := types.TS{}, tbl.store.txn.GetStartTS()
+	if dedupAfterSnapshotTS {
+		from, to = tbl.store.txn.GetStartTS(), tbl.dedupTS
+	}
 	if !isTombstone {
-		err = tbl.findDeletes(ctx, rowIDs, dedupAfterSnapshotTS, false)
+		err = tbl.findDeletes(ctx, rowIDs, from, to)
 		if err != nil {
 			return
 		}
@@ -1109,8 +1113,7 @@ func (tbl *txnTable) DedupSnapByPK(
 func (tbl *txnTable) findDeletes(
 	ctx context.Context,
 	rowIDs containers.Vector,
-	dedupAfterSnapshotTS,
-	isCommitting bool,
+	from, to types.TS,
 ) (err error) {
 	pkType := rowIDs.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1118,19 +1121,28 @@ func (tbl *txnTable) findDeletes(
 		return
 	}
 	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
-	snapshotTS := tbl.store.txn.GetSnapshotTS()
 	it := tbl.entry.MakeTombstoneObjectIt()
 	for it.Next() {
 		obj := it.Item()
 		objData := obj.GetObjectData()
+		needWait, txn := obj.CreateNode.NeedWaitCommitting(to)
+		if needWait {
+			txn.GetTxnState(true)
+		}
+		needWait2, txn := obj.DeleteNode.NeedWaitCommitting(to)
+		if needWait2 {
+			txn.GetTxnState(true)
+		}
+		if needWait || needWait2 {
+			obj = obj.GetLatestNode()
+		}
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
-		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
+		if !obj.VisibleByTS(to) {
 			continue
 		}
-		skip := obj.IsCreatingOrAborted()
-		if skip {
+		if !obj.IsAppendable() && obj.CreatedAt.LT(&from) {
 			continue
 		}
 		// PXU TODO: jxm need to double check this logic
@@ -1169,14 +1181,18 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	isTombstone bool,
 ) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
+		now := tbl.store.rt.Now()
+		if tbl.dedupTS.IsEmpty() {
+			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), tbl.store.rt.Now(), true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, false, true)
+			err = tbl.findDeletes(tbl.store.ctx, rowIDs, tbl.dedupTS.Next(), now)
 			if err != nil {
 				return
 			}
@@ -1240,13 +1256,17 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		defer closeFunc()
 		defer pks.Close()
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, tbl.store.rt.Now(), true)
+		now := tbl.store.rt.Now()
+		if tbl.dedupTS.IsEmpty() {
+			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		}
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, now, true)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, true, true)
+			err = tbl.findDeletes(ctx, rowIDs, tbl.dedupTS, now)
 		}
 		if err != nil {
 			return

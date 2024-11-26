@@ -250,7 +250,6 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	blkOffset uint16,
 	isAblk bool,
 	from, to types.TS,
-	maxVisibleRow uint32,
 	mp *mpool.MPool,
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
@@ -273,12 +272,12 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 		dedupFn = containers.MakeForeachVectorOp(
 			keys.GetType().Oid,
 			getRowIDAlkFunctions,
-			data.Vecs[0],
+			data.Vecs[0], //
 			rowIDs,
 			blkID,
-			maxVisibleRow,
 			obj.LoadPersistedCommitTS,
 			txn,
+			from, to,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
@@ -360,7 +359,6 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 	keysZM index.ZM,
 	rowIDs containers.Vector,
 	isAblk bool,
-	maxVisibleRow uint32,
 	mp *mpool.MPool,
 ) (err error) {
 	pkIndex, err := MakeImmuIndex(
@@ -385,7 +383,7 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			continue
 		}
 		err = obj.getDuplicateRowsWithLoad(
-			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, from, to, maxVisibleRow, mp)
+			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, from, to, mp)
 		if err != nil {
 			return err
 		}

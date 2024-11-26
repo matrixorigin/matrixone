@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -230,19 +231,25 @@ func (obj *aobject) GetDuplicatedRows(
 			keysZM,
 			rowIDs,
 			true,
-			maxRow,
 			mp,
 		)
 	}
 }
 
-func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
+func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
+	if ts.IsEmpty() {
+		return -1, nil
+	}
+	maxTS := types.MaxTs()
+	if ts.EQ(&maxTS) {
+		return math.MaxInt32, nil
+	}
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		obj.RLock()
 		defer obj.RUnlock()
-		return obj.appendMVCC.GetMaxRowByTSLocked(ts), nil
+		return int32(obj.appendMVCC.GetMaxRowByTSLocked(ts)), nil
 	} else {
 		vec, err := obj.LoadPersistedCommitTS(0)
 		if err != nil {
@@ -253,10 +260,10 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 			vec.GetDownstreamVector())
 		for i := range tsVec {
 			if tsVec[i].GT(&ts) {
-				return uint32(i), nil
+				return int32(i), nil
 			}
 		}
-		return uint32(vec.Length()), nil
+		return int32(vec.Length()), nil
 	}
 }
 func (obj *aobject) Contains(
