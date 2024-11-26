@@ -2186,6 +2186,7 @@ func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *p
 	}
 	col := expr.GetCol()
 	col.ColPos = cpkeyIdx
+	expr.Typ = tableDef.Cols[cpkeyIdx].Typ
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
 		UpperLimit:  upperlimit,

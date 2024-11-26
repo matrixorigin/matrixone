@@ -103,3 +103,45 @@ func (node *RollbackTransaction) GetQueryType() string     { return QueryTypeTCL
 func NewRollbackTransaction(t CompletionType) *RollbackTransaction {
 	return &RollbackTransaction{Type: t}
 }
+
+type SavePoint struct {
+	statementImpl
+	Name Identifier
+}
+
+func (node *SavePoint) Format(ctx *FmtCtx) {
+	ctx.WriteString("savepoint")
+	ctx.WriteString(" ")
+	ctx.WriteString(node.Name.String())
+}
+
+func (node *SavePoint) GetStatementType() string { return "Savepoint" }
+func (node *SavePoint) GetQueryType() string     { return QueryTypeTCL }
+
+type ReleaseSavePoint struct {
+	statementImpl
+	Name Identifier
+}
+
+func (node *ReleaseSavePoint) Format(ctx *FmtCtx) {
+	ctx.WriteString("release savepoint")
+	ctx.WriteString(" ")
+	ctx.WriteString(node.Name.String())
+}
+
+func (node *ReleaseSavePoint) GetStatementType() string { return "Release Savepoint" }
+func (node *ReleaseSavePoint) GetQueryType() string     { return QueryTypeTCL }
+
+type RollbackToSavePoint struct {
+	statementImpl
+	Name Identifier
+}
+
+func (node *RollbackToSavePoint) Format(ctx *FmtCtx) {
+	ctx.WriteString("rollback to savepoint")
+	ctx.WriteString(" ")
+	ctx.WriteString(node.Name.String())
+}
+
+func (node *RollbackToSavePoint) GetStatementType() string { return "Rollback To Savepoint" }
+func (node *RollbackToSavePoint) GetQueryType() string     { return QueryTypeTCL }
