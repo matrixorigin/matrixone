@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ const (
 		`"%t",` + //no_full
 		`"%s",` + //incr_config
 		`'%s',` + //additional_config
-		`"",` + //reserved1
+		`"",` + //err_msg
 		`"",` + //reserved2
 		`"",` + //reserved3
 		`""` + //reserved4
@@ -91,7 +92,7 @@ const (
 		`account_id = %d and ` +
 		`task_id = "%s"`
 
-	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state from mo_catalog.mo_cdc_task where account_id = %d"
+	getShowCdcTaskFormat = "select task_id, task_name, source_uri, sink_uri, state, err_msg from mo_catalog.mo_cdc_task where account_id = %d"
 
 	getDbIdAndTableIdFormat = "select reldatabase_id,rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname = '%s'"
 
@@ -109,20 +110,21 @@ const (
 
 	deleteWatermarkFormat = "delete from `mo_catalog`.`mo_cdc_watermark` where account_id = %d and task_id = '%s'"
 
-	getWatermarkFormat = `
-		select 
-			t.reldatabase, t.relname, w.watermark
-		from 
-			mo_catalog.mo_cdc_watermark w 
-		join 
-			mo_catalog.mo_tables t 
-		on cast(SUBSTRING_INDEX(w.table_id,'_',1) as bigint unsigned) = t.rel_id 
-		where w.account_id = %d and w.task_id = '%s'`
+	getWatermarkFormat = "select db_name, table_name, watermark, err_msg from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
 	getDataKeyFormat = "select encrypted_key from mo_catalog.mo_data_key where account_id = %d and key_id = '%s'"
+
+	updateErrMsgFormat = "update `mo_catalog`.`mo_cdc_task` set state = '%s', err_msg = '%s' where account_id = %d and task_id = '%s'"
 )
 
-var showCdcOutputColumns = [7]Column{
+const (
+	CdcRunning   = "running"
+	CdcPaused    = "paused"
+	CdcFailed    = "failed"
+	maxErrMsgLen = 256
+)
+
+var showCdcOutputColumns = [8]Column{
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
 			name:       "task_id",
@@ -150,6 +152,12 @@ var showCdcOutputColumns = [7]Column{
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
 			name:       "state",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "err_msg",
 			columnType: defines.MYSQL_TYPE_VARCHAR,
 		},
 	},
@@ -263,11 +271,6 @@ func getSqlForGetTask(accountId uint64, all bool, taskName string) string {
 	return s
 }
 
-const (
-	CdcRunning = "running"
-	CdcStopped = "stopped"
-)
-
 func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) error {
 	return doCreateCdc(execCtx.reqCtx, ses, create)
 }
@@ -355,16 +358,41 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 		return moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", create.SinkType)
 	}
 
+	//step 5: check downstream connectivity
+	jsonSinkUri, sinkUriInfo, err := extractUriInfo(ctx, create.SinkUri, cdc2.SinkUriPrefix)
+	if err != nil {
+		return
+	}
+	if _, err = cdc2.OpenDbConn(sinkUriInfo.User, sinkUriInfo.Password, sinkUriInfo.Ip, sinkUriInfo.Port, cdc2.DefaultSendSqlTimeout); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		return
+	}
+
 	noFull := false
 	if cdcTaskOptionsMap["NoFull"] == "true" {
 		noFull = true
 	}
 
 	additionalConfig := make(map[string]any)
-	additionalConfig[cdc2.InitSnapshotSplitTxn] = true
+	additionalConfig[cdc2.InitSnapshotSplitTxn] = cdc2.DefaultInitSnapshotSplitTxn
 	if cdcTaskOptionsMap[cdc2.InitSnapshotSplitTxn] == "false" {
 		additionalConfig[cdc2.InitSnapshotSplitTxn] = false
 	}
+	additionalConfig[cdc2.MaxSqlLength] = cdc2.DefaultMaxSqlLength
+	if val, ok := cdcTaskOptionsMap[cdc2.MaxSqlLength]; ok {
+		if additionalConfig[cdc2.MaxSqlLength], err = strconv.ParseUint(val, 10, 64); err != nil {
+			return
+		}
+	}
+	additionalConfig[cdc2.SendSqlTimeout] = cdc2.DefaultSendSqlTimeout
+	if val, ok := cdcTaskOptionsMap[cdc2.SendSqlTimeout]; ok {
+		// check duration format
+		if _, err = time.ParseDuration(val); err != nil {
+			return
+		}
+		additionalConfig[cdc2.SendSqlTimeout] = val
+	}
+
 	additionalConfigBytes, err := json.Marshal(additionalConfig)
 	if err != nil {
 		return err
@@ -405,14 +433,8 @@ func doCreateCdc(ctx context.Context, ses *Session, create *tree.CreateCDC) (err
 			return 0, err
 		}
 
-		var jsonSinkUri string
 		var encodedSinkPwd string
-		var sinkUriInfo cdc2.UriInfo
 		if !useConsole {
-			if jsonSinkUri, sinkUriInfo, err = extractUriInfo(ctx, create.SinkUri, cdc2.SinkUriPrefix); err != nil {
-				return
-			}
-
 			// TODO replace with creatorAccountId
 			if err = initAesKeyWrapper(ctx, tx, catalog.System_Account, service); err != nil {
 				return
@@ -977,16 +999,17 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri              cdc2.UriInfo
-	tables               cdc2.PatternTuples
-	filters              cdc2.PatternTuples
-	startTs              types.TS
-	noFull               string
-	initSnapshotSplitTxn bool
+	sinkUri          cdc2.UriInfo
+	tables           cdc2.PatternTuples
+	filters          cdc2.PatternTuples
+	startTs          types.TS
+	noFull           string
+	additionalConfig map[string]interface{}
 
 	activeRoutine *cdc2.ActiveRoutine
 	// sunkWatermarkUpdater update the watermark of the items that has been sunk to downstream
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
+	isRunning            bool
 	holdCh               chan int
 }
 
@@ -1031,8 +1054,12 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		if err != nil {
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
-			close(cdc.activeRoutine.Pause)
-			close(cdc.activeRoutine.Cancel)
+			cdc.activeRoutine.ClosePause()
+			cdc.activeRoutine.CloseCancel()
+
+			if updateErrMsgErr := cdc.updateErrMsg(rootCtx, err.Error()); updateErrMsgErr != nil {
+				logutil.Errorf("cdc task %s update err msg failed, err: %v", cdc.cdcTask.TaskName, updateErrMsgErr)
+			}
 		}
 		// if Resume/Restart successfully will reach here, do nothing
 	}()
@@ -1072,9 +1099,15 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		dbTableInfos = append(dbTableInfos, info)
 	}
 
-	err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos)
-	if err != nil {
+	if err = cdc.startWatermarkAndPipeline(ctx, dbTableInfos); err != nil {
 		return err
+	}
+
+	cdc.isRunning = true
+	logutil.Infof("cdc task %s start on cn %s success", cdc.cdcTask.TaskName, cdc.cnUUID)
+	// start success, clear err msg
+	if err = cdc.updateErrMsg(ctx, ""); err != nil {
+		logutil.Errorf("cdc task %s update err msg failed, err: %v", cdc.cdcTask.TaskName, err)
 	}
 
 	if firstTime {
@@ -1088,6 +1121,192 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		}
 	}
 	return
+}
+
+var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
+	return cdc.Start(ctx, firstTime)
+}
+
+// Resume cdc task from last recorded watermark
+func (cdc *CdcTask) Resume() (err error) {
+	logutil.Infof("cdc task %s resume", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s resume success", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s resume failed, err: %v", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	// closed in Pause, need renew
+	cdc.activeRoutine.Pause = make(chan struct{})
+	cdc.activeRoutine.Cancel = make(chan struct{})
+	err = Start(context.Background(), cdc, false)
+	return
+}
+
+// Restart cdc task from init watermark
+func (cdc *CdcTask) Restart() (err error) {
+	logutil.Infof("cdc task %s restart", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s restart success", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s restart failed, err: %v", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	// delete previous records
+	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return
+	}
+	// closed in Pause, need renew
+	cdc.activeRoutine.Pause = make(chan struct{})
+	cdc.activeRoutine.Cancel = make(chan struct{})
+	err = Start(context.Background(), cdc, false)
+	return
+}
+
+// Pause cdc task
+func (cdc *CdcTask) Pause() error {
+	logutil.Infof("cdc task %s pause", cdc.cdcTask.TaskName)
+	defer func() {
+		logutil.Infof("cdc task %s pause success", cdc.cdcTask.TaskName)
+	}()
+
+	if cdc.isRunning {
+		cdc.activeRoutine.ClosePause()
+		cdc.isRunning = false
+	}
+	return nil
+}
+
+// Cancel cdc task
+func (cdc *CdcTask) Cancel() (err error) {
+	logutil.Infof("cdc task %s cancel", cdc.cdcTask.TaskName)
+	defer func() {
+		if err == nil {
+			logutil.Infof("cdc task %s cancel success", cdc.cdcTask.TaskName)
+		} else {
+			logutil.Infof("cdc task %s cancel failed, err: %v", cdc.cdcTask.TaskName, err)
+		}
+	}()
+
+	if cdc.isRunning {
+		cdc.activeRoutine.CloseCancel()
+		cdc.isRunning = false
+	}
+	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
+		return err
+	}
+
+	// let Start() go
+	cdc.holdCh <- 1
+	return
+}
+
+func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
+	// reader --call--> sinker ----> remote db
+	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
+
+	// add watermark to updater
+	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblIdStr)
+	if err != nil {
+		return err
+	}
+	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblIdStr, watermark)
+
+	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
+	if err != nil {
+		return err
+	}
+
+	// make sinker for table
+	sinker, err := cdc2.NewSinker(
+		cdc.sinkUri,
+		info,
+		cdc.sunkWatermarkUpdater,
+		tableDef,
+		cdc2.DefaultRetryTimes,
+		cdc2.DefaultRetryDuration,
+		cdc.activeRoutine,
+		uint64(cdc.additionalConfig[cdc2.MaxSqlLength].(float64)),
+		cdc.additionalConfig[cdc2.SendSqlTimeout].(string),
+	)
+	if err != nil {
+		return err
+	}
+	go sinker.Run(ctx, cdc.activeRoutine)
+
+	// make reader
+	reader := cdc2.NewTableReader(
+		cdc.cnTxnClient,
+		cdc.cnEngine,
+		cdc.mp,
+		cdc.packerPool,
+		info,
+		sinker,
+		cdc.sunkWatermarkUpdater,
+		tableDef,
+		cdc.resetWatermarkForTable,
+		cdc.additionalConfig[cdc2.InitSnapshotSplitTxn].(bool),
+	)
+	go reader.Run(ctx, cdc.activeRoutine)
+
+	return nil
+}
+
+func (cdc *CdcTask) resetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
+	tblIdStr := info.SourceTblIdStr
+	// delete old watermark of table
+	cdc.sunkWatermarkUpdater.DeleteFromMem(tblIdStr)
+	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblIdStr); err != nil {
+		return
+	}
+
+	// use start_ts as init watermark
+	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info, cdc.startTs); err != nil {
+		return
+	}
+	cdc.sunkWatermarkUpdater.UpdateMem(tblIdStr, cdc.startTs)
+	return
+}
+
+func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
+	if len(cdc2.AesKey) > 0 {
+		return nil
+	}
+
+	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
+	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return res.Error()
+	} else if res.RowCount() < 1 {
+		return moerr.NewInternalErrorf(ctx, "no data key record for account %d", accountId)
+	}
+
+	encryptedKey, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
+	return
+}
+
+func (cdc *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error) {
+	accId := cdc.cdcTask.Accounts[0].GetId()
+	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
+	state := CdcRunning
+	if errMsg != "" {
+		state = CdcFailed
+	}
+	if len(errMsg) > maxErrMsgLen {
+		errMsg = errMsg[:maxErrMsgLen]
+	}
+
+	sql := fmt.Sprintf(updateErrMsgFormat, state, errMsg, accId, cdcTaskId)
+	return cdc.ie.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql, ie.SessionOverrideOptions{})
 }
 
 func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos []*cdc2.DbTableInfo) (err error) {
@@ -1116,7 +1335,7 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	} else if count == 0 {
 		for _, info = range dbTableInfos {
 			// use startTs as watermark
-			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info.SourceTblIdStr, cdc.startTs); err != nil {
+			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info, cdc.startTs); err != nil {
 				return err
 			}
 		}
@@ -1224,17 +1443,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	additionalConfig := make(map[string]interface{})
-	if err = json.Unmarshal([]byte(additionalConfigStr), &additionalConfig); err != nil {
-		return err
-	}
-
-	cdc.initSnapshotSplitTxn = true
-	if val, ok := additionalConfig[cdc2.InitSnapshotSplitTxn]; ok {
-		cdc.initSnapshotSplitTxn = val.(bool)
-	}
-
-	return nil
+	return json.Unmarshal([]byte(additionalConfigStr), &cdc.additionalConfig)
 }
 
 func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, dbName, tblName string, tblIdStrMap map[string]bool) (*cdc2.DbTableInfo, error) {
@@ -1283,189 +1492,6 @@ func (cdc *CdcTask) retrieveTable(ctx context.Context, accId uint64, accName, db
 		SourceTblId:       tblId,
 		SourceTblIdStr:    getTblIdStr(tblId),
 	}, err
-}
-
-func needSkipThisTable(accountName, dbName, tblName string, filters *cdc2.PatternTuples) bool {
-	if len(filters.Pts) == 0 {
-		return false
-	}
-	for _, filter := range filters.Pts {
-		if filter == nil {
-			continue
-		}
-		if filter.Source.Account == accountName &&
-			filter.Source.Database == dbName &&
-			filter.Source.Table == tblName {
-			return true
-		}
-	}
-	return false
-}
-
-var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
-	return cdc.Start(ctx, firstTime)
-}
-
-// Resume cdc task from last recorded watermark
-func (cdc *CdcTask) Resume() (err error) {
-	logutil.Infof("cdc task %s resume\n", cdc.cdcTask.TaskName)
-	defer func() {
-		logutil.Infof("cdc task %s resume success\n", cdc.cdcTask.TaskName)
-	}()
-
-	for {
-		// closed in Pause, need renew
-		cdc.activeRoutine.Pause = make(chan struct{})
-		cdc.activeRoutine.Cancel = make(chan struct{})
-		if err = Start(context.Background(), cdc, false); err == nil {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-}
-
-// Restart cdc task from init watermark
-func (cdc *CdcTask) Restart() (err error) {
-	logutil.Infof("cdc task %s restart\n", cdc.cdcTask.TaskName)
-	defer func() {
-		logutil.Infof("cdc task %s restart success\n", cdc.cdcTask.TaskName)
-	}()
-
-	for {
-		// closed in Pause, need renew
-		cdc.activeRoutine.Pause = make(chan struct{})
-		cdc.activeRoutine.Cancel = make(chan struct{})
-		// delete previous records
-		if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err == nil {
-			if err = Start(context.Background(), cdc, false); err == nil {
-				return
-			}
-		}
-		time.Sleep(time.Second)
-	}
-}
-
-// Pause cdc task
-func (cdc *CdcTask) Pause() (err error) {
-	logutil.Infof("cdc task %s pause\n", cdc.cdcTask.TaskName)
-	defer func() {
-		if err == nil {
-			logutil.Infof("cdc task %s pause success\n", cdc.cdcTask.TaskName)
-		} else {
-			logutil.Infof("cdc task %s pause failed, err: %v\n", cdc.cdcTask.TaskName, err)
-		}
-	}()
-
-	close(cdc.activeRoutine.Pause)
-	return
-}
-
-// Cancel cdc task
-func (cdc *CdcTask) Cancel() (err error) {
-	logutil.Infof("cdc task %s cancel\n", cdc.cdcTask.TaskName)
-	defer func() {
-		if err == nil {
-			logutil.Infof("cdc task %s cancel success\n", cdc.cdcTask.TaskName)
-		} else {
-			logutil.Infof("cdc task %s cancel failed, err: %v\n", cdc.cdcTask.TaskName, err)
-		}
-	}()
-
-	close(cdc.activeRoutine.Cancel)
-	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
-		return err
-	}
-
-	// let Start() go
-	cdc.holdCh <- 1
-	return
-}
-
-func (cdc *CdcTask) addExecPipelineForTable(info *cdc2.DbTableInfo, txnOp client.TxnOperator) error {
-	// reader --call--> sinker ----> remote db
-	ctx := defines.AttachAccountId(context.Background(), uint32(cdc.cdcTask.Accounts[0].GetId()))
-
-	// add watermark to updater
-	watermark, err := cdc.sunkWatermarkUpdater.GetFromDb(info.SourceTblIdStr)
-	if err != nil {
-		return err
-	}
-	cdc.sunkWatermarkUpdater.UpdateMem(info.SourceTblIdStr, watermark)
-
-	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
-	if err != nil {
-		return err
-	}
-
-	// make sinker for table
-	sinker, err := cdc2.NewSinker(
-		cdc.sinkUri,
-		info,
-		cdc.sunkWatermarkUpdater,
-		tableDef,
-		cdc2.DefaultRetryTimes,
-		cdc2.DefaultRetryDuration,
-		cdc.activeRoutine,
-	)
-	if err != nil {
-		return err
-	}
-	go sinker.Run(ctx, cdc.activeRoutine)
-
-	// make reader
-	reader := cdc2.NewTableReader(
-		cdc.cnTxnClient,
-		cdc.cnEngine,
-		cdc.mp,
-		cdc.packerPool,
-		info,
-		sinker,
-		cdc.sunkWatermarkUpdater,
-		tableDef,
-		cdc.ResetWatermarkForTable,
-		cdc.initSnapshotSplitTxn,
-	)
-	go reader.Run(ctx, cdc.activeRoutine)
-
-	return nil
-}
-
-func (cdc *CdcTask) ResetWatermarkForTable(info *cdc2.DbTableInfo) (err error) {
-	tblIdStr := info.SourceTblIdStr
-	// delete old watermark of table
-	cdc.sunkWatermarkUpdater.DeleteFromMem(tblIdStr)
-	if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tblIdStr); err != nil {
-		return
-	}
-
-	// use start_ts as init watermark
-	if err = cdc.sunkWatermarkUpdater.InsertIntoDb(tblIdStr, cdc.startTs); err != nil {
-		return
-	}
-	cdc.sunkWatermarkUpdater.UpdateMem(tblIdStr, cdc.startTs)
-	return
-}
-
-func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
-	if len(cdc2.AesKey) > 0 {
-		return nil
-	}
-
-	querySql := fmt.Sprintf(getDataKeyFormat, accountId, cdc2.InitKeyId)
-	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
-	if res.Error() != nil {
-		return res.Error()
-	} else if res.RowCount() < 1 {
-		return moerr.NewInternalErrorf(ctx, "no data key record for account %d", accountId)
-	}
-
-	encryptedKey, err := res.GetString(ctx, 0, 0)
-	if err != nil {
-		return err
-	}
-
-	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
-	return
 }
 
 var initAesKeyByInternalExecutor = func(ctx context.Context, cdc *CdcTask, accountId uint32) error {
@@ -1655,7 +1681,7 @@ func updateCdcTask(
 			//execute update cdc status in mo_cdc_task
 			var targetCdcStatus string
 			if targetStatus == task.TaskStatus_PauseRequested {
-				targetCdcStatus = CdcStopped
+				targetCdcStatus = CdcPaused
 			} else {
 				targetCdcStatus = CdcRunning
 			}
@@ -1741,6 +1767,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 		sourceUri     string
 		sinkUri       string
 		state         string
+		errMsg        string
 		ckpStr        string
 		sourceUriInfo cdc2.UriInfo
 		sinkUriInfo   cdc2.UriInfo
@@ -1797,6 +1824,9 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 			if state, err = result.GetString(ctx, i, 4); err != nil {
 				return
 			}
+			if errMsg, err = result.GetString(ctx, i, 5); err != nil {
+				return
+			}
 
 			// decode uriInfo
 			if err = cdc2.JsonDecode(sourceUri, &sourceUriInfo); err != nil {
@@ -1817,6 +1847,7 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 				sourceUriInfo.String(),
 				sinkUriInfo.String(),
 				state,
+				errMsg,
 				ckpStr,
 				timestamp,
 			})
@@ -1827,11 +1858,23 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 
 func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
 	var (
-		dbName       string
-		tblName      string
-		watermarkStr string
-		watermark    timestamp.Timestamp
+		dbName           string
+		tblName          string
+		watermarkStdTime string
+		errMsg           string
 	)
+
+	getWatermarkStdTime := func(result ExecResult, i uint64) (watermarkStr string, err error) {
+		var watermarkTs timestamp.Timestamp
+		if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+			return
+		}
+		if watermarkTs, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
+			return
+		}
+		watermarkStr = watermarkTs.ToStdTime().In(time.Local).String()
+		return
+	}
 
 	s = "{\n"
 
@@ -1854,14 +1897,18 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			if tblName, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+			if watermarkStdTime, err = getWatermarkStdTime(result, i); err != nil {
 				return
 			}
-			if watermark, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
+			if errMsg, err = result.GetString(ctx, i, 3); err != nil {
 				return
 			}
 
-			s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermark.ToStdTime().In(time.Local).String())
+			if len(errMsg) == 0 {
+				s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermarkStdTime)
+			} else {
+				s += fmt.Sprintf("  \"%s.%s\": %s(Failed, error: %s),\n", dbName, tblName, watermarkStdTime, errMsg)
+			}
 		}
 	}
 
@@ -1899,4 +1946,21 @@ func initAesKeyBySqlExecutor(ctx context.Context, executor taskservice.SqlExecut
 
 	cdc2.AesKey, err = decrypt(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
 	return
+}
+
+func needSkipThisTable(accountName, dbName, tblName string, filters *cdc2.PatternTuples) bool {
+	if len(filters.Pts) == 0 {
+		return false
+	}
+	for _, filter := range filters.Pts {
+		if filter == nil {
+			continue
+		}
+		if filter.Source.Account == accountName &&
+			filter.Source.Database == dbName &&
+			filter.Source.Table == tblName {
+			return true
+		}
+	}
+	return false
 }
