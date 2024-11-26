@@ -125,7 +125,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := allocateCompile(proc)
+	c := allocateNewCompile(proc)
 
 	c.e = e
 	c.db = db
@@ -160,7 +160,7 @@ func (c *Compile) Release() {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
 	}
-	releaseCompile(c)
+	doCompileRelease(c)
 }
 
 func (c Compile) TypeName() string {

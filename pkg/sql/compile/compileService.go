@@ -20,13 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func allocateCompile(proc *process.Process) *Compile {
+func allocateNewCompile(proc *process.Process) *Compile {
 	runningCompile := reuse.Alloc[Compile](nil)
 	runningCompile.proc = proc
 	return runningCompile
 }
 
-func releaseCompile(c *Compile) {
+func doCompileRelease(c *Compile) {
 	if !c.isPrepare {
 		reuse.Free[Compile](c, nil)
 	}
