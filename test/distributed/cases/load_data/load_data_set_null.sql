@@ -49,3 +49,15 @@ select * from t2;
 load data infile "$resources/load_data/set_null_3.csv" into table t2 character set utf8 fields terminated by ',' set col1=nullif(col1,'null');
 
 drop table t2;
+
+drop table if exists t3;
+create table t3(col1 varchar(20), col2 varchar(20));
+load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello');
+select * from t3 order by col1;
+delete from t3;
+load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello'), col2=nullif(col2, 'world');
+select * from t3 order by col1;
+delete from t3;
+load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello'), col1=nullif(col1, 'HELLO');
+select * from t3 order by col1;
+drop table t3;
