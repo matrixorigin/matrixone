@@ -20,6 +20,10 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -257,4 +261,36 @@ func TestGetShuffleDop(t *testing.T) {
 	require.Equal(t, 48, n)
 	n = GetShuffleDop(16, 1, 1500000)
 	require.Equal(t, 16, n)
+}
+
+func TestShouldSkipObjByShuffle(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
+	objectio.SetObjectStatsRowCnt(stats, 100)
+	node := &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 2,
+		CNIDX: 0,
+		Init:  false,
+	}
+	rp := &engine.RangesParam{
+		BlockFilters:   nil,
+		PreAllocBlocks: 2,
+		TxnOffset:      0,
+		Policy:         engine.Policy_CollectAllData,
+		Rsp:            rsp,
+	}
+
+	ShouldSkipObjByShuffle(rp, stats)
+	rsp.CNIDX = 1
+	ShouldSkipObjByShuffle(rp, stats)
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 100
+	ShouldSkipObjByShuffle(rp, stats)
 }

@@ -3972,7 +3972,7 @@ func collectTombstones(
 }
 
 func (c *Compile) expandRanges(
-	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
+	n *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
@@ -3981,7 +3981,7 @@ func (c *Compile) expandRanges(
 			if len(blockFilterList) > 0 {
 				preAllocBlocks = 64
 			} else {
-				preAllocBlocks = int(node.Stats.BlockNum)
+				preAllocBlocks = int(n.Stats.BlockNum)
 				if rsp != nil {
 					preAllocBlocks = preAllocBlocks / int(rsp.CNCNT)
 				}
@@ -4003,15 +4003,15 @@ func (c *Compile) expandRanges(
 		return nil, err
 	}
 
-	if node.TableDef.Partition != nil {
+	if n.TableDef.Partition != nil {
 		begin := 0
 		if policy&engine.Policy_CollectUncommittedData != 0 {
 			begin = 1 //skip empty block info
 		}
 		rangesParam.PreAllocBlocks = 2
 
-		if node.PartitionPrune != nil && node.PartitionPrune.IsPruned {
-			for i, partitionItem := range node.PartitionPrune.SelectedPartitions {
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
 				subrelation, err := db.Relation(newCtx, partTableName, c.proc)
 				if err != nil {
@@ -4030,7 +4030,7 @@ func (c *Compile) expandRanges(
 					})
 			}
 		} else {
-			partitionInfo := node.TableDef.Partition
+			partitionInfo := n.TableDef.Partition
 			partitionNum := int(partitionInfo.PartitionNum)
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {

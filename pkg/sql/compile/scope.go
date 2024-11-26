@@ -900,16 +900,16 @@ func removeStringBetween(s, start, end string) string {
 }
 
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
-	scanNode := s.DataSource.node
-	if scanNode != nil && len(scanNode.AggList) > 0 {
-		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
+	n := s.DataSource.node
+	if n != nil && len(n.AggList) > 0 {
+		partialResults, partialResultTypes, columnMap := checkAggOptimize(n)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			blk := s.NodeInfo.Data.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 
-			tombstones, err := collectTombstones(c, scanNode, rel, engine.Policy_CollectAllTombstones)
+			tombstones, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return err
 			}
@@ -933,7 +933,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
-				if c.evalAggOptimize(scanNode, blk, partialResults, partialResultTypes, columnMap) != nil {
+				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
 					partialResults = nil
 					return false, nil
 				}
