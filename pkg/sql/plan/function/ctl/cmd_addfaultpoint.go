@@ -85,10 +85,6 @@ type CNResponse struct {
 	ErrorStr  string `json:"error_str,omitempty"`
 }
 
-type AddFaultResponse struct {
-	Res []CNResponse `json:"res"`
-}
-
 func handleAddFaultPoint(
 	proc *process.Process,
 	service serviceType,
@@ -117,9 +113,8 @@ func handleAddFaultPoint(
 		})
 	}
 
-	cnRes := AddFaultResponse{
-		Res: make([]CNResponse, 0),
-	}
+	cnRes := make([]CNResponse, 0)
+
 	for idx := range cns {
 		res := CNResponse{
 			CNid: cns[idx],
@@ -144,7 +139,7 @@ func handleAddFaultPoint(
 				res.ReturnStr = resp.TraceSpanResponse.Resp
 			}
 		}
-		cnRes.Res = append(cnRes.Res, res)
+		cnRes = append(cnRes, res)
 	}
 
 	return Result{

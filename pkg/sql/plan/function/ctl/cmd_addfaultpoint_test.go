@@ -76,9 +76,7 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
-		Data: AddFaultResponse{
-			Res: []CNResponse{res},
-		},
+		Data:   []CNResponse{res},
 	})
 
 	a4.proc = proc
@@ -91,9 +89,7 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
-		Data: AddFaultResponse{
-			Res: []CNResponse{res},
-		},
+		Data:   []CNResponse{res},
 	})
 
 }
