@@ -106,12 +106,6 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
-//func (b *ProjectionBinder) BindProjectList(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-//	astStr := tree.String(astExpr, dialect.MYSQL)
-//
-//	b.ctx.projects
-//}
-
 func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindColRef(astExpr, depth, isRoot)
 }
