@@ -113,6 +113,8 @@ import (
     selectStatement tree.SelectStatement
     selectExprs tree.SelectExprs
     selectExpr tree.SelectExpr
+    selectOptions uint64
+    selectOption uint64
 
     insert *tree.Insert
     replace *tree.Replace
@@ -331,7 +333,7 @@ import (
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
-%token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
+%token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_CALC_FOUND_ROWS
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
@@ -562,6 +564,8 @@ import (
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
+%type <selectOptions> select_options_opt select_option_list
+%type <selectOption> select_option_opt
 %type <tableExprs> table_name_wild_list
 %type <joinTableExpr>  join_table
 %type <applyTableExpr> apply_table
@@ -738,9 +742,9 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt rollup_opt
+%type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword separator_opt kmeans_opt
+%type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -780,7 +784,7 @@ import (
 %type <epxlainOptions> utility_option_list
 %type <epxlainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
-%type <str> explain_option_key select_option_opt
+%type <str> explain_option_key
 %type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
@@ -5651,21 +5655,10 @@ union_op:
     }
 
 simple_select_clause:
-    SELECT distinct_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+    SELECT select_options_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
     {
         $$ = &tree.SelectClause{
-            Distinct: $2,
-            Exprs: $3,
-            From: $4,
-            Where: $5,
-            GroupBy: $6,
-            Having: $7,
-        }
-    }
-|    SELECT select_option_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
-    {
-        $$ = &tree.SelectClause{
-            Distinct: false,
+            Distinct: tree.QuerySpecOptionDistinct & $2 != 0,
             Exprs: $3,
             From: $4,
             Where: $5,
@@ -5675,36 +5668,83 @@ simple_select_clause:
         }
     }
 
+select_options_opt:
+    {
+        $$ = tree.QuerySpecOptionNone
+    }
+|   select_option_list
+    {
+        $$ = $1
+    }
+
+select_option_list:
+    select_option_opt
+    {
+        $$ = $1
+    }
+|   select_option_list select_option_opt
+    {
+        $$ = $1 | $2
+    }
+
 select_option_opt:
     SQL_SMALL_RESULT
     {
-    	$$ = strings.ToLower($1)
+    	$$ = tree.QuerySpecOptionSqlSmallResult
     }
-|	SQL_BIG_RESULT
-	{
-       $$ = strings.ToLower($1)
+|   SQL_BIG_RESULT
+    {
+       $$ = tree.QuerySpecOptionSqlBigResult
     }
 |   SQL_BUFFER_RESULT
 	{
-    	$$ = strings.ToLower($1)
+    	$$ = tree.QuerySpecOptionSqlBufferResult
     }
-
-distinct_opt:
+|   STRAIGHT_JOIN
     {
-        $$ = false
+    	$$ = tree.QuerySpecOptionStraightJoin
+    }
+|   HIGH_PRIORITY
+    {
+    	$$ = tree.QuerySpecOptionHighPriority
+    }
+|   SQL_CALC_FOUND_ROWS
+    {
+    	$$ = tree.QuerySpecOptionSqlCalcFoundRows
+    }
+|   SQL_NO_CACHE
+    {
+    	$$ = tree.QuerySpecOptionSqlNoCache
     }
 |   ALL
     {
-        $$ = false
+        $$ = tree.QuerySpecOptionAll
     }
-|   distinct_keyword
+|   DISTINCT
     {
-        $$ = true
+        $$ = tree.QuerySpecOptionDistinct
+    }
+|   DISTINCTROW
+    {
+        $$ = tree.QuerySpecOptionDistinctRow
     }
 
-distinct_keyword:
-    DISTINCT
-|   DISTINCTROW
+//distinct_opt:
+//    {
+//        $$ = false
+//    }
+//|   ALL
+//    {
+//        $$ = false
+//    }
+//|   distinct_keyword
+//    {
+//        $$ = true
+//    }
+//
+//distinct_keyword:
+//    DISTINCT
+//|   DISTINCTROW
 
 having_opt:
     {
@@ -12665,7 +12705,7 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-
+|   SQL_BUFFER_RESULT
 
 func_not_keyword:
     DATE_ADD
