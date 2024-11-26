@@ -16,7 +16,10 @@ package bytejson
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type tokenTestCase struct {
@@ -92,4 +95,19 @@ func TestByteJson(t *testing.T) {
 		}
 		checkTokens(t, tokensWithKey, tc.tokensWithKey)
 	}
+}
+
+func TestFillToken(t *testing.T) {
+	var tok Token
+	lv := "1234567890"
+	fmt.Printf("%s %d\n", lv, len(lv))
+
+	fillToken(&tok, []byte(lv), 0)
+	require.Equal(t, 10, int(tok.TokenBytes[0]))
+
+	for i := 0; i < 20; i++ {
+		lv += lv
+	}
+	fillToken(&tok, []byte(lv), 0)
+	require.Equal(t, 127, int(tok.TokenBytes[0]))
 }

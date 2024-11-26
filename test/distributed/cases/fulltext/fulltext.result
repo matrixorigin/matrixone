@@ -510,3 +510,11 @@ select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mo
 count(*)
 1
 drop table t1;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;
