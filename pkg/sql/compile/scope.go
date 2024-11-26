@@ -900,30 +900,28 @@ func removeStringBetween(s, start, end string) string {
 }
 
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
-	n := s.DataSource.node
-	if n != nil && len(n.AggList) > 0 {
-		partialResults, partialResultTypes, columnMap := checkAggOptimize(n)
+	node := s.DataSource.node
+	if node != nil && len(node.AggList) > 0 {
+		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
-
+			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			blk := s.NodeInfo.Data.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
-
-			tombstones, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
-			if err != nil {
-				return err
-			}
-
-			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
-			if err != nil {
-				return err
-			}
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
 			var (
 				hasTombstone bool
 				err2         error
 			)
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return err
+			}
+			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
+			if err != nil {
+				return err
+			}
 			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
@@ -933,7 +931,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
-				if c.evalAggOptimize(n, blk, partialResults, partialResultTypes, columnMap) != nil {
+				if c.evalAggOptimize(node, blk, partialResults, partialResultTypes, columnMap) != nil {
 					partialResults = nil
 					return false, nil
 				}
