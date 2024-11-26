@@ -29,7 +29,8 @@ import (
 type Cmd = uint8
 
 const (
-	QUIT Cmd = iota
+	QUIT  Cmd = iota
+	stuck     // For tests only. Stop executing Ops.
 )
 
 const (
@@ -203,6 +204,7 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 		return true
 	default:
 	}
+	w.Pending.Add(-1)
 	return false
 }
 
@@ -232,6 +234,9 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 			panic("logic error")
 		}
 		w.ClosedCh <- struct{}{}
+	case stuck: // For test only
+		<-w.Ctx.Done()
+		return
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}
