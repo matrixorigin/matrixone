@@ -18,6 +18,29 @@ mo_ctl(dn, flush, d1.t2)
 select Sleep(1);
 Sleep(1)
 0
+explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER   hashOnPK
+        Join Cond: (t2.c0 = t1.c1)
+        Runtime Filter Build: serial(#[-1,0])
+        ->  Table Scan on d1.t2
+              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix
+        ->  Join
+              Join Type: INDEX
+              Join Cond: (t1.c1 = #[1,0])
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1 [ForceOneCN]
+                    Filter Cond: (t1.c3 = 11)
+                    Block Filter Cond: (t1.c3 = 11)
+                    Runtime Filter Probe: t1.c1
+              ->  Table Scan on d1.id1(index) [ForceOneCN]
+                    Filter Cond: (#[0,0] = 11)
+                    Block Filter Cond: (#[0,0] = 11)
+select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
+c1    c2    c3    c0    c1    c2    c3
+11    11    11    11    11    11    11
 select * from t1 where c2=1;
 c1    c2    c3
 1    1    1
