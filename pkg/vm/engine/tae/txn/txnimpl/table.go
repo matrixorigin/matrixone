@@ -1129,9 +1129,6 @@ func (tbl *txnTable) findDeletes(
 		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
-		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
-			continue
-		}
 		skip := obj.IsCreatingOrAborted()
 		if skip {
 			continue
