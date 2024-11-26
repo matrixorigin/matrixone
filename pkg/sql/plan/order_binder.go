@@ -34,6 +34,15 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 
 		if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
+			for _, selectField := range b.ctx.projectByAst {
+				if selectField.aliasName != "" {
+					continue
+				}
+				if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
+				}
+			}
+
 			return &plan.Expr{
 				Typ: b.ctx.projects[selectItem.idx].Typ,
 				Expr: &plan.Expr_Col{
@@ -71,9 +80,6 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 						},
 					}
 					continue
-					//col := colRef.ColName()
-					//table := colRef.TblName()
-					//name := tree.String(astExpr, dialect.MYSQL)
 				}
 			}
 
