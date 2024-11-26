@@ -1147,7 +1147,6 @@ func (tbl *txnTable) findDeletes(
 		if err = objData.Contains(
 			ctx,
 			tbl.store.txn,
-			isCommitting,
 			rowIDs,
 			keysZM,
 			common.WorkspaceAllocator,

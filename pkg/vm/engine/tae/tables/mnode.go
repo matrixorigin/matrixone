@@ -102,22 +102,20 @@ func (node *memoryNode) Contains(
 	keys containers.Vector,
 	keysZM index.ZM,
 	txn txnif.TxnReader,
-	isCommitting bool,
 	mp *mpool.MPool,
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
-	return node.pkIndex.Contains(ctx, keys.GetDownstreamVector(), keysZM, blkID, node.checkConflictLocked(txn, isCommitting), mp)
+	return node.pkIndex.Contains(ctx, keys.GetDownstreamVector(), keysZM, blkID, node.checkConflictLocked(txn), mp)
 }
 func (node *memoryNode) getDuplicatedRowsLocked(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	maxRow uint32,
+	minRow,maxRow uint32,
 	skipFn func(uint32) error,
-	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
@@ -127,9 +125,9 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 		keysZM,
 		blkID,
 		rowIDs.GetDownstreamVector(),
+		minRow,
 		maxRow,
 		skipFn,
-		skipCommittedBeforeTxnForAblk,
 		mp)
 }
 
@@ -257,28 +255,23 @@ func (node *memoryNode) ApplyAppendLocked(
 func (node *memoryNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	maxVisibleRow uint32,
+	minVisibleRow,maxVisibleRow uint32,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	isCommitting bool,
-	checkWWConflict bool,
-	skipCommittedBeforeTxnForAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	var checkFn func(uint32) error
-	if checkWWConflict {
-		checkFn = node.checkConflictLocked(txn, isCommitting)
-	}
-	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, maxVisibleRow, checkFn, skipCommittedBeforeTxnForAblk, mp)
+	checkFn = node.checkConflictLocked(txn)
+	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs,minVisibleRow, maxVisibleRow, checkFn, mp)
 
 	return
 }
 
 func (node *memoryNode) checkConflictLocked(
-	txn txnif.TxnReader, isCommitting bool,
+	txn txnif.TxnReader,
 ) func(row uint32) error {
 	return func(row uint32) error {
 		appendnode := node.object.appendMVCC.GetAppendNodeByRowLocked(row)

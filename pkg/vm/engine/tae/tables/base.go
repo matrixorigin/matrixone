@@ -249,7 +249,7 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	rowIDs containers.Vector,
 	blkOffset uint16,
 	isAblk bool,
-	skipCommittedBeforeTxnForAblk bool,
+	from, to types.TS,
 	maxVisibleRow uint32,
 	mp *mpool.MPool,
 ) (err error) {
@@ -279,7 +279,6 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 			maxVisibleRow,
 			obj.LoadPersistedCommitTS,
 			txn,
-			skipCommittedBeforeTxnForAblk,
 		)
 	} else {
 		dedupFn = containers.MakeForeachVectorOp(
@@ -308,7 +307,6 @@ func (obj *baseObject) containsWithLoad(
 	sels *nulls.Bitmap,
 	blkOffset uint16,
 	isAblk bool,
-	isCommitting bool,
 	mp *mpool.MPool,
 ) (err error) {
 	schema := obj.meta.Load().GetSchema()
@@ -357,7 +355,7 @@ func (obj *baseObject) containsWithLoad(
 func (obj *baseObject) persistedGetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	skipCommittedBeforeTxnForAblk bool,
+	from, to types.TS,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
@@ -387,7 +385,7 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			continue
 		}
 		err = obj.getDuplicateRowsWithLoad(
-			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, skipCommittedBeforeTxnForAblk, maxVisibleRow, mp)
+			ctx, txn, keys, sels, rowIDs, uint16(i), isAblk, from, to, maxVisibleRow, mp)
 		if err != nil {
 			return err
 		}
@@ -398,7 +396,6 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 func (obj *baseObject) persistedContains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
 	keysZM index.ZM,
 	isAblk bool,
@@ -426,7 +423,7 @@ func (obj *baseObject) persistedContains(
 			continue
 		}
 		err = obj.containsWithLoad(
-			ctx, txn, keys, sels, uint16(i), isAblk, isCommitting, mp)
+			ctx, txn, keys, sels, uint16(i), isAblk, mp)
 		if err != nil {
 			return err
 		}

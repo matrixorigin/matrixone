@@ -192,9 +192,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, ch
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			false,
-			checkWW,
-			false,
+			types.TS{},types.MaxTs(),
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
@@ -267,9 +265,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			true,
-			true,
-			false,
+			from,to,
 			rowIDs,
 			common.WorkspaceAllocator,
 		)

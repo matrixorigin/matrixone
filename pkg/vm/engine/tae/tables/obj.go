@@ -81,9 +81,7 @@ func (obj *object) GetDuplicatedRows(
 	txn txnif.TxnReader,
 	keys containers.Vector,
 	keysZM index.ZM,
-	precommit bool,
-	checkWWConflict bool,
-	_ bool, /*skipCommittedBeforeTxnForAblk*/
+	from, to types.TS,
 	rowIDs containers.Vector,
 	mp *mpool.MPool,
 ) (err error) {
@@ -99,7 +97,7 @@ func (obj *object) GetDuplicatedRows(
 	return obj.persistedGetDuplicatedRows(
 		ctx,
 		txn,
-		false, /*skipCommittedBeforeTxnForAblk*/
+		from, to,
 		keys,
 		keysZM,
 		rowIDs,
@@ -114,7 +112,6 @@ func (obj *object) GetMaxRowByTS(ts types.TS) (uint32, error) {
 func (obj *object) Contains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
 	keysZM index.ZM,
 	mp *mpool.MPool) (err error) {
@@ -130,7 +127,6 @@ func (obj *object) Contains(
 	return obj.persistedContains(
 		ctx,
 		txn,
-		isCommitting,
 		keys,
 		keysZM,
 		false,

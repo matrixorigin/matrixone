@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -198,9 +197,7 @@ func (obj *aobject) GetDuplicatedRows(
 	txn txnif.TxnReader,
 	keys containers.Vector,
 	keysZM index.ZM,
-	precommit bool,
-	checkWWConflict bool,
-	skipCommittedBeforeTxnForAblk bool,
+	from, to types.TS,
 	rowIDs containers.Vector,
 	mp *mpool.MPool,
 ) (err error) {
@@ -211,28 +208,24 @@ func (obj *aobject) GetDuplicatedRows(
 	}()
 	node := obj.PinNode()
 	defer node.Unref()
-	maxRow := uint32(math.MaxUint32)
-	if !precommit {
-		maxRow, err = obj.GetMaxRowByTS(txn.GetStartTS())
-	}
+	maxRow, err := obj.GetMaxRowByTS(to)
+	minRow, err := obj.GetMaxRowByTS(from)
 	if !node.IsPersisted() {
 		return node.GetDuplicatedRows(
 			ctx,
 			txn,
+			minRow,
 			maxRow,
 			keys,
 			keysZM,
 			rowIDs,
-			precommit,
-			checkWWConflict,
-			skipCommittedBeforeTxnForAblk,
 			mp,
 		)
 	} else {
 		return obj.persistedGetDuplicatedRows(
 			ctx,
 			txn,
-			skipCommittedBeforeTxnForAblk,
+			from, to,
 			keys,
 			keysZM,
 			rowIDs,
@@ -269,7 +262,6 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (uint32, error) {
 func (obj *aobject) Contains(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	precommit bool,
 	keys containers.Vector,
 	keysZM index.ZM,
 	mp *mpool.MPool,
@@ -287,14 +279,12 @@ func (obj *aobject) Contains(
 			keys,
 			keysZM,
 			txn,
-			precommit,
 			mp,
 		)
 	} else {
 		return obj.persistedContains(
 			ctx,
 			txn,
-			precommit,
 			keys,
 			keysZM,
 			true,

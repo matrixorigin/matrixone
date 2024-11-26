@@ -3446,10 +3446,10 @@ func TestImmutableIndexInAblk(t *testing.T) {
 		rowIDs.Append(nil, true)
 	}
 	err = meta.GetObjectData().GetDuplicatedRows(
-		context.Background(), txn, bat.Vecs[1], nil, false, true, false, rowIDs, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, types.TS{}, types.MaxTs(), rowIDs, common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
-	err = meta.GetObjectData().Contains(context.Background(), txn, false, rowIDs, nil, common.DebugAllocator)
+	err = meta.GetObjectData().Contains(context.Background(), txn, rowIDs, nil, common.DebugAllocator)
 	assert.NoError(t, err)
 	duplicate := false
 	rowIDs.Foreach(func(v any, isNull bool, row int) error {
