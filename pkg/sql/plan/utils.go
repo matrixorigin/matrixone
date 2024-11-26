@@ -2180,7 +2180,7 @@ func MakeFalseExpr() *Expr {
 }
 
 func MakeCPKEYRuntimeFilter(tag int32, limit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
-	idx, _ := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	idx := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
 	expr.GetCol().ColPos = idx
 	expr.Typ = tableDef.Cols[idx].Typ
 	return &plan.RuntimeFilterSpec{
