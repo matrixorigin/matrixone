@@ -408,6 +408,14 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
 					dels := delsFn(v1)
+					if dels == nil {
+						logutil.Info("Dedup-WW",
+							zap.String("txn", txn.Repr()),
+							zap.Int("row offset", row),
+							zap.String("commit ts", commitTS.ToString()),
+						)
+						return txnif.ErrTxnWWConflict
+					}
 					ts, ok := dels.Mapping[row]
 					if !ok {
 						logutil.Info("Dedup-WW",
@@ -422,6 +430,7 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 							zap.String("txn", txn.Repr()),
 							zap.Int("row offset", row),
 							zap.String("commit ts", commitTS.ToString()),
+							zap.String("original commit ts", ts.ToString()),
 						)
 						return txnif.ErrTxnWWConflict
 					}

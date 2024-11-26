@@ -492,7 +492,7 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 			if col != expr3.ColName() {
 				return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param must equal to colName")
 			}
-			param.NullMap[col] = append(param.NullMap[col], strings.ToLower(expr4.String()))
+			param.NullMap[col] = append(param.NullMap[col], expr4.String())
 		}
 		param.Tail.Assignments[i].Expr = nil
 	}

@@ -120,6 +120,10 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeVector(proc.Mp())
 }
 
+func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) resetParam() {
 	ctr.status = receive
 	ctr.desc = nil

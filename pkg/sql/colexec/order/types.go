@@ -116,6 +116,10 @@ func (order *Order) Free(proc *process.Process, _ bool, err error) {
 	ctr.resultOrderList = nil
 }
 
+func (order *Order) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (order *Order) cleanBatch(proc *process.Process) {
 	//big memory, just clean
 	ctr := &order.ctr

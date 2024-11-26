@@ -121,6 +121,10 @@ func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, e
 	mergeBlock.cleanMp(proc)
 }
 
+func (mergeBlock *MergeBlock) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (mergeBlock *MergeBlock) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	if len(mergeBlock.container.mp) > 0 {
 		for _, bat := range mergeBlock.container.mp {

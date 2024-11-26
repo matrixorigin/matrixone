@@ -630,51 +630,24 @@ func (client *txnClient) Resume() {
 	}
 }
 
-// NodeRunningPipelineManager to avoid packages import cycles.
-type NodeRunningPipelineManager interface {
-	PauseService()
-	KillAllQueriesWithError()
-	ResumeService()
-}
-
-var runningPipelines NodeRunningPipelineManager
-
-func SetRunningPipelineManagement(m NodeRunningPipelineManager) {
-	runningPipelines = m
-}
-
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
-	runningPipelines.PauseService()
-
-	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
+	actives := make([]*txnOperator, 0, len(client.mu.activeTxns))
 	for _, op := range client.mu.activeTxns {
-		ops = append(ops, op)
+		actives = append(actives, op)
 	}
-	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
-	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
 
 	if client.timestampWaiter != nil {
 		// Cancel all waiters, means that all waiters do not need to wait for
 		// the newer timestamp from logtail consumer.
 		client.timestampWaiter.Pause()
 	}
-	runningPipelines.KillAllQueriesWithError()
 
 	client.mu.Unlock()
 
-	for _, op := range ops {
-		op.reset.cannotCleanWorkspace = true
-		_ = op.Rollback(context.Background())
-		op.reset.cannotCleanWorkspace = false
+	for _, op := range actives {
+		op.addFlag(AbortedFlag)
 	}
-	for _, op := range waitOps {
-		op.reset.cannotCleanWorkspace = true
-		_ = op.Rollback(context.Background())
-		op.reset.cannotCleanWorkspace = false
-		op.notifyActive()
-	}
-	runningPipelines.ResumeService()
 
 	if client.timestampWaiter != nil {
 		// After rollback all transactions, resume the timestamp waiter channel.

@@ -317,7 +317,7 @@ import (
 
 
 // Transaction
-%token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
+%token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT SAVEPOINT
 %token <str> CHAIN NO RELEASE PRIORITY QUICK
 
 // Type
@@ -510,7 +510,7 @@ import (
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
-%type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
+%type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
@@ -2681,6 +2681,42 @@ transaction_stmt:
     begin_stmt
 |   commit_stmt
 |   rollback_stmt
+|   savepoint_stmt
+|   release_savepoint_stmt
+|   rollback_to_savepoint_stmt
+
+savepoint_stmt:
+    SAVEPOINT ident
+    {
+        $$ = &tree.SavePoint{Name: tree.Identifier($2.Compare())}
+    }
+
+release_savepoint_stmt:
+    RELEASE SAVEPOINT ident
+    {
+        $$ = &tree.ReleaseSavePoint{Name: tree.Identifier($3.Compare())}
+    }
+
+rollback_to_savepoint_stmt:
+    ROLLBACK TO ident
+    {
+        $$ = &tree.RollbackToSavePoint{Name: tree.Identifier($3.Compare())}
+    }
+|
+    ROLLBACK TO SAVEPOINT ident
+    {
+        $$ = &tree.RollbackToSavePoint{Name: tree.Identifier($4.Compare())}
+    }
+|
+    ROLLBACK WORK TO SAVEPOINT ident
+    {
+        $$ = &tree.RollbackToSavePoint{Name: tree.Identifier($5.Compare())}
+    }
+|
+    ROLLBACK WORK TO ident
+    {
+        $$ = &tree.RollbackToSavePoint{Name: tree.Identifier($4.Compare())}
+    }
 
 rollback_stmt:
     ROLLBACK completion_type
@@ -12432,6 +12468,7 @@ non_reserved_keyword:
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
+|   SAVEPOINT
 |   TASK
 |   TEXT
 |   THAN
@@ -12627,6 +12664,7 @@ non_reserved_keyword:
 |   GROUPING
 |   SETS
 |   CUBE
+|   RETRY
 
 
 func_not_keyword:

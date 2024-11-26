@@ -95,6 +95,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FaultInjection, s.handleFaultInjection, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -142,6 +143,16 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
 	resp.TraceSpanResponse.Resp = ctl.UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
+	return nil
+}
+
+func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.TraceSpanResponse = new(query.TraceSpanResponse)
+	resp.FaultInjectionResponse.Resp = ctl.HandleCnFaultInjection(
+		ctx, req.FaultInjectionRequest.Name,
+		req.FaultInjectionRequest.Freq, req.FaultInjectionRequest.Action,
+		req.FaultInjectionRequest.Iarg, req.FaultInjectionRequest.Sarg,
+	)
 	return nil
 }
 

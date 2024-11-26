@@ -17,11 +17,9 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"iter"
-	"net/http/httptrace"
 	pathpkg "path"
 	"runtime"
 	"sort"
@@ -31,7 +29,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -138,6 +135,9 @@ func NewS3FS(
 		fs.storage,
 		"s3",
 	)
+
+	// http trace
+	fs.storage = newObjectStorageHTTPTrace(fs.storage)
 
 	// cache
 	if !noCache {
@@ -378,10 +378,6 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 		return err
 	}
 
-	tp := reuse.Alloc[tracePoint](nil)
-	defer reuse.Free(tp, nil)
-	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
-
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
@@ -421,41 +417,41 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	// size
-	var size int64
-	if len(vector.Entries) > 0 {
-		last := vector.Entries[len(vector.Entries)-1]
-		size = int64(last.Offset + last.Size)
+	// reader
+	var reader io.Reader
+	reader = newIOEntriesReader(ctx, vector.Entries)
+	var n atomic.Int64
+	reader = &countingReader{
+		R: reader,
+		C: &n,
 	}
 
-	// content
-	var content []byte
-	if len(vector.Entries) == 1 &&
-		vector.Entries[0].Size > 0 &&
-		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
-		// one piece of data
-		content = vector.Entries[0].Data
-
-	} else {
-		r := newIOEntriesReader(ctx, vector.Entries)
-		content, err = io.ReadAll(r)
-		if err != nil {
-			return 0, err
-		}
+	// disk cache
+	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
+	var diskCacheBuf *bytes.Buffer
+	if writeDiskCache {
+		diskCacheBuf = new(bytes.Buffer)
+		reader = io.TeeReader(reader, diskCacheBuf)
 	}
 
-	r := bytes.NewReader(content)
+	// some SDKs can't handle unknown reader type
+	size := vector.size()
+	if size != nil {
+		reader = io.LimitReader(reader, *size)
+	}
+
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt
 	}
 	key := s.pathToKey(path.File)
-	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
+	if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
 		return 0, err
 	}
 
 	// write to disk cache
-	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
+	if writeDiskCache {
+		content := diskCacheBuf.Bytes()
 		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
 		}); err != nil {
@@ -463,7 +459,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 	}
 
-	return len(content), nil
+	return int(n.Load()), nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
@@ -484,10 +480,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		LogEvent(ctx, str_read_return)
 		LogSlowEvent(ctx, time.Millisecond*500)
 	}()
-
-	tp := reuse.Alloc[tracePoint](nil)
-	defer reuse.Free(tp, nil)
-	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -979,76 +971,4 @@ func (s *S3FS) Cost() *CostAttr {
 	return &CostAttr{
 		List: CostHigh,
 	}
-}
-
-type tracePoint struct {
-	start             time.Time
-	dnsStart          time.Time
-	connectStart      time.Time
-	tlsHandshakeStart time.Time
-	ct                *httptrace.ClientTrace
-}
-
-func newTracePoint() *tracePoint {
-	tp := &tracePoint{
-		ct: &httptrace.ClientTrace{},
-	}
-	tp.ct.GetConn = tp.getConnPoint
-	tp.ct.GotConn = tp.gotConnPoint
-	tp.ct.DNSStart = tp.dnsStartPoint
-	tp.ct.DNSDone = tp.dnsDonePoint
-	tp.ct.ConnectStart = tp.connectStartPoint
-	tp.ct.ConnectDone = tp.connectDonePoint
-	tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
-	tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
-	return tp
-}
-
-func (tp tracePoint) TypeName() string {
-	return "fileservice.tracePoint"
-}
-
-func resetTracePoint(tp *tracePoint) {
-	tp.start = time.Time{}
-	tp.dnsStart = time.Time{}
-	tp.connectStart = time.Time{}
-	tp.tlsHandshakeStart = time.Time{}
-}
-
-func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
-	return tp.ct
-}
-
-func (tp *tracePoint) getConnPoint(hostPort string) {
-	tp.start = time.Now()
-}
-
-func (tp *tracePoint) gotConnPoint(info httptrace.GotConnInfo) {
-	metric.S3GetConnDurationHistogram.Observe(time.Since(tp.start).Seconds())
-}
-
-func (tp *tracePoint) dnsStartPoint(di httptrace.DNSStartInfo) {
-	metric.S3DNSResolveCounter.Inc()
-	tp.dnsStart = time.Now()
-}
-
-func (tp *tracePoint) dnsDonePoint(di httptrace.DNSDoneInfo) {
-	metric.S3DNSResolveDurationHistogram.Observe(time.Since(tp.dnsStart).Seconds())
-}
-
-func (tp *tracePoint) connectStartPoint(network, addr string) {
-	metric.S3ConnectCounter.Inc()
-	tp.connectStart = time.Now()
-}
-
-func (tp *tracePoint) connectDonePoint(network, addr string, err error) {
-	metric.S3ConnectDurationHistogram.Observe(time.Since(tp.connectStart).Seconds())
-}
-
-func (tp *tracePoint) tlsHandshakeStartPoint() {
-	tp.tlsHandshakeStart = time.Now()
-}
-
-func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
-	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
 }

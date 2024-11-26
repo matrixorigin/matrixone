@@ -166,24 +166,16 @@ func (external *External) Prepare(proc *process.Process) error {
 }
 
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
 
 	analyzer := external.OpAnalyzer
-	analyzer.Start()
 	defer func() {
-		analyzer.Stop()
 		analyzer.AddScanTime(t1)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	//anal.Input(nil, external.GetIsFirst())
-	analyzer.Input(nil)
 
 	var err error
 	result := vm.NewCallResult()
@@ -208,6 +200,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.End = true
 		return result, err
 	}
+	analyzer.Input(external.ctr.buf)
 
 	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {
@@ -215,13 +208,6 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
-	if external.ProjectList != nil {
-		result.Batch, err = external.EvalProjection(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-	}
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -270,7 +256,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
+		bat.Attrs[i] = node.TableDef.Cols[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
 			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
@@ -955,7 +941,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])])
+		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
@@ -970,7 +956,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return err
@@ -1225,7 +1211,6 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
 		return false
 	}
-	field = strings.ToLower(field)
 	for _, v := range nullMap[attr] {
 		if v == field {
 			return true
@@ -1238,26 +1223,17 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.TbColToDataCol[strings.ToLower(colName)]]
+	return line[param.TbColToDataCol[colName]]
 }
 
-// when len(line) >= len(param.TbColToDataCol), call this function to get one row data
-func getOneRowDataLineGECol(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	for colIdx := range param.Attrs {
-		if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
-			return err
+func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	if checkLineStrict(param) || len(line) >= len(param.TbColToDataCol) {
+		for colIdx := range param.Attrs {
+			if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
-}
-
-func getOneRowDataRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
-}
-
-func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	if len(line) >= len(param.TbColToDataCol) {
-		return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
+		return nil
 	}
 
 	for colIdx, colName := range param.Attrs {
@@ -1271,13 +1247,6 @@ func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowId
 		vector.AppendBytes(vec, nil, true, mp)
 	}
 	return nil
-}
-
-func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	if checkLineStrict(param) {
-		return getOneRowDataRestrictive(bat, line, rowIdx, param, mp)
-	}
-	return getOneRowDataNonRestrictive(bat, line, rowIdx, param, mp)
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {

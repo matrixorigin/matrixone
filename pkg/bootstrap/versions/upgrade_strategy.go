@@ -299,7 +299,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 
 // CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
-func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
+var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
 	if schema == "" || tableName == "" {
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}

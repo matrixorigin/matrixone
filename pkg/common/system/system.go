@@ -119,9 +119,17 @@ func GoMaxProcs() int {
 
 // SetGoMaxProcs
 // co-operate with pkg/cnservice/service.handleGoMaxProcs
-func SetGoMaxProcs(n int) int {
-	goMaxProcs.Store(int32(n))
-	return runtime.GOMAXPROCS(n)
+func SetGoMaxProcs(n int) (ret int) {
+	ret = runtime.GOMAXPROCS(n)
+	if n < 1 {
+		// fix https://github.com/matrixorigin/MO-Cloud/issues/4486
+		goMaxProcs.Store(int32(ret))
+		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, ret)
+	} else {
+		goMaxProcs.Store(int32(n))
+		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, n)
+	}
+	return ret
 }
 
 func runWithContainer(stopper *stopper.Stopper) {
@@ -256,6 +264,6 @@ func refreshQuotaConfig() {
 
 func init() {
 	pid = os.Getpid()
-	SetGoMaxProcs(runtime.GOMAXPROCS(0))
 	refreshQuotaConfig()
+	SetGoMaxProcs(int(cpuNum.Load()))
 }
