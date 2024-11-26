@@ -237,6 +237,17 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			}
 		}
 
+		needWait, txn := obj.CreateNode.NeedWaitCommitting(to)
+		if needWait {
+			txn.GetTxnState(true)
+		}
+		needWait2, txn := obj.DeleteNode.NeedWaitCommitting(to)
+		if needWait2 {
+			txn.GetTxnState(true)
+		}
+		if needWait || needWait2 {
+			obj = obj.GetLatestNode()
+		}
 		visible := obj.VisibleByTS(to)
 		if !visible {
 			if !inQueue && !obj.IsAppendable() {

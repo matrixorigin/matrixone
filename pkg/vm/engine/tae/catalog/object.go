@@ -125,14 +125,6 @@ func (entry *ObjectEntry) GetUpdateEntry(
 	return
 }
 func (entry *ObjectEntry) VisibleByTS(ts types.TS) bool {
-	needWait, txn := entry.CreateNode.NeedWaitCommitting(ts)
-	if needWait {
-		txn.GetTxnState(true)
-	}
-	needWait, txn = entry.DeleteNode.NeedWaitCommitting(ts)
-	if needWait {
-		txn.GetTxnState(true)
-	}
 	// visible by end
 	if entry.CreatedAt.GT(&ts) {
 		return false
