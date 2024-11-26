@@ -426,6 +426,7 @@ func (r *reader) Read(
 				logutil.Info(
 					"LOGREADER-INJECTED-1",
 					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
 					zap.Int("data-len", outBatch.RowCount()),
 					zap.Error(err),
 				)
@@ -437,6 +438,7 @@ func (r *reader) Read(
 				logutil.Info(
 					"LOGREADER-INJECTED-1",
 					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
 					zap.Error(err),
 					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
 				)
