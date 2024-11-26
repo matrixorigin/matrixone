@@ -308,11 +308,6 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	zm := index2.NewZM(types.T_datetime, 0)
-	bs := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bs, 0)
-	index2.UpdateZM(zm, bs)
-	binary.LittleEndian.PutUint32(bs, 10)
-	index2.UpdateZM(zm, bs)
 	defer func() {
 		r := recover()
 		fmt.Println("panic recover", r)
