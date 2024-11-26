@@ -83,6 +83,7 @@ type Service interface {
 	GetTimestampWaiter() client.TimestampWaiter
 	GetEngine() engine.Engine
 	GetClock() clock.Clock
+	GetTxnClient() client.TxnClient
 }
 
 type EngineType string
