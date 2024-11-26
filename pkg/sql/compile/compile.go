@@ -125,7 +125,7 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := allocateNewCompile(proc)
+	c := allocateCompile(proc)
 
 	c.e = e
 	c.db = db

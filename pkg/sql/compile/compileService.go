@@ -15,14 +15,12 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func allocateNewCompile(proc *process.Process) *Compile {
+func allocateCompile(proc *process.Process) *Compile {
 	runningCompile := reuse.Alloc[Compile](nil)
 	runningCompile.proc = proc
 	return runningCompile
@@ -46,16 +44,4 @@ func MarkQueryDone(c *Compile, txn txnClient.TxnOperator) {
 	if txn != nil {
 		txn.ExitRunSql()
 	}
-}
-
-// thisQueryStillRunning return nil if this query is still in running.
-// return error once query was canceled or txn was done.
-func thisQueryStillRunning(proc *process.Process, txn txnClient.TxnOperator) error {
-	if err := proc.GetQueryContextError(); err != nil {
-		return err
-	}
-	if txn != nil && txn.Status() != pbtxn.TxnStatus_Active {
-		return moerr.NewInternalError(proc.Ctx, "transaction is not active.")
-	}
-	return nil
 }
