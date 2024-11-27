@@ -105,6 +105,10 @@ func (group *Group) requireDefaultAggResult(proc *process.Process) (*batch.Batch
 	return group.ctr.result1.Popped, true, nil
 }
 
+func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) error {
+	return nil
+}
+
 // container
 // running context.
 type container struct {

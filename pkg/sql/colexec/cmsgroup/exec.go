@@ -182,6 +182,10 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 func (group *Group) consumeBatchToGetFinalResult(
 	proc *process.Process, bat *batch.Batch) error {
 
+	if err := group.evaluateGroupByAndAgg(proc, bat); err != nil {
+		return err
+	}
+
 	switch group.ctr.mtyp {
 	case H0:
 		// without group by.
@@ -329,6 +333,10 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 func (group *Group) consumeBatchToGetIntermediateResult(
 	proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
 
+	if err := group.evaluateGroupByAndAgg(proc, bat); err != nil {
+		return nil, err
+	}
+
 	res, err := group.ctr.result2.getResultBatch(
 		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
 	if err != nil {
@@ -356,6 +364,41 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 			return nil, err
 		}
 
+		count := bat.RowCount()
+		for i := 0; i < count; i += hashmap.UnitLimit {
+			n := count - i
+			if n > hashmap.UnitLimit {
+				n = hashmap.UnitLimit
+			}
+
+			originGroupCount := group.ctr.hr.Hash.GroupCount()
+			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			if err1 != nil {
+				return nil, err1
+			}
+			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+
+			cnt := int(more)
+			if cnt > 0 {
+				for j, vec := range res.Vecs {
+					if err = vec.UnionBatch(group.ctr.groupByEvaluate.Vec[j], int64(i), n, insertList, proc.Mp()); err != nil {
+						return nil, err
+					}
+				}
+
+				for _, ag := range res.Aggs {
+					if err = ag.GroupGrow(cnt); err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			for j, ag := range res.Aggs {
+				if err = ag.BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
+					return nil, err
+				}
+			}
+		}
 
 	}
 
