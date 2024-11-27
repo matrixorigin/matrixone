@@ -289,9 +289,10 @@ pub06    sys    null    null    null    null    sub06    2024-08-27 17:58:14    
 restore account sys from snapshot sp06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    test07    *        2024-08-27 17:58:14    sub06    2024-08-27 17:58:14    0
+pub06    sys    null    null    null    null    sub06    2024-11-14 17:22:29    2
 drop database sub06;
 drop publication pub06;
+internal error: publication 'pub06' does not exist
 drop table test07.t2;
 drop table test08.t3;
 drop database test07;

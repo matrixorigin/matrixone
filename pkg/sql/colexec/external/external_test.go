@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,17 +198,17 @@ func Test_Call(t *testing.T) {
 				},
 			}
 			param.FileSize = []int64{1}
-			end, err := tcs.arg.Call(tcs.proc)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 		}
@@ -272,14 +273,14 @@ func Test_Call2(t *testing.T) {
 			var err error
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err := tcs.arg.Call(tcs.proc)
+			end, err := vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 			tcs.arg.Reset(tcs.proc, false, nil)
 
 			err = tcs.arg.Prepare(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			end, err = tcs.arg.Call(tcs.proc)
+			end, err = vm.Exec(tcs.arg, tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 			tcs.arg.Free(tcs.proc, false, nil)
@@ -362,7 +363,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err := tcs.arg.Call(tcs.proc)
+		end, err := vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Reset(tcs.proc, false, nil)
@@ -372,7 +373,7 @@ func Test_CALL3(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		param.plh, err = getMOCSVReader(param, tcs.proc)
 		require.NoError(t, err)
-		end, err = tcs.arg.Call(tcs.proc)
+		end, err = vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 		tcs.arg.Free(tcs.proc, false, nil)
@@ -716,4 +717,35 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 			require.Equal(t, tt.want1, got1)
 		})
 	}
+}
+
+// test load data local infile with a compress file which not exists
+// getUnCompressReader will return EOF err in that case, and getMOCSVReader should handle EOF, and return nil err
+func Test_getMOCSVReader(t *testing.T) {
+	case1 := newTestCase(tree.CSV, "")
+	param := case1.arg.Es
+	extern := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "",
+			Tail: &tree.TailParameter{
+				IgnoredLines: 0,
+			},
+			Format:   case1.format,
+			ScanType: tree.INFILE,
+		},
+		ExParam: tree.ExParam{
+			FileService: case1.proc.Base.FileService,
+			JsonData:    case1.jsondata,
+			Ctx:         context.Background(),
+			Local:       true,
+		},
+	}
+	var writer *io.PipeWriter
+	case1.proc.Base.LoadLocalReader, writer = io.Pipe()
+	_ = writer.Close()
+
+	param.Extern = extern
+	param.Fileparam.Filepath = "/noexistsfile.gz"
+	_, err := getMOCSVReader(param, case1.proc)
+	require.Equal(t, nil, err)
 }

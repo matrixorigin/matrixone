@@ -53,13 +53,7 @@ func (postdml *PostDml) Prepare(proc *process.Process) error {
 }
 
 func (postdml *PostDml) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := postdml.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(postdml.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -73,7 +67,6 @@ func (postdml *PostDml) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

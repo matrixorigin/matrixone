@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -272,11 +271,7 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
-	IsInsertValues bool
-	InsertBat      *batch.Batch
 	proc           *process.Process
-
-	exprList [][]colexec.ExpressionExecutor
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -342,6 +337,10 @@ func execResultArrayHasData(arr []ExecResult) bool {
 	return len(arr) != 0 && arr[0].GetRowCount() != 0
 }
 
+type BackgroundExecOption struct {
+	fromRealUser bool
+}
+
 // BackgroundExec executes the sql in background session without network output.
 type BackgroundExec interface {
 	Close()
@@ -386,17 +385,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
-	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
-		prepareStmt.InsertBat = nil
-	}
-	if prepareStmt.exprList != nil {
-		for _, exprs := range prepareStmt.exprList {
-			for _, expr := range exprs {
-				expr.Free()
-			}
-		}
-	}
+
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
@@ -478,7 +467,7 @@ type FeSession interface {
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
 	GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error)
-	GetBackgroundExec(ctx context.Context) BackgroundExec
+	GetBackgroundExec(ctx context.Context, opts ...*BackgroundExecOption) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
 	GetGlobalSysVars() *SystemVariables
 	GetGlobalSysVar(name string) (interface{}, error)
@@ -547,7 +536,7 @@ type FeSession interface {
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
-	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc) BackgroundExec
+	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
 	SessionLogger
 }
 
@@ -563,6 +552,7 @@ type SessionLogger interface {
 	Warnf(ctx context.Context, msg string, args ...any)
 	Fatalf(ctx context.Context, msg string, args ...any)
 	Debugf(ctx context.Context, msg string, args ...any)
+	LogDebug() bool
 	GetLogger() SessionLogger
 }
 
@@ -693,6 +683,10 @@ type feSessionImpl struct {
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
 	service     string
+
+	//fromRealUser distinguish the sql that the user inputs from the one
+	//that the internal or background program executes
+	fromRealUser bool
 }
 
 func (ses *feSessionImpl) GetService() string {
@@ -740,10 +734,6 @@ func (ses *feSessionImpl) Close() {
 	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
-	if ses.txnHandler != nil {
-		ses.txnHandler.Close()
-		ses.txnHandler = nil
-	}
 	ses.Reset()
 }
 
@@ -758,8 +748,10 @@ func (ses *feSessionImpl) Reset() {
 	ses.Clear()
 
 	ses.mrs = nil
-	//release refer but not close it
-	ses.txnHandler = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.Close()
+		ses.txnHandler = nil
+	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
 		ses.txnCompileCtx = nil
@@ -780,6 +772,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.buf = nil
 	}
 	ses.upstream = nil
+	ses.fromRealUser = false
 }
 
 // Clear clean result only

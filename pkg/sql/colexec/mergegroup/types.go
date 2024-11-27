@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(MergeGroup)
@@ -86,6 +87,15 @@ func init() {
 
 func (mergeGroup MergeGroup) TypeName() string {
 	return opName
+}
+
+func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if mergeGroup.ProjectList != nil {
+		batch, err = mergeGroup.EvalProjection(input, proc)
+	}
+	return batch, err
 }
 
 func (mergeGroup *MergeGroup) WithNeedEval(needEval bool) *MergeGroup {

@@ -1290,14 +1290,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		if err = maybeCreateAutoIncrement(
+		err = maybeCreateAutoIncrement(
 			c.proc.Ctx,
 			c.proc.GetService(),
 			dbSource,
 			def,
 			c.proc.GetTxnOperator(),
 			nil,
-		); err != nil {
+		)
+		if err != nil {
 			c.proc.Error(c.proc.Ctx, "create auto increment table",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1802,14 +1803,17 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 		return err
 	}
 
-	if err = maybeCreateAutoIncrement(
+	c.setHaveDDL(true)
+
+	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
 		dbSource,
 		def,
 		c.proc.GetTxnOperator(),
 		nil,
-	); err != nil {
+	)
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "create auto increment for index table",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", def.GetName()),
@@ -1817,7 +1821,7 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 		)
 		return err
 	}
-	return nil
+	return err
 }
 
 func (s *Scope) handleVectorIvfFlatIndex(c *Compile, dbSource engine.Database, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
@@ -2160,7 +2164,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e

@@ -57,13 +57,7 @@ func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) (err error) {
 }
 
 func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := onDuplicatekey.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	for {
@@ -90,7 +84,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		case Eval:
 			result.Batch = onDuplicatekey.ctr.rbat
 			onDuplicatekey.ctr.state = End
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:

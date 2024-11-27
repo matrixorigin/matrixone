@@ -733,7 +733,7 @@ func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOp
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
 			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
-			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows)).
+			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows) + objectio.EstimateS3Input(analyzeInfo.DeletedRows)).
 			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
 			WithS3IOListCount(float64(analyzeInfo.S3List)).
 			WithS3IODeleteCount(float64(analyzeInfo.S3Delete + analyzeInfo.S3DeleteMul))

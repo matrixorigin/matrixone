@@ -55,6 +55,9 @@ func (c *Compile) Compile(
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
+	// clear the clone txn operator to avoid reuse.
+	c.proc.ResetCloneTxnOperator()
+
 	// statistical information record and trace.
 	compileStart := time.Now()
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
@@ -138,6 +141,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// init context for pipeline.
 	c.proc.ResetQueryContext()
+	c.proc.ResetCloneTxnOperator()
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
@@ -180,9 +184,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		if runC != c {
 			runC.Release()
 		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
 	}()
 
 	// update the top context with some trace information and values.

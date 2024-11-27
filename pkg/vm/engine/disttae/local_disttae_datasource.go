@@ -18,15 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"slices"
 	"sort"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -76,11 +78,6 @@ func NewLocalDataSource(
 		state, err := table.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
-		}
-		//TODO::Remove the debug info for issue-19867
-		if table.tableName == "mo_database" && table.db.op.IsSnapOp() {
-			logutil.Infof("NewLocalDataSource:tbl:%p, table name:%s, get partition state:%p,snapshot op:%s",
-				table, table.tableName, state, table.db.op.Txn().DebugString())
 		}
 		source.pState = state
 	}
@@ -149,11 +146,12 @@ func (ls *LocalDisttaeDataSource) String() string {
 		blks[i] = ls.rangeSlice.Get(i)
 	}
 
-	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, blk list: %v",
-		ls.snapshotTS.ToString(),
+	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, state: %p, blk list: %v",
+		ls.table.db.op.Txn().DebugString(),
 		ls.iteratePhase,
 		ls.txnOffset,
 		ls.rangesCursor,
+		ls.pState,
 		blks)
 }
 
@@ -287,7 +285,9 @@ func (ls *LocalDisttaeDataSource) Next(
 		return
 	}
 
-	injected, logLevel := objectio.LogReaderInjected(ls.table.tableName)
+	injected, logLevel := objectio.LogReaderInjected(
+		ls.table.db.databaseName, ls.table.tableName,
+	)
 	if injected && logLevel > 0 {
 		defer func() {
 			if err != nil {
@@ -532,7 +532,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 }
 
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
-	_ context.Context,
+	ctx context.Context,
 	colTypes []types.Type,
 	seqNums []uint16,
 	mp *mpool.MPool,
@@ -547,12 +547,19 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		sels []int64
 	)
 
+	var summaryBuf *bytes.Buffer
+	if v := ctx.Value(defines.ReaderSummaryKey{}); v != nil {
+		summaryBuf = v.(*bytes.Buffer)
+	}
 	if ls.pStateRows.insIter == nil {
 		if ls.memPKFilter.SpecFactory == nil {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
 				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
+		}
+		if summaryBuf != nil {
+			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
 		}
 	}
 
@@ -583,6 +590,12 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		applyOffset      = 0
 	)
 
+	var (
+		scan      int
+		inserted  int
+		delInFile int
+	)
+
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 			if goNext = ls.pStateRows.insIter.Next(); !goNext {
@@ -591,6 +604,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 			entry := ls.pStateRows.insIter.Entry()
 			b, o := entry.RowID.Decode()
+			scan++
 
 			if sels, err = ls.ApplyTombstones(
 				ls.ctx, b, []int64{int64(o)}, applyPolicy,
@@ -605,7 +619,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			if minTS.GT(&entry.Time) {
 				minTS = entry.Time
 			}
-
+			inserted++
 			if err = vector.AppendFixed(
 				physicalColumnPtr,
 				entry.RowID,
@@ -640,36 +654,38 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			}
 		}
 
+		deletedMask := objectio.GetReusableBitmap()
+
 		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](physicalColumnPtr)
-		deleted, err := ls.batchApplyTombstoneObjects(minTS, rowIds[applyOffset:])
-		if err != nil {
+		if err = ls.batchApplyTombstoneObjects(
+			minTS, rowIds[applyOffset:], &deletedMask); err != nil {
+			deletedMask.Release()
 			return err
 		}
 
-		if len(deleted) > 0 {
+		if deletedMask.Count() > 0 {
+			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				for i := range deleted {
-					deleted[i] += int64(applyOffset)
-				}
-				physicalColumnPtr.Shrink(deleted, true)
-				for i := range deleted {
-					deleted[i] += int64(inputRowCnt)
-				}
+				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+
 				// negative shrink requires the bat sorted already
-				outBatch.Shrink(deleted, true)
+				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
 			} else {
-				for i := range deleted {
-					deleted[i] += int64(applyOffset)
-				}
-				outBatch.Shrink(deleted, true)
+				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
 			}
 		}
 
 		minTS = types.MaxTs()
 		applyOffset = physicalColumnPtr.Length()
+
+		deletedMask.Release()
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+
+	if summaryBuf != nil {
+		summaryBuf.WriteString(fmt.Sprintf("[PScan] scan:%d, inserted:%d, delInFile:%d, outBatchRowCnt: %v\n", scan, inserted, delInFile, outBatch.RowCount()))
+	}
 
 	return nil
 }
@@ -854,13 +870,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := &ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-	s3FlushedDeletes.RWMutex.Lock()
-	defer s3FlushedDeletes.RWMutex.Unlock()
-
-	if len(s3FlushedDeletes.data) == 0 {
-		return
-	}
+	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
 
 	release := func() {}
 	if deletedRows == nil {
@@ -870,14 +880,21 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 	}
 	defer release()
 
-	var curr int
+	var tombstones []objectio.ObjectStats
+	s3FlushedDeletes.Range(func(key, value any) bool {
+		tombstones = append(tombstones, key.(objectio.ObjectStats))
+		return true
+	})
+
+	curr := 0
 	getTombstone := func() (*objectio.ObjectStats, error) {
-		if curr >= len(s3FlushedDeletes.data) {
+		if curr >= len(tombstones) {
 			return nil, nil
 		}
+
 		i := curr
 		curr++
-		return &s3FlushedDeletes.data[i], nil
+		return &tombstones[i], nil
 	}
 
 	if err = blockio.GetTombstonesByBlockId(
@@ -1096,15 +1113,16 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	minTS types.TS,
 	rowIds []objectio.Rowid,
-) (deleted []int64, err error) {
+	deletedMask *objectio.Bitmap,
+) (err error) {
 
 	if ls.pState.ApproxTombstoneObjectsNum() == 0 {
-		return nil, nil
+		return nil
 	}
 
 	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer iter.Close()
 
@@ -1126,9 +1144,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	cacheVectors := containers.NewVectors(len(attrs))
 
-	checkedObjCnt := 0
-
-	for iter.Next() && len(deleted) < len(rowIds) {
+	for iter.Next() && deletedMask.Count() < len(rowIds) {
 		obj := iter.Entry()
 
 		if !obj.GetAppendable() {
@@ -1147,14 +1163,13 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 		}
 
-		sameObj := false
-		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
+		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > deletedMask.Count(); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = blockio.ReadDeletes(
 				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
 			); err != nil {
-				return nil, err
+				return err
 			}
 
 			var deletedRowIds []objectio.Rowid
@@ -1172,13 +1187,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
-						deleted = append(deleted, int64(i))
-
-						if !sameObj {
-							checkedObjCnt++
-						}
-						sameObj = true
-
+						deletedMask.Add(uint64(i))
 						break
 					}
 				}
@@ -1188,11 +1197,5 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		}
 	}
 
-	// if more than one tombstone have applied any delete,
-	// the unsorted input rowIds slice may lead the deleted slice unsorted as well.
-	if checkedObjCnt >= 2 {
-		slices.Sort(deleted)
-	}
-
-	return deleted, nil
+	return nil
 }

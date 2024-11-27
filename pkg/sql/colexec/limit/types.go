@@ -16,6 +16,7 @@ package limit
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -84,4 +85,8 @@ func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) 
 		limit.ctr.limitExecutor.Free()
 		limit.ctr.limitExecutor = nil
 	}
+}
+
+func (limit *Limit) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }

@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 )
 
 var (
@@ -213,6 +214,13 @@ func WithSkipPushClientReady() TxnOption {
 	}
 }
 
+// WithTxnMode set txn mode
+func WithWaitActiveHandle(fn func()) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.waitActiveHandle = fn
+	}
+}
+
 type txnOperator struct {
 	sid             string
 	logger          *log.MOLogger
@@ -263,6 +271,7 @@ type txnOperator struct {
 		coordinator        bool
 		skipWaitPushClient bool
 		options            txn.TxnOptions
+		waitActiveHandle   func()
 	}
 }
 
@@ -403,18 +412,16 @@ func newTxnOperatorWithSnapshot(
 	return tc
 }
 
-func (tc *txnOperator) setWaitActive(v bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.waitActive = v
-}
-
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	if tc.reset.waiter == nil {
 		return nil
 	}
 
 	tc.setWaitActive(true)
+	if tc.opts.waitActiveHandle != nil {
+		tc.opts.waitActiveHandle()
+	}
+
 	defer func() {
 		tc.reset.waiter.close()
 		tc.setWaitActive(false)
@@ -608,8 +615,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() {
-		tc.logger.Fatal("commit on running txn")
+	if tc.reset.runningSQL.Load() && !tc.markAborted() {
+		tc.logger.Fatal("commit on running txn",
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
 	}
 
 	tc.reset.commitCounter.addEnter()
@@ -1434,12 +1442,13 @@ func (tc *txnOperator) inRollbackStmt() bool {
 }
 
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s footPrints: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
 		tc.reset.runSqlCounter.String(),
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
+		tc.Txn().DebugString(),
 		tc.reset.fprints.String())
 }
 
@@ -1455,6 +1464,18 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	}
 }
 
+func (tc *txnOperator) markAborted() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.markAbortedLocked()
+}
+
 func (tc *txnOperator) markAbortedLocked() bool {
 	return tc.mu.flag&AbortedFlag != 0
+}
+
+func (tc *txnOperator) setWaitActive(v bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.waitActive = v
 }

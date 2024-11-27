@@ -48,7 +48,13 @@ type container struct {
 	batches       []*batch.Batch
 	batchRowCount int64
 
-	expr colexec.ExpressionExecutor
+	exprExecs []colexec.ExpressionExecutor
+
+	joinBat1 *batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat2 *batch.Batch
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -59,12 +65,14 @@ type container struct {
 	handledLast bool
 
 	maxAllocSize int64
+	rbat         *batch.Batch
 	buf          []*batch.Batch
 }
 
 type DedupJoin struct {
 	ctr        container
-	Result     []int32
+	Result     []colexec.ResultPos
+	LeftTypes  []types.Type
 	RightTypes []types.Type
 	Conditions [][]*plan.Expr
 
@@ -80,9 +88,10 @@ type DedupJoin struct {
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
 	DedupColTypes     []plan.Type
+	UpdateColIdxList  []int32
+	UpdateColExprList []*plan.Expr
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (dedupJoin *DedupJoin) GetOperatorBase() *vm.OperatorBase {
@@ -138,22 +147,26 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
 	ctr.cleanBuf(proc)
-	ctr.cleanEvalVectors()
+	ctr.cleanBatch(proc)
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
+	ctr.cleanEvalVectors()
+}
 
+func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {
-	if ctr.expr != nil {
-		ctr.expr.ResetForNextQuery()
+	for i := range ctr.exprExecs {
+		ctr.exprExecs[i].ResetForNextQuery()
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
-	if ctr.expr != nil {
-		ctr.expr.Free()
-		ctr.expr = nil
+	for i := range ctr.exprExecs {
+		ctr.exprExecs[i].Free()
+		ctr.exprExecs[i] = nil
 	}
 }
 
@@ -167,6 +180,23 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 		bat.Clean(proc.GetMPool())
 	}
 	ctr.buf = nil
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	ctr.batches = nil
+
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
+	if ctr.joinBat1 != nil {
+		ctr.joinBat1.Clean(proc.GetMPool())
+		ctr.joinBat1 = nil
+	}
+	if ctr.joinBat2 != nil {
+		ctr.joinBat2.Clean(proc.GetMPool())
+		ctr.joinBat2 = nil
+	}
 }
 
 func (ctr *container) cleanHashMap() {

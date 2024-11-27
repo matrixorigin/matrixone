@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -91,6 +92,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -520,7 +522,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.ValueScan:
 		t := sourceOp.(*value_scan.ValueScan)
-		op := value_scan.NewValueScanFromProcess()
+		op := value_scan.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -530,7 +532,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.ProjectList = t.ProjectList
 		op.TableFunction = table_function.NewArgument()
 		op.TableFunction.FuncName = t.TableFunction.FuncName
 		op.TableFunction.Args = t.TableFunction.Args
@@ -560,6 +561,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NumCPU = uint64(maxParallel)
 		op.IsMerger = (index == 0)
 		op.Result = append(op.Result, t.Result...)
+		op.LeftTypes = t.LeftTypes
 		op.RightTypes = append(op.RightTypes, t.RightTypes...)
 		op.Conditions = append(op.Conditions, t.Conditions...)
 		op.IsShuffle = t.IsShuffle
@@ -569,6 +571,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
+		op.UpdateColIdxList = t.UpdateColIdxList
+		op.UpdateColExprList = t.UpdateColExprList
+
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
@@ -834,7 +839,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 
 	for _, col := range n.TableDef.Cols {
 		if !col.Hidden {
-			attrs = append(attrs, col.GetOriginCaseName())
+			attrs = append(attrs, col.Name)
 		}
 	}
 
@@ -1075,23 +1080,28 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	return arg
 }
 
-func constructDedupJoin(n *plan.Node, right_typs []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
-	result := make([]int32, len(n.ProjectList))
+func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
-		_, result[i] = constructJoinResult(expr, proc)
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	if cond != nil {
 		panic("dedupjoin should not have non-equi join condition")
 	}
 	arg := dedupjoin.NewArgument()
-	arg.RightTypes = right_typs
+	arg.LeftTypes = leftTypes
+	arg.RightTypes = rightTypes
 	arg.Result = result
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
+	if n.DedupJoinCtx != nil {
+		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
+		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
+	}
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1779,6 +1789,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
@@ -1910,7 +1921,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedBatches = true
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
@@ -1999,8 +2010,45 @@ func constructTableScan(n *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan() *value_scan.ValueScan {
-	return value_scan.NewValueScanFromProcess()
+func constructValueScan(proc *process.Process, n *plan.Node) (*value_scan.ValueScan, error) {
+	op := value_scan.NewArgument()
+	if n == nil {
+		return op, nil
+	}
+	op.NodeType = n.NodeType
+	if n.RowsetData == nil {
+		return op, nil
+	}
+
+	op.ColCount = len(n.TableDef.Cols)
+	op.Batchs = make([]*batch.Batch, 2)
+	op.Batchs[0] = batch.NewWithSize(len(n.RowsetData.Cols))
+	op.Batchs[0].SetRowCount(len(n.RowsetData.Cols[0].Data))
+	rowsetData := &plan.RowsetData{
+		Cols: make([]*plan.ColData, op.ColCount),
+	}
+	for i := 0; i < op.ColCount; i++ {
+		rowsetData.Cols[i] = new(plan.ColData)
+	}
+
+	for i, col := range n.RowsetData.Cols {
+		vec := vector.NewVec(plan2.MakeTypeByPlan2Type(n.TableDef.Cols[i].Typ))
+		op.Batchs[0].Vecs[i] = vec
+		for j, rowsetExpr := range col.Data {
+			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
+			if err != nil {
+				op.Batchs[0].Clean(proc.Mp())
+				return nil, err
+			}
+			if !get {
+				rowsetExpr.RowPos = int32(j)
+				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, rowsetExpr)
+			}
+		}
+	}
+	op.RowsetData = rowsetData
+
+	return op, nil
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

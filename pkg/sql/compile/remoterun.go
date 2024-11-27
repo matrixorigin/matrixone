@@ -819,6 +819,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:      t.OnDuplicateAction,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			LeftTypes:              convertToPlanTypes(t.LeftTypes),
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:       t.UpdateColIdxList,
+			UpdateColExprList:      t.UpdateColExprList,
 		}
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
@@ -828,7 +832,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColList:   colList,
 			Types:     convertToPlanTypes(t.Typs),
 		}
-		in.ProjectList = t.ProjectList
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.TableFunction.Attrs,
 			Rets:   t.TableFunction.Rets,
@@ -1289,7 +1292,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		op.(*table_scan.TableScan).ProjectList = opr.ProjectList
 	case vm.ValueScan:
-		op = value_scan.NewValueScanFromProcess()
+		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
 			bat := batch.NewOffHeapEmpty()
@@ -1346,6 +1349,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.UpdateColIdxList = t.UpdateColIdxList
+		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()
@@ -1353,7 +1360,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.ProjectList = opr.ProjectList
 		arg.TableFunction = table_function.NewArgument()
 		arg.TableFunction.Attrs = opr.TableFunction.Attrs
 		arg.TableFunction.Rets = opr.TableFunction.Rets

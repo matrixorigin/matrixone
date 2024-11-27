@@ -1,0 +1,120 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(c1 int primary key, c2 int , c3 int);
+create table t2(c1 int primary key, c2 int , c3 int);
+insert into t1 select *,*,* from generate_series(1000000) g;
+insert into t2 select *,*,* from generate_series(100000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+explain select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: RIGHT
+              Join Cond: (t1.c2 = t2.c2)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1 [ForceOneCN]
+                    Runtime Filter Probe: t1.c2
+              ->  Table Scan on d1.t2 [ForceOneCN]
+                    Filter Cond: t2.c1 in ([1 10 100 1000 10000])
+                    Block Filter Cond: t2.c1 in ([1 10 100 1000 10000])
+select count(*) from t1 right join t2 on t1.c2=t2.c2 where t2.c1 in (1,10,100,1000,10000);
+count(*)
+5
+delete from t1 where c1<100;
+delete from t2 where c2=1000;
+insert into t1 values(1,null,null);
+insert into t2 values(1000,null,null);
+explain select * from t1 right join t2 on t1.c1=t2.c1 where t2.c2 is null;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: RIGHT   hashOnPK
+        Join Cond: (t1.c1 = t2.c1)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Runtime Filter Probe: t1.c1
+        ->  Table Scan on d1.t2 [ForceOneCN]
+              Filter Cond: (t2.c2 IS NULL)
+              Block Filter Cond: (t2.c2 IS NULL)
+select * from t1 right join t2 on t1.c1=t2.c1 where t2.c2 is null;
+c1    c2    c3    c1    c2    c3
+1000    1000    1000    1000    null    null
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 is null;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Filter
+              Filter Cond: (t2.c2 IS NULL)
+              ->  Join
+                    Join Type: LEFT   hashOnPK
+                    Join Cond: (t1.c1 = t2.c1)
+                    ->  Table Scan on d1.t1
+                    ->  Table Scan on d1.t2
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 is null;
+count(*)
+900001
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 = 10;
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER   hashOnPK
+              Join Cond: (t1.c1 = t2.c1)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1
+                    Runtime Filter Probe: t1.c1
+              ->  Table Scan on d1.t2
+                    Filter Cond: (t2.c2 = 10)
+                    Block Filter Cond: (t2.c2 = 10)
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 = 10;
+count(*)
+0
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 in (1,10,100,1000,10000,20000);
+TP QUERY PLAN
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER   hashOnPK
+              Join Cond: (t1.c1 = t2.c1)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1
+                    Runtime Filter Probe: t1.c1
+              ->  Table Scan on d1.t2
+                    Filter Cond: t2.c2 in ([1 10 100 1000 10000 20000])
+                    Block Filter Cond: t2.c2 in ([1 10 100 1000 10000 20000])
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 in (1,10,100,1000,10000,20000);
+count(*)
+4
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
+AP QUERY PLAN ON MULTICN(4 core)
+Project
+  ->  Aggregate
+        Aggregate Functions: starcount(1)
+        ->  Join
+              Join Type: INNER   hashOnPK
+              Join Cond: (t1.c1 = t2.c1)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1
+                    Runtime Filter Probe: t1.c1
+              ->  Table Scan on d1.t2
+                    Filter Cond: t2.c2 BETWEEN 10 AND 1000
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
+count(*)
+900
+drop database d1;

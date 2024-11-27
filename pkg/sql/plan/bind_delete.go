@@ -297,40 +297,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 
-		//lastNodeID = builder.appendNode(&plan.Node{
-		//	NodeType: plan.Node_DELETE,
-		//	Children: []int32{lastNodeID},
-		//	DeleteCtx: &plan.DeleteCtx{
-		//		TableDef: DeepCopyTableDef(tableDef, true),
-		//		Ref: DeepCopyObjectRef(tblInfo.objRef[i]),
-		//		AddAffectedRows:     delNodeInfo.addAffectedRows,
-		//		IsClusterTable:      delNodeInfo.IsClusterTable,
-		//		PartitionTableIds:   delNodeInfo.partTableIDs,
-		//		PartitionTableNames: delNodeInfo.partTableNames,
-		//		PartitionIdx:        int32(delNodeInfo.partitionIdx),
-		//	},
-		//	InsertDeleteCols: []*plan.Expr{
-		//		{
-		//			Typ: selectNode.ProjectList[pkPos].Typ,
-		//			Expr: &plan.Expr_Col{
-		//				Col: &plan.ColRef{
-		//					RelPos: selectNode.BindingTags[0],
-		//					ColPos: pkPos,
-		//				},
-		//			},
-		//		},
-		//		{
-		//			Typ: selectNode.ProjectList[rowIDPos].Typ,
-		//			Expr: &plan.Expr_Col{
-		//				Col: &plan.ColRef{
-		//					RelPos: selectNode.BindingTags[0],
-		//					ColPos: rowIDPos,
-		//				},
-		//			},
-		//		},
-		//	},
-		//}, ctx)
-
 		for j, idxNode := range idxScanNodes[i] {
 			if idxNode == nil {
 				continue
@@ -369,42 +335,6 @@ func (builder *QueryBuilder) bindDelete(stmt *tree.Delete, bindCtx *BindContext)
 					},
 				},
 			})
-
-			//lastNodeID = builder.appendNode(&plan.Node{
-			//	NodeType: plan.Node_DELETE,
-			//	Children: []int32{lastNodeID},
-			//	DeleteCtx: &plan.DeleteCtx{
-			//		TableDef: DeepCopyTableDef(idxNode.TableDef, true),
-			//		Ref:      DeepCopyObjectRef(idxNode.ObjRef),
-			//		PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
-			//		CanTruncate:         canTruncate,
-			//		AddAffectedRows:     delNodeInfo.addAffectedRows,
-			//		IsClusterTable:      delNodeInfo.IsClusterTable,
-			//		PartitionTableIds:   delNodeInfo.partTableIDs,
-			//		PartitionTableNames: delNodeInfo.partTableNames,
-			//		PartitionIdx:        int32(delNodeInfo.partitionIdx),
-			//	},
-			//	InsertDeleteCols: []*plan.Expr{
-			//		{
-			//			Typ: idxNode.TableDef.Cols[pkPos].Typ,
-			//			Expr: &plan.Expr_Col{
-			//				Col: &plan.ColRef{
-			//					RelPos: idxNode.BindingTags[0],
-			//					ColPos: pkPos,
-			//				},
-			//			},
-			//		},
-			//		{
-			//			Typ: idxNode.TableDef.Cols[rowIDPos].Typ,
-			//			Expr: &plan.Expr_Col{
-			//				Col: &plan.ColRef{
-			//					RelPos: idxNode.BindingTags[0],
-			//					ColPos: rowIDPos,
-			//				},
-			//			},
-			//		},
-			//	},
-			//}, ctx)
 		}
 	}
 
@@ -440,12 +370,10 @@ func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
 			builder.updateLocksOnDemand(childID)
 		}
 	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		node.LockTargets[0].LockTable = true
 		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
 		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
-
-		if len(node.LockTargets) > 1 && node.LockTargets[1].IsPartitionTable {
-			node.LockTargets[1].LockTable = true
+		for _, target := range node.LockTargets {
+			target.LockTable = true
 		}
 	}
 }

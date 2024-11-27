@@ -536,8 +536,7 @@ message Stats {
 
 message RowsetExpr {
 	int32 row_pos = 1;
-	int32 pos = 2;
-	Expr expr = 3;
+	Expr expr = 2;
 }
 
 message ColData {
@@ -613,6 +612,12 @@ message OnDuplicateKeyCtx {
 	uint32 table_version			= 10;
 }
 
+message DedupJoinCtx {
+	repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
+	repeated int32 update_col_idx_list = 2;
+	repeated Expr update_col_expr_list = 3;
+}
+
 message UpdateCtx {
 	ObjectRef obj_ref	= 1;
 	TableDef table_def	= 2;
@@ -673,7 +678,10 @@ message AnalyzeInfo {
 	int64 s3_get = 20;
 	int64 s3_delete = 21;
 	int64 s3_delete_mul = 22;
+	// written_rows used to estimate S3input
 	int64 written_rows = 23;
+	// deleted_rows used to estimate S3input
+	int64 deleted_rows = 24;
 }
 
 message PartitionPrune {
@@ -778,7 +786,7 @@ message Node {
 	}
 
 	enum OnDuplicateAction {
-		ERROR = 0;
+		FAIL = 0;
 		IGNORE = 1;
 		UPDATE = 2;
 	}
@@ -823,8 +831,6 @@ message Node {
 	ObjectRef obj_ref = 18;
 	ObjectRef parent_obj_ref = 19;
 	RowsetData rowset_data = 20;
-
-	repeated Expr insert_delete_cols = 21;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
@@ -882,6 +888,8 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 58;
 	repeated msgHeader recv_msg_list = 59;
+
+	DedupJoinCtx dedup_join_ctx = 60;
 	
 	repeated UpdateCtx update_ctx_list = 61;
 	Snapshot scan_snapshot = 62;

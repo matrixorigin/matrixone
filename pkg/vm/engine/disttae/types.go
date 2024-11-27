@@ -293,10 +293,11 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock() and has the same lifecycle as transaction.
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	cn_flushed_s3_tombstone_object_stats_list struct {
-		sync.RWMutex
-		data []objectio.ObjectStats
-	}
+	cn_flushed_s3_tombstone_object_stats_list *sync.Map
+	//cn_flushed_s3_tombstone_object_stats_list struct {
+	//	sync.RWMutex
+	//	data []objectio.ObjectStats
+	//}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -412,6 +413,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		batchSelectList:      make(map[*batch.Batch][]int64),
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 
 	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
@@ -427,11 +429,7 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
-	txn.cn_flushed_s3_tombstone_object_stats_list.Lock()
-	defer txn.cn_flushed_s3_tombstone_object_stats_list.Unlock()
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.data =
-		append(txn.cn_flushed_s3_tombstone_object_stats_list.data, stats)
+	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
 }
 
 func (txn *Transaction) Readonly() bool {
@@ -656,6 +654,9 @@ func (txn *Transaction) gcObjs(start int) error {
 
 			for j := range vec.Length() {
 				ss := objectio.ObjectStats(vec.GetBytesAt(j))
+				if txn.writes[i].typ == DELETE {
+					txn.cn_flushed_s3_tombstone_object_stats_list.Delete(ss)
+				}
 				objsName = append(objsName, ss.ObjectName().String())
 			}
 		}

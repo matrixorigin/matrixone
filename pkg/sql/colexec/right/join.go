@@ -65,13 +65,7 @@ func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := rightJoin.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &rightJoin.ctr
 	result := vm.NewCallResult()
@@ -122,7 +116,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else if ctr.lastPos == startRow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case Finalize:
@@ -137,7 +130,6 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Status = vm.ExecNext
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
@@ -247,10 +239,10 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 	}
 	itr := ctr.itr
 
-	rowCountIncrese := 0
+	rowCntInc := 0
 	for i := ap.ctr.lastPos; i < count; i += hashmap.UnitLimit {
-		if rowCountIncrese >= colexec.DefaultBatchSize {
-			ctr.rbat.AddRowCount(rowCountIncrese)
+		if rowCntInc >= colexec.DefaultBatchSize {
+			ctr.rbat.AddRowCount(rowCntInc)
 			result.Batch = ctr.rbat
 			ap.ctr.lastPos = i
 			return nil
@@ -296,12 +288,12 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 							}
 						}
 						ctr.matched.Add(vals[k] - 1)
-						rowCountIncrese++
+						rowCntInc++
 					}
 				} else {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := ctr.rbat.Vecs[j].UnionMulti(ap.ctr.buf.Vecs[rp.Pos], int64(i+k), 1, proc.Mp()); err != nil {
+							if err := ctr.rbat.Vecs[j].UnionOne(ap.ctr.buf.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
 								return err
 							}
 						} else {
@@ -311,7 +303,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 						}
 					}
 					ctr.matched.Add(vals[k] - 1)
-					rowCountIncrese++
+					rowCntInc++
 				}
 			} else {
 				sels := ctr.mp.GetSels(vals[k] - 1)
@@ -349,7 +341,7 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 							}
 						}
 						ctr.matched.Add(uint64(sel))
-						rowCountIncrese++
+						rowCntInc++
 					}
 				} else {
 					for j, rp := range ap.Result {
@@ -369,14 +361,14 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, analyzer proce
 					for _, sel := range sels {
 						ctr.matched.Add(uint64(sel))
 					}
-					rowCountIncrese += len(sels)
+					rowCntInc += len(sels)
 				}
 			}
 
 		}
 	}
 
-	ctr.rbat.AddRowCount(rowCountIncrese)
+	ctr.rbat.AddRowCount(rowCntInc)
 	//anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastPos = 0

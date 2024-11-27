@@ -532,15 +532,10 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //	return
 //}
 
-var openDbConn = func(
-	user, password string,
-	ip string,
-	port int) (db *sql.DB, err error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=10m&timeout=10m&writeTimeout=10m&multiStatements=true",
-		user,
-		password,
-		ip,
-		port)
+var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
+	logutil.Infof("openDbConn timeout = %s", timeout)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=%s&timeout=%s&writeTimeout=%s&multiStatements=true",
+		user, password, ip, port, timeout, timeout, timeout)
 	for i := 0; i < 3; i++ {
 		if db, err = tryConn(dsn); err == nil {
 			// TODO check table existence
@@ -549,14 +544,14 @@ var openDbConn = func(
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("cdc task openDbConn failed")
+	logutil.Error("cdc task OpenDbConn failed")
 	return
 }
 
 var openDb = sql.Open
 
 var tryConn = func(dsn string) (*sql.DB, error) {
-	db, err := openDb("mysql", dsn)
+	db, err := openDb("mysql-mo", dsn)
 	if err != nil {
 		return nil, err
 	} else {

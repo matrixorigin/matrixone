@@ -34,13 +34,19 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
-	increaseRefCntForExprList(node.InsertDeleteCols, 2, colRefCnt)
+
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
+
+	if node.DedupJoinCtx != nil {
+		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
+	}
+
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
+
 		if len(updateCtx.PartitionTableIds) > 0 {
 			colRefs := make([]ColRef, 0, 2)
 			if updateCtx.OldPartitionIdx > -1 {
@@ -247,13 +253,19 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
-	replaceColumnsForExprList(node.InsertDeleteCols, projMap)
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
 	}
+
+	if node.DedupJoinCtx != nil {
+		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
+	}
+
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
+
 		if len(updateCtx.PartitionTableIds) > 0 {
 			oldPartRef := [2]int32{node.BindingTags[1], updateCtx.OldPartitionIdx}
 			newPartRef := [2]int32{node.BindingTags[1], updateCtx.NewPartitionIdx}
@@ -472,10 +484,15 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
-	increaseTagCntForExprList(node.InsertDeleteCols, 2, tagCnt)
+
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
 	}
+
+	if node.DedupJoinCtx != nil {
+		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, 2, tagCnt)
+	}
+
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
@@ -510,10 +527,15 @@ END:
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
-	increaseTagCntForExprList(node.InsertDeleteCols, -2, tagCnt)
+
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
 	}
+
+	if node.DedupJoinCtx != nil {
+		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, -2, tagCnt)
+	}
+
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
@@ -1079,6 +1101,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
+	case "skipDedup":
+		builder.optimizerHints.skipDedup = value
 	}
 }
 
@@ -1105,7 +1129,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
 	ReCalcNodeStats(rootID, builder, false, true, true)
-	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+	sortFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }
 

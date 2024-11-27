@@ -94,8 +94,14 @@ func (reader *tableReader) Close() {
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
+	var err error
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
+		if err != nil {
+			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceTblIdStr, err.Error()); err != nil {
+				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
+			}
+		}
 		reader.Close()
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
@@ -111,7 +117,7 @@ func (reader *tableReader) Run(
 		case <-reader.tick.C:
 		}
 
-		if err := reader.readTable(ctx, ar); err != nil {
+		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 
 			// if stale read, try to restart reader
@@ -254,15 +260,17 @@ func (reader *tableReader) readTableWithTxn(
 				reader.sinker.SendCommit()
 				// so send a dummy sql to guarantee previous commit is sent successfully
 				reader.sinker.SendDummy()
-				err = reader.sinker.Error()
-			}
-
-			if err != nil {
+				if reader.sinker.Error() == nil {
+					reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
+				}
+			} else {
 				reader.sinker.SendRollback()
 			}
+			return
 		}
 
-		if err == nil {
+		reader.sinker.SendDummy()
+		if err == nil && reader.sinker.Error() == nil {
 			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
 		}
 	}()

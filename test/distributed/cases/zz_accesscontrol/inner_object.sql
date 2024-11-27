@@ -9,7 +9,7 @@ select user_name,owner from mo_catalog.mo_user where user_name="root";
 select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moadmin","public");
 
 select enable_fault_injection();
-select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 1, 'mo_tables');
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
 
 --验证moadminaccount初始化，sys租户root下创建普通租户下管理员用户查看
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
@@ -113,7 +113,6 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 desc mo_catalog.mo_indexes;
 -- @session
 
-select add_fault_point('fj/debug/19524', ':::', 'echo', 0, '');
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;

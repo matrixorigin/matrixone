@@ -176,13 +176,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 }
 
 func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := preInsert.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -223,7 +217,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -292,7 +285,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 				}
 				fromTs := types.TimestampToTS(from)
 				toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-				if mayChanged, err := rel.PrimaryKeysMayBeModified(proc.Ctx, fromTs, toTs, vec); err == nil {
+				if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, vec); err == nil {
 					if mayChanged {
 						logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 						return moerr.NewTxnNeedRetry(proc.Ctx)
