@@ -459,6 +459,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 			s.StmtBuilder.Reset()
 			row.SetColumnVal(stmtCol, table.StringField(Statement))
 		} else {
+			s.StmtBuilder.Reset()
 			s.StmtBuilder.Grow(len(s.Statement) + 32)
 			s.StmtBuilder.WriteString("/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n")
 			s.StmtBuilder.Write(s.Statement)
