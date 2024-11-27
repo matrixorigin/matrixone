@@ -164,8 +164,8 @@ func Test_CanTransferCnFaultInjection(t *testing.T) {
 }
 
 func mockHandleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = HandleCnFaultInjection(
+	resp.FaultInjectionResponse = new(query.FaultInjectionResponse)
+	resp.FaultInjectionResponse.Resp = HandleCnFaultInjection(
 		ctx,
 		req.FaultInjectionRequest.Name,
 		req.FaultInjectionRequest.Freq, req.FaultInjectionRequest.Action,

@@ -136,7 +136,7 @@ func handleAddFaultPoint(
 			if err != nil {
 				res.ErrorStr = err.Error()
 			} else {
-				res.ReturnStr = resp.TraceSpanResponse.Resp
+				res.ReturnStr = resp.FaultInjectionResponse.Resp
 			}
 		}
 		cnRes = append(cnRes, res)
