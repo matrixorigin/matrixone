@@ -101,6 +101,7 @@ func TestTruncatedOverlap(t *testing.T) {
 		bytes.Repeat([]byte{0xff}, 30),
 		bytes.Repeat([]byte{0x20}, 30),
 		zm1.GetType(), zm1.GetScale(), zm3.GetScale()))
+
 }
 
 type testArithRes struct {
