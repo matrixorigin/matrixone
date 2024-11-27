@@ -829,6 +829,7 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 	if dedupType.SkipTargetAllCommitted() {
 		return
 	}
+	// Incremental dedup requires transfer. It dedup when freeze.
 	if !dedupType.SkipTargetOldCommitted() {
 		if err = tbl.DedupSnapByPK(
 			ctx,
@@ -838,12 +839,6 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 		); err != nil {
 			return
 		}
-	} else {
-		// if err = tbl.DedupSnapByPK(
-		// 	ctx,
-		// 	pk, true, isTombstone); err != nil {
-		// 	return
-		// }
 	}
 	return
 }
@@ -852,16 +847,6 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	var dedupDur float64
 	if schema.HasPK() && !schema.IsSecondaryIndexTable() {
 		now := time.Now()
-		// dedupType := tbl.store.txn.GetDedupType()
-		// if dedupType.SkipTargetOldCommitted() {
-		// 	if tbl.dedupTS.IsEmpty() {
-		// 		tbl.dedupTS = tbl.store.rt.Now()
-		// 	}
-		// 	err = tbl.PrePreareTransfer(ctx, "dedup", tbl.dedupTS)
-		// 	if err != nil {
-		// 		return
-		// 	}
-		// }
 		err = tbl.dedup(ctx, data.Vecs[schema.GetSingleSortKeyIdx()], false)
 		if err != nil {
 			return err
@@ -1029,7 +1014,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 }
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, ts types.TS) (err error) {
+func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phase string, ts types.TS) (err error) {
+	if ts.GT(&tbl.transferedTS) {
+		panic(fmt.Sprintf("invalid ts, dedup ts should be less than or equal transfer ts, dedup TS %v, transfer TS %v", ts.ToString(), tbl.transferedTS.ToString()))
+	}
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
@@ -1064,7 +1052,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, ts t
 		pkVec.Close()
 		return err
 	}
-	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, ts); err != nil {
+	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, phase, ts); err != nil {
 		pkVec.Close()
 		return err
 	}
@@ -1188,6 +1176,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	pks containers.Vector,
 	pksZM index.ZM,
 	isTombstone bool,
+	phase string,
 	ts types.TS,
 ) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
@@ -1215,6 +1204,13 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 				colName = tbl.dataTable.schema.GetPrimaryKey().Name
 			}
 			if !rowIDs.IsNull(i) {
+				logutil.Error("Duplicate",
+					zap.String("table", tbl.dataTable.schema.Name),
+					zap.Bool("is tombstone", isTombstone),
+					zap.String("phase", phase),
+					zap.String("from", tbl.dedupTS.Next().ToString()),
+					zap.String("to", ts.ToString()),
+				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
 				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
 				return
