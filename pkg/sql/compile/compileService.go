@@ -28,6 +28,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// todo: Move it to a CN level structure next day.
+var compileService *ServiceOfCompile
+
+func init() {
+	compileService = InitCompileService()
+}
+
+func GetCompileService() *ServiceOfCompile {
+	return compileService
+}
+
 // ServiceOfCompile is used to manage the lifecycle of Compile structures,
 // including their creation and deletion.
 //

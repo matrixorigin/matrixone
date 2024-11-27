@@ -33,7 +33,9 @@ import (
 const (
 	watermarkUpdateInterval = time.Second
 
-	insertWatermarkFormat = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', '%s', '%s')"
+	maxErrMsgLen = 256
+
+	insertWatermarkFormat = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', '%s', '%s', '%s', '%s', '%s')"
 
 	getWatermarkFormat = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = '%s'"
 
@@ -44,6 +46,8 @@ const (
 	deleteWatermarkFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
 	deleteWatermarkByTableFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = '%s'"
+
+	updateErrMsgFormat = "update mo_catalog.mo_cdc_watermark set err_msg='%s' where account_id = %d and task_id = '%s' and table_id = '%s'"
 )
 
 type WatermarkUpdater struct {
@@ -86,8 +90,11 @@ func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 }
 
-func (u *WatermarkUpdater) InsertIntoDb(tableIdStr string, watermark types.TS) error {
-	sql := fmt.Sprintf(insertWatermarkFormat, u.accountId, u.taskId, tableIdStr, watermark.ToString())
+func (u *WatermarkUpdater) InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error {
+	sql := fmt.Sprintf(insertWatermarkFormat,
+		u.accountId, u.taskId,
+		dbTableInfo.SourceTblIdStr, dbTableInfo.SourceDbName, dbTableInfo.SourceTblName,
+		watermark.ToString(), "")
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
@@ -151,18 +158,27 @@ func (u *WatermarkUpdater) DeleteAllFromDb() error {
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
 
+func (u *WatermarkUpdater) SaveErrMsg(tableIdStr string, errMsg string) error {
+	if len(errMsg) > maxErrMsgLen {
+		errMsg = errMsg[:maxErrMsgLen]
+	}
+	sql := fmt.Sprintf(updateErrMsgFormat, errMsg, u.accountId, u.taskId, tableIdStr)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
+}
+
 func (u *WatermarkUpdater) flushAll() {
 	u.watermarkMap.Range(func(k, v any) bool {
 		tableIdStr := k.(string)
 		ts := v.(types.TS)
-		if err := u.updateDb(tableIdStr, ts); err != nil {
+		if err := u.flush(tableIdStr, ts); err != nil {
 			logutil.Errorf("flush table %s failed, current watermark: %s err: %v\n", tableIdStr, ts.ToString(), err)
 		}
 		return true
 	})
 }
 
-func (u *WatermarkUpdater) updateDb(tableIdStr string, watermark types.TS) error {
+func (u *WatermarkUpdater) flush(tableIdStr string, watermark types.TS) error {
 	sql := fmt.Sprintf(updateWatermarkFormat, watermark.ToString(), u.accountId, u.taskId, tableIdStr)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})

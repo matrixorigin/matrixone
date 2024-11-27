@@ -154,7 +154,10 @@ func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.tmpBatches = nil
+}
 
+func (rightAnti *RightAnti) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

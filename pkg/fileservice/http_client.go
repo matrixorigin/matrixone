@@ -62,6 +62,7 @@ var httpTransport = &http.Transport{
 		InsecureSkipVerify: true,
 		RootCAs:            caPool,
 	},
+	Proxy: http.ProxyFromEnvironment,
 }
 
 var caPool = func() *x509.CertPool {

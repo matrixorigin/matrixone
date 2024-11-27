@@ -718,7 +718,8 @@ func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Objec
 	}
 	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID(), opts.IsTombstone)
+	tbl.store.txn.GetMemo().AddObject(
+		tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID(), opts.IsTombstone)
 	tbl.txnEntries.Append(meta)
 	return
 }

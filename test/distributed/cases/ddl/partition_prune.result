@@ -55,10 +55,10 @@ col1    col2    col3
 select * from t1 where col3 = 7996 and col1 > 25;
 col1    col2    col3
 29    2001-11-17    7996
-select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
+select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990 order by col1, col3;
 col1    col2    col3
-24    1999-08-01    7991
 23    2001-12-04    7990
+24    1999-08-01    7991
 select * from t1 where col3 > 7992;
 col1    col2    col3
 27    1971-12-09    7994
@@ -330,7 +330,7 @@ id    fname    lname    hired    separated    job_code    store_id
 10020    Mayuko    Warwick    1952-12-24    1991-01-26    120    1
 10028    Domenick    Tempesti    1963-11-26    1991-10-22    110    11
 10030    Elvis    Demeyer    1958-07-14    1994-02-17    110    1
-select * from employees where store_id = 3 and id = 10004 or store_id = 10;
+select * from employees where store_id = 3 and id = 10004 or store_id = 10 order by id;
 id    fname    lname    hired    separated    job_code    store_id
 10004    Chirstian    Koblick    1954-05-01    1986-12-01    150    3
 10008    Saniya    Kalloufi    1958-02-19    1994-09-15    170    10

@@ -384,6 +384,7 @@ type Operator interface {
 	AppendChild(child Operator)
 
 	GetOperatorBase() *OperatorBase
+	ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error)
 }
 
 type OperatorBase struct {
@@ -494,9 +495,25 @@ func CancelCheck(proc *process.Process) (error, bool) {
 	}
 }
 
+func Exec(op Operator, proc *process.Process) (CallResult, error) {
+	if err, isCancel := CancelCheck(proc); isCancel {
+		return CancelResult, err
+	}
+	analyzer := op.GetOperatorBase().OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+	result, err := op.Call(proc)
+	if err != nil {
+		return result, err
+	}
+	result.Batch, err = op.ExecProjection(proc, result.Batch)
+	analyzer.Output(result.Batch)
+	return result, err
+}
+
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
-	result, err := op.Call(proc)
+	result, err := Exec(op, proc)
 	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {
 		anal.Input(result.Batch)

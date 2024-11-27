@@ -87,13 +87,7 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 }
 
 func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeTop.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
@@ -106,7 +100,6 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -118,10 +111,8 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 	err := mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
 	if err == nil {
 		result.Status = vm.ExecStop
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
-	analyzer.Output(result.Batch)
 	return result, err
 }
 

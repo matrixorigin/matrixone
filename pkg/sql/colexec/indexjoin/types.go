@@ -95,3 +95,12 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 	}
 	indexJoin.FreeProjection(proc)
 }
+
+func (indexJoin *IndexJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if indexJoin.ProjectList != nil {
+		batch, err = indexJoin.EvalProjection(input, proc)
+	}
+	return batch, err
+}

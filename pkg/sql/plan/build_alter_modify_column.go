@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // ModifyColumn Can change a column definition but not its name.
@@ -125,14 +126,13 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 	if origin.Id == to.Id {
 		return nil
 	} else {
-		if (origin.Id == int32(types.T_time) || origin.Id == int32(types.T_timestamp) || origin.Id == int32(types.T_date) || origin.Id == int32(types.T_datetime) || origin.Id == int32(types.T_char) || origin.Id == int32(types.T_varchar) || origin.Id == int32(types.T_json) || origin.Id == int32(types.T_uuid)) &&
-			to.Id == int32(types.T_binary) {
-			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
+		// The enumeration type has an independent cast function to handle it
+		if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
+			return nil
 		}
 
-		if (origin.Id == int32(types.T_binary) || origin.Id == int32(types.T_decimal64) || origin.Id == int32(types.T_decimal128) || origin.Id == int32(types.T_float32) || origin.Id == int32(types.T_float64)) &&
-			(to.Id == int32(types.T_time) || to.Id == int32(types.T_timestamp) || to.Id == int32(types.T_date) || to.Id == int32(types.T_datetime)) {
-			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", origin.Id, to.Id)
+		if supported := function.IfTypeCastSupported(types.T(origin.GetId()), types.T(to.GetId())); !supported {
+			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", types.T(origin.Id).String(), types.T(to.Id).String())
 		}
 	}
 	return nil

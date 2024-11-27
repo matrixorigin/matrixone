@@ -65,13 +65,7 @@ func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 }
 
 func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := rightSemi.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	ctr := &rightSemi.ctr
 	result := vm.NewCallResult()
@@ -132,7 +126,6 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = ctr.buf[ctr.lastPos]
 			ctr.lastPos++
 			result.Status = vm.ExecHasMore
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		default:
