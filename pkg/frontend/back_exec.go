@@ -120,7 +120,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
-			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
@@ -188,7 +188,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
 			switch stmt.(type) {
-			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
 		}
@@ -1054,6 +1054,10 @@ func (backSes *backSession) Fatal(ctx context.Context, msg string, fields ...zap
 
 func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	backSes.log(ctx, zap.DebugLevel, msg, fields...)
+}
+
+func (backSes *backSession) LogDebug() bool {
+	return backSes.getMOLogger().Enabled(zap.DebugLevel)
 }
 
 func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {

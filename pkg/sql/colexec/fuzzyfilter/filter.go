@@ -151,13 +151,7 @@ else
 		-> can be optimized to Test if the sinkScan data can guarantee uniqueness
 */
 func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := fuzzyFilter.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 	ctr := &fuzzyFilter.ctr
@@ -215,7 +209,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
-					analyzer.Output(result.Batch)
 					return result, nil
 				}
 
@@ -227,7 +220,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
-					analyzer.Output(result.Batch)
 					return result, nil
 				}
 			}
@@ -247,7 +239,6 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
-			analyzer.Output(result.Batch)
 			return result, nil
 		}
 	}

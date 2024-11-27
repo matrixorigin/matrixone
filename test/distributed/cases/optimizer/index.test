@@ -15,6 +15,9 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
 select Sleep(1);
+-- @separator:table
+explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
+select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
 select * from t1 where c2=1;
 select count(c3) from t1 where c2=1111;
 select * from t1 where c3=1234;

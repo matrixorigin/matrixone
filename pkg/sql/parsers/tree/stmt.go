@@ -168,6 +168,18 @@ func (node *RollbackTransaction) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *SavePoint) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ReleaseSavePoint) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RollbackToSavePoint) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *CreatePublication) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

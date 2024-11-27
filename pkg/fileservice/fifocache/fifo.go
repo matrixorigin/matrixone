@@ -52,7 +52,7 @@ type Cache[K comparable, V any] struct {
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
 
-	overEvict atomic.Int64
+	capacityCut atomic.Int64
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -138,7 +138,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	if item := c.set(ctx, key, value, size); item != nil {
 		c.enqueue(item)
-		c.evict(ctx, nil, 0)
+		c.Evict(ctx, nil, 0)
 	}
 }
 
@@ -206,34 +206,38 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	// queues will be update in evict
 }
 
-func (c *Cache[K, V]) evict(ctx context.Context, done chan int64, overEvict int64) {
+func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
 	if done == nil {
 		// can be async
 		if c.queueLock.TryLock() {
 			defer c.queueLock.Unlock()
 		} else {
-			if overEvict > 0 {
+			if capacityCut > 0 {
 				// let the holder do more evict
-				c.overEvict.Add(overEvict)
+				c.capacityCut.Add(capacityCut)
 			}
 			return
 		}
+
 	} else {
+		if cap(done) < 1 {
+			panic("should be buffered chan")
+		}
 		c.queueLock.Lock()
 		defer c.queueLock.Unlock()
 	}
 
 	var target int64
 	for {
-		globalOverEvict := c.overEvict.Swap(0)
-		target = c.capacity() - overEvict - globalOverEvict
+		globalCapacityCut := c.capacityCut.Swap(0)
+		target = c.capacity() - capacityCut - globalCapacityCut
 		if target < 0 {
 			target = 0
 		}
 		if c.used1+c.used2 <= target {
 			break
 		}
-		target1 := c.capacity1() - overEvict - globalOverEvict
+		target1 := c.capacity1() - capacityCut - globalCapacityCut
 		if target1 < 0 {
 			target1 = 0
 		}
@@ -246,6 +250,18 @@ func (c *Cache[K, V]) evict(ctx context.Context, done chan int64, overEvict int6
 	if done != nil {
 		done <- target
 	}
+}
+
+// ForceEvict evicts n bytes despite capacity
+func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
+	capacityCut := c.capacity() - c.used() + n
+	c.Evict(ctx, nil, capacityCut)
+}
+
+func (c *Cache[K, V]) used() int64 {
+	c.queueLock.RLock()
+	defer c.queueLock.RUnlock()
+	return c.used1 + c.used2
 }
 
 func (c *Cache[K, V]) evict1(ctx context.Context) {
@@ -299,11 +315,4 @@ func (c *Cache[K, V]) evict2(ctx context.Context) {
 			return
 		}
 	}
-}
-
-func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64) {
-	if done != nil && cap(done) < 1 {
-		panic("should be buffered chan")
-	}
-	c.evict(ctx, done, 0)
 }

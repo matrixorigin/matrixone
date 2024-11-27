@@ -102,6 +102,10 @@ func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
 	top.ctr.free(proc)
 }
 
+func (top *Top) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) reset() {
 
 	ctr.n = 0

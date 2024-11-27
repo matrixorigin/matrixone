@@ -28,6 +28,7 @@ func execInFrontendInBack(backSes *backSession,
 	case *tree.BeginTransaction:
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
+	case *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 	case *tree.Use:
 		execCtx.ses.EnterFPrint(FPInBackUse)
 		defer execCtx.ses.ExitFPrint(FPInBackUse)

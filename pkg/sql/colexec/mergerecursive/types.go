@@ -83,3 +83,7 @@ func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFaile
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
 }
+
+func (mergeRecursive *MergeRecursive) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}

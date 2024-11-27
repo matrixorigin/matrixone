@@ -49,13 +49,7 @@ func (output *Output) Prepare(_ *process.Process) error {
 }
 
 func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := output.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	if !output.ctr.block {
 		result, err := vm.ChildrenCall(output.GetChildren(0), proc, analyzer)

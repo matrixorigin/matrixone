@@ -109,7 +109,7 @@ func TestInsertOperator(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	_, err = argument1.Call(proc)
+	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
@@ -118,7 +118,7 @@ func TestInsertOperator(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
-	_, err = argument1.Call(proc)
+	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 

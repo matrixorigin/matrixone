@@ -61,13 +61,7 @@ func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
 }
 
 func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := mergeBlock.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	var err error
 	input, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, analyzer)
@@ -153,6 +147,5 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 	}
 
-	analyzer.Output(input.Batch)
 	return input, nil
 }

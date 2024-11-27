@@ -71,7 +71,7 @@ func TestOnDuplicateKey(t *testing.T) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		ret, _ := tc.arg.Call(tc.proc)
+		ret, _ := vm.Exec(tc.arg, tc.proc)
 		require.Equal(t, tc.rowCount, ret.Batch.RowCount())
 
 		tc.arg.Reset(tc.proc, false, nil)
@@ -79,7 +79,7 @@ func TestOnDuplicateKey(t *testing.T) {
 		resetChildren(tc.arg)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		ret, _ = tc.arg.Call(tc.proc)
+		ret, _ = vm.Exec(tc.arg, tc.proc)
 		require.Equal(t, tc.rowCount, ret.Batch.RowCount())
 
 		tc.arg.Free(tc.proc, false, nil)
