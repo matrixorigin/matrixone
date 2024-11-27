@@ -270,8 +270,15 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	row := types.RandomRowid()
 	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
 	objectio.SetObjectStatsRowCnt(stats, 100)
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "a",
+			Names:       []string{"a"},
+		},
+	}
 	node := &plan.Node{
-		Stats: DefaultStats(),
+		TableDef: tableDef,
+		Stats:    DefaultStats(),
 	}
 	node.Stats.HashmapStats.Shuffle = true
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
