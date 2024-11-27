@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"go.uber.org/zap"
 )
 
@@ -162,7 +161,7 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 
 func parseAContainsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector,
-	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any) *model.TransDels,
+	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any, ts types.TS) (types.TS, error),
 ) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
@@ -175,7 +174,7 @@ func parseAContainsArgs(args ...any) (
 		txn = args[3].(txnif.TxnReader)
 	}
 	if args[4] != nil {
-		delsFn = args[4].(func(rowID any) *model.TransDels)
+		delsFn = args[4].(func(rowID any, ts types.TS) (types.TS, error))
 	}
 	return
 }
@@ -407,23 +406,9 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
-					dels := delsFn(v1)
-					if dels == nil {
-						logutil.Info("Dedup-WW",
-							zap.String("txn", txn.Repr()),
-							zap.Int("row offset", row),
-							zap.String("commit ts", commitTS.ToString()),
-						)
-						return txnif.ErrTxnWWConflict
-					}
-					ts, ok := dels.Mapping[row]
-					if !ok {
-						logutil.Info("Dedup-WW",
-							zap.String("txn", txn.Repr()),
-							zap.Int("row offset", row),
-							zap.String("commit ts", commitTS.ToString()),
-						)
-						return txnif.ErrTxnWWConflict
+					ts, err := delsFn(v1, commitTS)
+					if err != nil {
+						return err
 					}
 					if ts.GT(&startTS) {
 						logutil.Info("Dedup-WW",
