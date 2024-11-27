@@ -196,7 +196,7 @@ const (
 const (
 	defaultAlphaCycleDur     = time.Minute
 	defaultGamaCycleDur      = time.Minute * 60
-	defaultGetTableListLimit = 1000
+	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
 	logHeader = "MO-TABLE-STATS-TASK"
 )
@@ -278,13 +278,6 @@ func initMoTableStatsConfig(
 			},
 		}
 
-		dynamicCtx.tablePairPool = sync.Pool{
-			New: func() interface{} {
-				return &tablePair{}
-			},
-		}
-
-		//dynamicCtx.db, err = sql.Open("mo_table_stats")
 		dynamicCtx.sqlOpts = ie.NewOptsBuilder().Database(catalog.MO_CATALOG).Internal(true).Finish()
 
 		if dynamicCtx.conf.GetTableListLimit <= 0 {
@@ -306,7 +299,7 @@ func initMoTableStatsConfig(
 			},
 		}
 
-		dynamicCtx.tblQueue = make(chan *tablePair, options.DefaultBlockMaxRows*2)
+		dynamicCtx.tblQueue = make(chan tablePair, options.DefaultBlockMaxRows*2)
 
 		dynamicCtx.cleanDeletesQueue = make(chan struct{})
 		dynamicCtx.updateForgottenQueue = make(chan struct{})
@@ -330,7 +323,7 @@ func initMoTableStatsConfig(
 			function.GetMoTableRowsFunc.Store(&ff2)
 		}
 
-		dynamicCtx.tableStock.tbls = make([]*tablePair, 0, 1)
+		dynamicCtx.tableStock.tbls = make([]tablePair, 0, 1)
 
 		// start beta task
 		{
@@ -377,22 +370,6 @@ func initMoTableStatsConfig(
 				gamaTask(gamaCtx, eng.service, eng)
 			}()
 		}
-
-		//go func() {
-		//	select {
-		//	case <-ctx.Done():
-		//		if gamaCancel != nil {
-		//			fmt.Println("gama canceled")
-		//			gamaCancel()
-		//		}
-		//
-		//		if betaCancel != nil {
-		//			fmt.Println("beta canceled")
-		//			betaCancel()
-		//		}
-		//		return
-		//	}
-		//}()
 	})
 
 	return err
@@ -406,7 +383,7 @@ var dynamicCtx struct {
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
 
-	tblQueue             chan *tablePair
+	tblQueue             chan tablePair
 	cleanDeletesQueue    chan struct{}
 	updateForgottenQueue chan struct{}
 
@@ -415,7 +392,7 @@ var dynamicCtx struct {
 	objIdsPool sync.Pool
 
 	tableStock struct {
-		tbls   []*tablePair
+		tbls   []tablePair
 		newest types.TS
 	}
 
@@ -431,8 +408,7 @@ var dynamicCtx struct {
 	alphaTaskPool *ants.Pool
 	gamaTaskPool  *ants.Pool
 
-	tablePairPool sync.Pool
-	executorPool  sync.Pool
+	executorPool sync.Pool
 
 	sqlOpts ie.SessionOverrideOptions
 }
@@ -620,7 +596,7 @@ func forceUpdateQuery(
 		to      types.TS
 		val     any
 		stdTime time.Time
-		pairs   = make([]*tablePair, 0, len(tbls))
+		pairs   = make([]tablePair, 0, len(tbls))
 		oldTS   = make([]*timestamp.Timestamp, len(tbls))
 	)
 
@@ -668,8 +644,8 @@ func forceUpdateQuery(
 		to = types.BuildTS(time.Now().UnixNano(), 0)
 
 		for i := range tbls {
-			tbl := buildTablePairFromCache(eng, accs[i], dbs[i], tbls[i], to, false)
-			if tbl == nil {
+			tbl, ok := buildTablePairFromCache(eng, accs[i], dbs[i], tbls[i], to, false)
+			if !ok {
 				continue
 			}
 
@@ -886,6 +862,8 @@ func MTSTableRows(
 /////////////// MoTableStats Implementation ///////////////
 
 type tablePair struct {
+	valid bool
+
 	errChan chan error
 
 	relKind    string
@@ -898,22 +876,6 @@ type tablePair struct {
 
 	snapshot types.TS
 	pState   *logtailreplay.PartitionState
-
-	reuse func()
-}
-
-func allocateTablePair() *tablePair {
-	pair := dynamicCtx.tablePairPool.Get().(*tablePair)
-	pair.reuse = func() {
-		pair.tblName = ""
-		pair.dbName = ""
-		pair.pState = nil
-		pair.onlyUpdateTS = false
-		// pair can not close this channel
-		pair.errChan = nil
-		dynamicCtx.tablePairPool.Put(pair)
-	}
-	return pair
 }
 
 func buildTablePairFromCache(
@@ -921,21 +883,20 @@ func buildTablePairFromCache(
 	accId, dbId, tblId uint64,
 	snapshot types.TS,
 	onlyUpdateTS bool,
-) (tbl *tablePair) {
+) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
 	if item == nil {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
-		return nil
+		return
 	}
 
 	if item.Kind == "v" {
-		return nil
+		return
 	}
 
-	tbl = allocateTablePair()
-
+	tbl.valid = true
 	tbl.acc = int64(accId)
 	tbl.db = int64(dbId)
 	tbl.tbl = int64(tblId)
@@ -946,7 +907,7 @@ func buildTablePairFromCache(
 	tbl.snapshot = snapshot
 	tbl.onlyUpdateTS = onlyUpdateTS
 
-	return tbl
+	return tbl, true
 }
 
 func (tp *tablePair) String() string {
@@ -958,8 +919,6 @@ func (tp *tablePair) Done(err error) {
 	if tp.errChan != nil {
 		tp.errChan <- err
 	}
-
-	tp.reuse()
 }
 
 type statsList struct {
@@ -1235,7 +1194,7 @@ func alphaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-	tbls []*tablePair,
+	tbls []tablePair,
 	caller string,
 ) (err error) {
 
@@ -1255,6 +1214,9 @@ func alphaTask(
 		waitErrDur time.Duration
 	)
 
+	// batCnt -> [200, 500]
+	batCnt := min(max(100, len(tbls)/5), 500)
+
 	now := time.Now()
 	defer func() {
 		dur := time.Since(now)
@@ -1262,6 +1224,7 @@ func alphaTask(
 		logutil.Info(logHeader,
 			zap.String("source", "alpha task"),
 			zap.Int("processed", processed),
+			zap.Int("batch count", batCnt),
 			zap.Duration("takes", dur),
 			zap.Duration("wait err", waitErrDur),
 			zap.String("caller", caller))
@@ -1271,12 +1234,6 @@ func alphaTask(
 	}()
 
 	wg := sync.WaitGroup{}
-
-	dynamicCtx.Lock()
-	limit := dynamicCtx.conf.GetTableListLimit
-	dynamicCtx.Unlock()
-
-	batCnt := max(max(len(tbls)/5, limit/5), 200)
 
 	errQueue := make(chan error, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
@@ -1304,7 +1261,7 @@ func alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				dynamicCtx.tblQueue <- nil
+				dynamicCtx.tblQueue <- tablePair{}
 				ticker.Reset(time.Second)
 
 				if enterWait {
@@ -1333,36 +1290,34 @@ func alphaTask(
 			start := time.Now()
 			submitted := 0
 			for i := 0; i < batCnt && i < len(tbls); i++ {
-
 				submitted++
 				wg.Add(1)
 
-				curTbl := *tbls[i]
 				err = dynamicCtx.alphaTaskPool.Submit(func() {
 					defer wg.Done()
 
 					var err2 error
 					var pState *logtailreplay.PartitionState
-					if !curTbl.onlyUpdateTS {
-						if pState, err2 = subscribeTable(ctx, service, eng, &curTbl); err2 != nil {
+					if !tbls[i].onlyUpdateTS {
+						if pState, err2 = subscribeTable(ctx, service, eng, tbls[i]); err2 != nil {
 							logutil.Info(logHeader,
 								zap.String("source", "alpha task"),
 								zap.String("subscribe failed", err2.Error()),
-								zap.String("tbl", curTbl.String()))
+								zap.String("tbl", tbls[i].String()))
 
-							curTbl.Done(err2)
+							tbls[i].Done(err2)
 							return
 						}
 					}
 
-					curTbl.pState = pState
-					curTbl.errChan = errQueue
-					dynamicCtx.tblQueue <- &curTbl
+					tbls[i].pState = pState
+					tbls[i].errChan = errQueue
+					dynamicCtx.tblQueue <- tbls[i]
 				})
 
 				if err != nil {
 					wg.Done()
-					curTbl.Done(err)
+					tbls[i].Done(err)
 				}
 			}
 
@@ -1373,7 +1328,7 @@ func alphaTask(
 			wg.Wait()
 
 			// let beta know that a batch done
-			dynamicCtx.tblQueue <- nil
+			dynamicCtx.tblQueue <- tablePair{}
 
 			dur := time.Since(start)
 			// the longer the update takes, the longer we would pause,
@@ -1401,7 +1356,7 @@ func betaTask(
 	var (
 		de        = eng.(*Engine)
 		slBat     sync.Map
-		onlyTSBat []*tablePair
+		onlyTSBat []tablePair
 
 		bulkWait sync.WaitGroup
 	)
@@ -1413,7 +1368,7 @@ func betaTask(
 			return
 
 		case tbl := <-dynamicCtx.tblQueue:
-			if tbl == nil {
+			if !tbl.valid {
 				// an alpha batch transmit done
 				bulkUpdateTableOnlyTS(ctx, service, onlyTSBat)
 
@@ -1434,20 +1389,19 @@ func betaTask(
 				continue
 			}
 
-			curTbl := *tbl
 			bulkWait.Add(1)
 			if err = dynamicCtx.beta.betaTaskPool.Submit(func() {
 				defer bulkWait.Done()
 
-				sl, err2 := statsCalculateOp(ctx, service, de.fs, curTbl.snapshot, curTbl.pState)
+				sl, err2 := statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
 				if err2 != nil {
-					curTbl.Done(err2)
+					tbl.Done(err2)
 				} else {
-					slBat.Store(&curTbl, sl)
+					slBat.Store(tbl, sl)
 				}
 			}); err != nil {
 				bulkWait.Done()
-				curTbl.Done(err)
+				tbl.Done(err)
 				return
 			}
 		}
@@ -1529,7 +1483,7 @@ func gamaTask(
 			return
 		}
 
-		var tbls []*tablePair
+		var tbls []tablePair
 		defer func() {
 			for i := range tbls {
 				tbls[i].Done(nil)
@@ -1537,8 +1491,8 @@ func gamaTask(
 		}()
 
 		for i := range tblIds {
-			tbl := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
-			if tbl == nil {
+			tbl, ok := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
+			if !ok {
 				continue
 			}
 
@@ -1785,7 +1739,7 @@ func getChangedTableList(
 	dbs []uint64,
 	tbls []uint64,
 	ts []*timestamp.Timestamp,
-	pairs *[]*tablePair,
+	pairs *[]tablePair,
 	to *types.TS,
 ) (err error) {
 
@@ -1858,9 +1812,9 @@ func getChangedTableList(
 	*to = types.TimestampToTS(*resp.Newest)
 
 	for i := range resp.AccIds {
-		tp := buildTablePairFromCache(de, resp.AccIds[i],
+		tp, ok := buildTablePairFromCache(de, resp.AccIds[i],
 			resp.DatabaseIds[i], resp.TableIds[i], *to, false)
-		if tp == nil {
+		if !ok {
 			continue
 		}
 
@@ -1874,9 +1828,9 @@ func getChangedTableList(
 		}
 
 		// has no changes, only update TS
-		tp := buildTablePairFromCache(de, req.AccIds[i],
+		tp, ok := buildTablePairFromCache(de, req.AccIds[i],
 			req.DatabaseIds[i], req.TableIds[i], *to, true)
-		if tp == nil {
+		if !ok {
 			continue
 		}
 
@@ -1890,7 +1844,7 @@ func subscribeTable(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-	tbl *tablePair,
+	tbl tablePair,
 ) (pState *logtailreplay.PartitionState, err error) {
 
 	txnTbl := txnTable{}
@@ -2103,7 +2057,7 @@ func bulkUpdateTableStatsList(
 	var (
 		val  []byte
 		vals []string
-		tbls []*tablePair
+		tbls []tablePair
 
 		now = time.Now()
 	)
@@ -2120,7 +2074,7 @@ func bulkUpdateTableStatsList(
 	}()
 
 	bat.Range(func(key, value any) bool {
-		tbl := key.(*tablePair)
+		tbl := key.(tablePair)
 		sl := value.(statsList)
 
 		tbls = append(tbls, tbl)
@@ -2156,7 +2110,7 @@ func bulkUpdateTableStatsList(
 func bulkUpdateTableOnlyTS(
 	ctx context.Context,
 	service string,
-	tbls []*tablePair,
+	tbls []tablePair,
 ) {
 
 	if len(tbls) == 0 {
