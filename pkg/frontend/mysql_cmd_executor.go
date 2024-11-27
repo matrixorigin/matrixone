@@ -2298,14 +2298,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	//so we need to make sure the pipewriter.write returns.
 	//issue3976
 	quitC := make(chan int)
-	go func() {
+	go func(ctx context.Context, reader *io.PipeReader) {
 		select {
-		case <-execCtx.reqCtx.Done():
+		case <-ctx.Done():
 			//close reader
 			_ = reader.Close()
 		case <-quitC:
 		}
-	}()
+	}(execCtx.reqCtx, reader)
 	defer func() {
 		close(quitC)
 	}()

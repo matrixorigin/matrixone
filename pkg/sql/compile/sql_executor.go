@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -334,6 +335,12 @@ func (exec *txnExecutor) Exec(
 	})
 
 	result := executor.NewResult(exec.s.mp)
+
+	stream_chan, streaming := exec.opts.Streaming()
+	if streaming {
+		defer close(stream_chan)
+	}
+
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,
@@ -347,9 +354,24 @@ func (exec *txnExecutor) Exec(
 				if err != nil {
 					return err
 				}
-				batches = append(batches, rows)
+				if streaming {
+					stream_result := executor.NewResult(exec.s.mp)
+					for len(stream_chan) == cap(stream_chan) {
+						select {
+						case <-proc.Ctx.Done():
+							return moerr.NewInternalError(proc.Ctx, "context cancelled")
+						default:
+							time.Sleep(1 * time.Millisecond)
+						}
+					}
+					stream_result.Batches = []*batch.Batch{rows}
+					stream_chan <- stream_result
+				} else {
+					batches = append(batches, rows)
+				}
 			}
 			return nil
+
 		})
 	if err != nil {
 		return executor.Result{}, err
