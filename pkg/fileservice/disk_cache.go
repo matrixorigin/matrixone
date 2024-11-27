@@ -120,10 +120,6 @@ func NewDiskCache(
 					)
 				}
 			},
-			func(capacity int64) int64 {
-				// use half space for queue1
-				return capacity / 2
-			},
 		),
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
@@ -165,9 +161,6 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 				}
 
 				d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
-				// get 2 times to prevent too early eviction
-				d.cache.Get(ctx, work.Path)
-				d.cache.Get(ctx, work.Path)
 			}
 		}()
 	}

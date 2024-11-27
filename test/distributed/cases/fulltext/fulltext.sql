@@ -377,3 +377,15 @@ select * from nation where match(n_comment) against('china');
 
 drop table nation;
 
+
+-- error drop column with multiple index parts
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+
+-- drop column success
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;
