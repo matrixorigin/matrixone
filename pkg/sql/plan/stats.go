@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 	"strconv"
@@ -304,7 +305,11 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		}
 
 		if info.ShuffleRanges[i] != nil {
-			if s.MinValMap[colName] != s.MaxValMap[colName] && s.BlockNumber > 32 {
+			if s.MinValMap[colName] != s.MaxValMap[colName] &&
+				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
+				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
+				!util.JudgeIsCompositeClusterByColumn(colName) &&
+				colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval()
 				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
