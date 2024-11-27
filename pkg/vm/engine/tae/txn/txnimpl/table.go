@@ -830,14 +830,14 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 		return
 	}
 	if !dedupType.SkipTargetOldCommitted() {
-		if err = tbl.DedupSnapByPK(
-			ctx,
-			pk,
-			false,
-			isTombstone,
-		); err != nil {
-			return
-		}
+		// if err = tbl.DedupSnapByPK(
+		// 	ctx,
+		// 	pk,
+		// 	false,
+		// 	isTombstone,
+		// ); err != nil {
+		// 	return
+		// }
 	} else {
 		if err = tbl.DedupSnapByPK(
 			ctx,
@@ -852,16 +852,16 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	var dedupDur float64
 	if schema.HasPK() && !schema.IsSecondaryIndexTable() {
 		now := time.Now()
-		dedupType := tbl.store.txn.GetDedupType()
-		if dedupType.SkipTargetOldCommitted() {
-			if tbl.dedupTS.IsEmpty() {
-				tbl.dedupTS = tbl.store.rt.Now()
-			}
-			err = tbl.PrePreareTransfer(ctx, "dedup", tbl.dedupTS)
-			if err != nil {
-				return
-			}
-		}
+		// dedupType := tbl.store.txn.GetDedupType()
+		// if dedupType.SkipTargetOldCommitted() {
+		// 	if tbl.dedupTS.IsEmpty() {
+		// 		tbl.dedupTS = tbl.store.rt.Now()
+		// 	}
+		// 	err = tbl.PrePreareTransfer(ctx, "dedup", tbl.dedupTS)
+		// 	if err != nil {
+		// 		return
+		// 	}
+		// }
 		err = tbl.dedup(ctx, data.Vecs[schema.GetSingleSortKeyIdx()], false)
 		if err != nil {
 			return err
