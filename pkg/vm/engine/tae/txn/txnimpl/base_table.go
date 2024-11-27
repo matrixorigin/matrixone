@@ -192,7 +192,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, ch
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			types.TS{},types.MaxTs(),
+			types.TS{}, types.MaxTs(),
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
@@ -225,9 +225,11 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			break
 		}
 		obj := objIt.Item()
-		if obj.IsAppendable() && obj.DeleteBefore(from) {
-			aobjDeduped = true
-			continue
+		if obj.IsAppendable() {
+			if obj.DeleteBefore(from) {
+				aobjDeduped = true
+				continue
+			}
 		} else {
 			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
 				naobjDeduped = true
@@ -265,7 +267,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			from,to,
+			from, to,
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
