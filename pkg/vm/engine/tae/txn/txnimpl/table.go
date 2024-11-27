@@ -851,6 +851,16 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	var dedupDur float64
 	if schema.HasPK() && !schema.IsSecondaryIndexTable() {
 		now := time.Now()
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType.SkipTargetOldCommitted() {
+			if tbl.dedupTS.IsEmpty() {
+				tbl.dedupTS = tbl.store.rt.Now()
+			}
+			err = tbl.PrePreareTransfer(ctx, "dedup", tbl.dedupTS)
+			if err != nil {
+				return
+			}
+		}
 		err = tbl.dedup(ctx, data.Vecs[schema.GetSingleSortKeyIdx()], false)
 		if err != nil {
 			return err
@@ -1074,9 +1084,6 @@ func (tbl *txnTable) DedupSnapByPK(
 	defer r.End()
 	var rowIDs containers.Vector
 	if dedupAfterSnapshotTS {
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.rt.Now()
-		}
 		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, keys, tbl.store.txn.GetStartTS(), tbl.dedupTS, false)
 	} else {
 		rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys, true)
