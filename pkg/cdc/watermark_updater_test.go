@@ -97,7 +97,7 @@ func (res *internalExecResult) Column(ctx context.Context, i uint64) (name strin
 }
 
 func (res *internalExecResult) RowCount() uint64 {
-	return 1
+	return uint64(len(res.resultSet.Data))
 }
 
 func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
@@ -117,15 +117,17 @@ func (res *internalExecResult) GetString(ctx context.Context, i uint64, j uint64
 }
 
 func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
-	if strings.HasPrefix(sql, "select count") {
+	if strings.HasPrefix(sql, "select table_id") {
+		var data [][]interface{}
+		for k, v := range m.mp {
+			data = append(data, []interface{}{k, v})
+		}
 		return &internalExecResult{
 			affectedRows: 1,
 			resultSet: &MysqlResultSet{
 				Columns:    nil,
 				Name2Index: nil,
-				Data: [][]interface{}{
-					{uint64(len(m.mp))},
-				},
+				Data:       data,
 			},
 			err: nil,
 		}
@@ -212,9 +214,9 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	}
 
 	// ---------- init count is 0
-	count, err := u.GetCountFromDb()
+	mp, err := u.GetAllFromDb()
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(0), count)
+	assert.Equal(t, 0, len(mp))
 
 	// ---------- insert into a record
 	t1 := types.BuildTS(1, 1)
@@ -226,9 +228,9 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	err = u.InsertIntoDb(info1, t1)
 	assert.NoError(t, err)
 	// count is 1
-	count, err = u.GetCountFromDb()
+	mp, err = u.GetAllFromDb()
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(1), count)
+	assert.Equal(t, 1, len(mp))
 	// get value of tableId 1
 	actual, err := u.GetFromDb("1_0")
 	assert.NoError(t, err)
@@ -263,17 +265,17 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	err = u.DeleteFromDb("1_0")
 	assert.NoError(t, err)
 	// count is 2
-	count, err = u.GetCountFromDb()
+	mp, err = u.GetAllFromDb()
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(2), count)
+	assert.Equal(t, 2, len(mp))
 
 	// ---------- delete all
 	err = u.DeleteAllFromDb()
 	assert.NoError(t, err)
 	// count is 0
-	count, err = u.GetCountFromDb()
+	mp, err = u.GetAllFromDb()
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(0), count)
+	assert.Equal(t, 0, len(mp))
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
