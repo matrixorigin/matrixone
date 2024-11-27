@@ -319,6 +319,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 
 	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
 	if err != nil {
+		c.debugLogFor19288(err, duplicateCheckSql)
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
 	}

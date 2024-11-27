@@ -46,6 +46,8 @@ type Node struct {
 	Addr             string `json:"address"`
 	Data             RelData
 	NeedExpandRanges bool
+	CNCNT            int32 // number of all cns
+	CNIDX            int32 // cn index , starts from 0
 }
 
 // Attribute is a column
@@ -583,6 +585,14 @@ const (
 	TombstoneData
 )
 
+type DataCollectPolicy uint64
+
+const (
+	Policy_CollectCommittedData = 1 << iota
+	Policy_CollectUncommittedData
+	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+)
+
 type TombstoneCollectPolicy uint64
 
 const (
@@ -815,7 +825,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int) (RelData, error)
+	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 

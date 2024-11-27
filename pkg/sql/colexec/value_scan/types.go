@@ -88,6 +88,7 @@ func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 	valueScan.FreeProjection(proc)
 	if valueScan.Batchs != nil {
 		valueScan.cleanBatchs(proc)
+<<<<<<< HEAD
 	}
 	for i := range valueScan.ExprExecLists {
 		exprExecList := valueScan.ExprExecLists[i]
@@ -98,6 +99,27 @@ func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
 			}
 		}
 	}
+=======
+	}
+	for i := range valueScan.ExprExecLists {
+		exprExecList := valueScan.ExprExecLists[i]
+		for i, expr := range exprExecList {
+			if expr != nil {
+				expr.Free()
+				exprExecList[i] = nil
+			}
+		}
+	}
+}
+
+func (valueScan *ValueScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if valueScan.ProjectList != nil {
+		batch, err = valueScan.EvalProjection(input, proc)
+	}
+	return batch, err
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 }
 
 func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {

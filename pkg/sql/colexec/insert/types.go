@@ -137,10 +137,21 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 }
 
+<<<<<<< HEAD
 func (insert *Insert) GetAffectedRows() uint64 {
 	return insert.ctr.affectedRows
 }
 
+=======
+func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
+func (insert *Insert) GetAffectedRows() uint64 {
+	return insert.ctr.affectedRows
+}
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 func (insert *Insert) initBufForS3() {
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	insert.ctr.buf = batch.NewWithSize(len(attrs))

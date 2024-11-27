@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
@@ -154,6 +156,10 @@ func (i IOEntry) String() string {
 
 type CacheDataAllocator interface {
 	AllocateCacheData(ctx context.Context, size int) fscache.Data
+<<<<<<< HEAD
+=======
+	AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	CopyToCacheData(ctx context.Context, data []byte) fscache.Data
 }
 

@@ -26,23 +26,24 @@ type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
 	deallocated uint32
+	_refs       atomic.Int32
 	refs        *atomic.Int32
 }
 
-func (b Bytes) Size() int64 {
+func (b *Bytes) Size() int64 {
 	return int64(len(b.bytes))
 }
 
-func (b Bytes) Bytes() []byte {
+func (b *Bytes) Bytes() []byte {
 	return b.bytes
 }
 
-func (b Bytes) Slice(length int) fscache.Data {
+func (b *Bytes) Slice(length int) fscache.Data {
 	b.bytes = b.bytes[:length]
-	return &b
+	return b
 }
 
-func (b Bytes) Retain() {
+func (b *Bytes) Retain() {
 	if b.refs != nil {
 		b.refs.Add(1)
 	}
@@ -75,19 +76,26 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	if err != nil {
 		panic(err)
 	}
-	var refs atomic.Int32
-	refs.Store(1)
-	return &Bytes{
+	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
-		refs:        &refs,
 	}
+	bytes._refs.Store(1)
+	bytes.refs = &bytes._refs
+	return bytes
 }
 
 func (b *bytesAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	return b.allocateCacheData(size, malloc.NoHints)
 }
 
+<<<<<<< HEAD
+=======
+func (b *bytesAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	return b.allocateCacheData(size, hints)
+}
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	ret := b.allocateCacheData(len(data), malloc.NoClear)
 	copy(ret.Bytes(), data)

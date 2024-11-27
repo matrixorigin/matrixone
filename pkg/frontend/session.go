@@ -1344,7 +1344,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 	}
 
+<<<<<<< HEAD
 	needCheckLock, err = whetherCheckLoginAttempts(tenantCtx, ses)
+=======
+	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	if err != nil {
 		return nil, err
 	}
@@ -2081,6 +2085,7 @@ func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
 	return delay, nil
 }
 
+<<<<<<< HEAD
 func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
 	var (
 		loginTimes    int64
@@ -2088,6 +2093,15 @@ func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) 
 		loginMaxDelay int64
 	)
 	loginTimes, err = getLoginAttempts(ctx, ses)
+=======
+func whetherNeedCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
+	var (
+		loginMaxTimes int64
+		err           error
+		loginMaxDelay int64
+	)
+	loginMaxTimes, err = getLoginAttempts(ctx, ses)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	if err != nil {
 		return false, err
 	}
@@ -2096,7 +2110,11 @@ func whetherCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) 
 	if err != nil {
 		return false, err
 	}
+<<<<<<< HEAD
 	return loginTimes > 0 && loginMaxDelay > 0, nil
+=======
+	return loginMaxTimes > 0 && loginMaxDelay > 0, nil
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 }
 
 func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {

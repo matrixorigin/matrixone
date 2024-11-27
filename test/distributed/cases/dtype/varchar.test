@@ -46,9 +46,7 @@ SELECT * FROM Demovarchar;
 select concat_ws(LastName,FirstName) from Demovarchar where Age > 40 order by 1 asc;
 select concat_ws(LastName,FirstName) as fullname from Demovarchar where Age > 40 order by fullname desc;
 select concat_ws(LastName,FirstName),Gender,Age from Demovarchar where Gender='F' order by Age asc;
--- @bvt:issue#3252
 select cast(Age as char) and Age as cAge from Demovarchar where Age>=50 order by cAge desc;
--- @bvt:issue
 CREATE TABLE employees (
   employeeNumber int(11) NOT NULL,
   lastName varchar(50) NOT NULL,
@@ -87,9 +85,7 @@ select lastName,firstName from employees where lastName>=firstName;
 select lastName,firstName from employees where lastName between firstName and JobTitle;
 select * from employees where officeCode in ('2','3','4') order by 1 asc,3 desc limit 1,2;
 select * from employees where officeCode not in ('5','7','1');
--- @bvt:issue#3295
 select avg(officeCode) from employees where jobTitle like 'Sales%' group by jobTitle; 
--- @bvt:issue
 select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
 
@@ -107,12 +103,10 @@ insert into job values
 (6,'Sales Manager (NA)'),
 (7,'Sales Rep'),
 (8,'Marketing');
--- @bvt:issue#3245
 select employeeNumber,e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle order by 1 asc, 3 asc;
 select distinct e.jobTitle,j.jobid from employees e join job j on e.jobTitle=j.jobTitle;
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5;
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5 order by 2 desc;
--- @bvt:issue
 
 #Test cases of update with single tables
 drop table if exists t1;
@@ -141,7 +135,6 @@ i varchar(10) not null default '0',
 j varchar(10) not null default '0',
 primary key (a));
 insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
--- @bvt:issue#3245
 update t1 set a=a+'101';
 select a,b from t1;
 update t1 set a='127' where a='25';
@@ -150,7 +143,6 @@ update t1 set a=a+'a' where 1 > 2;
 select a,b from t1;
 update t1 set a=a+a where 3 > 2;
 select a,b from t1;
--- @bvt:issue
 drop table t1;
 create table t1 (a varchar(10) primary key, b varchar(32));
 insert into t1 values ('abc','apple'), ('ab','apple');

@@ -72,7 +72,7 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 			outputTime := 0
 
 			for {
-				result, err := OperatorArgument.Call(proc)
+				result, err := vm.Exec(OperatorArgument, proc)
 				require.NoError(t, err)
 
 				if result.Status == vm.ExecStop || result.Batch == nil {
@@ -135,7 +135,7 @@ func TestGroupOperatorBehavior1(t *testing.T) {
 			outputTime := 0
 
 			for {
-				result, err := OperatorArgument.Call(proc)
+				result, err := vm.Exec(OperatorArgument, proc)
 				require.NoError(t, err)
 
 				if result.Status == vm.ExecStop || result.Batch == nil {
@@ -212,7 +212,7 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 			outputTime := 0
 
 			for {
-				result, err := OperatorArgument.Call(proc)
+				result, err := vm.Exec(OperatorArgument, proc)
 				require.NoError(t, err)
 
 				if result.Status == vm.ExecStop || result.Batch == nil {
@@ -284,7 +284,7 @@ func TestGroupOperatorBehavior2(t *testing.T) {
 			outputTime := 0
 
 			for {
-				result, err := OperatorArgument.Call(proc)
+				result, err := vm.Exec(OperatorArgument, proc)
 				require.NoError(t, err)
 
 				if result.Status == vm.ExecStop || result.Batch == nil {

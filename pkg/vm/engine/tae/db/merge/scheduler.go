@@ -17,6 +17,7 @@ package merge
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
+	"time"
 )
 
 type Scheduler struct {
@@ -34,9 +36,11 @@ type Scheduler struct {
 	executor *executor
 
 	skipForTransPageLimit bool
+
+	rc *resourceController
 }
 
-func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
+func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 	policySlice := make([]policy, 0, 4)
 	policySlice = append(policySlice, newBasicPolicy(), newObjCompactPolicy(rt.Fs.Service))
 	if !common.RuntimeDisableZMBasedMerge.Load() {
@@ -48,6 +52,7 @@ func NewScheduler(rt *dbutils.Runtime, sched CNMergeScheduler) *Scheduler {
 		LoopProcessor: new(catalog.LoopProcessor),
 		policies:      newPolicyGroup(policySlice...),
 		executor:      newMergeExecutor(rt, sched),
+		rc:            new(resourceController),
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -76,22 +81,24 @@ func (s *Scheduler) resetForTable(entry *catalog.TableEntry) {
 }
 
 func (s *Scheduler) PreExecute() error {
-	s.executor.refreshMemInfo()
+	s.rc.refresh()
 	s.skipForTransPageLimit = false
 	m := &dto.Metric{}
-	v2.TaskMergeTransferPageLengthGauge.Write(m)
+	if err := v2.TaskMergeTransferPageLengthGauge.Write(m); err != nil {
+		return err
+	}
 	pagesize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/
-	if pagesize > float64(s.executor.transferPageSizeLimit()) {
+	if pagesize > float64(s.rc.transferPageLimit) {
 		logutil.Infof("[mergeblocks] skip merge scanning due to transfer page %s, limit %s",
 			common.HumanReadableBytes(int(pagesize)),
-			common.HumanReadableBytes(int(s.executor.transferPageSizeLimit())))
+			common.HumanReadableBytes(int(s.rc.transferPageLimit)))
 		s.skipForTransPageLimit = true
 	}
 	return nil
 }
 
 func (s *Scheduler) PostExecute() error {
-	s.executor.printStats()
+	s.rc.printStats()
 	return nil
 }
 
@@ -99,7 +106,7 @@ func (s *Scheduler) onDataBase(*catalog.DBEntry) (err error) {
 	if StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
-	if s.executor.memAvailBytes() < 100*common.Const1MBytes {
+	if s.rc.availableMem() < 100*common.Const1MBytes {
 		return moerr.GetOkStopCurrRecur()
 	}
 
@@ -143,7 +150,7 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 	// delObjs := s.ObjectHelper.finish()
 
-	results := s.policies.revise(s.executor.CPUPercent(), int64(s.executor.memAvailBytes()))
+	results := s.policies.revise(s.rc)
 	for _, r := range results {
 		if len(r.objs) > 0 {
 			s.executor.executeFor(tableEntry, r.objs, r.kind)
@@ -191,18 +198,14 @@ func (s *Scheduler) StartMerge(tblID uint64, reentrant bool) error {
 	return s.executor.rt.LockMergeService.UnlockFromUser(tblID, reentrant)
 }
 
-func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	if objectEntry.IsAppendable() {
-		return false
-	}
-	if !objectEntry.IsActive() {
-		return false
-	}
-	if !objectEntry.IsCommitted() {
-		return false
-	}
-	if objectEntry.IsCreatingOrAborted() {
-		return false
-	}
-	return true
+func (s *Scheduler) CNActiveObjectsString() string {
+	return s.executor.cnSched.activeObjsString()
+}
+
+func (s *Scheduler) RemoveCNActiveObjects(ids []objectio.ObjectId) {
+	s.executor.cnSched.removeActiveObject(ids)
+}
+
+func (s *Scheduler) PruneCNActiveObjects(id uint64, ago time.Duration) {
+	s.executor.cnSched.prune(id, ago)
 }

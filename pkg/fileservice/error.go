@@ -86,6 +86,7 @@ func catch(ptr *error) {
 	}
 }
 
+<<<<<<< HEAD
 func isDiskFull(err error) bool {
 	if err == nil {
 		return false
@@ -94,6 +95,8 @@ func isDiskFull(err error) bool {
 	return strings.Contains(str, "disk quota exceeded")
 }
 
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 var httpBadLengthPattern = regexp.MustCompile(`transport connection broken: http: ContentLength=[0-9]* with Body length [0-9]*`)
 
 func wrapSizeMismatchErr(p *error) {
@@ -106,4 +109,16 @@ func wrapSizeMismatchErr(p *error) {
 		httpBadLengthPattern.MatchString(str) {
 		*p = moerr.NewSizeNotMatchNoCtx("")
 	}
+<<<<<<< HEAD
+=======
+
+}
+
+func isDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	str := err.Error()
+	return strings.Contains(str, "disk quota exceeded")
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 }

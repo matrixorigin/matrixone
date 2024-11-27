@@ -563,13 +563,14 @@ func (tbl *txnTable) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (data engine.RelData, err error) {
-	unCommittedObjs, _ := tbl.collectUnCommittedDataObjs(txnOffset)
 	return tbl.doRanges(
 		ctx,
 		exprs,
 		preAllocSize,
-		unCommittedObjs,
+		policy,
+		txnOffset,
 	)
 }
 
@@ -577,13 +578,15 @@ func (tbl *txnTable) doRanges(
 	ctx context.Context,
 	exprs []*plan.Expr,
 	preAllocSize int,
-	uncommittedObjects []objectio.ObjectStats,
+	policy engine.DataCollectPolicy,
+	txnOffset int,
 ) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
+	var uncommittedObjects []objectio.ObjectStats
 	blocks := objectio.PreAllocBlockInfoSlice(1, preAllocSize)
 
 	trace.GetService(sid).AddTxnDurationAction(
@@ -674,9 +677,15 @@ func (tbl *txnTable) doRanges(
 		}
 	}()
 
+	if policy&engine.Policy_CollectUncommittedData != 0 {
+		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(txnOffset)
+	}
+
 	// get the table's snapshot
-	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return
+	if policy&engine.Policy_CollectCommittedData != 0 {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
 	}
 
 	if err = tbl.rangesOnePart(
@@ -1224,6 +1233,7 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		// if the operation is snapshot read, isCreatedInTxn can not be called by AlterTable
 		// So if the snapshot read want to subcribe logtail tail, let it go ahead.
 		return false, nil
+<<<<<<< HEAD
 	}
 
 	cache := tbl.db.getEng().GetLatestCatalogCache()
@@ -1235,6 +1245,19 @@ func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
 		return false, moerr.NewTxnNeedRetry(ctx)
 	}
 
+=======
+	}
+
+	cache := tbl.db.getEng().GetLatestCatalogCache()
+	cacheTS := cache.GetStartTS().ToTimestamp()
+	if cacheTS.Greater(tbl.db.op.SnapshotTS()) {
+		if err := tbl.db.op.UpdateSnapshot(ctx, cacheTS); err != nil {
+			return false, err
+		}
+		return false, moerr.NewTxnNeedRetry(ctx)
+	}
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	idAckedbyTN := cache.GetTableByIdAndTime(
 		tbl.accountId,
 		tbl.db.databaseId,
@@ -1914,8 +1937,18 @@ func (tbl *txnTable) PKPersistedBetween(
 	to types.TS,
 	keys *vector.Vector,
 	checkTombstone bool,
+<<<<<<< HEAD
 ) (bool, error) {
+=======
+) (changed bool, err error) {
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
+	v2.TxnPKChangeCheckTotalCounter.Inc()
+	defer func() {
+		if err != nil && changed {
+			v2.TxnPKChangeCheckChangedCounter.Inc()
+		}
+	}()
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2038,6 +2071,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	if len(candidateBlks) > 0 {
+		v2.TxnPKChangeCheckIOCounter.Inc()
+	}
 	for _, blk := range candidateBlks {
 		release, err := blockio.LoadColumns(
 			ctx,
@@ -2170,7 +2206,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

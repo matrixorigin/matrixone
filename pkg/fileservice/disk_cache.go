@@ -105,7 +105,10 @@ func NewDiskCache(
 			},
 
 			nil,
+<<<<<<< HEAD
 
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			func(ctx context.Context, path string, _ struct{}, size int64) {
 				inuseBytes.Add(float64(-size))
 				capacityBytes.Set(float64(capacityFunc()))
@@ -165,9 +168,12 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 				}
 
 				d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
+<<<<<<< HEAD
 				// get 2 times to prevent too early eviction
 				d.cache.Get(ctx, work.Path)
 				d.cache.Get(ctx, work.Path)
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			}
 		}()
 	}

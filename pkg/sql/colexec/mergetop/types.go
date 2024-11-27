@@ -97,6 +97,10 @@ func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err e
 	mergeTop.ctr.free(proc)
 }
 
+func (mergeTop *MergeTop) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) reset() {
 	ctr.n = 0
 	ctr.sels = nil

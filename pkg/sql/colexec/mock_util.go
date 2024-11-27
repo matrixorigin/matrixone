@@ -41,7 +41,9 @@ func (op *MockOperator) GetOperatorBase() *vm.OperatorBase {
 }
 
 func NewMockOperator() *MockOperator {
-	return &MockOperator{}
+	mockOp := &MockOperator{}
+	mockOp.OpAnalyzer = process.NewAnalyzer(0, false, false, "mock_op")
+	return mockOp
 }
 
 func (op *MockOperator) ResetBatchs() {
@@ -77,6 +79,10 @@ func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err err
 	}
 	op.batchs = nil
 	op.current = 0
+}
+
+func (op *MockOperator) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (op *MockOperator) String(buf *bytes.Buffer) {

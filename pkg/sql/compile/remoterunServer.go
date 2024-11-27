@@ -159,13 +159,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		cancel()
 
 		if err != nil || !succeed {
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -198,9 +198,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		GetCompileService().recordRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+		MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator())
 		defer func() {
-			GetCompileService().removeRunningCompile(runCompile, runCompile.proc.GetTxnOperator())
+			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
 		err = s.MergeRun(runCompile)

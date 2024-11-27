@@ -94,10 +94,10 @@ func TestJoin(t *testing.T) {
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
-		res, err := tc.barg.Call(tc.proc)
+		res, err := vm.Exec(tc.barg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, res.Batch == nil, true)
-		res, err = tc.arg.Call(tc.proc)
+		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, res.Batch == nil)
 
@@ -112,10 +112,10 @@ func TestJoin(t *testing.T) {
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
-		res, err = tc.barg.Call(tc.proc)
+		res, err = vm.Exec(tc.barg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, res.Batch == nil, true)
-		res, err = tc.arg.Call(tc.proc)
+		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, true, res.Batch == nil)
 

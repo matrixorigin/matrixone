@@ -48,7 +48,7 @@ func TestIntersect(t *testing.T) {
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	end, err = c.arg.Call(c.proc)
+	end, err = vm.Exec(c.arg, c.proc)
 	require.NoError(t, err)
 	result := end.Batch
 	if result != nil && !result.IsEmpty() {
@@ -63,7 +63,7 @@ func TestIntersect(t *testing.T) {
 	err = c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt = 0
-	end, err = c.arg.Call(c.proc)
+	end, err = vm.Exec(c.arg, c.proc)
 	require.NoError(t, err)
 	result = end.Batch
 	if result != nil && !result.IsEmpty() {

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -296,6 +297,9 @@ type BaseProcess struct {
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
+
+	// stage cache to avoid to run same stage SQL repeatedly
+	StageCache *threadsafe.Map[string, stage.StageDef]
 }
 
 // Process contains context used in query execution
@@ -309,7 +313,7 @@ type Process struct {
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx    context.Context
-	Cancel context.CancelFunc
+	Cancel context.CancelCauseFunc
 }
 
 type sqlHelper interface {
@@ -435,6 +439,10 @@ func (proc *Process) SetBaseProcessRunningStatus(status bool) {
 
 func (proc *Process) GetPostDmlSqlList() *threadsafe.Slice[string] {
 	return proc.Base.PostDmlSqlList
+}
+
+func (proc *Process) GetStageCache() *threadsafe.Map[string, stage.StageDef] {
+	return proc.Base.StageCache
 }
 
 func (si *SessionInfo) GetUser() string {

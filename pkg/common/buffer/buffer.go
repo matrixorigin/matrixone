@@ -17,6 +17,7 @@ package buffer
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,6 +34,7 @@ func (b *Buffer) Free() {
 	b.chunks = nil
 }
 
+// WARN: if T contains any Go heap pointer, it's invalid to store it in []byte, since the garbage collector will not mark pointers in []byte, causing dangling pointers.
 func Alloc[T any](b *Buffer) *T {
 	var v T
 
@@ -41,9 +43,10 @@ func Alloc[T any](b *Buffer) *T {
 }
 
 func Free[T any](b *Buffer, v *T) {
-	b.free(unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v)))
+	b.free(util.UnsafeToBytes(v))
 }
 
+// WARN: if T contains any Go heap pointer, it's invalid to store it in []byte, since the garbage collector will not mark pointers in []byte, causing dangling pointers.
 func MakeSlice[T any](b *Buffer, len, cap int) []T {
 	var v T
 

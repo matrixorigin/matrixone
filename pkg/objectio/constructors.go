@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -46,7 +48,11 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		}
 
 		// lz4 compress
+<<<<<<< HEAD
 		decompressed := allocator.AllocateCacheData(ctx, int(size))
+=======
+		decompressed := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
 			return

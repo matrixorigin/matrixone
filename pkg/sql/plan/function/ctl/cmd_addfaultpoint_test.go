@@ -16,7 +16,10 @@ package ctl
 
 import (
 	"context"
+<<<<<<< HEAD
 	"fmt"
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -70,9 +73,20 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	a3.parameter = "all.enable_fault_injection"
 	ret, err = handleAddFaultPoint(a3.proc, a3.service, a3.parameter, a3.sender)
 	require.NoError(t, err)
+<<<<<<< HEAD
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
 		Data:   fmt.Sprintf("%v:fault injection enabled, previous status: disabled; ", id),
+=======
+	res := CNResponse{
+		CNid:      id,
+		ReturnStr: "fault injection enabled, previous status: disabled",
+	}
+
+	require.Equal(t, ret, Result{
+		Method: AddFaultPointMethod,
+		Data:   []CNResponse{res},
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	})
 
 	a4.proc = proc
@@ -80,9 +94,18 @@ func Test_CanHandleCnFaultInjection(t *testing.T) {
 	a4.parameter = "all.test.:::.echo.0."
 	ret, err = handleAddFaultPoint(a4.proc, a4.service, a4.parameter, a4.sender)
 	require.NoError(t, err)
+<<<<<<< HEAD
 	require.Equal(t, ret, Result{
 		Method: AddFaultPointMethod,
 		Data:   fmt.Sprintf("%v:OK; ", id),
+=======
+
+	res.ReturnStr = "OK"
+
+	require.Equal(t, ret, Result{
+		Method: AddFaultPointMethod,
+		Data:   []CNResponse{res},
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	})
 
 }

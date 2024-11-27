@@ -360,6 +360,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: dbName,
+<<<<<<< HEAD
 		}
 		switch tableId {
 		case catalog.MO_DATABASE_ID:
@@ -369,6 +370,17 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		case catalog.MO_COLUMNS_ID:
 			tableName = catalog.MO_COLUMNS
 		}
+=======
+		}
+		switch tableId {
+		case catalog.MO_DATABASE_ID:
+			tableName = catalog.MO_DATABASE
+		case catalog.MO_TABLES_ID:
+			tableName = catalog.MO_TABLES
+		case catalog.MO_COLUMNS_ID:
+			tableName = catalog.MO_COLUMNS
+		}
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		rel, err = db.Relation(ctx, tableName, nil)
 		return
 	}
@@ -641,6 +653,9 @@ func (e *Engine) BuildBlockReaders(
 		for i := 0; i < num-blkCnt; i++ {
 			rds = append(rds, new(engine_util.EmptyReader))
 		}
+	}
+	if blkCnt == 0 {
+		return rds, nil
 	}
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {

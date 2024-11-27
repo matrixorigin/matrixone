@@ -24,6 +24,10 @@ import (
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+<<<<<<< HEAD
+=======
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -121,9 +125,13 @@ func validateCheckUserNameInPassword(ctx context.Context, pwd, authUserName, cur
 		return nil
 	}
 
-	pwdBytes := Slice(pwd)
+	pwdBytes := util.UnsafeStringToBytes(pwd)
 	for _, userName := range []string{authUserName, curUserName} {
+<<<<<<< HEAD
 		userNameBytes := Slice(userName)
+=======
+		userNameBytes := util.UnsafeStringToBytes(userName)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		if bytes.Equal(pwdBytes, userNameBytes) {
 			return moerr.NewInvalidInputf(ctx, "Password '%s' euqals the user name '%s'", pwd, userName)
 		} else if bytes.Equal(pwdBytes, reverseBytes(userNameBytes)) {

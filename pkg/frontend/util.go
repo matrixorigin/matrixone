@@ -1833,6 +1833,7 @@ func (lca *LeakCheckAllocator) CheckBalance() bool {
 	defer lca.Unlock()
 	return lca.allocated == lca.freed && len(lca.records) == 0
 }
+<<<<<<< HEAD
 
 func Slice(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
@@ -1846,3 +1847,5 @@ func isDisallowedError(err error) bool {
 	}
 	return false
 }
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099

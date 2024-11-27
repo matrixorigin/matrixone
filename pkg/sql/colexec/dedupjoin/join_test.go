@@ -92,10 +92,17 @@ func TestDedupJoin(t *testing.T) {
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		res, err := tc.barg.Call(tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, res.Batch == nil, true)
 		res, err = tc.arg.Call(tc.proc)
+=======
+		res, err := vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = vm.Exec(tc.barg, tc.proc)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		require.NoError(t, err)
 		require.Equal(t, true, res.Batch == nil)
 
@@ -111,10 +118,17 @@ func TestDedupJoin(t *testing.T) {
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		res, err = tc.barg.Call(tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, res.Batch == nil, true)
 		res, err = tc.arg.Call(tc.proc)
+=======
+		res, err = vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = vm.Exec(tc.barg, tc.proc)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		require.NoError(t, err)
 		require.Equal(t, true, res.Batch == nil)
 
@@ -135,10 +149,17 @@ func TestDedupJoin(t *testing.T) {
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
+<<<<<<< HEAD
 		res, err = tc.barg.Call(tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, res.Batch == nil, true)
 		res, err = tc.arg.Call(tc.proc)
+=======
+		res, err = vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = vm.Exec(tc.barg, tc.proc)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		require.NoError(t, err)
 		require.Equal(t, true, res.Batch == nil)
 

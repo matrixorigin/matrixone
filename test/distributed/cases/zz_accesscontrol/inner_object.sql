@@ -9,7 +9,11 @@ select user_name,owner from mo_catalog.mo_user where user_name="root";
 select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moadmin","public");
 
 select enable_fault_injection();
+<<<<<<< HEAD
 select add_fault_point('fj/log/partitionstate', ':::', 'echo', 20, 'mo_tables');
+=======
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
 --验证moadminaccount初始化，sys租户root下创建普通租户下管理员用户查看
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';

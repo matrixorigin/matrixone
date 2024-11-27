@@ -19,8 +19,12 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,3 +105,25 @@ func TestHandleOptimizerHints(t *testing.T) {
 	handleOptimizerHints("skipDedup=1", builder)
 	require.Equal(t, 1, builder.optimizerHints.skipDedup)
 }
+<<<<<<< HEAD
+=======
+
+func TestMakeCPKEYRuntimeFilter(t *testing.T) {
+	name2colidx := make(map[string]int32, 0)
+	name2colidx[catalog.CPrimaryKeyColName] = 0
+	typ := plan.Type{
+		Id: int32(types.T_varchar),
+	}
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name: "catalog.CPrimaryKeyColName",
+				Typ:  typ,
+			},
+		},
+		Name2ColIndex: name2colidx,
+	}
+	expr := GetColExpr(typ, 0, 0)
+	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
+}
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099

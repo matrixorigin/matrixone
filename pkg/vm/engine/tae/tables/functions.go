@@ -26,7 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+<<<<<<< HEAD
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"go.uber.org/zap"
 )
 
@@ -162,7 +165,11 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 
 func parseAContainsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector,
+<<<<<<< HEAD
 	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any) *model.TransDels,
+=======
+	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any, ts types.TS) (types.TS, error),
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 ) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
@@ -175,7 +182,11 @@ func parseAContainsArgs(args ...any) (
 		txn = args[3].(txnif.TxnReader)
 	}
 	if args[4] != nil {
+<<<<<<< HEAD
 		delsFn = args[4].(func(rowID any) *model.TransDels)
+=======
+		delsFn = args[4].(func(rowID any, ts types.TS) (types.TS, error))
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	}
 	return
 }
@@ -407,6 +418,7 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {
+<<<<<<< HEAD
 					dels := delsFn(v1)
 					if dels == nil {
 						logutil.Info("Dedup-WW",
@@ -424,6 +436,11 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 							zap.String("commit ts", commitTS.ToString()),
 						)
 						return txnif.ErrTxnWWConflict
+=======
+					ts, err := delsFn(v1, commitTS)
+					if err != nil {
+						return err
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 					}
 					if ts.GT(&startTS) {
 						logutil.Info("Dedup-WW",

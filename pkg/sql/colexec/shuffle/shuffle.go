@@ -66,13 +66,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 // next time, set this bucket rowcount to 0 and reuse it
 // for now, we shuffle null to the first bucket
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := shuffle.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result := vm.NewCallResult()
 SENDLAST:
@@ -86,7 +80,6 @@ SENDLAST:
 				result.Status = vm.ExecHasMore
 			}
 			shuffle.ctr.buf = result.Batch
-			analyzer.Output(result.Batch)
 		}
 		return result, nil
 	}
@@ -125,7 +118,6 @@ SENDLAST:
 				if err = shuffle.handleRuntimeFilter(proc); err != nil {
 					return vm.CancelResult, err
 				}
-				analyzer.Output(result.Batch)
 				return result, nil
 			}
 		}
@@ -136,7 +128,6 @@ SENDLAST:
 	}
 	// send the batch
 	result.Batch = shuffle.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 

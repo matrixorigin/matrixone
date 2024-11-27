@@ -62,8 +62,13 @@ select crc32(a),b from t1;
 
 drop table if exists test_table;
 create table test_table (
+<<<<<<< HEAD
                             id int auto_increment primary key,
                             text_column varchar(255) not null
+=======
+id int auto_increment primary key,
+text_column varchar(255) not null
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 );
 insert into test_table (text_column) VALUES ('Hello, World!');
 insert into test_table (text_column) VALUES ('Goodbye, World!');
@@ -91,6 +96,7 @@ drop table test_table;
 
 drop table if exists employees;
 create table employees (
+<<<<<<< HEAD
                            employeeNumber int(11) not null,
                            lastName text not null,
                            firstName text not null,
@@ -115,12 +121,39 @@ insert  into employees(employeeNumber,lastName,firstName,extension,email,officeC
                                                                                                             (1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
                                                                                                             (1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
                                                                                                             (1337,'Bondur','Loui','x6493','lbondur@classicmodelcars.com','4',1102,'Sales Rep');
+=======
+employeeNumber int(11) not null,
+lastName text not null,
+firstName text not null,
+extension text not null,
+email text not null,
+officeCode text not null,
+reportsTo int(11) DEFAULT NULL,
+jobTitle text not null,
+primary key (employeeNumber)
+);
+insert  into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing'),
+(1088,'Patterson','William','x4871','wpatterson@classicmodelcars.com','6',1056,'Sales Manager (APAC)'),
+(1102,'Bondur','Gerard','x5408','gbondur@classicmodelcars.com','4',1056,'Sale Manager (EMEA)'),
+(1143,'Bow','Anthony','x5428','abow@classicmodelcars.com','1',1056,'Sales Manager (NA)'),
+(1165,'Jennings','Leslie','x3291','ljennings@classicmodelcars.com','1',1143,'Sales Rep'),
+(1166,'Thompson','Leslie','x4065','lthompson@classicmodelcars.com','1',1143,'Sales Rep'),
+(1188,'Firrelli','Julie','x2173','jfirrelli@classicmodelcars.com','2',1143,'Sales Rep'),
+(1216,'Patterson','Steve','x4334','spatterson@classicmodelcars.com','2',1143,'Sales Rep'),
+(1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
+(1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
+(1337,'Bondur','Loui','x6493','lbondur@classicmodelcars.com','4',1102,'Sales Rep');
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 select crc32(lastName),crc32(firstName) from employees;
 select (sum(crc32(concat_ws(lastName,firstName,extension)))) as `columns` from employees where 1=1 and reportsTo > 1000;
 drop table employees;
 
 drop table if exists jobs;
 create table job(
+<<<<<<< HEAD
                     jobid int primary key,
                     jobTitle varchar(50)
 );
@@ -133,6 +166,20 @@ insert into job values
                     (6,'Sales Manager (NA)'),
                     (7,'Sales Rep'),
                     (8,'Marketing');
+=======
+jobid int primary key,
+jobTitle varchar(50)
+);
+insert into job values
+(1,'President'),
+(2,'VP Sales'),
+(3,'VP Marketing'),
+(4,'Sales Manager (APAC)'),
+(5,'Sale Manager (EMEA)'),
+(6,'Sales Manager (NA)'),
+(7,'Sales Rep'),
+(8,'Marketing');
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 select crc32(jobTitle) from job;
 drop table job;
 

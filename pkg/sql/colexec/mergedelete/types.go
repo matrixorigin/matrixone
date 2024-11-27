@@ -108,6 +108,13 @@ func (mergeDelete *MergeDelete) Free(proc *process.Process, pipelineFailed bool,
 	}
 }
 
+<<<<<<< HEAD
+=======
+func (mergeDelete *MergeDelete) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 func (mergeDelete *MergeDelete) GetAffectedRows() uint64 {
 	return mergeDelete.ctr.affectedRows
 }

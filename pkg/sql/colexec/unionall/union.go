@@ -43,19 +43,12 @@ func (unionall *UnionAll) Prepare(proc *process.Process) error {
 }
 
 func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := unionall.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }

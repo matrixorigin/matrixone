@@ -194,8 +194,13 @@ id    val
 3    3.5
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+<<<<<<< HEAD
 3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-11-25 15:06:27    2024-11-25 15:06:27    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-11-25 15:06:27    2024-11-25 15:06:27    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+=======
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-05-31 03:23:49    2024-05-31 03:23:49    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-05-31 03:23:49    2024-05-31 03:23:49    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 drop snapshot if exists sp_sp06;
 create snapshot sp_sp06 for account sys;
 drop table tbh1;
@@ -215,8 +220,13 @@ id    val
 1    a
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+<<<<<<< HEAD
 3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-11-25 15:06:27    2024-11-25 15:06:27    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-11-25 15:06:27    2024-11-25 15:06:27    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+=======
+3    test_if_hit_second_elseif    null    {}    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-05-31 03:23:49    2024-05-31 03:23:49    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    {}    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    dump    2024-05-31 03:23:49    2024-05-31 03:23:49    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 drop snapshot sp_sp06;
 drop procedure test_if_hit_second_elseif;
 drop procedure test_if_hit_else;

@@ -132,17 +132,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 }
 
 func (update *MultiUpdate) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := update.OpAnalyzer
-	analyzer.Start()
 
 	t := time.Now()
 	defer func() {
 		analyzer.AddInsertTime(t)
-		analyzer.Stop()
 	}()
 
 	switch update.Action {
@@ -199,7 +193,10 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 		}
 		result := vm.NewCallResult()
 		result.Batch = ctr.s3Writer.outputBat
+<<<<<<< HEAD
 		analyzer.Output(result.Batch)
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		return result, nil
 	}
 
@@ -221,11 +218,114 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 		return vm.CancelResult, err
 	}
 
+<<<<<<< HEAD
 	analyzer.Output(input.Batch)
+=======
+	return input, nil
+}
+
+func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return input, err
+	}
+
+	if input.Batch == nil || input.Batch.IsEmpty() {
+		return input, nil
+	}
+
+	actions := vector.MustFixedColNoTypeCheck[uint8](input.Batch.Vecs[0])
+	updateCtxIdx := vector.MustFixedColNoTypeCheck[uint16](input.Batch.Vecs[1])
+	partitionIdx := vector.MustFixedColNoTypeCheck[uint16](input.Batch.Vecs[2])
+	rowCounts := vector.MustFixedColNoTypeCheck[uint64](input.Batch.Vecs[3])
+	nameData, nameArea := vector.MustVarlenaRawData(input.Batch.Vecs[4])
+	batData, batArea := vector.MustVarlenaRawData(input.Batch.Vecs[5])
+
+	ctx := proc.Ctx
+	batBufs := make(map[actionType]*batch.Batch)
+	defer func() {
+		for _, bat := range batBufs {
+			bat.Clean(proc.Mp())
+		}
+	}()
+
+	for i, action := range actions {
+		updateCtx := update.MultiUpdateCtx[updateCtxIdx[i]]
+
+		switch actionType(action) {
+		case actionDelete:
+			if batBufs[actionDelete] == nil {
+				batBufs[actionDelete] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionDelete].CleanOnlyData()
+			}
+			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addDeleteAffectRows(tableType, rowCounts[i])
+			name := nameData[i].UnsafeGetString(nameArea)
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			err = source.Delete(newCtx, batBufs[actionDelete], name)
+			if err != nil {
+				return input, err
+			}
+			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+
+		case actionInsert:
+			if batBufs[actionInsert] == nil {
+				batBufs[actionInsert] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionInsert].CleanOnlyData()
+			}
+			if err := batBufs[actionInsert].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
+
+			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+			update.addInsertAffectRows(tableType, rowCounts[i])
+			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[partitionIdx[i]]
+
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+			err = source.Write(newCtx, batBufs[actionInsert])
+			if err != nil {
+				return input, err
+			}
+			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
+			analyzer.AddS3RequestCount(crs)
+			analyzer.AddDiskIO(crs)
+
+		case actionUpdate:
+			if batBufs[actionUpdate] == nil {
+				batBufs[actionUpdate] = batch.NewOffHeapEmpty()
+			} else {
+				batBufs[actionUpdate].CleanOnlyData()
+			}
+			if err := batBufs[actionUpdate].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+				return input, err
+			}
+
+			err = update.updateOneBatch(proc, analyzer, batBufs[actionUpdate])
+		default:
+			panic("unexpected multi_update.actionType")
+		}
+
+		if err != nil {
+			return vm.CancelResult, err
+		}
+	}
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
 	return input, nil
 }
 
+<<<<<<< HEAD
 func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -326,6 +426,8 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	return input, nil
 }
 
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
 	for i, updateCtx := range update.MultiUpdateCtx {
 		// delete rows

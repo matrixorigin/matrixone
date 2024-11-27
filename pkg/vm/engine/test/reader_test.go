@@ -79,6 +79,11 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(tableName, 0)
+	require.NoError(t, err)
+	defer rmFault()
 
 	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
 	require.NoError(t, err)
@@ -273,6 +278,12 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectPartitionStateLogging(objectio.FJ_EmptyDB, catalog.MO_TABLES, 0)
+	require.NoError(t, err)
+	defer rmFault()
+
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
 	// the mock function. Here we exepct the type of the primary key
@@ -419,6 +430,12 @@ func Test_ShardingHandler(t *testing.T) {
 		rpcAgent      *testutil.MockRPCAgent
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, catalog.MO_TABLES, 0)
+	require.NoError(t, err)
+	defer rmFault()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -613,6 +630,12 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectPartitionStateLogging(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
+	require.NoError(t, err)
+	defer rmFault()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -783,7 +806,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 2, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -1048,7 +1071,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 2, 0)
+	relData, err := delegate.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
@@ -1231,7 +1254,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 2, 0)
+		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()

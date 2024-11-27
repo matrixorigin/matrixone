@@ -20,7 +20,10 @@ import (
 	"net"
 	"sync"
 
+<<<<<<< HEAD
 	"github.com/petermattis/goid"
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

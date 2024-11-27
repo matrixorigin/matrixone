@@ -409,7 +409,10 @@ func (r *reader) Read(
 		if err != nil || dataState == engine.End {
 			r.Close()
 		}
+<<<<<<< HEAD
 
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
 			if err != nil {
 				logutil.Error(
@@ -426,7 +429,10 @@ func (r *reader) Read(
 				logutil.Info(
 					"LOGREADER-INJECTED-1",
 					zap.String("name", r.name),
+<<<<<<< HEAD
 					zap.String("ts", r.ts.DebugString()),
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 					zap.Int("data-len", outBatch.RowCount()),
 					zap.Error(err),
 				)
@@ -438,7 +444,10 @@ func (r *reader) Read(
 				logutil.Info(
 					"LOGREADER-INJECTED-1",
 					zap.String("name", r.name),
+<<<<<<< HEAD
 					zap.String("ts", r.ts.DebugString()),
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 					zap.Error(err),
 					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
 				)
@@ -462,6 +471,10 @@ func (r *reader) Read(
 				}
 			}
 		}
+<<<<<<< HEAD
+=======
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	}()
 
 	r.tryUpdateColumns(cols)

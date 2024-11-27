@@ -18,25 +18,29 @@ import (
 	"cmp"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
 
-type objOverlapPolicy struct {
-	objects     []*catalog.ObjectEntry
-	objectsSize int
+var levels = [6]int{
+	1, 2, 4, 16, 64, 256,
+}
 
+type objOverlapPolicy struct {
+	leveledObjects [6][]*catalog.ObjectEntry
+
+	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
-		objects:            make([]*catalog.ObjectEntry, 0),
 		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
+		segments:           make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -50,31 +54,44 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
-	if m.objectsSize > 10*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-		return false
+	if m.segments[obj.ObjectName().SegmentId()] == nil {
+		m.segments[obj.ObjectName().SegmentId()] = make(map[*catalog.ObjectEntry]struct{})
 	}
-	m.objects = append(m.objects, obj)
-	m.objectsSize += int(obj.OriginSize())
+	m.segments[obj.ObjectName().SegmentId()][obj] = struct{}{}
 	return true
 }
 
-func (m *objOverlapPolicy) revise(cpu, mem int64, config *BasicPolicyConfig) []reviseResult {
-	if len(m.objects) < 2 {
-		return nil
+func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
+	for _, objects := range m.segments {
+		segLevel := segLevel(len(objects))
+		for obj := range objects {
+			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
+		}
 	}
-	if cpu > 80 {
-		return nil
+
+	reviseResults := make([]reviseResult, len(levels))
+	for i := range 4 {
+		if len(m.leveledObjects[i]) < 2 {
+			continue
+		}
+
+		if rc.cpuPercent > 80 {
+			continue
+		}
+
+		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+
+		objs, taskHostKind := m.reviseLeveledObjs(i)
+		if len(objs) > 1 && rc.resourceAvailable(objs) {
+			rc.reserveResources(objs)
+			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+		}
 	}
-	objs, taskHostKind := m.reviseDataObjs(config)
-	objs = controlMem(objs, mem)
-	if len(objs) > 1 {
-		return []reviseResult{{objs, taskHostKind}}
-	}
-	return nil
+	return reviseResults
 }
 
-func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog.ObjectEntry, TaskHostKind) {
-	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
+func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, taskHostKind) {
+	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
 		zmA := a.SortKeyZoneMap()
 		zmB := b.SortKeyZoneMap()
 		if c := zmA.CompareMin(zmB); c != 0 {
@@ -83,7 +100,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 		return zmA.CompareMax(zmB)
 	})
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
-	for _, obj := range m.objects {
+	for _, obj := range m.leveledObjects[level] {
 		if len(set.entries) == 0 {
 			set.add(obj)
 			continue
@@ -114,7 +131,7 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 		set.reset()
 	}
 	if len(m.overlappingObjsSet) == 0 {
-		return nil, TaskHostDN
+		return nil, taskHostDN
 	}
 
 	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
@@ -124,18 +141,22 @@ func (m *objOverlapPolicy) reviseDataObjs(config *BasicPolicyConfig) ([]*catalog
 	// get the overlapping set with most objs.
 	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
 	if len(objs) < 2 {
-		return nil, TaskHostDN
+		return nil, taskHostDN
 	}
-	if len(objs) > config.MergeMaxOneRun {
-		objs = objs[:config.MergeMaxOneRun]
+
+	if level < 3 && len(objs) > levels[3] {
+		objs = objs[:levels[3]]
 	}
-	return objs, TaskHostDN
+
+	return objs, taskHostDN
 }
 
-func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry) {
-	m.objects = m.objects[:0]
+func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
 	m.overlappingObjsSet = m.overlappingObjsSet[:0]
-	m.objectsSize = 0
+	for i := range m.leveledObjects {
+		m.leveledObjects[i] = m.leveledObjects[i][:0]
+	}
+	clear(m.segments)
 }
 
 type entrySet struct {
@@ -157,4 +178,15 @@ func (s *entrySet) add(obj *catalog.ObjectEntry) {
 		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
 		s.maxValue = zm.GetMaxBuf()
 	}
+}
+
+func segLevel(length int) int {
+	l := len(levels) - 1
+	for i, level := range levels {
+		if length < level {
+			l = i - 1
+			break
+		}
+	}
+	return l
 }

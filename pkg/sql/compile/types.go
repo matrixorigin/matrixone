@@ -181,8 +181,7 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	PartialResults     []any
-	PartialResultTypes []types.T
+	HasPartialResults bool
 }
 
 // ipAddrMatch return true if the node-addr of the scope matches to local address.
@@ -251,9 +250,6 @@ type Compile struct {
 	// sql sql text.
 	sql       string
 	originSQL string
-
-	// queryStatus is a structure to record query has done.
-	queryStatus queryDoneWaiter
 
 	retryTimes int
 	anal       *AnalyzeModule

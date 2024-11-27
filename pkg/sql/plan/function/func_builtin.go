@@ -23,7 +23,6 @@ import (
 	"math/rand"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
 
@@ -1095,7 +1094,11 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
 		if vec.IsConst() {
+<<<<<<< HEAD
 			data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), vec.GetType().Size)
+=======
+			data := vec.GetData()[:vec.GetType().Size]
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			if vec.IsConstNull() {
 				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(1))
@@ -1107,7 +1110,11 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				}
 			}
 		} else {
+<<<<<<< HEAD
 			data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
+=======
+			data := vec.GetData()[:(n+start)*sz]
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			if !vec.GetNulls().Any() {
 				for i := 0; i < n; i++ {
 					keys[i] = append(keys[i], byte(0))

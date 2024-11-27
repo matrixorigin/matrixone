@@ -12,8 +12,13 @@ role_id    role_name    owner
 select enable_fault_injection();
 enable_fault_injection()
 true
+<<<<<<< HEAD
 select add_fault_point('fj/log/partitionstate', ':::', 'echo', 20, 'mo_tables');
 add_fault_point(fj/log/partitionstate, :::, echo, 20, mo_tables)
+=======
+select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
+add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 true
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select role_id,role_name,owner from mo_catalog.mo_role;

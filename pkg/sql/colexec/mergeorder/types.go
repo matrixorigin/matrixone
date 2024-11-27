@@ -131,6 +131,10 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 
 }
 
+func (mergeOrder *MergeOrder) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr

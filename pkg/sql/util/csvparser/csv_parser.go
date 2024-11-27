@@ -262,8 +262,12 @@ func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
 		return nil, err
 	}
 
+<<<<<<< HEAD
 	str := util.UnsafeBytesToString(parser.recordBuffer) // convert byte to string using unsafe, reduce memory alloc
 
+=======
+	str := util.UnsafeBytesToString(parser.recordBuffer) // convert byte to string using unsafe, reduce memory allocgit
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	// remove the last empty value
 	if parser.cfg.TrimLastSep {
 		i := len(parser.fieldIndexes) - 1

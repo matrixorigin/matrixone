@@ -74,6 +74,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 }
 
 func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
+<<<<<<< HEAD
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -81,6 +82,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := dedupJoin.OpAnalyzer
 	analyzer.Start()
 	defer analyzer.Stop()
+=======
+	analyzer := dedupJoin.OpAnalyzer
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
 	ctr := &dedupJoin.ctr
 	result := vm.NewCallResult()
@@ -123,7 +127,10 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
+<<<<<<< HEAD
 			analyzer.Output(result.Batch)
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			return result, nil
 
 		case Finalize:
@@ -143,7 +150,10 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 			dedupJoin.ctr.lastPos++
 			result.Status = vm.ExecHasMore
+<<<<<<< HEAD
 			analyzer.Output(result.Batch)
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			return result, nil
 
 		default:

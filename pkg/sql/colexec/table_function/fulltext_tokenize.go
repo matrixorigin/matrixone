@@ -18,14 +18,17 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/datalink"
-	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+<<<<<<< HEAD
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+=======
+	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -182,6 +185,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 	case "json":
 		joffset := int32(0)
+<<<<<<< HEAD
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
@@ -216,6 +220,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 	case "json_value":
 		joffset := int32(0)
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
@@ -236,7 +242,17 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
 				value := string(t.TokenBytes[1 : jslen+1])
+<<<<<<< HEAD
 				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+=======
+				// tokenize the value
+				tok, _ := tokenizer.NewSimpleTokenizer([]byte(value))
+				for tt := range tok.Tokenize() {
+					tslen := tt.TokenBytes[0]
+					word := string(tt.TokenBytes[1 : tslen+1])
+					doc.Words = append(doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
+				}
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 				voffset += int32(jslen)
 			}
 

@@ -16,6 +16,10 @@ package shufflebuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+<<<<<<< HEAD
+=======
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -98,4 +102,11 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffleBuild.ctr.hashmapBuilder.Free(proc)
+<<<<<<< HEAD
+=======
+}
+
+func (shuffleBuild *ShuffleBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 }

@@ -16,7 +16,10 @@ package ctl
 
 import (
 	"context"
+<<<<<<< HEAD
 	"fmt"
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -80,6 +83,15 @@ func handleTNAddFaultPoint() handleFunc {
 		})
 }
 
+<<<<<<< HEAD
+=======
+type CNResponse struct {
+	CNid      string `json:"cn_id,omitempty"`
+	ReturnStr string `json:"return_str,omitempty"`
+	ErrorStr  string `json:"error_str,omitempty"`
+}
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 func handleAddFaultPoint(
 	proc *process.Process,
 	service serviceType,
@@ -108,11 +120,23 @@ func handleAddFaultPoint(
 		})
 	}
 
+<<<<<<< HEAD
 	info := map[string]string{}
 	for idx := range cns {
 		// the current cn also need to process this span cmd
 		if cns[idx] == proc.GetQueryClient().ServiceID() {
 			info[cns[idx]] = HandleCnFaultInjection(proc.Ctx, name, freq, action, iarg, sarg)
+=======
+	cnRes := make([]CNResponse, 0)
+
+	for idx := range cns {
+		res := CNResponse{
+			CNid: cns[idx],
+		}
+		// the current cn also need to process this span cmd
+		if cns[idx] == proc.GetQueryClient().ServiceID() {
+			res.ReturnStr = HandleCnFaultInjection(proc.Ctx, name, freq, action, iarg, sarg)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		} else {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_FaultInjection)
 			request.FaultInjectionRequest = &query.FaultInjectionRequest{
@@ -123,6 +147,7 @@ func handleAddFaultPoint(
 				Sarg:   sarg,
 			}
 			// transfer query to another cn and receive its response
+<<<<<<< HEAD
 			resp, _ := transferRequest2OtherCNs(proc, cns[idx], request)
 			if resp == nil {
 				// no such cn service
@@ -136,11 +161,25 @@ func handleAddFaultPoint(
 	data := ""
 	for k, v := range info {
 		data += fmt.Sprintf("%s:%s; ", k, v)
+=======
+			resp, err := transferRequest2OtherCNs(proc, cns[idx], request)
+			if err != nil {
+				res.ErrorStr = err.Error()
+			} else {
+				res.ReturnStr = resp.TraceSpanResponse.Resp
+			}
+		}
+		cnRes = append(cnRes, res)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	}
 
 	return Result{
 		Method: AddFaultPointMethod,
+<<<<<<< HEAD
 		Data:   data,
+=======
+		Data:   cnRes,
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	}, nil
 }
 
@@ -225,5 +264,9 @@ func HandleCnFaultInjection(
 		}
 		res = "OK"
 	}
+<<<<<<< HEAD
 	return res
+=======
+	return
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 }

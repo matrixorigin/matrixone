@@ -142,6 +142,9 @@ select count(*) from src where match(title, body) against('red');
 -- @separator:table
 explain select match(body, title) against('red') from src where match(body, title) against('red');
 
+desc src;
+show create table src;
+
 drop table src;
 
 -- composite primary key
@@ -164,6 +167,9 @@ select * from src2 where match(body, title) against('t4');
 insert into src2 values ('id4', 4, 'light brown', 't5');
 
 select * from src2 where match(body, title) against('t5');
+
+desc src;
+show create table src;
 
 drop table src2;
 
@@ -205,6 +211,12 @@ create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
 select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+<<<<<<< HEAD
+=======
+
+desc src;
+show create table src;
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
 drop table src;
 
@@ -287,6 +299,9 @@ select * from src where match(body, title) against('brown');
 delete from src;
 select count(*) from src;
 
+desc src;
+show create table src;
+
 -- drop table
 drop table src;
 
@@ -297,8 +312,13 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 select * from src2 where match(body, title) against('red');
 select src2.*, match(body, title) against('blue') from src2;
 
+<<<<<<< HEAD
 desc src;
 show create table src;
+=======
+desc src2;
+show create table src2;
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
 drop table src2;
 
@@ -338,6 +358,7 @@ create fulltext index ftidx2 on src (json1, json2) with parser json;
 select * from src where match(json1, json2) against('+red +winter' in boolean mode);
 
 select * from src where match(json1, json2) against('中文學習教材' in natural language mode);
+<<<<<<< HEAD
 
 update src set json1='{"c":"update json"}' where id=0;
 
@@ -345,9 +366,14 @@ select * from src where match(json1, json2) against('"update json"' in boolean m
 
 desc src;
 show create table src;
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 
-drop table src;
+update src set json1='{"c":"update json"}' where id=0;
 
+select * from src where match(json1, json2) against('"update json"' in boolean mode);
+
+<<<<<<< HEAD
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
 insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
@@ -376,4 +402,16 @@ delete from nation where n_nationkey = 0;
 select * from nation where match(n_comment) against('china');
 
 drop table nation;
+=======
+desc src;
+show create table src;
 
+drop table src;
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
+
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
+create fulltext index ftidx on t1 (b);
+select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
+drop table t1;

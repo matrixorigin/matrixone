@@ -141,6 +141,15 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 }
 
+func (antiJoin *AntiJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if antiJoin.ProjectList != nil {
+		batch, err = antiJoin.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 func (ctr *container) resetExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.ResetForNextQuery()

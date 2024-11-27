@@ -26,7 +26,11 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
+<<<<<<< HEAD
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112122606-a8979920f0b1
+=======
+	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
@@ -53,6 +57,10 @@ require (
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
+<<<<<<< HEAD
+=======
+	github.com/matrixorigin/monlp v0.0.0-20240825091235-be436dc30e78
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	github.com/matrixorigin/mysql v1.8.2-0.20241106110439-6ac9ee94770d
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.78

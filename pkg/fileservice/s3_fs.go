@@ -27,6 +27,10 @@ import (
 	"sync/atomic"
 	"time"
 
+<<<<<<< HEAD
+=======
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -155,10 +159,24 @@ func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
+<<<<<<< HEAD
 func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
 		s.memCache.cache.EnsureNBytes(ctx, len(data))
 	}
+=======
+func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(ctx, size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	if s.memCache != nil {
+		s.memCache.cache.EnsureNBytes(ctx, len(data))
+	}
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 

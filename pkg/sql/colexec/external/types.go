@@ -178,6 +178,15 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 	external.FreeProjection(proc)
 }
 
+func (external *External) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	batch := input
+	var err error
+	if external.ProjectList != nil {
+		batch, err = external.EvalProjection(input, proc)
+	}
+	return batch, err
+}
+
 type ParseLineHandler struct {
 	csvReader *csvparser.CSVParser
 }

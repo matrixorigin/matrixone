@@ -386,7 +386,10 @@ func (c *connCache) Pop(key cacheKey, connID uint32, salt []byte, authResp []byt
 			if err != nil || !ok {
 				c.logger.Error("failed to set conn id",
 					zap.Uint32("conn ID", sc.ConnID()),
+<<<<<<< HEAD
 					zap.Int64("goId", goid.Get()),
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 					zap.Error(err),
 				)
 				// Failed to set connection ID, try to send quit command to the server.

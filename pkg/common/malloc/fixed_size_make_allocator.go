@@ -12,26 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package stage
+package malloc
 
-import (
-	"testing"
+type fixedSizeMakeAllocator struct {
+	size uint64
+}
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
+func NewFixedSizeMakeAllocator(size uint64) (ret *fixedSizeMakeAllocator) {
+	return &fixedSizeMakeAllocator{
+		size: size,
+	}
+}
 
-func TestS3ServiceProvider(t *testing.T) {
-	protocol, err := getS3ServiceFromProvider("cos")
-	require.Nil(t, err)
-	assert.Equal(t, protocol, "s3")
+var _ FixedSizeAllocator = new(fixedSizeMakeAllocator)
 
-	protocol, err = getS3ServiceFromProvider("amazon")
-	require.Nil(t, err)
-	assert.Equal(t, protocol, "s3")
-
-	protocol, err = getS3ServiceFromProvider("minio")
-	require.Nil(t, err)
-	assert.Equal(t, protocol, "minio")
-
+func (f *fixedSizeMakeAllocator) Allocate(Hints, uint64) ([]byte, Deallocator, error) {
+	return make([]byte, f.size), FuncDeallocator(func(Hints) {}), nil
 }

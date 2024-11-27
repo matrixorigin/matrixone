@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 set experimental_fulltext_index=1;
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 drop table if exists t0;
 create table t0 (
   a int,
@@ -7,6 +10,10 @@ create table t0 (
   primary key(a, b)
 );
 insert into t0 select result, result, result || 'test' from generate_series(1, 100) g;
+<<<<<<< HEAD
+=======
+set experimental_fulltext_index=1;
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 create fulltext index ftidx on t0 (c);
 drop table if exists t1;
 create table t1 (

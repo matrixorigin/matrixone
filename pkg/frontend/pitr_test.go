@@ -2940,7 +2940,11 @@ func TestCheckDbIsSubDb(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+<<<<<<< HEAD
 			got, err := checkDbIsSubDb(ctx, tt.createDbsql)
+=======
+			got, err := checkDbWhetherSub(ctx, tt.createDbsql)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 			if (err != nil) != tt.wantErr {
 				t.Errorf("checkDbIsSubDb() error = %v, wantErr %v", err, tt.wantErr)
 				return

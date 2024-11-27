@@ -35,6 +35,12 @@ const (
 	FJ_LogRanges         = "fj/log/ranges"
 	FJ_LogPartitionState = "fj/log/partitionstate"
 
+<<<<<<< HEAD
+=======
+	FJ_Debug19524 = "fj/debug/19524"
+	FJ_Debug19787 = "fj/debug/19787"
+
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
 )
@@ -62,6 +68,7 @@ func ParseLoggingIntArgs(iarg int) (logLevel int, funcId int) {
 	}
 	funcId = iarg / 10
 	return
+<<<<<<< HEAD
 }
 
 func ParseLoggingSArgs(sarg string, funcId int, args ...string) bool {
@@ -168,6 +175,216 @@ func InjectLogWorkspace(
 	databaseName string,
 	tableName string,
 	level int,
+=======
+}
+
+func ParseLoggingSArgs(sarg string, funcId int, args ...string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch funcId {
+	case 0: // equal args[0]
+		return sarg == args[0] || args[0] == ""
+	case 1: // contains args[0]
+		return strings.Contains(sarg, args[0])
+	case 2: // equal args[1]
+		if len(args) < 2 {
+			return false
+		}
+		return sarg == args[1] || args[1] == ""
+	case 3: // contains args[1]
+		if len(args) < 2 {
+			return false
+		}
+		return strings.Contains(sarg, args[1])
+	case 4: // contains args[0] and args[1]
+		params := strings.Split(sarg, ".")
+		if len(params) != 2 {
+			return false
+		}
+		return strings.Contains(params[0], args[0]) && strings.Contains(params[1], args[1])
+	default:
+		return false
+	}
+}
+
+func makeInjectIntArg(level, funcId int) int {
+	return level + funcId*10
+}
+
+func MakeInjectTableLoggingIntArg(level int, isEqual bool) int {
+	// 0 means equal database name
+	// 1 means contains database name
+	// 2 means equal table name
+	// 3 means contains table name
+	// 4 means contains database name and table name
+	if isEqual {
+		return makeInjectIntArg(level, 2)
+	}
+	return makeInjectIntArg(level, 3)
+}
+
+func MakeInjectDBLoggingIntArg(level int, isEqual bool) int {
+	if isEqual {
+		return makeInjectIntArg(level, 0)
+	}
+	return makeInjectIntArg(level, 1)
+}
+
+func MakeInjectDBAndTableLoggingIntArg(level int) int {
+	return makeInjectIntArg(level, 4)
+}
+
+func checkLoggingArgs(
+	iarg int, sarg string, inputArgs ...string,
+) (bool, int) {
+	level, funcId := ParseLoggingIntArgs(iarg)
+	ok := ParseLoggingSArgs(sarg, funcId, inputArgs...)
+	if !ok {
+		return false, 0
+	}
+	return ok, level
+}
+
+func LogWorkspaceInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogWorkspace)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, args...)
+}
+
+// `name` is the table name
+// return injected, logLevel
+func LogReaderInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_LogReader)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, args...)
+}
+
+func InjectPartitionStateLogging(
+	databaseName string,
+	tableName string,
+	level int,
+) (rmFault func(), err error) {
+	return InjectLogging(
+		FJ_TracePartitionState,
+		databaseName,
+		tableName,
+		level,
+		false,
+	)
+}
+
+func InjectLogging(
+	key string,
+	databaseName string,
+	tableName string,
+	level int,
+	isEqual bool,
+) (rmFault func(), err error) {
+	var (
+		iarg int64
+		sarg string
+	)
+	if databaseName != FJ_EmptyDB && tableName != FJ_EmptyTBL {
+		iarg = int64(MakeInjectDBAndTableLoggingIntArg(level))
+		sarg = databaseName + "." + tableName
+	} else if databaseName != "" {
+		iarg = int64(MakeInjectDBLoggingIntArg(level, isEqual))
+		sarg = databaseName
+	} else if tableName != "" {
+		iarg = int64(MakeInjectTableLoggingIntArg(level, isEqual))
+		sarg = tableName
+	} else {
+		return func() {}, nil
+	}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		key,
+		":::",
+		"echo",
+		iarg,
+		sarg,
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), key)
+	}
+	return
+}
+
+// inject log reader and partition state
+// `name` is the table name
+func InjectLog1(
+	tableName string,
+	level int,
+) (rmFault func(), err error) {
+	iarg := int64(MakeInjectTableLoggingIntArg(level, true))
+	rmFault = func() {}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogReader,
+		":::",
+		"echo",
+		iarg,
+		tableName,
+	); err != nil {
+		return
+	}
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TracePartitionState,
+		":::",
+		"echo",
+		iarg,
+		tableName,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		return
+	}
+
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_LogWorkspace,
+		":::",
+		"echo",
+		iarg,
+		tableName,
+	); err != nil {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		return
+	}
+
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_LogWorkspace)
+		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
+		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
+	}
+	return
+}
+
+func Debug19524Injected() bool {
+	_, _, injected := fault.TriggerFault(FJ_Debug19524)
+	return injected
+}
+
+func RangesLogInjected(dbName, tableName string) (bool, int) {
+	_, sarg, injected := fault.TriggerFault(FJ_TraceRanges)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(0, sarg, dbName, tableName)
+}
+
+func InjectRanges(
+	ctx context.Context,
+	tableName string,
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 ) (rmFault func(), err error) {
 	return InjectLogging(
 		FJ_LogWorkspace,
@@ -220,8 +437,13 @@ func InjectLogging(
 		key,
 		":::",
 		"echo",
+<<<<<<< HEAD
 		iarg,
 		sarg,
+=======
+		int64(MakeInjectTableLoggingIntArg(0, true)),
+		tableName,
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	); err != nil {
 		return
 	}
@@ -231,6 +453,7 @@ func InjectLogging(
 	return
 }
 
+<<<<<<< HEAD
 func RangesLogInjected(dbName, tableName string) (bool, int) {
 	_, sarg, injected := fault.TriggerFault(FJ_LogRanges)
 	if !injected {
@@ -257,6 +480,12 @@ func PartitionStateInjected(dbName, tableName string) (bool, int) {
 	iarg, sarg, injected := fault.TriggerFault(FJ_LogPartitionState)
 	if !injected {
 		return false, 0
+=======
+func PartitionStateInjected(dbName, tableName string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_TracePartitionState)
+	if !injected {
+		return false, 0
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	}
 	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
 }

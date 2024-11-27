@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -119,8 +120,20 @@ func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data 
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
+<<<<<<< HEAD
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
+=======
+func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	if l.memCache != nil {
+		l.memCache.cache.EnsureNBytes(ctx, size)
+	}
+	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	if l.memCache != nil {
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		l.memCache.cache.EnsureNBytes(ctx, len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)

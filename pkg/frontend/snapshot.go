@@ -744,7 +744,11 @@ func restoreToDatabaseOrTable(
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
+<<<<<<< HEAD
 	isSubDb, err = checkDbIsSubDb(toCtx, createDbSql)
+=======
+	isSubDb, err = checkDbWhetherSub(toCtx, createDbSql)
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	if err != nil {
 		return
 	}
@@ -2032,7 +2036,11 @@ func checkPubValid(
 	return true, nil
 }
 
+<<<<<<< HEAD
 func checkDbIsSubDb(ctx context.Context, createDbsql string) (bool, error) {
+=======
+func checkDbWhetherSub(ctx context.Context, createDbsql string) (bool, error) {
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 	var (
 		err error
 		ast []tree.Statement

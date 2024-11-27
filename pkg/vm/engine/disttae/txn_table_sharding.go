@@ -274,6 +274,7 @@ func (tbl *txnTableDelegate) Ranges(
 	exprs []*plan.Expr,
 	preAllocSize int,
 	txnOffset int,
+	policy engine.DataCollectPolicy,
 ) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
@@ -285,11 +286,15 @@ func (tbl *txnTableDelegate) Ranges(
 			exprs,
 			preAllocSize,
 			txnOffset,
+			policy,
 		)
 	}
 
 	var blocks objectio.BlockInfoSlice
-	uncommitted, _ := tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	var uncommitted []objectio.ObjectStats
+	if policy != engine.Policy_CheckCommittedOnly {
+		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
 		nil,
@@ -309,6 +314,10 @@ func (tbl *txnTableDelegate) Ranges(
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
 			param.RangesParam.Exprs = exprs
+			param.RangesParam.PreAllocSize = 2
+			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
+			param.RangesParam.TxnOffset = 0
+
 		},
 		func(resp []byte) {
 			data, err := engine_util.UnmarshalRelationData(resp)

@@ -347,9 +347,13 @@ func (c *cluster) refresh() {
 		if tn.State == logpb.NormalState {
 			v := newTNService(tn)
 			new.addTN([]metadata.TNService{v})
+<<<<<<< HEAD
 			if c.logger.Enabled(zap.DebugLevel) {
 				c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
 			}
+=======
+			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 		}
 	}
 	c.services.Store(new)

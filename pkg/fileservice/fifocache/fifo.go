@@ -92,7 +92,10 @@ func New[K comparable, V any](
 	postSet func(ctx context.Context, key K, value V, size int64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
+<<<<<<< HEAD
 	capacity1Func func(capacity int64) int64,
+=======
+>>>>>>> 12023e16cc66a531162ae2c41d49d12f98a84099
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,

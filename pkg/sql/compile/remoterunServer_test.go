@@ -32,7 +32,17 @@ func Test_handlePipelineMessage(t *testing.T) {
 	srv := colexec.Get()
 
 	proc := testutil.NewProcess()
-	proc.Ctx, proc.Cancel = context.WithTimeoutCause(context.Background(), time.Second*0, moerr.NewInternalErrorNoCtx("ut tester"))
+
+	withTimeoutCauseAdapter := func(parent context.Context, timeout time.Duration, cause error) (context.Context, context.CancelCauseFunc) {
+		ctx, cancel := context.WithTimeout(parent, timeout)
+		return ctx, func(c error) {
+			cancel()
+			if c != nil {
+				cause = c
+			}
+		}
+	}
+	proc.Ctx, proc.Cancel = withTimeoutCauseAdapter(context.Background(), time.Second*0, moerr.NewInternalErrorNoCtx("ut tester"))
 	_ = srv.PutProcIntoUuidMap(uuid.UUID{}, proc, nil)
 
 	recv := &messageReceiverOnServer{}
