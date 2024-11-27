@@ -202,7 +202,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 		group.ctr.result1.ToPopped[0].SetRowCount(1)
 		for i := range group.ctr.result1.AggList {
-			if err := group.ctr.result1.AggList[0].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+			if err := group.ctr.result1.AggList[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
 				return err
 			}
 		}
@@ -322,5 +322,42 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		if res.IsEmpty() {
 			continue
 		}
+		return group.consumeBatchToGetIntermediateResult(proc, res)
 	}
+}
+
+func (group *Group) consumeBatchToGetIntermediateResult(
+	proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+
+	res, err := group.ctr.result2.getResultBatch(
+		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
+	if err != nil {
+		return nil, err
+	}
+
+	switch group.ctr.state {
+	case H0:
+		// without group by.
+		for i := range res.Aggs {
+			if err = res.Aggs[i].GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
+		res.SetRowCount(1)
+		for i := range res.Aggs {
+			if err = res.Aggs[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+				return nil, err
+			}
+		}
+
+	default:
+		// with group by.
+		if err = group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+			return nil, err
+		}
+
+
+	}
+
+	return res, nil
 }
