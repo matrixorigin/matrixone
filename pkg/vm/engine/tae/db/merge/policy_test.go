@@ -458,3 +458,19 @@ func TestCheckTombstone(t *testing.T) {
 		}
 	}
 }
+
+func TestObjectsWithMaximumOverlaps(t *testing.T) {
+	o1 := newSortedTestObjectEntry(t, 0, 50, 0)
+	o2 := newSortedTestObjectEntry(t, 51, 100, 0)
+	require.Equal(t, 1, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2})))
+	o3 := newSortedTestObjectEntry(t, 49, 52, 0)
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o3})))
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o2, o3})))
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3})))
+
+	o4 := newSortedTestObjectEntry(t, 0, 52, 0)
+	require.Equal(t, 3, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3, o4})))
+
+	o5 := newSortedTestObjectEntry(t, 50, 51, 0)
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o5})))
+}

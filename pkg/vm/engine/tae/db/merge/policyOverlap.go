@@ -15,11 +15,11 @@
 package merge
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -72,7 +72,10 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 		}
 
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
-		revisedResults := m.reviseLeveledObjs(i)
+		revisedResults := []reviseResult{{
+			objs: objectsWithMaximumOverlaps(m.leveledObjects[i]),
+			kind: taskHostDN,
+		}}
 		for _, result := range revisedResults {
 			if len(result.objs) < 2 {
 				continue
@@ -93,70 +96,6 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 		}
 	}
 	return reviseResults
-}
-
-func (m *objOverlapPolicy) reviseLeveledObjs(level int) []reviseResult {
-	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
-		zmA := a.SortKeyZoneMap()
-		zmB := b.SortKeyZoneMap()
-		if c := zmA.CompareMin(zmB); c != 0 {
-			return c
-		}
-		return zmA.CompareMax(zmB)
-	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0)}
-	for _, obj := range m.leveledObjects[level] {
-		if len(set.entries) == 0 {
-			set.add(obj)
-			continue
-		}
-
-		if zm := obj.SortKeyZoneMap(); set.setZM.StrictlyCompareZmMaxAndMin(zm) > 0 {
-			// zm is overlapped
-			averageRowCnt := set.rows / uint32(len(set.entries))
-			if averageRowCnt/3 < obj.Rows() && obj.Rows() < averageRowCnt*3 {
-				set.add(obj)
-				continue
-			}
-		}
-
-		// obj has no overlap with the set.
-		// if the set has more than one objects, add the set to m.overlappingObjsSet.
-		// else dismiss it.
-		if len(set.entries) > 1 {
-			m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
-		}
-
-		set.reset()
-		set.add(obj)
-	}
-	// there is still more than one entry in set.
-	if len(set.entries) > 1 {
-		m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
-		set.reset()
-	}
-	if len(m.overlappingObjsSet) == 0 {
-		return nil
-	}
-
-	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
-		return cmp.Compare(len(a), len(b))
-	})
-
-	revisedResults := make([]reviseResult, 0, len(m.overlappingObjsSet))
-	// get the overlapping set with most objs.
-	for i := len(m.overlappingObjsSet) - 1; i >= 0; i-- {
-		objs := m.overlappingObjsSet[i]
-		if len(objs) < 2 {
-			continue
-		}
-		revisedResults = append(revisedResults, reviseResult{
-			objs: slices.Clone(objs),
-			kind: taskHostDN,
-		})
-	}
-
-	return revisedResults
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
@@ -208,4 +147,60 @@ func segLevel(length int) int {
 		}
 	}
 	return l
+}
+
+type endPoint struct {
+	val any
+	s   int
+
+	obj *catalog.ObjectEntry
+}
+
+func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	if len(objects) == 0 {
+		return nil
+	}
+	if len(objects) == 1 {
+		return objects
+	}
+	points := make([]endPoint, 0, len(objects))
+	for _, obj := range objects {
+		zm := obj.SortKeyZoneMap()
+		points = append(points, endPoint{val: zm.GetMin(), obj: obj, s: 1})
+		points = append(points, endPoint{val: zm.GetMax(), obj: obj, s: -1})
+	}
+
+	slices.SortFunc(points, func(a, b endPoint) int {
+		c := compute.CompareGeneric(a.val, b.val, objects[0].SortKeyZoneMap().GetType())
+		if c != 0 {
+			return c
+		}
+
+		if a.s == 1 {
+			// left node is first
+			return -1
+		} else {
+			return 1
+		}
+	})
+
+	globalMax, tmpMax := 0, 0
+	res := make([]*catalog.ObjectEntry, 0, len(objects))
+	tmp := make(map[*catalog.ObjectEntry]struct{})
+	for _, p := range points {
+		tmpMax += p.s
+		if p.s == 1 {
+			tmp[p.obj] = struct{}{}
+		} else {
+			delete(tmp, p.obj)
+		}
+		if tmpMax > globalMax {
+			globalMax = tmpMax
+			res = res[:0]
+			for obj := range tmp {
+				res = append(res, obj)
+			}
+		}
+	}
+	return res
 }
