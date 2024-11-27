@@ -1026,9 +1026,13 @@ func tableStatsExecutor(
 				return err
 			}
 
+			dynamicCtx.Lock()
+			tbls := dynamicCtx.tableStock.tbls[:]
+			dynamicCtx.Unlock()
+
 			if err = alphaTask(
 				newCtx, service, eng,
-				dynamicCtx.tableStock.tbls,
+				tbls,
 				"main routine",
 			); err != nil {
 				logutil.Info(logHeader,
@@ -1037,10 +1041,9 @@ func tableStatsExecutor(
 				return err
 			}
 
-			dynamicCtx.tableStock.tbls = dynamicCtx.tableStock.tbls[:0]
-
 			dynamicCtx.Lock()
 			executeTicker.Reset(dynamicCtx.conf.UpdateDuration)
+			dynamicCtx.tableStock.tbls = dynamicCtx.tableStock.tbls[:0]
 			dynamicCtx.Unlock()
 		}
 	}
@@ -1149,13 +1152,16 @@ func prepare(
 	eng engine.Engine,
 ) (err error) {
 
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
+
 	if err = insertNewTables(ctx, service, eng); err != nil {
 		return
 	}
 
 	offsetTS := types.TS{}
 	for len(dynamicCtx.tableStock.tbls) == 0 {
-		accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng, offsetTS)
+		accs, dbs, tbls, ts, err := getCandidates(ctx, service, eng, dynamicCtx.conf.GetTableListLimit, offsetTS)
 		if err != nil {
 			return err
 		}
@@ -1670,12 +1676,9 @@ func getCandidates(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
+	limit int,
 	offsetTS types.TS,
 ) (accs, dbs, tbls []uint64, ts []*timestamp.Timestamp, err error) {
-
-	dynamicCtx.Lock()
-	limit := dynamicCtx.conf.GetTableListLimit
-	dynamicCtx.Unlock()
 
 	var (
 		sql    string
