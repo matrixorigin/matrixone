@@ -844,21 +844,16 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 }
 func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
 	schema := tbl.dataTable.schema
-	var dedupDur float64
 	if schema.HasPK() && !schema.IsSecondaryIndexTable() {
-		now := time.Now()
 		err = tbl.dedup(ctx, data.Vecs[schema.GetSingleSortKeyIdx()], false)
 		if err != nil {
 			return err
 		}
-		dedupDur += time.Since(now).Seconds()
 	}
 	if tbl.dataTable.tableSpace == nil {
 		tbl.dataTable.tableSpace = newTableSpace(tbl, false)
 	}
-	dur, err := tbl.dataTable.tableSpace.Append(data)
-	dedupDur += dur
-	v2.TxnTNAppendDeduplicateDurationHistogram.Observe(dedupDur)
+	_, err = tbl.dataTable.tableSpace.Append(data)
 	return
 }
 func (tbl *txnTable) AddDataFiles(ctx context.Context, stats containers.Vector) (err error) {
@@ -1015,9 +1010,6 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phase string, ts types.TS) (err error) {
-	if ts.GT(&tbl.transferedTS) {
-		panic(fmt.Sprintf("invalid ts, dedup ts should be less than or equal transfer ts, dedup TS %v, transfer TS %v", ts.ToString(), tbl.transferedTS.ToString()))
-	}
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
@@ -1185,7 +1177,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 			tbl.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
 		if err != nil {
 			return
 		}

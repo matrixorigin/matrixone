@@ -444,10 +444,10 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 			delete(db.tables, table.GetID())
 		}
 	}
-	now := db.store.rt.Now()
+	nowTS := db.store.rt.Now()
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(
-			ctx, txnif.FreezePhase, now,
+			ctx, txnif.FreezePhase, nowTS,
 		); err != nil {
 			return
 		}
@@ -455,18 +455,20 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 
 	dedupType := db.store.txn.GetDedupType()
 	if dedupType.SkipTargetOldCommitted() {
+		now := time.Now()
 		for _, table := range db.tables {
 			if err = table.PrePrepareDedup(
-				ctx, false, txnif.FreezePhase, now,
+				ctx, false, txnif.FreezePhase, nowTS,
 			); err != nil {
 				return
 			}
 			if err = table.PrePrepareDedup(
-				ctx, true, txnif.FreezePhase, now,
+				ctx, true, txnif.FreezePhase, nowTS,
 			); err != nil {
 				return
 			}
 		}
+		v2.TxnTNAppendDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
 	}
 	return
 }
