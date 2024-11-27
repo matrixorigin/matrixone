@@ -150,7 +150,7 @@ func Test_CanTransferCnFaultInjection(t *testing.T) {
 	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.enable_fault_injection", a1.sender)
 	require.NoError(t, err)
 
-	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.status_fault_injection", a1.sender)
+	_, err = handleAddFaultPoint(a1.proc, a1.service, "all.list_fault_injection", a1.sender)
 	require.NoError(t, err)
 
 	_, err = handleAddFaultPoint(a1.proc, a1.service, a1.parameter, a1.sender)

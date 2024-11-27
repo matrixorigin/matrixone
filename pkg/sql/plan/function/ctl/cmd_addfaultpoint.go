@@ -17,6 +17,7 @@ package ctl
 import (
 	"context"
 	"github.com/fagongzi/util/protoc"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -83,6 +84,8 @@ type CNResponse struct {
 	CNid      string `json:"cn_id,omitempty"`
 	ReturnStr string `json:"return_str,omitempty"`
 	ErrorStr  string `json:"error_str,omitempty"`
+
+	ReturnList []fault.Point `json:"return_list,omitempty"`
 }
 
 func handleAddFaultPoint(
@@ -121,7 +124,14 @@ func handleAddFaultPoint(
 		}
 		// the current cn also need to process this span cmd
 		if cns[idx] == proc.GetQueryClient().ServiceID() {
-			res.ReturnStr = HandleCnFaultInjection(proc.Ctx, name, freq, action, iarg, sarg)
+			str := HandleCnFaultInjection(proc.Ctx, name, freq, action, iarg, sarg)
+			if name == list {
+				if err = jsoniter.Unmarshal([]byte(str), &res.ReturnList); err != nil {
+					res.ErrorStr = str
+				}
+			} else {
+				res.ReturnStr = str
+			}
 		} else {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_FaultInjection)
 			request.FaultInjectionRequest = &query.FaultInjectionRequest{
@@ -135,6 +145,10 @@ func handleAddFaultPoint(
 			resp, err := transferRequest2OtherCNs(proc, cns[idx], request)
 			if err != nil {
 				res.ErrorStr = err.Error()
+			} else if name == list {
+				if err = jsoniter.Unmarshal([]byte(resp.FaultInjectionResponse.Resp), &res.ReturnList); err != nil {
+					res.ErrorStr = err.Error()
+				}
 			} else {
 				res.ReturnStr = resp.FaultInjectionResponse.Resp
 			}
@@ -192,6 +206,7 @@ const (
 	enable  = "enable_fault_injection"
 	disable = "disable_fault_injection"
 	status  = "status_fault_injection"
+	list    = "list_fault_injection"
 )
 
 func HandleCnFaultInjection(
@@ -223,6 +238,9 @@ func HandleCnFaultInjection(
 		} else {
 			res = "fault injection is disabled"
 		}
+	case list:
+		//var err error
+		res = fault.ListAllFaultPoints(ctx)
 	default:
 		if err := fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg); err != nil {
 			return err.Error()

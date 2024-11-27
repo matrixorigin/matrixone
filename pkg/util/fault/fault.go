@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -34,6 +35,7 @@ const (
 	ADD
 	REMOVE
 	TRIGGER
+	LIST
 )
 
 const (
@@ -105,6 +107,11 @@ func (fm *faultMap) run() {
 			fm.chOut <- out
 		case LOOKUP:
 			fm.chOut <- fm.faultPoints[e.sarg]
+		case LIST:
+			for _, v := range fm.faultPoints {
+				fm.chOut <- v
+			}
+			fm.chOut <- nil
 		default:
 			fm.chOut <- nil
 		}
@@ -336,4 +343,38 @@ func lookup(name string) *faultEntry {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	return out
+}
+
+type Point struct {
+	Name string `json:"name"`
+	Iarg int64  `json:"iarg"`
+	Sarg string `json:"sarg"`
+}
+
+func ListAllFaultPoints(ctx context.Context) string {
+	fm := enabled.Load()
+	if fm == nil {
+		return "list fault points not enabled"
+	}
+
+	points := make([]Point, 0)
+
+	var msg faultEntry
+	msg.cmd = LIST
+	fm.chIn <- &msg
+	for {
+		out := <-fm.chOut
+		if out == nil {
+			break
+		}
+		points = append(points, Point{
+			Name: out.name,
+			Iarg: out.iarg,
+			Sarg: out.sarg,
+		})
+	}
+
+	data, _ := jsoniter.Marshal(points)
+
+	return string(data)
 }
