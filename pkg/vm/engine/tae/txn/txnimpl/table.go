@@ -830,20 +830,20 @@ func (tbl *txnTable) dedup(ctx context.Context, pk containers.Vector, isTombston
 		return
 	}
 	if !dedupType.SkipTargetOldCommitted() {
-		// if err = tbl.DedupSnapByPK(
-		// 	ctx,
-		// 	pk,
-		// 	false,
-		// 	isTombstone,
-		// ); err != nil {
-		// 	return
-		// }
-	} else {
 		if err = tbl.DedupSnapByPK(
 			ctx,
-			pk, true, isTombstone); err != nil {
+			pk,
+			false,
+			isTombstone,
+		); err != nil {
 			return
 		}
+	} else {
+		// if err = tbl.DedupSnapByPK(
+		// 	ctx,
+		// 	pk, true, isTombstone); err != nil {
+		// 	return
+		// }
 	}
 	return
 }
