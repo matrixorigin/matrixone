@@ -1211,7 +1211,6 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
 		return false
 	}
-	field = strings.ToLower(field)
 	for _, v := range nullMap[attr] {
 		if v == field {
 			return true
@@ -1227,23 +1226,14 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	return line[param.TbColToDataCol[colName]]
 }
 
-// when len(line) >= len(param.TbColToDataCol), call this function to get one row data
-func getOneRowDataLineGECol(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	for colIdx := range param.Attrs {
-		if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
-			return err
+func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	if checkLineStrict(param) || len(line) >= len(param.TbColToDataCol) {
+		for colIdx := range param.Attrs {
+			if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
-}
-
-func getOneRowDataRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
-}
-
-func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	if len(line) >= len(param.TbColToDataCol) {
-		return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
+		return nil
 	}
 
 	for colIdx, colName := range param.Attrs {
@@ -1257,13 +1247,6 @@ func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowId
 		vector.AppendBytes(vec, nil, true, mp)
 	}
 	return nil
-}
-
-func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	if checkLineStrict(param) {
-		return getOneRowDataRestrictive(bat, line, rowIdx, param, mp)
-	}
-	return getOneRowDataNonRestrictive(bat, line, rowIdx, param, mp)
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {

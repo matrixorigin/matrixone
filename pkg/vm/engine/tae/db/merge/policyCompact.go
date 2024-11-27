@@ -81,7 +81,9 @@ func (o *objCompactPolicy) revise(rc *resourceController, config *BasicPolicyCon
 	for _, objs := range o.segObjects {
 		if rc.resourceAvailable(objs) {
 			rc.reserveResources(objs)
-			results = append(results, reviseResult{objs, taskHostDN})
+			for _, obj := range objs {
+				results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
+			}
 		}
 	}
 	if len(o.tombstones) > 0 {
@@ -106,7 +108,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 		}
 
 		if (entryOutdated(tEntry, config.TombstoneLifetime) && tEntry.OriginSize() > 10*common.Const1MBytes) ||
-			tEntry.OriginSize() > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
+			tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			meta, err := loadTombstoneMeta(ctx, tEntry.GetObjectStats(), o.fs)
