@@ -1028,7 +1028,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 }
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err error) {
+func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, ts types.TS) (err error) {
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
@@ -1063,11 +1063,12 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool) (err
 		pkVec.Close()
 		return err
 	}
-	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone); err != nil {
+	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, ts); err != nil {
 		pkVec.Close()
 		return err
 	}
 	pkVec.Close()
+	tbl.dedupTS = ts
 	return
 }
 
@@ -1186,6 +1187,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	pks containers.Vector,
 	pksZM index.ZM,
 	isTombstone bool,
+	ts types.TS,
 ) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
@@ -1193,7 +1195,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 			tbl.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), now, true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, true)
 		if err != nil {
 			return
 		}

@@ -444,11 +444,28 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 			delete(db.tables, table.GetID())
 		}
 	}
+	now := db.store.rt.Now()
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(
-			ctx, txnif.FreezePhase, table.store.rt.Now(),
+			ctx, txnif.FreezePhase, now,
 		); err != nil {
 			return
+		}
+	}
+
+	dedupType := db.store.txn.GetDedupType()
+	if dedupType.SkipTargetOldCommitted() {
+		for _, table := range db.tables {
+			if err = table.PrePrepareDedup(
+				ctx, false, now,
+			); err != nil {
+				return
+			}
+			if err = table.PrePrepareDedup(
+				ctx, true, now,
+			); err != nil {
+				return
+			}
 		}
 	}
 	return
@@ -474,11 +491,12 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	}
 
 	now := time.Now()
+	nowTS := db.store.rt.Now()
 	for _, table := range db.tables {
-		if err = table.PrePrepareDedup(ctx, true); err != nil {
+		if err = table.PrePrepareDedup(ctx, true, nowTS); err != nil {
 			return
 		}
-		if err = table.PrePrepareDedup(ctx, false); err != nil {
+		if err = table.PrePrepareDedup(ctx, false, nowTS); err != nil {
 			return
 		}
 	}
