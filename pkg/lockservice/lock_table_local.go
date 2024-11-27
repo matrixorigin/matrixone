@@ -54,6 +54,7 @@ type localLockTable struct {
 
 	options struct {
 		beforeCloseFirstWaiter func(c *lockContext)
+		beforeWait             func(c *lockContext)
 	}
 }
 
@@ -147,6 +148,10 @@ func (l *localLockTable) doLock(
 		c.txn.Unlock()
 
 		logLocalLockWait(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, gid)
+
+		if l.options.beforeWait != nil {
+			l.options.beforeWait(c)
+		}
 
 		v := c.w.wait(c.ctx, l.logger)
 		c.txn.Lock()
@@ -480,7 +485,8 @@ func (l *localLockTable) addRowLockLocked(
 func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
-	conflictWith Lock) error {
+	conflictWith Lock,
+) error {
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
@@ -508,6 +514,21 @@ func (l *localLockTable) handleLockConflictLocked(
 	// waiter added, we need to active deadlock check.
 	c.txn.setBlocked(c.w, l.logger)
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
+
+	if c.opts.Granularity != pb.Granularity_Range {
+		return nil
+	}
+
+	if len(c.rangeLastWaitKey) > 0 {
+		v, ok := l.mu.store.Get(c.rangeLastWaitKey)
+		if !ok {
+			panic("BUG: missing range last wait key")
+		}
+		if ok && v.closeWaiter(c.w, l.logger) {
+			l.mu.store.Delete(c.rangeLastWaitKey)
+		}
+	}
+	c.rangeLastWaitKey = key
 	return nil
 }
 

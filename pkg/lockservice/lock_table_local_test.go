@@ -937,6 +937,138 @@ func TestLocalNeedUpgrade(t *testing.T) {
 	)
 }
 
+func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*1000,
+			)
+			defer cancel()
+
+			// workflow
+			// txn1 lock 1
+			// 1: holders(txn1), waiters ()
+			//
+			// txn2 lock 2
+			// 1: holders(txn1), waiters ()
+			// 2: holders(txn2), waiters ()
+			//
+			// txn3 lock [1, 2]
+			// 1: holders(txn1), waiters (txn3)
+			// 2: holders(txn2)
+			// 3: holders(txn3), waiters ()
+			//
+			// txn1 unlock 1
+			// 1: holders(), waiters ()
+			// 2: holders(txn2), waiters (txn3)
+			// 3: holders(txn3), waiters ()
+			//
+			// txn4 lock 1 can successful
+
+			tableID := uint64(10)
+
+			// txn1 hold row1
+			txn1 := []byte{1}
+			row1 := newTestRows(1)
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txn1,
+				row1,
+				pb.Granularity_Row,
+			)
+
+			// txn2 hold row2
+			txn2 := []byte{2}
+			row2 := newTestRows(2)
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txn2,
+				row2,
+				pb.Granularity_Row,
+			)
+
+			txn3 := []byte{3}
+			row3 := newTestRows(1, 2)
+			txn4WaitTxn1C := make(chan struct{})
+			txn4WaitTxn2C := make(chan struct{})
+
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			waitTimes := 0
+			lt.options.beforeWait = func(c *lockContext) {
+				if bytes.Equal(c.txn.txnID, txn3) && waitTimes == 0 {
+					close(txn4WaitTxn1C)
+					waitTimes++
+					return
+				}
+
+				if bytes.Equal(c.txn.txnID, txn3) && waitTimes == 1 {
+					close(txn4WaitTxn2C)
+					return
+				}
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(3)
+			go func() {
+				defer wg.Done()
+
+				// txn3 will wait txn1 first, and than wait txn2
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					tableID,
+					txn3,
+					row3,
+					pb.Granularity_Range,
+				)
+			}()
+
+			// unlock txn1
+			go func() {
+				defer wg.Done()
+
+				<-txn4WaitTxn1C
+				assert.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			}()
+
+			go func() {
+				defer wg.Done()
+
+				<-txn4WaitTxn2C
+
+				txn4 := []byte{4}
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					tableID,
+					txn4,
+					row1,
+					pb.Granularity_Row,
+				)
+
+				assert.NoError(t, l.Unlock(ctx, txn4, timestamp.Timestamp{}))
+				assert.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			}()
+
+			wg.Wait()
+		},
+	)
+}
+
 type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`

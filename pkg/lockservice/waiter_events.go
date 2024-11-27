@@ -39,20 +39,21 @@ func init() {
 }
 
 type lockContext struct {
-	ctx      context.Context
-	txn      *activeTxn
-	waitTxn  pb.WaitTxn
-	rows     [][]byte
-	opts     LockOptions
-	offset   int
-	idx      int
-	lockedTS timestamp.Timestamp
-	result   pb.Result
-	cb       func(pb.Result, error)
-	lockFunc func(*lockContext, bool)
-	w        *waiter
-	createAt time.Time
-	closed   bool
+	ctx              context.Context
+	txn              *activeTxn
+	waitTxn          pb.WaitTxn
+	rows             [][]byte
+	opts             LockOptions
+	offset           int
+	idx              int
+	lockedTS         timestamp.Timestamp
+	result           pb.Result
+	cb               func(pb.Result, error)
+	lockFunc         func(*lockContext, bool)
+	w                *waiter
+	createAt         time.Time
+	closed           bool
+	rangeLastWaitKey []byte
 }
 
 func (l *localLockTable) newLockContext(
