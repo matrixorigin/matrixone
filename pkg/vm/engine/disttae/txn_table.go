@@ -786,7 +786,7 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(&rangesParam, &obj.ObjectStats) {
+			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
 			}
 			var meta objectio.ObjectDataMeta

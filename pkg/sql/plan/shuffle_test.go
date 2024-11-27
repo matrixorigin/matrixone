@@ -281,21 +281,13 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 		CNIDX: 0,
 		Init:  false,
 	}
-	rp := &engine.RangesParam{
-		BlockFilters:   nil,
-		PreAllocBlocks: 2,
-		TxnOffset:      0,
-		Policy:         engine.Policy_CollectAllData,
-		Rsp:            rsp,
-	}
-
-	ShouldSkipObjByShuffle(rp, stats)
+	ShouldSkipObjByShuffle(rsp, stats)
 	rsp.CNIDX = 1
-	ShouldSkipObjByShuffle(rp, stats)
+	ShouldSkipObjByShuffle(rsp, stats)
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	node.Stats.HashmapStats.ShuffleColMin = 0
 	node.Stats.HashmapStats.ShuffleColMax = 10000
-	ShouldSkipObjByShuffle(rp, stats)
+	ShouldSkipObjByShuffle(rsp, stats)
 	zm := index2.NewZM(types.T_int32, 0)
 	bs := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bs, 0)
@@ -303,7 +295,7 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	binary.LittleEndian.PutUint32(bs, 10)
 	index2.UpdateZM(zm, bs)
 	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
-	ShouldSkipObjByShuffle(rp, stats)
+	ShouldSkipObjByShuffle(rsp, stats)
 }
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {

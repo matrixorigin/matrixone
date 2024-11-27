@@ -16,6 +16,7 @@ package engine_util
 
 import (
 	"context"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -125,7 +126,7 @@ func FilterObjects(
 ) {
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		//if need to shuffle objects
-		if plan2.ShouldSkipObjByShuffle(&rangesParam, objStats) {
+		if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
 			return
 		}
 		var ok bool
