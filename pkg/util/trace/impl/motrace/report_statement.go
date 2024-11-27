@@ -79,9 +79,6 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
-		// fixme: StmtBuilder maybe not best choose
-		stmt.StmtBuilder.Reset()
-		stmt.StmtBuilder.Write(s.Statement)
 
 		return stmt
 	}
@@ -89,6 +86,7 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 }
 
 func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
+	enableStmtMerge := GetTracerProvider().enableStmtMerge
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
@@ -108,9 +106,15 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 		e.RequestAt = e.ResponseAt.Truncate(windowSize)
 		e.ResponseAt = e.RequestAt.Add(windowSize)
 		e.AggrCount = 1
+		// append the first query.
+		if enableStmtMerge {
+			// fixme: StmtBuilder maybe not best choose
+			e.StmtBuilder.Reset()
+			e.StmtBuilder.Write(e.Statement)
+		}
 	}
 	// update the stats
-	if GetTracerProvider().enableStmtMerge {
+	if enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
 		e.StmtBuilder.Write(n.Statement)
 	}
