@@ -538,6 +538,9 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.PrepareString{}},
 		{stmt: &tree.Deallocate{}},
 		{stmt: &tree.ShowBackendServers{}},
+		{stmt: &tree.SavePoint{}},
+		{stmt: &tree.ReleaseSavePoint{}},
+		{stmt: &tree.RollbackToSavePoint{}},
 	}
 
 	for i := 0; i < len(args); i++ {
