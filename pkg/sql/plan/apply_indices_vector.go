@@ -189,7 +189,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 
 		// 2. Do Sort by L2 Distance
 		sortTblByL2Distance := makeInnerJoinOrderByL2Distance(builder, builder.ctxByNode[nodeID],
-			distFnExpr, tlbJoinEntries, sortDirection, idxTableDefs, idxTags, sortNode)
+			distFnExpr, tlbJoinEntries, sortDirection, idxTableDefs, idxTags, sortNode, scanNode)
 
 		return sortTblByL2Distance
 	}
@@ -498,16 +498,27 @@ func makeInnerJoinOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	fn *plan.Function, tlbJoinEntries int32,
 	sortDirection plan.OrderBySpec_OrderByFlag,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
-	sortNode *plan.Node) int32 {
+	sortNode *plan.Node,
+	scanNode *plan.Node) int32 {
+
+	part := ""
+	embedid := int32(-1)
+	for _, indexDef := range scanNode.TableDef.Indexes {
+		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			part = indexDef.Parts[0]
+			embedid = scanNode.TableDef.Name2ColIndex[part]
+			break
+		}
+	}
 
 	distFnName := distFuncInternalDistFunc[fn.Func.ObjName]
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
-			Typ: idxTableDefs[2].Cols[3].Typ,
+			Typ: scanNode.TableDef.Cols[embedid].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["entries.scan"],
-					ColPos: 3, // entries.entry
+					RelPos: scanNode.BindingTags[0],
+					ColPos: int32(embedid), // embedding in src table
 				},
 			},
 		},
