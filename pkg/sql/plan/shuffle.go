@@ -130,7 +130,8 @@ func ShouldSkipObjByShuffle(rp *engine.RangesParam, objstats *objectio.ObjectSta
 		} else {
 			shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
 		}
-		logutil.Infof("table %v obj min %v max %v shuffle to %v", rsp.Node.TableDef.Name, zm.GetMinBuf(), zm.GetMaxBuf(), shuffleIDX)
+		t, _ := types.Unpack(zm.GetMinBuf())
+		logutil.Infof("table %v obj min %v max %v shuffle to %v, unpack %v %v", rsp.Node.TableDef.Name, zm.GetMinBuf(), zm.GetMaxBuf(), shuffleIDX, t[0], t[1])
 		return shuffleIDX != uint64(rsp.CNIDX)
 
 	}
