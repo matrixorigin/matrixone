@@ -1821,11 +1821,7 @@ func VectorToZM(vec *vector.Vector, zm ZM) ZM {
 //
 // In this case, StrictlyCompareZmMaxAndMin will return -1 even when truncated,
 // indicating a possibly false negative response to the declaration that two ZMs intersect
-func (zm ZM) StrictlyCompareZmMaxAndMin(o ZM) int {
-	return strictlyCompareZmMaxAndMin(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
-}
-
-func strictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2 int32) int {
+func StrictlyCompareZmMaxAndMin(maxBuf, minBuf []byte, t types.T, scale1, scale2 int32) int {
 	if t.FixedLength() >= 0 || len(maxBuf) != 30 {
 		return compute.Compare(maxBuf, minBuf, t, scale1, scale2)
 	}
