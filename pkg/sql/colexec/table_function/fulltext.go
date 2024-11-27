@@ -17,7 +17,6 @@ package table_function
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,10 +37,16 @@ const (
 
 type fulltextState struct {
 	inited      bool
-	result_chan chan map[any]float32
 	errors      chan error
-	done        chan bool
+	stream_chan chan executor.Result
+	score_array []map[any]float32
+	n_doc_id    int
+	last_doc_id any
+	n_result    uint64
+	sql_closed  bool
+	sacc        *fulltext.SearchAccum
 	limit       uint64
+	nrows       int
 
 	// holding output batch
 	batch *batch.Batch
@@ -58,33 +63,20 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 		u.batch.Clean(proc.Mp())
 	}
 
-	close(u.done)
-}
-
-func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-
-	var scoremap map[any]float32
-	var ok bool
-
-	u.batch.CleanOnlyData()
-
-	select {
-	case <-proc.Ctx.Done():
-		return vm.CancelResult, nil
-	case err, ok := <-u.errors:
-		if ok {
-			// error
-			return vm.CancelResult, err
-		} else {
-			// channel closed
-			return vm.CancelResult, nil
-		}
-	case scoremap, ok = <-u.result_chan:
-		if !ok {
-			return vm.CancelResult, nil
+	for {
+		select {
+		case res, ok := <-u.stream_chan:
+			if !ok {
+				return
+			}
+			res.Close()
+		case <-proc.Ctx.Done():
+			return
 		}
 	}
+}
 
+func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]float32) (vm.CallResult, error) {
 	// return result
 	if u.batch.VectorCount() == 1 {
 		// only doc_id returned
@@ -116,12 +108,46 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	}
 
 	u.batch.SetRowCount(len(scoremap))
+	u.n_result += uint64(len(scoremap))
 
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
 
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+
+}
+
+func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+
+	var scoremap map[any]float32
+	u.batch.CleanOnlyData()
+
+	// number of result more than pushdown limit and exit
+	if u.limit > 0 && u.n_result >= u.limit {
+		return vm.CancelResult, nil
+	}
+
+	// return scoremap when array is not empty
+	if len(u.score_array) > 0 {
+		scoremap, u.score_array = u.score_array[0], u.score_array[1:]
+		return u.returnResult(proc, scoremap)
+	}
+
+	// array is empty, try to get batch from SQL executor
+	for !u.sql_closed {
+		sql_closed, err := getResults(u, proc, u.sacc)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		u.sql_closed = sql_closed
+
+		if len(u.score_array) > 0 {
+			scoremap, u.score_array = u.score_array[0], u.score_array[1:]
+			return u.returnResult(proc, scoremap)
+		}
+	}
+	return vm.CancelResult, nil
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
@@ -130,9 +156,9 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		u.batch = tf.createResultBatch()
-		u.result_chan = make(chan map[any]float32, 2)
 		u.errors = make(chan error)
-		u.done = make(chan bool)
+		u.stream_chan = make(chan executor.Result, 8)
+		u.score_array = make([]map[any]float32, 0, 512)
 		u.inited = true
 	}
 
@@ -170,10 +196,6 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
 
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
-
 	if tableFunction.Limit != nil {
 		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
@@ -184,7 +206,9 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	return st, err
 }
 
-func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
+var ft_runSql = ft_runSql_fn
+
+func ft_runSql_fn(proc *process.Process, sql string) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -198,6 +222,27 @@ func ft_runSql(proc *process.Process, sql string) (executor.Result, error) {
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(proc.GetSessionInfo().AccountId)
+	return exec.Exec(proc.GetTopContext(), sql, opts)
+}
+
+var ft_runSql_streaming = ft_runSql_streaming_fn
+
+// run SQL in WithStreaming() and pass the channel to SQL executor
+func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan executor.Result) (executor.Result, error) {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(proc.GetTxnOperator()).
+		WithDatabase(proc.GetSessionInfo().Database).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(proc.GetSessionInfo().AccountId).
+		WithStreaming(stream_chan)
 	return exec.Exec(proc.GetTopContext(), sql, opts)
 }
 
@@ -243,7 +288,7 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	}
 	//logutil.Infof("SQL is %s", sql)
 
-	res, err := ft_runSql(proc, sql)
+	res, err := ft_runSql_streaming(proc, sql, u.stream_chan)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -251,131 +296,99 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	return res, nil
 }
 
-func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, res executor.Result) {
+// get one batch and evaluate the result in mini batches with size 8192
+func getResults(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (stream_closed bool, err error) {
 
-	defer res.Close()
-	defer close(u.result_chan)
-	var n_result uint64 = 0
-	n_doc_id := 0
-	var last_doc_id any = nil
-	for _, bat := range res.Batches {
-
-		if len(bat.Vecs) != 3 {
-			u.errors <- moerr.NewInternalError(proc.Ctx, "output vector columns not match")
-			return
-		}
-
-		for i := 0; i < bat.RowCount(); i++ {
-			// doc_id any
-			doc_id := vector.GetAny(bat.Vecs[0], i)
-
-			bytes, ok := doc_id.([]byte)
-			if ok {
-				// change it to string
-				key := string(bytes)
-				doc_id = key
-			}
-
-			// pos int32
-			pos := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
-
-			// word string
-			word := bat.Vecs[2].GetStringAt(i)
-
-			if last_doc_id == nil {
-				last_doc_id = doc_id
-			} else if last_doc_id != doc_id {
-				// new doc_id
-				last_doc_id = doc_id
-				n_doc_id++
-			}
-
-			//logutil.Infof("WORD:%s, DOC_ID:%v, POS:%d, LAST: %v", word, doc_id, pos, last_doc_id)
-			if n_doc_id >= 8192 {
-				scoremap, err := s.Eval()
-				if err != nil {
-					u.errors <- err
-					return
-				}
-
-				// check context cancel
-				select {
-				case <-proc.Ctx.Done():
-					return
-				case <-u.done:
-					return
-				default:
-				}
-
-				if len(scoremap) > 0 {
-					for len(u.result_chan) == cap(u.result_chan) {
-						select {
-						case <-proc.Ctx.Done():
-							return
-						case <-u.done:
-							return
-						default:
-							time.Sleep(10 * time.Millisecond)
-						}
-					}
-					u.result_chan <- scoremap
-				}
-
-				clear(s.WordAccums)
-				n_doc_id = 0
-
-				// check limit
-				n_result += uint64(len(scoremap))
-				if u.limit > 0 && n_result >= u.limit {
-					return
-				}
-			}
-
-			w, ok := s.WordAccums[word]
-			if !ok {
-				s.WordAccums[word] = fulltext.NewWordAccum()
-				w = s.WordAccums[word]
-			}
-			_, ok = w.Words[doc_id]
-			if ok {
-				w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
-				w.Words[doc_id].DocCount += 1
-			} else {
-				positions := make([]int32, 0, 128)
-				positions = append(positions, pos)
-				w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: positions, DocCount: 1}
-			}
-		}
-	}
-
-	scoremap, err := s.Eval()
-	if err != nil {
-		u.errors <- err
-		return
-	}
-
-	// check context cancel
+	// first receive the batch and calculate the scoremap
+	// We don't need to calculate mini-batch?????
+	var res executor.Result
+	var ok bool
 	select {
+	case res, ok = <-u.stream_chan:
+		if !ok {
+			// channel closed and evaluate the rest of result
+			scoremap, err := s.Eval()
+			if err != nil {
+				return false, err
+			}
+			if len(scoremap) > 0 {
+				u.score_array = append(u.score_array, scoremap)
+			}
+
+			return true, nil
+		}
+	case err = <-u.errors:
+		return false, err
 	case <-proc.Ctx.Done():
-		return
-	case <-u.done:
-		return
-	default:
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
 	}
 
-	if len(scoremap) > 0 {
-		for len(u.result_chan) == cap(u.result_chan) {
-			select {
-			case <-proc.Ctx.Done():
-				return
-			case <-u.done:
-				return
-			default:
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-		u.result_chan <- scoremap
+	bat := res.Batches[0]
+	defer res.Close()
+
+	if len(bat.Vecs) != 3 {
+		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
+
+	u.nrows += bat.RowCount()
+
+	for i := 0; i < bat.RowCount(); i++ {
+		// doc_id any
+		doc_id := vector.GetAny(bat.Vecs[0], i)
+
+		bytes, ok := doc_id.([]byte)
+		if ok {
+			// change it to string
+			key := string(bytes)
+			doc_id = key
+		}
+
+		// pos int32
+		pos := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
+
+		// word string
+		word := bat.Vecs[2].GetStringAt(i)
+
+		if u.last_doc_id == nil {
+			u.last_doc_id = doc_id
+		} else if u.last_doc_id != doc_id {
+			// new doc_id
+			u.last_doc_id = doc_id
+			u.n_doc_id++
+		}
+
+		//logutil.Infof("WORD:%s, DOC_ID:%v, POS:%d, LAST: %v", word, doc_id, pos, last_doc_id)
+		if u.n_doc_id >= 8192 {
+			scoremap, err := s.Eval()
+			if err != nil {
+				return false, err
+			}
+
+			if len(scoremap) > 0 {
+				u.score_array = append(u.score_array, scoremap)
+			}
+
+			clear(s.WordAccums)
+			u.n_doc_id = 0
+		}
+
+		w, ok := s.WordAccums[word]
+		if !ok {
+			s.WordAccums[word] = fulltext.NewWordAccum()
+			w = s.WordAccums[word]
+		}
+		_, ok = w.Words[doc_id]
+		if ok {
+			w.Words[doc_id].Position = append(w.Words[doc_id].Position, pos)
+			w.Words[doc_id].DocCount += 1
+		} else {
+			positions := make([]int32, 0, 128)
+			positions = append(positions, pos)
+			w.Words[doc_id] = &fulltext.Word{DocId: doc_id, Position: positions, DocCount: 1}
+		}
+	}
+
+	return false, nil
 }
 
 // Run SQL to get number of records in source table
@@ -419,13 +432,16 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	}
 	s.Nrow = nrow
 
-	// get the statistic of search string ([]Pattern) and store in SearchAccum
-	res, err := runWordStats(u, proc, s)
-	if err != nil {
-		return err
-	}
+	u.sacc = s
 
-	go getResults(u, proc, s, res)
+	go func() {
+		// get the statistic of search string ([]Pattern) and store in SearchAccum
+		_, err = runWordStats(u, proc, u.sacc)
+		if err != nil {
+			u.errors <- err
+			return
+		}
+	}()
 
 	return nil
 }
