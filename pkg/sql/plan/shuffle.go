@@ -127,6 +127,7 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint6
 
 func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
 	t := types.T(rsp.Node.TableDef.Cols[rsp.Node.Stats.HashmapStats.ShuffleColIdx].Typ.Id)
+	logutil.Infof("table %v type %v", rsp.Node.TableDef.Name, t)
 	if !rsp.Init {
 		rsp.Init = true
 		switch t {
