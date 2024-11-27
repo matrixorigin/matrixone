@@ -41,8 +41,6 @@ const (
 
 	getAllWatermarkFormat = "select table_id, watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
-	getWatermarkCountFormat = "select count(1) from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
-
 	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and table_id = '%s'"
 
 	deleteWatermarkFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
