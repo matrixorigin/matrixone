@@ -361,91 +361,7 @@ func (ps *OperatorStats) Reset() {
 	*ps = OperatorStats{}
 }
 
-func (ps *OperatorStats) StringV1() string {
-	// Convert OperationMetrics map to a formatted string
-	var metricsStr string
-	if len(ps.OperatorMetrics) > 0 {
-		metricsStr = " "
-		for k, v := range ps.OperatorMetrics {
-			metricName := "Unknown"
-			switch k {
-			case OpScanTime:
-				metricName = "ScanTime"
-			case OpInsertTime:
-				metricName = "InsertTime"
-			case OpIncrementTime:
-				metricName = "IncrementTime"
-			case OpWaitLockTime:
-				metricName = "WaitLockTime"
-			}
-			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
-		}
-	}
-
-	return fmt.Sprintf(" CallNum:%d "+
-		"TimeCost:%dns "+
-		"WaitTime:%dns "+
-		"InRows:%d "+
-		"OutRows:%d "+
-		"InSize:%dbytes "+
-		"InBlock:%d "+
-		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
-		"ScanBytes:%dbytes "+
-		"NetworkIO:%dbytes "+
-		"DiskIO:%dbytes "+
-		"WrittenRows:%d "+
-		"DeletedRows:%d "+
-		"S3List:%d "+
-		"S3Head:%d "+
-		"S3Put:%d "+
-		"S3Get:%d "+
-		"S3Delete:%d "+
-		"S3DeleteMul:%d"+
-		"%s",
-		ps.CallNum,
-		ps.TimeConsumed,
-		ps.WaitTimeConsumed,
-		ps.InputRows,
-		ps.OutputRows,
-		ps.InputSize,
-		ps.InputBlocks,
-		ps.OutputSize,
-		ps.MemorySize,
-		ps.ScanBytes,
-		ps.NetworkIO,
-		ps.DiskIO,
-		ps.WrittenRows,
-		ps.DeletedRows,
-		ps.S3List,
-		ps.S3Head,
-		ps.S3Put,
-		ps.S3Get,
-		ps.S3Delete,
-		ps.S3DeleteMul,
-		metricsStr)
-}
-
 func (ps *OperatorStats) String() string {
-	// Convert OperationMetrics map to a formatted string
-	var metricsStr string
-	if len(ps.OperatorMetrics) > 0 {
-		metricsStr = " "
-		for k, v := range ps.OperatorMetrics {
-			metricName := "Unknown"
-			switch k {
-			case OpScanTime:
-				metricName = "ScanTime"
-			case OpInsertTime:
-				metricName = "InsertTime"
-			case OpIncrementTime:
-				metricName = "IncrementTime"
-			case OpWaitLockTime:
-				metricName = "WaitLockTime"
-			}
-			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
-		}
-	}
 	// Use strings.Builder for efficient string concatenation
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(" CallNum:%d "+
@@ -528,6 +444,25 @@ func (ps *OperatorStats) String() string {
 	// Join and append S3 stats if any
 	if len(dynamicAttrs) > 0 {
 		sb.WriteString(strings.Join(dynamicAttrs, ""))
+	}
+
+	// Convert OperationMetrics map to a formatted string
+	var metricsStr string
+	if len(ps.OperatorMetrics) > 0 {
+		for k, v := range ps.OperatorMetrics {
+			metricName := "Unknown"
+			switch k {
+			case OpScanTime:
+				metricName = "ScanTime"
+			case OpInsertTime:
+				metricName = "InsertTime"
+			case OpIncrementTime:
+				metricName = "IncrementTime"
+			case OpWaitLockTime:
+				metricName = "WaitLockTime"
+			}
+			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
+		}
 	}
 
 	sb.WriteString(metricsStr)
