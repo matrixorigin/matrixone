@@ -126,8 +126,7 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint6
 }
 
 func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
-	t := types.T(rsp.Node.TableDef.Cols[rsp.Node.Stats.HashmapStats.ShuffleColIdx].Typ.Id)
-	logutil.Infof("table %v type %v", rsp.Node.TableDef.Name, t)
+	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
 	if !rsp.Init {
 		rsp.Init = true
 		switch t {
@@ -723,7 +722,7 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-		n.Stats.HashmapStats.ShuffleColIdx = firstSortColID
+		n.Stats.HashmapStats.ShuffleColIdx = n.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
 		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
 		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
