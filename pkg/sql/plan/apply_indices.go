@@ -368,11 +368,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 	}
 
-	var indexes []*IndexDef
+	indexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	for i := range node.TableDef.Indexes {
-		if node.TableDef.Indexes[i].TableExist {
-			indexes = append(indexes, node.TableDef.Indexes[i])
+		if node.TableDef.Indexes[i].IndexAlgo == "fulltext" || !node.TableDef.Indexes[i].TableExist {
+			continue
 		}
+		indexes = append(indexes, node.TableDef.Indexes[i])
 	}
 	if len(indexes) == 0 {
 		return nodeID

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -80,6 +81,26 @@ const (
 	smallCheckpointSize            = 1024
 	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
+
+func TestPrintVector(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	vec1 := vector.NewVec(types.T_uint32.ToType())
+	defer vec1.Free(mp)
+	for i := 0; i < 10; i++ {
+		err = vector.AppendFixed[uint32](vec1, math.MaxUint32, false, mp)
+		assert.NoError(t, err)
+	}
+
+	vec1.Reset(types.T_varchar.ToType())
+	err = vector.AppendBytes(vec1, nil, true, mp)
+	require.NoError(t, err)
+	s := common.MoVectorToString(vec1, 10)
+	t.Log(s)
+}
 
 func TestAppend1(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -10165,6 +10186,55 @@ func TestDeleteAndMerge(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.CompactBlocks(true)
 	tae.DoAppendWithTxn(bat, appendTxn, false)
+
+	assert.NoError(t, appendTxn.Commit(ctx))
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestDeleteAndMerge2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt(false)
+	for objIt.Next() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
+		}
+	}
+	task, err := jobs.NewMergeObjectsTask(nil, txn, objs, tae.Runtime, 0, false)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	var appendTxn txnif.AsyncTxn
+	{
+		deleteTxn, deleteRel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		filter := handle.NewEQFilter(v)
+		err := deleteRel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		err = deleteTxn.Commit(context.Background())
+		assert.NoError(t, err)
+		appendTxn, err = tae.StartTxn(nil)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CompactBlocks(true)
+	tae.DoAppendWithTxn(bats[3], appendTxn, false)
 
 	assert.NoError(t, appendTxn.Commit(ctx))
 	t.Log(tae.Catalog.SimplePPString(3))

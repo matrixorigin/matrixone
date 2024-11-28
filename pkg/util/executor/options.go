@@ -192,6 +192,11 @@ func (opts Options) WithDisableWaitPaused() Options {
 	return opts
 }
 
+func (opts Options) WithUserTxn() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithUserTxn())
+	return opts
+}
+
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
@@ -215,4 +220,14 @@ func (opts Options) LowerCaseTableNames() int64 {
 		return *opts.lower
 	}
 	return 1
+}
+
+func (opts Options) WithStreaming(stream_chan chan Result) Options {
+	opts.stream_chan = stream_chan
+	opts.streaming = true
+	return opts
+}
+
+func (opts Options) Streaming() (chan Result, bool) {
+	return opts.stream_chan, opts.streaming
 }

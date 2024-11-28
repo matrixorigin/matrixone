@@ -92,12 +92,11 @@ func New[K comparable, V any](
 	postSet func(ctx context.Context, key K, value V, size int64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
-	capacity1Func func(capacity int64) int64,
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capacity1: func() int64 {
-			return capacity1Func(capacity())
+			return capacity() / 10
 		},
 		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
 		queue1:       *NewQueue[*_CacheItem[K, V]](),

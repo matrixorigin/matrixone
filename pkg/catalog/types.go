@@ -164,6 +164,8 @@ const (
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
 
 	MO_DATA_KEY = "mo_data_key"
+
+	MO_TABLE_STATS = "mo_table_stats_alpha"
 )
 
 func IsSystemTable(id uint64) bool {

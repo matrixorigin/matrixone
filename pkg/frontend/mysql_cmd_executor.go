@@ -2298,14 +2298,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	//so we need to make sure the pipewriter.write returns.
 	//issue3976
 	quitC := make(chan int)
-	go func() {
+	go func(ctx context.Context, reader *io.PipeReader) {
 		select {
-		case <-execCtx.reqCtx.Done():
+		case <-ctx.Done():
 			//close reader
 			_ = reader.Close()
 		case <-quitC:
 		}
-	}()
+	}(execCtx.reqCtx, reader)
 	defer func() {
 		close(quitC)
 	}()
@@ -2493,6 +2493,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
 		return nil
+	case *tree.SavePoint, *tree.ReleaseSavePoint:
+		return nil
+	case *tree.RollbackToSavePoint:
+		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
 	//in session migration, the txn forced to be autocommit.

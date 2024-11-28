@@ -134,11 +134,7 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
-		},
-		func(capacity int64) int64 {
-			return capacity / 5
-		},
-	)
+		})
 }
 
 func EvictCache(ctx context.Context) (target int64) {

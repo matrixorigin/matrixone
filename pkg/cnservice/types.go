@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -57,7 +55,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 var (
@@ -83,6 +83,7 @@ type Service interface {
 	GetTimestampWaiter() client.TimestampWaiter
 	GetEngine() engine.Engine
 	GetClock() clock.Clock
+	GetTxnClient() client.TxnClient
 }
 
 type EngineType string
@@ -129,7 +130,10 @@ type Config struct {
 		Type     EngineType           `toml:"type"`
 		Logstore options.LogstoreType `toml:"logstore"`
 
+		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
+
+		Stats disttae.MoTableStatsConfig `toml:"stats"`
 	}
 
 	// parameters for cn-server related buffer.

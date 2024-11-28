@@ -926,6 +926,7 @@ var (
 		"mo_snapshots":                0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -966,6 +967,7 @@ var (
 		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1003,6 +1005,7 @@ var (
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
 		MoCatalogMoDataKeyDDL,
+		MoCatalogMoTableStatsDDL,
 	}
 
 	//drop tables for the tenant
@@ -5522,7 +5525,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.SetVar:
@@ -7570,6 +7573,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
 			return true
 		}
 		return false
