@@ -224,27 +224,19 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		if aobjDeduped && naobjDeduped {
 			break
 		}
-		if rowIDs.NullMask().IsEmpty() {
-			break
-		}
 		obj := objIt.Item()
 		if obj.IsAppendable() {
 			if aobjDeduped {
 				continue
 			}
-			if obj.DeleteBefore(from) {
-				aobjDeduped = true
-				continue
-			}
 		} else {
+			if !inQueue && tbl.lastInvisibleNOBJSortHint == 0 {
+				tbl.lastInvisibleNOBJSortHint = obj.SortHint
+			}
 			if naobjDeduped {
 				continue
 			}
 			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
-				naobjDeduped = true
-				continue
-			}
-			if obj.DeleteBefore(from) {
 				naobjDeduped = true
 				continue
 			}
@@ -261,6 +253,9 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		if needWait || needWait2 {
 			obj = obj.GetLatestNode()
 		}
+		if obj.IsAppendable() && obj.CreatedAt.LT(&from) {
+			aobjDeduped = true
+		}
 		visible := obj.VisibleByTS(to)
 		if !visible {
 			if !inQueue && !obj.IsAppendable() && obj.IsCreating() {
@@ -272,9 +267,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			continue
 		}
 		objData := obj.GetObjectData()
-		if objData.CoarseCheckAllRowsCommittedBefore(from) {
-			continue
-		}
 		err = objData.GetDuplicatedRows(
 			ctx,
 			tbl.txnTable.store.txn,
