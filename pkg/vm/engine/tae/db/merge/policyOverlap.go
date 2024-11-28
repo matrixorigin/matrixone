@@ -159,7 +159,7 @@ func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry,
 		return nil, taskHostDN
 	}
 
-	if level < 3 && len(objs) > levels[3] {
+	if len(objs) > levels[3] {
 		objs = objs[:levels[3]]
 	}
 
@@ -230,41 +230,18 @@ func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.Objec
 		points = append(points, endPoint{val: zm.GetMaxBuf(), obj: obj, s: -1})
 	}
 	t := objects[0].SortKeyZoneMap().GetType()
-	if t.FixedLength() > 0 {
-		slices.SortFunc(points, func(a, b endPoint) int {
-			c := compute.Compare(a.val, b.val, t,
-				a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
-			if c != 0 {
-				return c
-			}
-			if a.s == 1 {
-				// left node is first
-				return -1
-			}
-			return 1
-		})
-	} else {
-		slices.SortFunc(points, func(a, b endPoint) int {
-			if a.s == b.s {
-				c := compute.Compare(a.val, b.val, t,
-					a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
-				if c != 0 {
-					return c
-				}
-				if a.s == 1 {
-					// left node is first
-					return -1
-				}
-				return 1
-			}
-			if a.s == -1 {
-				return index.StrictlyCompareZmMaxAndMin(b.val, a.val, t,
-					b.obj.SortKeyZoneMap().GetScale(), a.obj.SortKeyZoneMap().GetScale())
-			}
-			return index.StrictlyCompareZmMaxAndMin(a.val, b.val, t,
-				a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
-		})
-	}
+	slices.SortFunc(points, func(a, b endPoint) int {
+		c := compute.Compare(a.val, b.val, t,
+			a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
+		if c != 0 {
+			return c
+		}
+		if a.s == 1 {
+			// left node is first
+			return -1
+		}
+		return 1
+	})
 
 	globalMax, tmpMax := 0, 0
 	res := make([]*catalog.ObjectEntry, 0, len(objects))
