@@ -452,7 +452,10 @@ func (ctr *container) getAggResult() ([]*vector.Vector, error) {
 
 	var err error
 	for i, ag := range ctr.bat.Aggs {
-		result[i], err = ag.Flush()
+		// todo: 只是暂时为了编译成功。
+		_ = i
+
+		result, err = ag.Flush()
 		if err != nil {
 			return nil, err
 		}

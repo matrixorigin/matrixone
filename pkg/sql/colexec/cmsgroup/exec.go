@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var makeAggExec = aggexec.MakeAgg
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
 	group.prepareAnalyzer()
@@ -282,7 +284,7 @@ func (group *Group) generateAggExec(proc *process.Process) ([]aggexec.AggFuncExe
 	}()
 
 	for i, ag := range group.Aggs {
-		exec := aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		exec := makeAggExec(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
 		execs = append(execs, exec)
 
 		if config := ag.GetExtraConfig(); config != nil {

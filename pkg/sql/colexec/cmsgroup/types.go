@@ -105,7 +105,25 @@ func (group *Group) requireDefaultAggResult(proc *process.Process) (*batch.Batch
 	return group.ctr.result1.Popped, true, nil
 }
 
-func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) error {
+func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
+	input := []*batch.Batch{bat}
+
+	// group.
+	for i := range group.ctr.groupByEvaluate.Vec {
+		if group.ctr.groupByEvaluate.Vec[i], err = group.ctr.groupByEvaluate.Executor[i].Eval(proc, input, nil); err != nil {
+			return err
+		}
+	}
+
+	// agg.
+	for i := range group.ctr.aggregateEvaluate {
+		for j := range group.ctr.aggregateEvaluate[i].Vec {
+			if group.ctr.aggregateEvaluate[i].Vec[j], err = group.ctr.aggregateEvaluate[i].Executor[j].Eval(proc, input, nil); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -134,6 +152,13 @@ type container struct {
 	// `select agg(x) from data_source` and data_source is empty.
 	// we should return 0 for count, and return NULL for the others.
 	alreadyOutputAnything bool
+}
+
+func (group *Group) Free(proc *process.Process, _ bool, _ error) {
+	group.ctr.result1.Free0(proc.Mp())
+	group.ctr.result2.Free0(proc.Mp())
+	group.ctr.freeAggEvaluate()
+	group.ctr.freeGroupEvaluate()
 }
 
 func (ctr *container) freeAggEvaluate() {

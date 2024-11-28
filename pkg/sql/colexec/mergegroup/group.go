@@ -86,7 +86,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			result := vm.NewCallResult()
-			b, err := ctr.res.BlockingGroupRelated.PopResult(proc.Mp())
+			b, err := ctr.res.GroupResultBuffer.PopResult(proc.Mp())
 			if err != nil {
 				return result, err
 			}
