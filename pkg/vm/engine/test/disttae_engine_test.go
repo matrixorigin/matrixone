@@ -612,6 +612,7 @@ func TestInProgressTransfer(t *testing.T) {
 		"echo",
 		0,
 		"trace delete",
+		false,
 	)
 	require.NoError(t, err1)
 	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitDelete)
@@ -622,6 +623,7 @@ func TestInProgressTransfer(t *testing.T) {
 		"echo",
 		0,
 		"trace slowlog",
+		false,
 	)
 	require.NoError(t, err1)
 	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CommitSlowLog)

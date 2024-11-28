@@ -60,6 +60,7 @@ type faultEntry struct {
 	action           int
 	iarg             int64  // int arg
 	sarg             string // string arg
+	constant         bool
 
 	nWaiters int
 	mutex    sync.Mutex
@@ -81,13 +82,18 @@ func (fm *faultMap) run() {
 		case STOP:
 			return
 		case ADD:
-			if _, ok := fm.faultPoints[e.name]; ok {
+			if v, ok := fm.faultPoints[e.name]; ok && (v.constant || e.constant) {
 				fm.chOut <- nil
 			} else {
 				fm.faultPoints[e.name] = e
 				fm.chOut <- e
 			}
 		case REMOVE:
+			if e.name == "all" {
+				fm.faultPoints = make(map[string]*faultEntry)
+				fm.chOut <- e
+				continue
+			}
 			if v, ok := fm.faultPoints[e.name]; ok {
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
@@ -223,7 +229,7 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return
 }
 
-func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
+func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
 	fm := enabled.Load()
 	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault point not enabled")
@@ -301,6 +307,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 
 	msg.iarg = iarg
 	msg.sarg = sarg
+	msg.constant = constant
 
 	if msg.action == WAIT {
 		msg.cond = sync.NewCond(&msg.mutex)
@@ -309,15 +316,18 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point failed.")
+		return moerr.NewInternalError(
+			ctx,
+			"failed to add fault injection point; it may already exist and be constant.",
+		)
 	}
 	return nil
 }
 
-func RemoveFaultPoint(ctx context.Context, name string) error {
+func RemoveFaultPoint(ctx context.Context, name string) (bool, error) {
 	fm := enabled.Load()
 	if fm == nil {
-		return moerr.NewInternalError(ctx, "add fault injection point not enabled.")
+		return false, moerr.NewInternalError(ctx, "fault injection not enabled.")
 	}
 
 	var msg faultEntry
@@ -326,9 +336,9 @@ func RemoveFaultPoint(ctx context.Context, name string) error {
 	fm.chIn <- &msg
 	out := <-fm.chOut
 	if out == nil {
-		return moerr.NewInvalidInputf(ctx, "invalid injection point %s", name)
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 func lookup(name string) *faultEntry {
@@ -351,7 +361,7 @@ type Point struct {
 	Sarg string `json:"sarg"`
 }
 
-func ListAllFaultPoints(ctx context.Context) string {
+func ListAllFaultPoints() string {
 	fm := enabled.Load()
 	if fm == nil {
 		return "list fault points not enabled"

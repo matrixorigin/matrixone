@@ -117,11 +117,12 @@ const (
 )
 
 type FaultPoint struct {
-	Name   string
-	Freq   string
-	Action string
-	Iarg   int64
-	Sarg   string
+	Name     string
+	Freq     string
+	Action   string
+	Iarg     int64
+	Sarg     string
+	Constant bool
 }
 
 func (m *FaultPoint) MarshalBinary() ([]byte, error) {

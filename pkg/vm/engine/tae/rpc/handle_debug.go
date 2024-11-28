@@ -63,7 +63,7 @@ func (h *Handle) HandleAddFaultPoint(
 		fault.Disable()
 		return nil, nil
 	}
-	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg, req.Constant)
 }
 
 func (h *Handle) HandleTraceSpan(ctx context.Context,

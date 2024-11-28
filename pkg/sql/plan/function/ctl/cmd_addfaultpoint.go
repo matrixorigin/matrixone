@@ -205,8 +205,9 @@ func getInputs(ctx context.Context, input string) (
 const (
 	enable  = "enable_fault_injection"
 	disable = "disable_fault_injection"
-	status  = "status_fault_injection"
-	list    = "list_fault_injection"
+	status  = "status_fault_point"
+	list    = "list_fault_point"
+	remove  = "remove_fault_point"
 )
 
 func HandleCnFaultInjection(
@@ -239,10 +240,9 @@ func HandleCnFaultInjection(
 			res = "fault injection is disabled"
 		}
 	case list:
-		//var err error
-		res = fault.ListAllFaultPoints(ctx)
+		res = fault.ListAllFaultPoints()
 	default:
-		if err := fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg); err != nil {
+		if err := fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg, false); err != nil {
 			return err.Error()
 		}
 		res = "OK"
