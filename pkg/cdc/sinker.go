@@ -34,14 +34,10 @@ import (
 )
 
 const (
-	// DefaultMaxAllowedPacket of mysql is 64 MB
-	DefaultMaxAllowedPacket uint64 = 64 * 1024 * 1024
 	// sqlBufReserved leave 5 bytes for mysql driver
-	sqlBufReserved       = 5
-	DefaultRetryTimes    = -1
-	DefaultRetryDuration = 30 * time.Minute
-	sqlPrintLen          = 200
-	fakeSql              = "fakeSql"
+	sqlBufReserved = 5
+	sqlPrintLen    = 200
+	fakeSql        = "fakeSql"
 )
 
 var (
@@ -59,18 +55,20 @@ func NewSinker(
 	retryTimes int,
 	retryDuration time.Duration,
 	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
 ) (Sinker, error) {
 	//TODO: remove console
 	if sinkUri.SinkTyp == ConsoleSink {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration)
+	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar), nil
+	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength), nil
 }
 
 var _ Sinker = new(consoleSinker)
@@ -147,8 +145,6 @@ type mysqlSinker struct {
 	watermarkUpdater *WatermarkUpdater
 	ar               *ActiveRoutine
 
-	maxAllowedPacket uint64
-
 	// buf of sql statement
 	sqlBufs      [2][]byte
 	curBufIdx    int
@@ -186,19 +182,22 @@ var NewMysqlSinker = func(
 	watermarkUpdater *WatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
+	maxSqlLength uint64,
 ) Sinker {
 	s := &mysqlSinker{
 		mysql:            mysql,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
-		maxAllowedPacket: DefaultMaxAllowedPacket,
 		ar:               ar,
 	}
-	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&s.maxAllowedPacket)
+	var maxAllowedPacket uint64
+	_ = mysql.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
+	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
+	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 
 	// sqlBuf
-	s.sqlBufs[0] = make([]byte, sqlBufReserved, s.maxAllowedPacket)
-	s.sqlBufs[1] = make([]byte, sqlBufReserved, s.maxAllowedPacket)
+	s.sqlBufs[0] = make([]byte, sqlBufReserved, maxAllowedPacket)
+	s.sqlBufs[1] = make([]byte, sqlBufReserved, maxAllowedPacket)
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.sqlBufSendCh = make(chan []byte)
@@ -646,6 +645,7 @@ type mysqlSink struct {
 
 	retryTimes    int
 	retryDuration time.Duration
+	timeout       string
 }
 
 var NewMysqlSink = func(
@@ -653,6 +653,7 @@ var NewMysqlSink = func(
 	ip string, port int,
 	retryTimes int,
 	retryDuration time.Duration,
+	timeout string,
 ) (Sink, error) {
 	ret := &mysqlSink{
 		user:          user,
@@ -661,6 +662,7 @@ var NewMysqlSink = func(
 		port:          port,
 		retryTimes:    retryTimes,
 		retryDuration: retryDuration,
+		timeout:       timeout,
 	}
 	err := ret.connect()
 	return ret, err
@@ -723,7 +725,7 @@ func (s *mysqlSink) Close() {
 }
 
 func (s *mysqlSink) connect() (err error) {
-	s.conn, err = openDbConn(s.user, s.password, s.ip, s.port)
+	s.conn, err = OpenDbConn(s.user, s.password, s.ip, s.port, s.timeout)
 	return err
 }
 

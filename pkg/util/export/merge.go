@@ -761,7 +761,7 @@ const ParamSeparator = " "
 // MergeTaskMetadata handle args like: "{db_tbl_name} [date, default: today]"
 func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
-		ID:       path.Join("ETLMergeTask", path.Join(args...)),
+		ID:       path.Join(etl.ETLMergeTask, path.Join(args...)),
 		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 		Options:  task.TaskOptions{Concurrency: 1},

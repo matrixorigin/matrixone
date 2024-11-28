@@ -636,13 +636,15 @@ func (tbl *txnTable) doRanges(
 			)
 		}
 
-		if objectio.RangesInjected(tbl.tableDef.Name) {
+		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok {
 			logutil.Info(
 				"INJECT-TRACE-RANGES",
 				zap.String("name", tbl.tableDef.Name),
+				zap.String("tbl", fmt.Sprintf("%p", tbl)),
 				zap.String("exprs", plan2.FormatExprs(exprs)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.Bool("is-snap", tbl.db.op.IsSnapOp()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
 				zap.Error(err),
@@ -1875,7 +1877,8 @@ func (tbl *txnTable) getPartitionState(
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Get partition state for snapshot read, table:%s, tid:%v, txn:%s, ps:%p",
+		logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
+			tbl,
 			tbl.tableName,
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString(),

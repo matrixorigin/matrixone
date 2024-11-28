@@ -176,3 +176,39 @@ var (
 
 	TransferMemLatencyHistogram = transferShortDurationHistogram.WithLabelValues("mem_latency")
 )
+
+// Mo table stats metrics
+var (
+	moTableStatsDurHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "mo_table_stats_duration",
+		Buckets:   getDurationBuckets(),
+	}, []string{"type"})
+
+	AlphaTaskDurationHistogram        = moTableStatsDurHistogram.WithLabelValues("alpha_task_duration")
+	GamaTaskDurationHistogram         = moTableStatsDurHistogram.WithLabelValues("gama_task_duration")
+	BulkUpdateOnlyTSDurationHistogram = moTableStatsDurHistogram.WithLabelValues("bulk_update_only_ts_duration")
+	BulkUpdateStatsDurationHistogram  = moTableStatsDurHistogram.WithLabelValues("bulk_update_stats_duration")
+	CalculateStatsDurationHistogram   = moTableStatsDurHistogram.WithLabelValues("calculate_stats_duration")
+
+	MoTableSizeRowsNormalDurationHistogram          = moTableStatsDurHistogram.WithLabelValues("mo_table_size_rows_normal_duration")
+	MoTableSizeRowsForceUpdateDurationHistogram     = moTableStatsDurHistogram.WithLabelValues("mo_table_size_rows_force_update_duration")
+	MoTableSizeRowsResetUpdateTimeDurationHistogram = moTableStatsDurHistogram.WithLabelValues("mo_table_size_rows_reset_update_duration")
+
+	moTableStatsCountingHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "mo_table_stats_total",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 12),
+	}, []string{"type"})
+
+	AlphaTaskCountingHistogram        = moTableStatsCountingHistogram.WithLabelValues("alpha_task_counting")
+	GamaTaskCountingHistogram         = moTableStatsCountingHistogram.WithLabelValues("gama_task_counting")
+	BulkUpdateOnlyTSCountingHistogram = moTableStatsCountingHistogram.WithLabelValues("bulk_update_only_ts_counting")
+	BulkUpdateStatsCountingHistogram  = moTableStatsCountingHistogram.WithLabelValues("bulk_update_stats_counting")
+
+	MoTableSizeRowsNormalCountingHistogram          = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_normal_counting")
+	MoTableSizeRowsForceUpdateCountingHistogram     = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_force_update_counting")
+	MoTableSizeRowsResetUpdateTimeCountingHistogram = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_reset_update_counting")
+)
