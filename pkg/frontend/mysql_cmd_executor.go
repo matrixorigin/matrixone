@@ -389,8 +389,51 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
+	getTableStats := func(funcName string, dbName string, tblNames []string) (stats []int64, err error) {
+		if _, err = executeSQLInBackgroundSession(ctx, bh, "set reset_update_time = yes"); err != nil {
+			return
+		}
+		defer func() {
+			_, _ = executeSQLInBackgroundSession(ctx, bh, "set reset_update_time = no")
+		}()
+		if _, err = executeSQLInBackgroundSession(ctx, bh, "create table tmp (db varchar, tbl varchar)"); err != nil {
+			return
+		}
+		defer func() {
+			_, _ = executeSQLInBackgroundSession(ctx, bh, "drop table tmp")
+		}()
+
+		sql := fmt.Sprintf("insert into tmp values ('%s', '%s')", dbName, tblNames[0])
+		for i := 1; i < len(tblNames); i++ {
+			sql += fmt.Sprintf(", ('%s', '%s')", dbName, tblNames[i])
+		}
+		if _, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
+			return
+		}
+
+		var rets []ExecResult
+		sql = fmt.Sprintf("select %s(db, tbl) from tmp", funcName)
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
+			return
+		}
+
+		stats = make([]int64, 0, len(tblNames))
+		idx := 0
+		for _, result := range rets {
+			for i := uint64(0); i < result.GetRowCount(); i++ {
+				if stats[idx], err = rets[0].GetInt64(ctx, i, 0); err != nil {
+					return
+				}
+				idx += 1
+			}
+		}
+		return
+	}
+
+	var tblNames []string
+	var tblIdxes []int
 	mrs := ses.GetMysqlResultSet()
-	for _, row := range ses.data {
+	for i, row := range ses.data {
 		tableName := string(row[0].([]byte))
 		// check if the table is in the subscription meta
 		if subMeta != nil && !pubsub.InSubMetaTables(subMeta, tableName) {
@@ -403,12 +446,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		if slices.Contains(needRowsAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
-			if row[3], err = r.Rows(ctx); err != nil {
-				return err
-			}
-			if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
-				return err
-			}
+			tblNames = append(tblNames, tableName)
+			tblIdxes = append(tblIdxes, i)
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
 			for i := 0; i < 16; i++ {
 				// only remain name and created_time
@@ -430,6 +469,19 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			}
 		}
 		mrs.AddRow(row)
+	}
+
+	// calculate table row and size
+	var rows, sizes []int64
+	if rows, err = getTableStats("mo_table_rows", stmt.DbName, tblNames); err != nil {
+		return err
+	}
+	if sizes, err = getTableStats("mo_table_size", stmt.DbName, tblNames); err != nil {
+		return err
+	}
+	for i, idx := range tblIdxes {
+		ses.data[idx][3] = rows[i]
+		ses.data[idx][5] = sizes[i]
 	}
 	return nil
 }
