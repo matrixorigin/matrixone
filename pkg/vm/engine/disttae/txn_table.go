@@ -2167,7 +2167,6 @@ func (tbl *txnTable) MergeObjects(
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
 
 	// check object visibility and set object stats.
-	fullObjStats := make([]objectio.ObjectStats, len(objStats))
 	for i, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
@@ -2175,7 +2174,7 @@ func (tbl *txnTable) MergeObjects(
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
 		objectio.SetObjectStats(&objstat, &info.ObjectStats)
-		fullObjStats[i] = objstat
+		objStats[i] = objstat
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
@@ -2183,7 +2182,7 @@ func (tbl *txnTable) MergeObjects(
 	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, // context
 		sortKeyPos, sortKeyIsPK, // schema
-		fullObjStats, // targets
+		objStats, // targets
 		targetObjSize)
 	if err != nil {
 		return nil, err
