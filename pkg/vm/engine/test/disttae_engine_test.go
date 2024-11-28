@@ -1207,3 +1207,34 @@ func TestCache3Tables(t *testing.T) {
 	require.Equal(t, catalog.MO_COLUMNS, tname)
 	require.NotNil(t, rel)
 }
+
+func TestRelationExists(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	exist, err := db.RelationExists(p.Ctx, "test", nil)
+	require.NoError(t, err)
+	require.True(t, exist)
+
+	exist, err = db.RelationExists(p.Ctx, "testxx", nil)
+	require.NoError(t, err)
+	require.False(t, exist)
+
+	// craft no-account-id error
+	ctx := context.WithValue(p.Ctx, defines.TenantIDKey{}, nil)
+	exist, err = db.RelationExists(ctx, "testxx", nil)
+	require.Error(t, err)
+	require.False(t, exist)
+
+	rel, err := db.Relation(ctx, "test", nil)
+	require.Error(t, err)
+	require.Nil(t, rel)
+}

@@ -2455,10 +2455,10 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "mem":
 			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg) +
+			cu = motrace.CalculateCUIOIn(stats.GetS3IOInputCount(), cfg) +
 				motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
+			cu = motrace.CalculateCUIOOut(stats.GetS3IOOutputCount(), cfg) +
 				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
 		case "iolist":
 			cu = motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
