@@ -408,9 +408,12 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar := rm.accountRoutine
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(getPu(rm.service).SV.CleanKillQueueInterval)*time.Minute {
-			delete(ar.killIdQueue, toKillAccount)
+	pu := getPu(rm.service)
+	if pu != nil {
+		for toKillAccount, killRecord := range ar.killIdQueue {
+			if time.Since(killRecord.killTime) > time.Duration(pu.SV.CleanKillQueueInterval)*time.Minute {
+				delete(ar.killIdQueue, toKillAccount)
+			}
 		}
 	}
 }
