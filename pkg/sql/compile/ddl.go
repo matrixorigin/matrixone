@@ -929,20 +929,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return err
 	}
-	//if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
-	//	if qry.GetIfNotExists() {
-	//		return nil
-	//	}
-	//
-	//	c.proc.Info(c.proc.Ctx, "createTable",
-	//		zap.String("databaseName", c.db),
-	//		zap.String("tableName", qry.GetTableDef().GetName()),
-	//		zap.Error(err),
-	//	)
-	//	return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	//}
 
-	//---------------------------------------------------------------------------------------------------
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
@@ -959,24 +946,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
-	//---------------------------------------------------------------------------------------------------
-
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
-		//if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
-		//	if qry.GetIfNotExists() {
-		//		return nil
-		//	}
-		//	c.proc.Info(c.proc.Ctx, "createTable",
-		//		zap.String("databaseName", c.db),
-		//		zap.String("tableName", qry.GetTableDef().GetName()),
-		//		zap.Error(err),
-		//	)
-		//	return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
-		//}
-
-		//-----------------------------------------------------------------------------------------------------
 		exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
@@ -992,8 +964,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
-
-		//-----------------------------------------------------------------------------------------------------
 	}
 
 	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -1311,16 +1281,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
-		//if _, err := dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-		//	c.proc.Info(c.proc.Ctx, "createTable",
-		//		zap.String("databaseName", c.db),
-		//		zap.String("tableName", qry.GetTableDef().GetName()),
-		//		zap.Error(err),
-		//	)
-		//	return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-		//}
 
-		//--------------------------------------------------------------------------------------------
 		exists, err := dbSource.RelationExists(c.proc.Ctx, def.Name, nil)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "check index relation exists failed",
@@ -1333,7 +1294,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if exists {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
-		//--------------------------------------------------------------------------------------------
 
 		if err := dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
 			c.proc.Info(c.proc.Ctx, "createTable",
@@ -1534,32 +1494,6 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	viewName := qry.GetTableDef().GetName()
-	//if _, err = dbSource.Relation(c.proc.Ctx, viewName, nil); err == nil {
-	//	if qry.GetIfNotExists() {
-	//		return nil
-	//	}
-	//
-	//	if qry.GetReplace() {
-	//		err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
-	//		if err != nil {
-	//			getLogger(s.Proc.GetService()).Info("createView",
-	//				zap.String("databaseName", c.db),
-	//				zap.String("viewName", qry.GetTableDef().GetName()),
-	//				zap.Error(err),
-	//			)
-	//			return err
-	//		}
-	//	} else {
-	//		getLogger(s.Proc.GetService()).Info("createView",
-	//			zap.String("databaseName", c.db),
-	//			zap.String("viewName", qry.GetTableDef().GetName()),
-	//			zap.Error(err),
-	//		)
-	//		return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
-	//	}
-	//}
-
-	//-----------------------------------------------------------------------------------------------------
 	exists, err := dbSource.RelationExists(c.proc.Ctx, viewName, nil)
 	if err != nil {
 		getLogger(s.Proc.GetService()).Error("check view relation exists failed",
@@ -1590,24 +1524,9 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 	}
 
-	//-----------------------------------------------------------------------------------------------------
-
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
 	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
-		//if _, err = tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
-		//	if qry.GetIfNotExists() {
-		//		return nil
-		//	}
-		//	getLogger(s.Proc.GetService()).Info("createView",
-		//		zap.String("databaseName", c.db),
-		//		zap.String("viewName", qry.GetTableDef().GetName()),
-		//		zap.Error(err),
-		//	)
-		//	return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
-		//}
-
-		//------------------------------------------------------------------------------------------------------
 		exists, err = tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
@@ -1623,8 +1542,6 @@ func (s *Scope) CreateView(c *Compile) error {
 			}
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
 		}
-		//------------------------------------------------------------------------------------------------------
-
 	}
 
 	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
@@ -1887,14 +1804,6 @@ func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) e
 		)
 		return err
 	}
-	//if _, err = dbSource.Relation(c.proc.Ctx, def.Name, nil); err == nil {
-	//	c.proc.Info(c.proc.Ctx, "createTable",
-	//		zap.String("databaseName", c.db),
-	//		zap.String("tableName", def.GetName()),
-	//		zap.Error(err),
-	//	)
-	//	return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-	//}
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, def.Name, nil)
 	if err != nil {
