@@ -408,9 +408,12 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar := rm.accountRoutine
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(getPu(rm.service).SV.CleanKillQueueInterval)*time.Minute {
-			delete(ar.killIdQueue, toKillAccount)
+	pu := getPu(rm.service)
+	if pu != nil {
+		for toKillAccount, killRecord := range ar.killIdQueue {
+			if time.Since(killRecord.killTime) > time.Duration(pu.SV.CleanKillQueueInterval)*time.Minute {
+				delete(ar.killIdQueue, toKillAccount)
+			}
 		}
 	}
 }
@@ -520,7 +523,12 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(getPu(rm.service).SV.KillRountinesInterval) * time.Second))
+			pu := getPu(rm.service)
+			if pu != nil {
+				time.Sleep(time.Duration(pu.SV.KillRountinesInterval) * time.Second)
+			} else {
+				break
+			}
 		}
 	}()
 
