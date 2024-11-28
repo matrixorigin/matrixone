@@ -3768,7 +3768,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
+	dop := c.ncpu //for dedup join, limit the dop max to ncpu
+	if n.JoinType != plan.Node_DEDUP {
+		dop = plan2.GetShuffleDop(c.ncpu, len(cnlist), n.Stats.HashmapStats.HashmapSize)
+	}
 
 	bucketNum := len(cnlist) * dop
 	shuffleJoins := make([]*Scope, 0, bucketNum)

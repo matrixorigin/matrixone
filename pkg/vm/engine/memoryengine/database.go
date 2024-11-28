@@ -165,6 +165,17 @@ func (d *Database) Relation(ctx context.Context, relName string, _ any) (engine.
 	}
 
 }
+func (d *Database) RelationExists(ctx context.Context, relName string, _ any) (bool, error) {
+	rel, err := d.Relation(ctx, relName, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return false, nil
+		} else {
+			return false, err
+		}
+	}
+	return rel != nil, nil
+}
 
 func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
