@@ -233,3 +233,11 @@ insert into `serial_numbers` (`biz_type`, `namespace`, `sn`) select result,resul
 INSERT INTO `serial_numbers` (`biz_type`, `namespace`, `sn`) VALUES (4, '2024091117', 1) ON DUPLICATE KEY UPDATE `sn` = `sn` + 1;
 SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 ;
 SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '2024091117';
+
+drop table if exists indup_11;
+create table indup_11(a int, b int, c int, primary key(a, b));
+insert into indup_11(a, b) select result, result from generate_series(1, 100000) g;
+insert into indup_11 values(1, 1, 1);
+insert ignore into indup_11 values(1, 1, 1);
+insert into indup_11 values(1, 1, 1) on duplicate key update c = a + b;
+select * from indup_11 where c is not null;

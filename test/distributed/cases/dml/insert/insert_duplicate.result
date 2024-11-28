@@ -391,3 +391,13 @@ id    biz_type    namespace    sn
 SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '2024091117';
 id    biz_type    namespace    sn
 100001    4    2024091117    1
+drop table if exists indup_11;
+create table indup_11(a int, b int, c int, primary key(a, b));
+insert into indup_11(a, b) select result, result from generate_series(1, 100000) g;
+insert into indup_11 values(1, 1, 1);
+Duplicate entry '(1,1)' for key '(a,b)'
+insert ignore into indup_11 values(1, 1, 1);
+insert into indup_11 values(1, 1, 1) on duplicate key update c = a + b;
+select * from indup_11 where c is not null;
+a    b    c
+1    1    2
