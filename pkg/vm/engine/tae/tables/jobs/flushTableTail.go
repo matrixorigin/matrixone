@@ -176,10 +176,10 @@ func NewFlushTableTailTask(
 			return
 		}
 		if obj.IsTombstone {
-			return nil, moerr.NewInternalErrorNoCtxf("L#179: logic err, obj %v is tombstone", obj.ID().String())
+			panic(fmt.Sprintf("logic err, obj %v is tombstone", obj.ID().String()))
 		}
 		if !hdl.IsAppendable() {
-			return nil, moerr.NewInternalErrorNoCtxf("L#182: logic err %v is nonappendable", hdl.GetID().String())
+			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Info(
@@ -206,10 +206,10 @@ func NewFlushTableTailTask(
 			return
 		}
 		if !obj.IsTombstone {
-			return nil, moerr.NewInternalErrorNoCtxf("L#209: logic err, obj %v is tombstone", obj.ID().String())
+			panic(fmt.Sprintf("logic err, obj %v is not tombstone", obj.ID().String()))
 		}
 		if !hdl.IsAppendable() {
-			return nil, moerr.NewInternalErrorNoCtxf("L#212: logic err %v is nonappendable", hdl.GetID().String())
+			panic(fmt.Sprintf("logic err %v is nonappendable", hdl.GetID().String()))
 		}
 		if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 			logutil.Infof("[FlushTabletail] obj %v needs retry", obj.ID().String())
@@ -498,7 +498,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
 
 	if isTombstone && bat.Deletes != nil {
-		return nil, false, moerr.NewInternalErrorNoCtxf("L#501: logic err, tombstone %v has deletes", obj.GetID().String())
+		panic(fmt.Sprintf("logic err, tombstone %v has deletes", obj.GetID().String()))
 	}
 
 	var sortMapping []int64
