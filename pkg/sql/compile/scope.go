@@ -636,13 +636,8 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		CNIDX: s.NodeInfo.CNIDX,
 		Init:  false,
 	}
-	start := time.Now()
-	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
-	cost := time.Since(start)
-	if cost.Milliseconds() > 10 {
-		logutil.Infof("debug ranges: table %v collect commited data cost %v ms", s.DataSource.node.TableDef.Name, cost.Milliseconds())
-	}
 
+	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
 	if err != nil {
 		return err
 	}
@@ -654,23 +649,13 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		start = time.Now()
 		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
-		cost = time.Since(start)
-		if cost.Milliseconds() > 10 {
-			logutil.Infof("debug ranges: table %v collect uncommited data cost %v ms", s.DataSource.node.TableDef.Name, cost.Milliseconds())
-		}
 		if err != nil {
 			return err
 		}
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
-		start = time.Now()
 		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
-		cost = time.Since(start)
-		if cost.Milliseconds() > 10 {
-			logutil.Infof("debug ranges: table %v collect commited tombstones cost %v ms", s.DataSource.node.TableDef.Name, cost.Milliseconds())
-		}
 		if err != nil {
 			return err
 		}

@@ -163,8 +163,6 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 			return shuffleIDX != uint64(rsp.CNIDX)
 		} else {
 			shuffleIDX := shuffleByValueExtractedFromZonemap(rsp, zm)
-			//t, _ := types.Unpack(zm.GetMinBuf())
-			//logutil.Infof("table %v obj min %v max %v shuffle to %v, unpack %v %v", rsp.Node.TableDef.Name, zm.GetMinBuf(), zm.GetMaxBuf(), shuffleIDX, t[0], t[1])
 			return shuffleIDX != uint64(rsp.CNIDX)
 		}
 	}

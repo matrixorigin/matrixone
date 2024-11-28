@@ -313,3 +313,55 @@ func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	}()
 	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
 }
+
+func TestShuffleByZonemap(t *testing.T) {
+	node := &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 10000
+	node.Stats.HashmapStats.Ranges = []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+	zm := index2.NewZM(types.T_uint32, 0)
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, 0)
+	index2.UpdateZM(zm, bs)
+	binary.LittleEndian.PutUint32(bs, 10)
+	index2.UpdateZM(zm, bs)
+
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 2,
+		CNIDX: 0,
+		Init:  false,
+	}
+	shuffleByZonemap(rsp, zm)
+}
+
+func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
+	node := &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 4000000000
+	node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_int64)
+
+	zm := index2.NewZM(types.T_varchar, 0)
+	bs := []byte{59, 24, 223, 254, 115, 192, 58, 21, 1}
+	index2.UpdateZM(zm, bs)
+	bs = []byte{59, 24, 224, 7, 119, 160, 58, 21, 5}
+	index2.UpdateZM(zm, bs)
+
+	rsp := &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 3,
+		CNIDX: 0,
+		Init:  false,
+	}
+	idx := shuffleByValueExtractedFromZonemap(rsp, zm)
+	require.Equal(t, idx, uint64(2))
+}
