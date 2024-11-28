@@ -250,7 +250,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		}
 		visible := obj.VisibleByTS(to)
 		if !visible {
-			if !inQueue && !obj.IsAppendable() {
+			if !inQueue && !obj.IsAppendable() && obj.IsCreating() {
 				tbl.lastInvisibleNOBJSortHint = obj.SortHint
 			}
 			continue
