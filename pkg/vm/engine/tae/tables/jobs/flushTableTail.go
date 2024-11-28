@@ -316,6 +316,36 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	/////////////////////
 	//// phase separator
 	///////////////////
+
+	phaseDesc = "1-flushing appendable objects for snapshot"
+	inst := time.Now()
+	snapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, false)
+	statFlushAobj := time.Since(inst)
+	defer func() {
+		releaseFlushObjTasks(task, snapshotSubtasks, err)
+	}()
+	if err != nil {
+		return
+	}
+
+	/////////////////////
+	//// phase separator
+	///////////////////
+
+	phaseDesc = "1-flushing appendable tombstones for snapshot"
+	inst = time.Now()
+	tombstoneSnapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, true)
+	statFlushTombStone := time.Since(inst)
+	if err != nil {
+		return
+	}
+	defer func() {
+		releaseFlushObjTasks(task, tombstoneSnapshotSubtasks, err)
+	}()
+
+	/////////////////////
+	//// phase separator
+	///////////////////
 	phaseDesc = "1-merge aobjects"
 	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
 	// after flushAObjsForSnapshot
@@ -346,36 +376,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		err = moerr.NewInternalErrorNoCtx("test merge bail out")
 		return
 	}
-
-	/////////////////////
-	//// phase separator
-	///////////////////
-
-	phaseDesc = "1-flushing appendable objects for snapshot"
-	inst := time.Now()
-	snapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, false)
-	statFlushAobj := time.Since(inst)
-	defer func() {
-		releaseFlushObjTasks(task, snapshotSubtasks, err)
-	}()
-	if err != nil {
-		return
-	}
-
-	/////////////////////
-	//// phase separator
-	///////////////////
-
-	phaseDesc = "1-flushing appendable tombstones for snapshot"
-	inst = time.Now()
-	tombstoneSnapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, true)
-	statFlushTombStone := time.Since(inst)
-	if err != nil {
-		return
-	}
-	defer func() {
-		releaseFlushObjTasks(task, tombstoneSnapshotSubtasks, err)
-	}()
 
 	/////////////////////
 	//// phase separator
