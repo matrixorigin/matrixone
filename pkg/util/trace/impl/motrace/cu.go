@@ -135,18 +135,18 @@ func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) 
 	return types.Decimal256ToFloat64(val1, cuScale), nil
 }
 
-func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
+func CalculateCUIOIn(ioCnt float64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cfg = GetCUConfig()
 	}
-	return float64(ioCnt) * cfg.IoInPrice / cfg.CUUnit
+	return ioCnt * cfg.IoInPrice / cfg.CUUnit
 }
 
-func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
+func CalculateCUIOOut(ioCnt float64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cfg = GetCUConfig()
 	}
-	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
+	return ioCnt * cfg.IoOutPrice / cfg.CUUnit
 }
 
 func CalculateCUIOList(ioCnt float64, cfg *config.OBCUConfig) float64 {
