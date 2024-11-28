@@ -1585,8 +1585,9 @@ func (s *Scope) CreateView(c *Compile) error {
 				)
 				return err
 			}
+		} else {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
 		}
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
 	}
 
 	//-----------------------------------------------------------------------------------------------------
