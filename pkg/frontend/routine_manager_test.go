@@ -230,8 +230,10 @@ func Test_rm(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 1
 	setPu("", pu)
-	_, err = NewRoutineManager(context.Background(), "")
+	rm, err := NewRoutineManager(context.Background(), "")
 	assert.NoError(t, err)
+	rm.cleanKillQueue()
 	setPu("", nil)
 	time.Sleep(2 * time.Second)
+	rm.cancelCtx()
 }
