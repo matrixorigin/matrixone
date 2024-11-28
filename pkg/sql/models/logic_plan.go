@@ -42,6 +42,15 @@ const S3Get = "S3 Get Count"
 const S3Delete = "S3 Delete Count"
 const S3DeleteMul = "S3 DeleteMul Count"
 
+const FSCacheRead = "FileService Cache Read"
+const FSCacheHit = "FileService Cache Hit"
+const FSCacheMemoryRead = "FileService Cache Memory Read"
+const FSCacheMemoryHit = "FileService Cache Memory Hit"
+const FSCacheDiskRead = "FileService Cache Disk Read"
+const FSCacheDiskHit = "FileService Cache Disk Hit"
+const FSCacheRemoteRead = "FileService Cache Remote Read"
+const FSCacheRemoteHit = "FileService Cache Remote Hit"
+
 const Network = "Network"
 
 type ExplainData struct {
@@ -252,6 +261,15 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 		gS3DeleteCount := NewStatisticValue(S3Delete, "count")
 		gS3DeleteMulCount := NewStatisticValue(S3DeleteMul, "count")
 
+		gFSCacheRead := NewStatisticValue(FSCacheRead, "count")
+		gFSCacheHit := NewStatisticValue(FSCacheHit, "count")
+		gFSCacheMemoryRead := NewStatisticValue(FSCacheMemoryRead, "count")
+		gFSCacheMemoryHit := NewStatisticValue(FSCacheMemoryHit, "count")
+		gFSCacheDiskRead := NewStatisticValue(FSCacheDiskRead, "count")
+		gFSCacheDiskHit := NewStatisticValue(FSCacheDiskHit, "count")
+		gFSCacheRemoteRead := NewStatisticValue(FSCacheRemoteRead, "count")
+		gFSCacheRemoteHit := NewStatisticValue(FSCacheRemoteHit, "count")
+
 		// network
 		gNetwork := NewStatisticValue(Network, "byte")
 
@@ -308,6 +326,22 @@ func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error 
 					gS3DeleteCount.Value += ioValue.Value
 				case S3DeleteMul:
 					gS3DeleteMulCount.Value += ioValue.Value
+				case FSCacheRead:
+					gFSCacheRead.Value += ioValue.Value
+				case FSCacheHit:
+					gFSCacheHit.Value += ioValue.Value
+				case FSCacheMemoryRead:
+					gFSCacheMemoryRead.Value += ioValue.Value
+				case FSCacheMemoryHit:
+					gFSCacheMemoryHit.Value += ioValue.Value
+				case FSCacheDiskRead:
+					gFSCacheDiskRead.Value += ioValue.Value
+				case FSCacheDiskHit:
+					gFSCacheDiskHit.Value += ioValue.Value
+				case FSCacheRemoteRead:
+					gFSCacheRemoteRead.Value += ioValue.Value
+				case FSCacheRemoteHit:
+					gFSCacheRemoteHit.Value += ioValue.Value
 				}
 			}
 
