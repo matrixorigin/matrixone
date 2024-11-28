@@ -2712,7 +2712,7 @@ func offsetToString(offset int) string {
 	return fmt.Sprintf("+%02d:%02d", hours, minutes)
 }
 
-// do not lock table if lock no rows at then end now.
+// do not lock table if lock no rows now.
 // if need to lock table, uncomment these codes
 // func getLockTableAtTheEnd(tableDef *TableDef) bool {
 // if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
