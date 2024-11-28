@@ -524,7 +524,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 			if pu != nil {
 				time.Sleep(time.Duration(pu.SV.KillRountinesInterval) * time.Second)
 			} else {
-				time.Sleep(time.Duration(10) * time.Second)
+				break
 			}
 		}
 	}()
