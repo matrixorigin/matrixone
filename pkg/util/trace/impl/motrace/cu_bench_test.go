@@ -15,10 +15,11 @@
 package motrace
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 // BenchmarkCalculateMem
@@ -229,8 +230,8 @@ func BenchmarkCalculateElem(b *testing.B) {
 		b.Run(bm.name+"/io", func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = CalculateCUIOIn(int64(bm.args.stats.GetS3IOInputCount()), bm.args.cfg)
-				_ = CalculateCUIOOut(int64(bm.args.stats.GetS3IOOutputCount()), bm.args.cfg)
+				_ = CalculateCUIOIn(bm.args.stats.GetS3IOInputCount(), bm.args.cfg)
+				_ = CalculateCUIOOut(bm.args.stats.GetS3IOOutputCount(), bm.args.cfg)
 			}
 		})
 	}
