@@ -364,4 +364,32 @@ func TestShuffleByValueExtractedFromZonemap(t *testing.T) {
 	}
 	idx := shuffleByValueExtractedFromZonemap(rsp, zm)
 	require.Equal(t, idx, uint64(2))
+
+	node = &plan.Node{
+		Stats: DefaultStats(),
+	}
+	node.Stats.HashmapStats.Shuffle = true
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 4000000000
+	node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_uint64)
+
+	zm = index2.NewZM(types.T_varchar, 0)
+	packer := types.NewPacker()
+	packer.EncodeUint64(1500000000)
+	packer.EncodeUint64(1)
+	index2.UpdateZM(zm, packer.Bytes())
+	packer = types.NewPacker()
+	packer.EncodeUint64(1600000000)
+	packer.EncodeUint64(1)
+	index2.UpdateZM(zm, packer.Bytes())
+
+	rsp = &engine.RangesShuffleParam{
+		Node:  node,
+		CNCNT: 4,
+		CNIDX: 0,
+		Init:  false,
+	}
+	idx = shuffleByValueExtractedFromZonemap(rsp, zm)
+	require.Equal(t, idx, uint64(1))
 }
