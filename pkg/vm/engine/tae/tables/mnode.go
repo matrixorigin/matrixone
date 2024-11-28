@@ -262,8 +262,7 @@ func (node *memoryNode) GetDuplicatedRows(
 ) (err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	var checkFn func(uint32) error
-	checkFn = node.checkConflictLocked(txn)
+	checkFn := node.checkConflictLocked(txn)
 	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, getRowOffset, checkFn, mp)
 
 	return
