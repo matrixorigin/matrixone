@@ -634,7 +634,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt})
+	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
