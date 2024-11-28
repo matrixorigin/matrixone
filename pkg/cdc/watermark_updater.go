@@ -39,7 +39,7 @@ const (
 
 	getWatermarkFormat = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and table_id = '%s'"
 
-	getWatermarkCountFormat = "select count(1) from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
+	getAllWatermarkFormat = "select table_id, watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s'"
 
 	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and table_id = '%s'"
 
@@ -128,14 +128,28 @@ func (u *WatermarkUpdater) GetFromDb(tableIdStr string) (watermark types.TS, err
 	return types.StringToTS(watermarkStr), nil
 }
 
-func (u *WatermarkUpdater) GetCountFromDb() (uint64, error) {
-	sql := fmt.Sprintf(getWatermarkCountFormat, u.accountId, u.taskId)
+func (u *WatermarkUpdater) GetAllFromDb() (mp map[string]types.TS, err error) {
+	sql := fmt.Sprintf(getAllWatermarkFormat, u.accountId, u.taskId)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
-		return 0, res.Error()
+		err = res.Error()
+		return
 	}
-	return res.GetUint64(ctx, 0, 0)
+
+	var tableIdStr string
+	var watermarkStr string
+	mp = make(map[string]types.TS)
+	for i := uint64(0); i < res.RowCount(); i++ {
+		if tableIdStr, err = res.GetString(ctx, i, 0); err != nil {
+			return
+		}
+		if watermarkStr, err = res.GetString(ctx, i, 1); err != nil {
+			return
+		}
+		mp[tableIdStr] = types.StringToTS(watermarkStr)
+	}
+	return
 }
 
 func (u *WatermarkUpdater) UpdateMem(tableIdStr string, watermark types.TS) {
