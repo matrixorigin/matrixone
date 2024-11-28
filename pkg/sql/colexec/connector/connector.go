@@ -44,9 +44,7 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 }
 
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
-	analyzer := connector.OpAnalyzer
-
-	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, connector.OpAnalyzer)
 	if err != nil {
 		return result, err
 	}

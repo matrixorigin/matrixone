@@ -159,7 +159,7 @@ func (c *Compile) Release() {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
 	}
-	releaseCompile(c)
+	doCompileRelease(c)
 }
 
 func (c Compile) TypeName() string {

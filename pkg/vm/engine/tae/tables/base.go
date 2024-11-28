@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -329,10 +328,34 @@ func (obj *baseObject) containsWithLoad(
 	if isAblk {
 		dedupFn = containers.MakeForeachVectorOp(
 			keys.GetType().Oid, containsAlkFunctions, data.Vecs[0], keys, obj.LoadPersistedCommitTS, txn,
-			func(vrowID any) *model.TransDels {
+			func(vrowID any, commitTS types.TS) (types.TS, error) {
 				rowID := vrowID.(types.Rowid)
 				blkID := rowID.BorrowBlockID()
-				return obj.rt.TransferDelsMap.GetDelsForBlk(*blkID)
+				dels := obj.rt.TransferDelsMap.GetDelsForBlk(*blkID)
+				if dels == nil {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.String("data row id", rowID.String()),
+						zap.String("commit ts %v", commitTS.ToString()),
+					)
+					return types.TS{}, txnif.ErrTxnWWConflict
+				}
+				row := rowID.GetRowOffset()
+				ts, ok := dels.Mapping[int(row)]
+				if !ok {
+					logutil.Info("Dedup-WW",
+						zap.String("txn", txn.Repr()),
+						zap.String("data row id", rowID.String()),
+						zap.String("commit ts", commitTS.ToString()),
+					)
+					return types.TS{}, txnif.ErrTxnWWConflict
+				}
+				logutil.Info("Dedup",
+					zap.String("txn", txn.Repr()),
+					zap.String("data row id", rowID.String()),
+					zap.String("commit ts", commitTS.ToString()),
+				)
+				return ts, nil
 			},
 		)
 	} else {
