@@ -59,16 +59,9 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 			var matchedExpr *plan.Expr // Used to save matched expr
 
 			for _, selectField := range b.ctx.projectByAst {
+				// alias has already been matched earlier, no further processing is needed
 				if selectField.aliasName != "" {
-					if selectField.aliasName == colRef.ColName() {
-						// Record the selectField index that matches
-						field := tree.String(selectField.ast, dialect.MYSQL)
-						matchedFields[field] += 1
-						// Save matching expr
-						matchedExpr = b.ctx.projects[selectField.pos]
-					} else {
-						continue
-					}
+					continue
 				} else if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
 					// Record the selectField index that matches
 					field := tree.String(selectField.ast, dialect.MYSQL)
