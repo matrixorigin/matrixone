@@ -15,39 +15,22 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type opSerial struct {
-	ps []*types.Packer
+	packer *types.Packer
+	funcs  []func(v *vector.Vector, idx int, ps *types.Packer)
 }
 
 func newOpSerial() *opSerial {
 	return &opSerial{
-		ps: make([]*types.Packer, 0),
-	}
-}
-
-func (op *opSerial) tryExpand(length int, mp *mpool.MPool) {
-	if len(op.ps) < length {
-		// close the current packer array
-		for _, p := range op.ps {
-			p.Close()
-		}
-
-		// create a new packer array with the new length
-		op.ps = types.NewPackerArray(length)
-	}
-
-	for _, p := range op.ps {
-		p.Reset()
+		packer: types.NewPacker(),
 	}
 }
 
 func (op *opSerial) Close() error {
-	for _, p := range op.ps {
-		p.Close()
-	}
+	op.packer.Close()
 	return nil
 }
