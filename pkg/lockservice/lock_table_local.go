@@ -53,7 +53,8 @@ type localLockTable struct {
 
 	options struct {
 		beforeCloseFirstWaiter func(c *lockContext)
-		beforeWait             func(c *lockContext)
+		beforeWait             func(c *lockContext) func()
+		afterWait              func(c *lockContext) func()
 	}
 }
 
@@ -145,10 +146,15 @@ func (l *localLockTable) doLock(
 		c.txn.Unlock()
 
 		if l.options.beforeWait != nil {
-			l.options.beforeWait(c)
+			l.options.beforeWait(c)()
 		}
 
 		v := c.w.wait(c.ctx, l.logger)
+
+		if l.options.afterWait != nil {
+			l.options.afterWait(c)()
+		}
+
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v)

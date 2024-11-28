@@ -945,124 +945,227 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 			l := s[0]
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
-				time.Second*1000,
+				time.Second*10,
 			)
 			defer cancel()
 
-			// workflow
-			// txn1 lock 1
-			// 1: holders(txn1), waiters ()
-			//
-			// txn2 lock 2
-			// 1: holders(txn1), waiters ()
-			// 2: holders(txn2), waiters ()
-			//
-			// txn3 lock [1, 2]
-			// 1: holders(txn1), waiters (txn3)
-			// 2: holders(txn2)
-			// 3: holders(txn3), waiters ()
-			//
-			// txn1 unlock 1
-			// 1: holders(), waiters ()
-			// 2: holders(txn2), waiters (txn3)
-			// 3: holders(txn3), waiters ()
-			//
-			// txn4 lock 1 can successful
-
 			tableID := uint64(10)
+			add := func(
+				txn []byte,
+				rows [][]byte,
+				g pb.Granularity,
+			) {
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					tableID,
+					txn,
+					rows,
+					g,
+				)
+			}
+
+			// workflow
+			//
+			// txn1 lock k4
+			//      k4: holder(txn1) waiters()
+			//
+			// txn3 lock [k1, k4], wait at k4
+			//      k4: holder(txn1) waiters(txn3)
+			//
+			// txn1 unlock, notify txn3 ------------------|
+			//      k4: holder() waiters(txn3)            |
+			//                                            |
+			// txn2 lock range k2, k3                     |
+			//      k2: holder(txn2) waiters()            |
+			//      k3: holder(txn2) waiters()            |
+			//      k4: holder() waiters(txn3)            |
+			//                                            |
+			// txn3 lock [k1, k4] retry, wait at k2 <-----|
+			//      k2: holder(txn2) waiters(txn3)
+			//      k3: holder(txn2) waiters()
+			//      k4: holder() waiters(txn3)
+			//
+			// txn4 lock k2, wait at k2 --------------------------------|
+			//      k2: holder(txn2) waiters(txn3, txn4)                |
+			//      k3: holder(txn2) waiters()                          |
+			//      k4: holder() waiters(txn3)                          |
+			//                                                          |
+			//                                                          |
+			// txn2 unlock, notify txn3, txn4                           |
+			//      k2: holder(txn2) waiters(txn3, txn4) -> deleted     |
+			//      k3: holder(txn2) waiters()           -> deleted     |
+			//      k4: holder() waiters(txn3)                          |
+			//                                                          |
+			// txn4 lock k2 retry <-------------------------------------|
+			//      k2: holder(txn4) waiters(txn3)
+			//      k4: holder() waiters(txn3)
+			//
+			// txn3 lock [k1, k4] retry, wait at k2
+			//      k2: holder(txn4) waiters(txn3)
+			//      k4: holder() waiters(txn3)
+			//
+			// txn4 lock k4, wait txn3
+			//      k2: holder(txn4) waiters()
+			//      k4: holder() waiters(txn3, txn4)
 
 			// txn1 hold row1
 			txn1 := []byte{1}
-			row1 := newTestRows(1)
-			mustAddTestLock(
-				t,
-				ctx,
-				l,
-				tableID,
-				txn1,
-				row1,
-				pb.Granularity_Row,
-			)
-
-			// txn2 hold row2
 			txn2 := []byte{2}
-			row2 := newTestRows(2)
-			mustAddTestLock(
-				t,
-				ctx,
-				l,
-				tableID,
-				txn2,
-				row2,
-				pb.Granularity_Row,
-			)
-
 			txn3 := []byte{3}
-			row3 := newTestRows(1, 2)
-			txn4WaitTxn1C := make(chan struct{})
-			txn4WaitTxn2C := make(chan struct{})
+			txn4 := []byte{4}
+
+			key2 := newTestRows(2)
+			key4 := newTestRows(4)
+			range23 := newTestRows(2, 3)
+			range14 := newTestRows(1, 4)
+
+			txn2Locked := make(chan struct{})
+			txn4WaitAt2 := make(chan struct{})
+			txn4GetLockAt1 := make(chan struct{})
+			startTxn3 := make(chan struct{})
+			txn3WaitAt2 := make(chan struct{})
+			txn3WaitAt2Again := make(chan struct{})
+			txn3WaitAt4 := make(chan struct{})
+			txn3NotifiedAt4 := make(chan struct{})
+
+			// txn1 lock k4
+			add(txn1, key4, pb.Granularity_Row)
+			fmt.Println(">>> txn1 lock k4")
+			close(startTxn3)
 
 			v, err := l.getLockTable(0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
-			waitTimes := 0
-			lt.options.beforeWait = func(c *lockContext) {
-				if bytes.Equal(c.txn.txnID, txn3) && waitTimes == 0 {
-					close(txn4WaitTxn1C)
-					waitTimes++
-					return
+			txn3WaitTimes := 0
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if bytes.Equal(c.txn.txnID, txn3) {
+					return func() {
+						if txn3WaitTimes == 0 {
+							fmt.Println(">>> txn3 wait at key4")
+							// txn3 wait at key4
+							close(txn3WaitAt4)
+							txn3WaitTimes++
+							return
+						}
+
+						if txn3WaitTimes == 1 {
+							fmt.Println(">>> txn3 wait at key2 ")
+							close(txn3WaitAt2)
+							txn3WaitTimes++
+							return
+						}
+
+						if txn3WaitTimes == 2 {
+							fmt.Println(">>> txn3 wait at key2 again")
+							// step10: txn4 retry lock and wait at key2 again
+							close(txn3WaitAt2Again)
+							txn3WaitTimes++
+							return
+						}
+					}
 				}
 
-				if bytes.Equal(c.txn.txnID, txn3) && waitTimes == 1 {
-					close(txn4WaitTxn2C)
-					return
+				if bytes.Equal(c.txn.txnID, txn4) {
+					return func() {
+						fmt.Println(">>> txn4 wait at key2")
+						if txn4WaitAt2 != nil {
+							close(txn4WaitAt2)
+							txn4WaitAt2 = nil
+						}
+					}
 				}
+
+				return func() {}
+			}
+
+			txn3NotifiedTimes := 0
+			lt.options.afterWait = func(c *lockContext) func() {
+				if bytes.Equal(c.txn.txnID, txn3) {
+					return func() {
+						if txn3NotifiedTimes == 0 {
+							// txn1 closed and txn3 get notified
+							fmt.Println(">>> txn1 closed and txn3 get notified at key4")
+							close(txn3NotifiedAt4)
+							txn3NotifiedTimes++
+							<-txn2Locked
+							return
+						}
+
+						if txn3NotifiedTimes == 1 {
+							fmt.Println(">>> txn3 notified at key2")
+							<-txn4GetLockAt1
+						}
+					}
+				}
+				return func() {}
 			}
 
 			var wg sync.WaitGroup
-			wg.Add(3)
+			wg.Add(5)
+
 			go func() {
 				defer wg.Done()
-
-				// txn3 will wait txn1 first, and than wait txn2
-				mustAddTestLock(
-					t,
-					ctx,
-					l,
-					tableID,
-					txn3,
-					row3,
-					pb.Granularity_Range,
-				)
-			}()
-
-			// unlock txn1
-			go func() {
-				defer wg.Done()
-
-				<-txn4WaitTxn1C
-				assert.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{}))
+				<-startTxn3
+				fmt.Println(">>> txn3 lock [k1, k4]")
+				// txn3 lock range [k1, k4]
+				add(txn3, range14, pb.Granularity_Range)
 			}()
 
 			go func() {
 				defer wg.Done()
-
-				<-txn4WaitTxn2C
-
-				txn4 := []byte{4}
-				mustAddTestLock(
-					t,
-					ctx,
-					l,
-					tableID,
-					txn4,
-					row1,
-					pb.Granularity_Row,
-				)
-
-				assert.NoError(t, l.Unlock(ctx, txn4, timestamp.Timestamp{}))
-				assert.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				<-txn3WaitAt4
+				// txn1 unlock
+				fmt.Println(">>> txn1 unlock")
+				require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			}()
+
+			go func() {
+				defer wg.Done()
+				<-txn3NotifiedAt4
+				// txn2 lock range [k3, k3]
+				fmt.Println(">>> txn2 range lock [k2, k3]")
+				add(txn2, range23, pb.Granularity_Range)
+				fmt.Println(">>> txn2 range lock [k2, k3] end")
+				close(txn2Locked)
+			}()
+
+			go func() {
+				defer wg.Done()
+				<-txn3WaitAt2
+				fmt.Println(">>> txn4 lock k2")
+				// txn4 lock k2
+				add(txn4, key2, pb.Granularity_Row)
+				fmt.Println(">>> txn4 lock k1 end")
+				close(txn4GetLockAt1)
+				<-txn3WaitAt2Again
+
+				// txn4 lock k4
+				add(txn4, key4, pb.Granularity_Row)
+
+				require.NoError(t, l.Unlock(ctx, txn4, timestamp.Timestamp{}))
+			}()
+
+			go func() {
+				defer wg.Done()
+				<-txn4WaitAt2
+				fmt.Println(">>> txn2 unlock [k2, k3]")
+				require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			}()
+
+			time.Sleep(time.Second * 2)
+			lt.mu.Lock()
+			lock1, ok := lt.mu.store.Get(key2[0])
+			if !ok {
+				fmt.Println(">>> no k2")
+			} else {
+				fmt.Println(">>> k2:" + lock1.String())
+			}
+
+			lock1, _ = lt.mu.store.Get(key4[0])
+			fmt.Println(">>> k4:" + lock1.String())
+			lt.mu.Unlock()
 
 			wg.Wait()
 		},
