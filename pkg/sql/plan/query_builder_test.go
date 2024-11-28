@@ -20,10 +20,13 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -90,4 +93,20 @@ func TestBuildTable_AlterView(t *testing.T) {
 	bc := NewBindContext(qb, nil)
 	_, err = qb.buildTable(tb, bc, -1, nil)
 	assert.Error(t, err)
+}
+
+func Test_cte(t *testing.T) {
+	sqls := []string{
+		"with recursive c as (select a from cte_test.t1 union all select a+1 from c where a < 2 union all select a from c where a < 2), d as (select a from c union all select a+1 from d where a < 2) select distinct tt.* from ( SELECT * FROM c UNION ALL SELECT * FROM d) tt order by tt.a;",
+	}
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
 }

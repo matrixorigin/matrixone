@@ -33,6 +33,7 @@ import (
 var _ CompilerContext = &MockCompilerContext{}
 
 type MockCompilerContext struct {
+	dbs             map[string]bool
 	objects         map[string]*ObjectRef
 	tables          map[string]*TableDef
 	pks             map[string][]int
@@ -150,11 +151,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	tpchSchema := make(map[string]*Schema)
 	moSchema := make(map[string]*Schema)
 	constraintTestSchema := make(map[string]*Schema)
+	cteTestSchema := make(map[string]*Schema)
 
 	schemas := map[string]map[string]*Schema{
 		"tpch":            tpchSchema,
 		"mo_catalog":      moSchema,
 		"constraint_test": constraintTestSchema,
+		"cte_test":        cteTestSchema,
+	}
+
+	dbs := make(map[string]bool)
+	for s := range schemas {
+		dbs[s] = true
 	}
 
 	tpchSchema["nation"] = &Schema{
@@ -716,6 +724,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 4,
 	}
 
+	cteTestSchema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{"b", types.T_varchar, false, 1, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
@@ -888,6 +905,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
+		dbs:     dbs,
 		isDml:   isDml,
 		objects: objects,
 		tables:  tables,
@@ -898,7 +916,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bool {
-	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo" || strings.ToLower(name) == "mo_catalog"
+	if _, ok := m.dbs[strings.ToLower(name)]; ok {
+		return true
+	}
+	return false
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error) {
