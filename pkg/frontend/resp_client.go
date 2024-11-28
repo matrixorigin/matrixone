@@ -88,18 +88,30 @@ func NewMysqlResp(mysqlWr MysqlRrWr) *MysqlResp {
 }
 
 func (resper *MysqlResp) SetStr(id PropertyID, val string) {
+	if resper == nil || resper.mysqlRrWr == nil {
+		return
+	}
 	resper.mysqlRrWr.SetStr(id, val)
 }
 
 func (resper *MysqlResp) GetStr(id PropertyID) string {
+	if resper == nil || resper.mysqlRrWr == nil {
+		return ""
+	}
 	return resper.mysqlRrWr.GetStr(id)
 }
 
 func (resper *MysqlResp) SetU32(id PropertyID, v uint32) {
+	if resper == nil || resper.mysqlRrWr == nil {
+		return
+	}
 	resper.mysqlRrWr.SetU32(id, v)
 }
 
 func (resper *MysqlResp) GetU32(id PropertyID) uint32 {
+	if resper == nil || resper.mysqlRrWr == nil {
+		return math.MaxUint32
+	}
 	return resper.mysqlRrWr.GetU32(id)
 }
 
@@ -113,6 +125,9 @@ func (resper *MysqlResp) GetBool(PropertyID) bool {
 }
 
 func (resper *MysqlResp) ResetStatistics() {
+	if resper == nil || resper.mysqlRrWr == nil {
+		return
+	}
 	resper.mysqlRrWr.ResetStatistics()
 }
 
