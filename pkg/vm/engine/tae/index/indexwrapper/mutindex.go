@@ -145,7 +145,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 	keysZM index.ZM,
 	blkID *types.Blockid,
 	rowIDs *vector.Vector,
-	minVisibleRow, maxVisibleRow int32,
+	getRowOffsetFn func() (min, max int32, err error),
 	skipFn func(row uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
@@ -158,6 +158,10 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if exist := idx.zonemap.FastContainsAny(keys); !exist {
 			return
 		}
+	}
+	minVisibleRow, maxVisibleRow, err := getRowOffsetFn()
+	if err != nil {
+		return
 	}
 	op := func(v []byte, _ bool, offset int) error {
 		if !rowIDs.IsNull(uint64(offset)) {

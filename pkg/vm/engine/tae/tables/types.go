@@ -45,7 +45,7 @@ type NodeT interface {
 	GetDuplicatedRows(
 		ctx context.Context,
 		txn txnif.TxnReader,
-		minVisibleRow, maxVisibleRow int32,
+		getRowOffset func() (min, max int32, err error),
 		keys containers.Vector,
 		keysZM index.ZM,
 		rowIDs containers.Vector,

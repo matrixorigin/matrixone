@@ -114,7 +114,7 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	minRow,maxRow int32,
+	getRowOffset func() (min, max int32, err error),
 	skipFn func(uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
@@ -125,8 +125,7 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 		keysZM,
 		blkID,
 		rowIDs.GetDownstreamVector(),
-		minRow,
-		maxRow,
+		getRowOffset,
 		skipFn,
 		mp)
 }
@@ -255,7 +254,7 @@ func (node *memoryNode) ApplyAppendLocked(
 func (node *memoryNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	minVisibleRow,maxVisibleRow int32,
+	getRowOffset func() (min, max int32, err error),
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
@@ -265,7 +264,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	defer node.object.RUnlock()
 	var checkFn func(uint32) error
 	checkFn = node.checkConflictLocked(txn)
-	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs,minVisibleRow, maxVisibleRow, checkFn, mp)
+	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, getRowOffset, checkFn, mp)
 
 	return
 }

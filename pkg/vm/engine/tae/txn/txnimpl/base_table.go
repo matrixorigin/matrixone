@@ -224,14 +224,27 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		if aobjDeduped && naobjDeduped {
 			break
 		}
+		if rowIDs.NullMask().IsEmpty() {
+			break
+		}
 		obj := objIt.Item()
 		if obj.IsAppendable() {
+			if aobjDeduped {
+				continue
+			}
 			if obj.DeleteBefore(from) {
 				aobjDeduped = true
 				continue
 			}
 		} else {
+			if naobjDeduped {
+				continue
+			}
 			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
+				naobjDeduped = true
+				continue
+			}
+			if obj.DeleteBefore(from) {
 				naobjDeduped = true
 				continue
 			}
