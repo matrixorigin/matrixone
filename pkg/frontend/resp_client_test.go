@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package function
+package frontend
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"testing"
 )
 
-type opSerial struct {
-	packer *types.Packer
-	funcs  []func(v *vector.Vector, idx int, ps *types.Packer)
-}
-
-func newOpSerial() *opSerial {
-	return &opSerial{
-		packer: types.NewPacker(),
-	}
-}
-
-func (op *opSerial) Close() error {
-	op.packer.Close()
-	return nil
+func Test_mysqlResp(t *testing.T) {
+	var resp *MysqlResp
+	resp.SetStr(DBNAME, "test")
+	resp.GetStr(DBNAME)
+	resp.SetU32(CONNID, 100)
+	resp.GetU32(CONNID)
+	resp.ResetStatistics()
 }
