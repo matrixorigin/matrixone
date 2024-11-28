@@ -1153,6 +1153,10 @@ type UserInput struct {
 	sqlSourceType       []string
 	isRestore           bool
 	isBinaryProtExecute bool
+	// isInternalInput mark this UserInput is come from mo internal.
+	// replace old logic: (stmt != nil)
+	// cc isInternal()
+	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
@@ -1188,13 +1192,13 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // it means the statement is not from any client.
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
-	return ui.getStmt() != nil
+	return ui.isInternalInput
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
 	sql := ui.getSql()
 	ui.sqlSourceType = nil
-	if ui.getStmt() != nil {
+	if ui.isInternal() {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}

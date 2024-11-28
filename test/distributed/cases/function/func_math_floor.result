@@ -89,7 +89,7 @@ SELECT a,
 (SELECT space(250) FROM t1 i1
 WHERE i1.b=t1.a ORDER BY 1 LIMIT 1) AS a
 FROM t1 ORDER BY a LIMIT 5;
-a	a
+invalid input: Column 'a' in order clause is ambiguous
 DROP TABLE t1;
 SELECT DATE(FLOOR(20110512154559.616));
 date(floor(20110512154559.616))
