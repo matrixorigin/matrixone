@@ -211,6 +211,8 @@ func (obj *aobject) GetDuplicatedRows(
 	defer node.Unref()
 	if !node.IsPersisted() {
 		fn := func() (min, max int32, err error) {
+			obj.RUnlock()
+			defer obj.RLock()
 			max, err = obj.GetMaxRowByTS(to)
 			if err != nil {
 				return
