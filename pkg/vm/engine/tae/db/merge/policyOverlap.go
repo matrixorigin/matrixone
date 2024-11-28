@@ -223,7 +223,7 @@ func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.Objec
 	if len(objects) < 2 {
 		return nil
 	}
-	points := make([]endPoint, 0, len(objects))
+	points := make([]endPoint, 0, 2*len(objects))
 	for _, obj := range objects {
 		zm := obj.SortKeyZoneMap()
 		points = append(points, endPoint{val: zm.GetMinBuf(), obj: obj, s: 1})
@@ -247,12 +247,12 @@ func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.Objec
 	res := make([]*catalog.ObjectEntry, 0, len(objects))
 	tmp := make(map[*catalog.ObjectEntry]struct{})
 	for _, p := range points {
-		tmpMax += p.s
 		if p.s == 1 {
 			tmp[p.obj] = struct{}{}
 		} else {
 			delete(tmp, p.obj)
 		}
+		tmpMax += p.s
 		if tmpMax > globalMax {
 			globalMax = tmpMax
 			res = res[:0]
@@ -261,7 +261,7 @@ func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.Objec
 			}
 		}
 	}
-	if len(res) < 2 {
+	if len(res) < 5 {
 		return nil
 	}
 	return res
