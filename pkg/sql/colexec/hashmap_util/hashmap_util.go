@@ -189,6 +189,19 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		return err
 	}
 
+	if hb.IsDedup && hb.InputBatchRowCount == 1 && needUniqueVec {
+		hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
+		for i, vec := range hb.vecs[0] {
+			hb.UniqueJoinKeys[i] = vector.NewVec(*vec.GetType())
+			err = hb.UniqueJoinKeys[i].UnionOne(vec, 0, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {

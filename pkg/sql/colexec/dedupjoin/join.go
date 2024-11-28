@@ -199,7 +199,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
 				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
-				batSize := ctr.batches[i].RowCount()
+				batSize := ctr.batches[i].Vecs[0].Length()
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
 						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.RightTypes[rp.Pos])
@@ -213,6 +213,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				}
+
 				ap.ctr.buf[i].SetRowCount(batSize)
 			}
 
@@ -398,17 +399,100 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	if err != nil {
 		return err
 	}
-	if ctr.joinBat1 == nil {
-		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+
+	if ap.OnDuplicateAction == plan.Node_UPDATE {
+		if ctr.joinBat1 == nil {
+			ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+		}
+		if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
+			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+		}
 	}
-	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+
+	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
+
+	if ctr.mp.IsPointQuery() {
+		switch ap.OnDuplicateAction {
+		case plan.Node_FAIL:
+			// do nothing for txn.mode = Optimistic
+			if !isPessimistic {
+				break
+			}
+
+			var rowStr string
+			if len(ap.DedupColTypes) == 1 {
+				if ap.DedupColName == catalog.IndexTableIndexColName {
+					if ctr.vecs[0].GetType().Oid == types.T_varchar {
+						t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(0))
+						if err == nil && len(schema) > 1 {
+							rowStr = t.ErrString(make([]int32, len(schema)))
+						}
+					}
+				}
+
+				if len(rowStr) == 0 {
+					rowStr = ctr.vecs[0].RowToString(0)
+				}
+			} else {
+				rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(0), ap.DedupColTypes)
+				if err != nil {
+					return err
+				}
+				rowStr = "(" + strings.Join(rowItems, ",") + ")"
+			}
+			return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
+
+		case plan.Node_IGNORE:
+			ctr.matched.Add(0)
+
+		case plan.Node_UPDATE:
+			err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, 0, 1, ctr.cfs1)
+			if err != nil {
+				return err
+			}
+
+			err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[0], 0, 1, ctr.cfs2)
+			if err != nil {
+				return err
+			}
+
+			vecs := make([]*vector.Vector, len(ctr.exprExecs))
+			for j, exprExec := range ctr.exprExecs {
+				vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+				if err != nil {
+					return err
+				}
+			}
+
+			for j, pos := range ap.UpdateColIdxList {
+				ctr.joinBat1.Vecs[pos] = vecs[j]
+			}
+
+			for j, rp := range ap.Result {
+				if rp.Rel == 1 {
+					if err := ctr.rbat.Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
+						return err
+					}
+				} else {
+					if err := ctr.rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
+						return err
+					}
+				}
+			}
+
+			ctr.matched.Add(0)
+		}
+
+		ctr.rbat.AddRowCount(1)
+		result.Batch = ctr.rbat
+		ap.ctr.lastPos = 0
+
+		return nil
 	}
 
 	rowCntInc := 0
 	count := bat.RowCount()
 	itr := ctr.mp.NewIterator()
-	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
