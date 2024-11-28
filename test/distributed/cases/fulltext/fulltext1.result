@@ -25,8 +25,6 @@ show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT(`json1`) WITH PARSER json\n)
 alter table src drop column json1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 5 column 12 near ") WITH PARSER json
-)";
 drop table src;
 create table articles (id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, title VARCHAR(200), body TEXT);
 insert into articles (title,body) VALUES ('MySQL Tutorial','DBMS stands for DataBase ...'),
@@ -90,6 +88,7 @@ insert into articles (title,body) VALUES ('{"title": "MySQL Tutorial"}','{"body"
 create fulltext index fdx_01 on articles(title, body) with parser json;
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
 id    title    body
+1    {"title": "MySQL Tutorial"}    {"body": "DBMS stands for DataBase ..."}
 5    {"title": "MySQL vs. YourSQL"}    {"body": "In the following database comparison ..."}
 drop index fdx_01 on articles;
 select * from articles where match(title,body)  AGAINST ('database' IN NATURAL LANGUAGE MODE) union select * from articles where match(title,body)  AGAINST ('YourSQL' IN NATURAL LANGUAGE MODE) order by id;
@@ -113,11 +112,14 @@ insert into articles (title,body) VALUES ('{"title": "神雕侠侣 第一回 风
 create fulltext index fdx_01 on articles(title, body) with parser json;
 select * from articles where match(title,body)  AGAINST ('风月无情' IN NATURAL LANGUAGE MODE);
 id    title    body
+1    {"title": "神雕侠侣 第一回 风月无情"}    {"body": "越女采莲秋水畔，窄袖轻罗，暗露双金钏 ..."}
 select * from articles where match(title,body)  AGAINST ('杨过' IN NATURAL LANGUAGE MODE);
 id    title    body
 5    {"title": "神雕侠侣 第五回 活死人墓"}    {"body": "杨过摔下山坡，滚入树林长草丛中，便即昏晕 ..."}
+6    {"title": "神雕侠侣 第六回 玉女心经"}    {"body": "小龙女从怀里取出一个瓷瓶，交在杨过手里 ..."}
 select * from articles where match(title,body)  AGAINST ('小龙女' IN NATURAL LANGUAGE MODE);
 id    title    body
+2    {"title": "神雕侠侣 第二回 故人之子"}    {"body": "正自发痴，忽听左首屋中传出一人喝道：“这是在人家府上，你又提小龙女干什么？” ..."}
 6    {"title": "神雕侠侣 第六回 玉女心经"}    {"body": "小龙女从怀里取出一个瓷瓶，交在杨过手里 ..."}
 select * from articles where match(title,body)  AGAINST ('神雕侠侣' IN NATURAL LANGUAGE MODE);
 id    title    body
