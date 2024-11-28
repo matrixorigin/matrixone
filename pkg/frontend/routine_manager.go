@@ -520,7 +520,12 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(getPu(rm.service).SV.KillRountinesInterval) * time.Second))
+			pu := getPu(rm.service)
+			if pu != nil {
+				time.Sleep(time.Duration(pu.SV.KillRountinesInterval) * time.Second)
+			} else {
+				time.Sleep(time.Duration(10) * time.Second)
+			}
 		}
 	}()
 
