@@ -272,37 +272,37 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		batCnt := (count-1)/colexec.DefaultBatchSize + 1
 		ap.ctr.buf = make([]*batch.Batch, batCnt)
 
-		fillCnt := 0
 		batIdx, rowIdx := 0, 0
-		for fillCnt < len(sels) {
-			batSize := colexec.DefaultBatchSize
-			if fillCnt+batSize > len(sels) {
-				batSize = len(sels) - fillCnt
-			}
-
-			ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
-			for i, rp := range ap.Result {
-				if rp.Rel == 1 {
-					ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
-					for _, sel := range sels[fillCnt : fillCnt+batSize] {
-						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
-							return err
-						}
-					}
-				} else {
-					ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
-					if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
-						return err
-					}
-				}
-			}
-
-			ap.ctr.buf[batIdx].SetRowCount(batSize)
-			fillCnt += batSize
-			batIdx++
-			rowIdx = batSize % colexec.DefaultBatchSize
-		}
+		//fillCnt := 0
+		//for fillCnt < len(sels) {
+		//	batSize := colexec.DefaultBatchSize
+		//	if fillCnt+batSize > len(sels) {
+		//		batSize = len(sels) - fillCnt
+		//	}
+		//
+		//	ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+		//	for i, rp := range ap.Result {
+		//		if rp.Rel == 1 {
+		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+		//			for _, sel := range sels[fillCnt : fillCnt+batSize] {
+		//				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+		//				if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+		//					return err
+		//				}
+		//			}
+		//		} else {
+		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
+		//			if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
+		//				return err
+		//			}
+		//		}
+		//	}
+		//
+		//	ap.ctr.buf[batIdx].SetRowCount(batSize)
+		//	fillCnt += batSize
+		//	batIdx++
+		//	rowIdx = batSize % colexec.DefaultBatchSize
+		//}
 
 		if ctr.joinBat1 != nil {
 			ctr.joinBat1.Clean(proc.GetMPool())

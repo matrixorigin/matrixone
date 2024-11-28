@@ -241,3 +241,5 @@ insert into indup_11 values(1, 1, 1);
 insert ignore into indup_11 values(1, 1, 1);
 insert into indup_11 values(1, 1, 1) on duplicate key update c = a + b;
 select * from indup_11 where c is not null;
+insert into indup_11 values(1, 1, 1), (1, 1, 2), (2, 2, 3) on duplicate key update c = c + 10;
+select * from indup_11 where c is not null;
