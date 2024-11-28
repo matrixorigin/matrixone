@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -215,18 +214,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
 
-	rmFault := func() {}
-
-	if objectio.Debug19524Injected() {
-		if rmFault, err = objectio.InjectRanges(
-			ctx,
-			catalog.MO_TABLES,
-		); err != nil {
-			return nil, err
-		}
-	}
 	res, err := execReadSql(ctx, db.op, sql, true)
-	rmFault()
 	if err != nil {
 		return nil, err
 	}

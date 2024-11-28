@@ -56,6 +56,7 @@ var (
 	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
 	CtlReaderMethod          = strings.ToUpper("reader")
 	GetTableShards           = strings.ToUpper("get-table-shards")
+	MoTableStats             = strings.ToUpper("MoTableStats")
 )
 
 var (
@@ -80,7 +81,7 @@ var (
 		LabelMethod:              handleSetLabel,
 		WorkStateMethod:          handleSetWorkState,
 		SyncCommitMethod:         handleSyncCommit,
-		AddFaultPointMethod:      handleAddFaultPoint(),
+		AddFaultPointMethod:      handleAddFaultPoint,
 		BackupMethod:             handleBackup(),
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
@@ -96,6 +97,7 @@ var (
 		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
 		CtlReaderMethod:          handleCtlReader,
 		GetTableShards:           handleGetTableShards,
+		MoTableStats:             handleMoTableStats,
 	}
 )
 

@@ -691,6 +691,7 @@ server_connections    accountadmin
 server_storage_usage    accountadmin
 server_object_count    accountadmin
 server_snapshot_usage    accountadmin
+set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner
 triggers    0    0    accountadmin
@@ -726,6 +727,7 @@ SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_tabl
 name    rows    size    owner
 metric    0    0    accountadmin
 sql_statement_cu    0    0    accountadmin
+set mo_table_stats.use_old_impl = no;
 SELECT count(*) FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' ORDER BY response_at asc LIMIT 1;
 SQL syntax error: column "statement_info.response_at" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='information_schema';

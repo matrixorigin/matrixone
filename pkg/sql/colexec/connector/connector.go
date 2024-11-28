@@ -48,11 +48,10 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyzer := connector.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
+	connector.OpAnalyzer.Start()
+	defer connector.OpAnalyzer.Stop()
 
-	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, analyzer)
+	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, connector.OpAnalyzer)
 	if err != nil {
 		return result, err
 	}

@@ -78,3 +78,52 @@ func Benchmark_GoRutinues(b *testing.B) {
 		}
 	})
 }
+
+// TestSetGoMaxProcs
+// ut for https://github.com/matrixorigin/MO-Cloud/issues/4486
+func TestSetGoMaxProcs(t *testing.T) {
+	// init
+	initMaxProcs := runtime.GOMAXPROCS(0)
+	type args struct {
+		n int
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantRet int
+		wantGet int
+	}{
+		{
+			name: "normal",
+			args: args{
+				n: 5,
+			},
+			wantRet: initMaxProcs,
+			wantGet: 5,
+		},
+		{
+			name: "zero",
+			args: args{
+				n: 0,
+			},
+			wantRet: 5,
+			wantGet: 5,
+		},
+		{
+			name: "nagetive",
+			args: args{
+				n: -1,
+			},
+			wantRet: 5,
+			wantGet: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SetGoMaxProcs(tt.args.n)
+			require.Equal(t, tt.wantRet, got)
+			gotQuery := GoMaxProcs()
+			require.Equal(t, tt.wantGet, gotQuery)
+		})
+	}
+}
