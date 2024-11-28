@@ -390,7 +390,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
-	getTableStats := func(funcName string, dbName string, tblNames []string) (stats []int64, err error) {
+	getTableStats := func(dbName string, tblNames []string) (rows, sizes []int64, err error) {
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
 			return
 		}
@@ -415,16 +415,20 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		var rets []ExecResult
-		sql = fmt.Sprintf("select %s(db, tbl) from %s", funcName, tmpTblName)
+		sql = fmt.Sprintf("select mo_table_rows(db, tbl), mo_table_size(db, tbl) from %s", tmpTblName)
 		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
 			return
 		}
 
-		stats = make([]int64, len(tblNames))
+		rows = make([]int64, len(tblNames))
+		sizes = make([]int64, len(tblNames))
 		idx := 0
 		for _, result := range rets {
 			for i := uint64(0); i < result.GetRowCount(); i++ {
-				if stats[idx], err = rets[0].GetInt64(ctx, i, 0); err != nil {
+				if rows[idx], err = rets[0].GetInt64(ctx, i, 0); err != nil {
+					return
+				}
+				if sizes[idx], err = rets[0].GetInt64(ctx, i, 1); err != nil {
 					return
 				}
 				idx += 1
@@ -475,11 +479,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	}
 
 	// calculate table row and size
-	var rows, sizes []int64
-	if rows, err = getTableStats("mo_table_rows", stmt.DbName, tblNames); err != nil {
-		return err
-	}
-	if sizes, err = getTableStats("mo_table_size", stmt.DbName, tblNames); err != nil {
+	rows, sizes, err := getTableStats(stmt.DbName, tblNames)
+	if err != nil {
 		return err
 	}
 	for i, idx := range tblIdxes {
