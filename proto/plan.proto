@@ -678,10 +678,20 @@ message AnalyzeInfo {
 	int64 s3_get = 20;
 	int64 s3_delete = 21;
 	int64 s3_delete_mul = 22;
+
+	int64 cache_read = 23;
+	int64 cache_hit = 24;
+	int64 cache_memory_read = 25;
+	int64 cache_memory_hit = 26;
+	int64 cache_disk_read = 27;
+	int64 cache_disk_hit = 28;
+	int64 cache_remote_read	= 29;
+	int64 cache_remote_hit = 30;
+
 	// written_rows used to estimate S3input
-	int64 written_rows = 23;
+	int64 written_rows = 31;
 	// deleted_rows used to estimate S3input
-	int64 deleted_rows = 24;
+	int64 deleted_rows = 32;
 }
 
 message PartitionPrune {
