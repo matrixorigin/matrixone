@@ -76,7 +76,7 @@ func TestTop(t *testing.T) {
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
-		_, _ = tc.arg.Call(tc.proc)
+		_, _ = vm.Exec(tc.arg, tc.proc)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
 
@@ -88,7 +88,7 @@ func TestTop(t *testing.T) {
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
-		_, _ = tc.arg.Call(tc.proc)
+		_, _ = vm.Exec(tc.arg, tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.Free()
@@ -112,7 +112,7 @@ func BenchmarkTop(b *testing.B) {
 				batch.EmptyBatch,
 			}
 			resetChildren(tc.arg, bats)
-			_, _ = tc.arg.Call(tc.proc)
+			_, _ = vm.Exec(tc.arg, tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 			tc.proc.Free()

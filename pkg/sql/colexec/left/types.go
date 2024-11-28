@@ -142,6 +142,10 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	leftJoin.FreeProjection(proc)
 }
 
+func (leftJoin *LeftJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (ctr *container) resetExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.ResetForNextQuery()

@@ -73,3 +73,41 @@ drop database if exists mysql_ddl_test_db_2;
 drop database if exists mysql_ddl_test_db_3;
 drop database if exists mysql_ddl_test_db_4;
 drop database if exists mysql_ddl_test_db_5;
+drop database if exists mysql_ddl_test_db_1;
+create database if not exists mysql_ddl_test_db_1;
+use mysql_ddl_test_db_1;
+CREATE TABLE `tenx_configs` (
+`config_id` varchar(45) NOT NULL,
+`config_type` varchar(45) DEFAULT NULL COMMENT 'config_type 有效值
+storage
+cicd
+registry
+monitor',
+`config_detail` varchar(2000) DEFAULT NULL,
+`create_time` datetime DEFAULT NULL,
+`description` varchar(2000) DEFAULT NULL,
+PRIMARY KEY (`config_id`),
+KEY `config_type` (`config_type`)
+) COMMENT='该表包含了所有的通用配置，所有集群可以共用一个，目前有三类：storage, cicd, registry';
+SELECT tenx_configs.*
+FROM (SELECT _utf8mb4'ai' COLLATE utf8mb4_unicode_ci AS config_type
+UNION ALL SELECT _utf8mb4'cicd'
+UNION ALL SELECT _utf8mb4'registry'
+UNION ALL SELECT _utf8mb4'mail'
+UNION ALL SELECT _utf8mb4'apiServer'
+UNION ALL SELECT _utf8mb4'harbor'
+UNION ALL SELECT _utf8mb4'vm'
+UNION ALL SELECT _utf8mb4'ftp'
+UNION ALL SELECT _utf8mb4'msa'
+UNION ALL SELECT _utf8mb4'billing'
+UNION ALL SELECT _utf8mb4'message'
+UNION ALL SELECT _utf8mb4'loadbalance'
+UNION ALL SELECT _utf8mb4'openstack'
+UNION ALL SELECT _utf8mb4'chart_repo'
+UNION ALL SELECT _utf8mb4'license_menu'
+UNION ALL SELECT _utf8mb4'tamp'
+UNION ALL SELECT _utf8mb4'tdsf'
+UNION ALL SELECT _utf8mb4 'asset') AS types
+INNER JOIN tenx_configs ON types.config_type = tenx_configs.config_type;
+config_id    config_type    config_detail    create_time    description
+drop database if exists mysql_ddl_test_db_1;

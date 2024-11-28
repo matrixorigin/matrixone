@@ -104,3 +104,7 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 		}
 	}
 }
+
+func (mergeCTE *MergeCTE) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}

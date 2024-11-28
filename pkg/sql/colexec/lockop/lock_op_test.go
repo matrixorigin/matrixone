@@ -66,7 +66,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.hasNewVersionInRange = testFunc
-			result, err := arg.Call(proc)
+			result, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 
 			vec := result.Batch.GetVector(1)
@@ -104,7 +104,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				result, err := arg.Call(proc)
+				result, err := vm.Exec(arg, proc)
 				require.NoError(t, err)
 
 				vec := result.Batch.GetVector(1)
@@ -163,11 +163,11 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				assert.NoError(t, err)
 
 				resetChildren(arg2, nil)
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -231,11 +231,11 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				assert.NoError(t, err)
 
 				resetChildren(arg2, nil)
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -301,11 +301,11 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 
 				proc.GetTxnOperator().TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				assert.NoError(t, err)
 
 				resetChildren(arg2, nil)
-				_, err = arg2.Call(proc)
+				_, err = vm.Exec(arg2, proc)
 				require.NoError(t, err)
 			}()
 			require.NoError(t, lockservice.WaitWaiters(proc.GetLockService(), 0, tableID, conflictRow, 1))
@@ -345,7 +345,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				return true, nil
 			}
 
-			_, err := arg.Call(proc)
+			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.Error(t, arg.ctr.retryError)
 			require.True(t, moerr.IsMoErrCode(arg.ctr.retryError, moerr.ErrTxnNeedRetry))
