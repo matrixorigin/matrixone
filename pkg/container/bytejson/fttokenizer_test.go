@@ -17,8 +17,6 @@ package bytejson
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/matrixorigin/monlp/tokenizer"
 )
 
 type tokenTestCase struct {
@@ -27,15 +25,15 @@ type tokenTestCase struct {
 	tokensWithKey []string
 }
 
-func checkTokens(t *testing.T, tokens []tokenizer.Token, expected []string) {
+func checkTokens(t *testing.T, tokens []Token, expected []string) {
 	if len(tokens) != len(expected) {
 		t.Fatalf("expected %d tokens, got %d", len(expected), len(tokens))
 	}
 
 	for i := range tokens {
-		var tk tokenizer.Token
-		if len(expected[i]) > tokenizer.MAX_TOKEN_SIZE {
-			tk.TokenBytes[0] = byte(tokenizer.MAX_TOKEN_SIZE)
+		var tk Token
+		if len(expected[i]) > MAX_TOKEN_SIZE {
+			tk.TokenBytes[0] = byte(MAX_TOKEN_SIZE)
 		} else {
 			tk.TokenBytes[0] = byte(len(expected[i]))
 		}
@@ -61,8 +59,8 @@ func TestByteJson(t *testing.T) {
 		},
 		{
 			input:         `{"a": [1.2, 2.0], "b": [3, true, "hello"], "c": "abcdefghijklmnopqrstuvwxyz"}`,
-			tokens:        []string{"1.2", "2", "3", "hello", "abcdefghijklmnopqrstuvw"},
-			tokensWithKey: []string{"a", "1.2", "2", "b", "3", "hello", "c", "abcdefghijklmnopqrstuvw"},
+			tokens:        []string{"1.2", "2", "3", "hello", "abcdefghijklmnopqrstuvwxyz"},
+			tokensWithKey: []string{"a", "1.2", "2", "b", "3", "hello", "c", "abcdefghijklmnopqrstuvwxyz"},
 		},
 		{
 			input:         `{"a": "相见时难别亦难", "b": "I come, I see, I 征服", "c": "相见时难别亦难，东风无力百花残。 春蚕到死丝方尽，蜡炬成灰泪始干。"}`,
@@ -72,7 +70,7 @@ func TestByteJson(t *testing.T) {
 		{
 			input:         `{"a bcdefghijklmnopqrstuvwxyz": 1, "学而时习之，不亦说乎": "说什么说， 就你话多"}`,
 			tokens:        []string{"1", "说什么说， 就你话多"},
-			tokensWithKey: []string{"a bcdefghijklmnopqrstuv", "1", "学而时习之，不亦说乎", "说什么说， 就你话多"},
+			tokensWithKey: []string{"a bcdefghijklmnopqrstuvwxyz", "1", "学而时习之，不亦说乎", "说什么说， 就你话多"},
 		},
 	}
 
@@ -82,13 +80,13 @@ func TestByteJson(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		var tokens []tokenizer.Token
+		var tokens []Token
 		for tk := range bj.TokenizeValue(false) {
 			tokens = append(tokens, tk)
 		}
 		checkTokens(t, tokens, tc.tokens)
 
-		var tokensWithKey []tokenizer.Token
+		var tokensWithKey []Token
 		for tk := range bj.TokenizeValue(true) {
 			tokensWithKey = append(tokensWithKey, tk)
 		}

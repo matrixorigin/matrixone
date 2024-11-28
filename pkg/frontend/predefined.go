@@ -249,7 +249,7 @@ var (
     			no_full bool,
     			incr_config varchar(1000),
     			additional_config text,
-    			reserved1 text,
+    			err_msg varchar(256),
     			reserved2 text,
     			reserved3 text,
     			reserved4 text,
@@ -261,7 +261,10 @@ var (
     			account_id bigint unsigned,			
     			task_id uuid,
     			table_id varchar(64),			
+				db_name varchar(256),
+				table_name varchar(256),
     			watermark varchar(128),			
+				err_msg varchar(256),
     			primary key(account_id,task_id,table_id)
 			)`
 
@@ -280,6 +283,18 @@ var (
 				update_time timestamp not null default current_timestamp on update current_timestamp,
     			primary key(account_id, key_id)
 			)`
+
+	MoCatalogMoTableStatsDDL = fmt.Sprintf(`create table mo_catalog.%s (
+    			account_id bigint signed,
+    			database_id bigint signed,
+    			table_id bigint signed,
+    			database_name varchar(255),
+    			table_name varchar(255),
+    			table_stats json,
+    			update_time datetime(6) not null,
+    			takes bigint unsigned,
+    			primary key(account_id, database_id, table_id)
+			)`, catalog.MO_TABLE_STATS)
 )
 
 // `mo_catalog` database system tables

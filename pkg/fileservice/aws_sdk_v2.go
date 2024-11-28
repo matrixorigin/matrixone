@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -317,24 +318,97 @@ func (a *AwsSDKv2) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (
 	err error,
 ) {
+	defer wrapSizeMismatchErr(&err)
 
-	_, err = a.putObject(
-		ctx,
-		&s3.PutObjectInput{
-			Bucket:        ptrTo(a.bucket),
-			Key:           ptrTo(key),
-			Body:          r,
-			ContentLength: zeroToNil(size),
-			Expires:       expire,
-		},
-	)
-	if err != nil {
-		return err
+	if sizeHint == nil {
+		// multipart
+		output, err := a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket:  ptrTo(a.bucket),
+			Key:     ptrTo(key),
+			Expires: expire,
+		})
+		if err != nil {
+			return err
+		}
+
+		defer func() {
+			// abort
+			if err != nil {
+				_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+					Bucket:   ptrTo(a.bucket),
+					Key:      ptrTo(key),
+					UploadId: output.UploadId,
+				})
+				err = errors.Join(err, abortErr)
+			}
+		}()
+
+		// upload
+		num := int32(1)
+		completed := new(types.CompletedMultipartUpload)
+		for {
+			reader := io.LimitReader(r, 64*(1<<20))
+			content, err := io.ReadAll(reader)
+			if err != nil {
+				return err
+			}
+			if len(content) == 0 {
+				break
+			}
+			uploadOutput, err := a.client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:     ptrTo(a.bucket),
+				Key:        ptrTo(key),
+				PartNumber: &num,
+				UploadId:   output.UploadId,
+				Body:       bytes.NewReader(content),
+			})
+			if err != nil {
+				return err
+			}
+			completed.Parts = append(completed.Parts, types.CompletedPart{
+				ETag:       uploadOutput.ETag,
+				PartNumber: ptrTo(num),
+			})
+			num++
+		}
+		if num == 1 {
+			// no content
+			return nil
+		}
+
+		// complete
+		_, err = a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+			Bucket:          ptrTo(a.bucket),
+			Key:             ptrTo(key),
+			UploadId:        output.UploadId,
+			MultipartUpload: completed,
+		})
+		if err != nil {
+			return err
+		}
+
+	} else {
+		_, err = a.putObject(
+			ctx,
+			&s3.PutObjectInput{
+				Bucket:        ptrTo(a.bucket),
+				Key:           ptrTo(key),
+				Body:          r,
+				ContentLength: sizeHint,
+				Expires:       expire,
+			},
+			func(opts *s3.Options) {
+				opts.Retryer = aws.NopRetryer{}
+			},
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return
