@@ -76,16 +76,13 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 		t := m.leveledObjects[i][0].SortKeyZoneMap().GetType()
 		var revisedResults []reviseResult
 		if t.FixedLength() > 0 {
-			revisedResults = []reviseResult{{
-				objs: objectsWithMaximumOverlaps(m.leveledObjects[i]),
-				kind: taskHostDN,
-			}}
+			objs := objectsWithMaximumOverlaps(m.leveledObjects[i])
+			if len(objs) > 4 {
+				revisedResults = []reviseResult{{objs: objs, kind: taskHostDN}}
+			}
 		} else {
 			objs, kind := m.reviseLeveledObjs(i)
-			revisedResults = []reviseResult{{
-				objs: objs,
-				kind: kind,
-			}}
+			revisedResults = []reviseResult{{objs: objs, kind: kind}}
 		}
 		for _, result := range revisedResults {
 			if len(result.objs) < 2 {
@@ -260,9 +257,6 @@ func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.Objec
 				res = append(res, obj)
 			}
 		}
-	}
-	if len(res) < 5 {
-		return nil
 	}
 	return res
 }
