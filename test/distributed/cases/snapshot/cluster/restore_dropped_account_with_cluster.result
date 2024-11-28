@@ -1,0 +1,42 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '1111' comment 'test_comment';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '11111';
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111111'  comment 'test_comment';
+drop snapshot if exists snapshot_01;
+create snapshot snapshot_01 for cluster;
+drop account if exists acc01;
+drop account if exists acc02;
+drop account if exists acc03;
+drop account if exists acc04;
+drop account if exists acc05;
+create account acc05 admin_name = 'test_account' identified by '1111111'  comment 'test_comment';
+drop account if exists acc06;
+create account acc06 admin_name = 'test_account' identified by '11111111'  comment 'test_comment';
+drop account if exists acc07;
+create account acc07 admin_name = 'test_account' identified by '111111111'  comment 'test_comment';
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc05    test_account    2024-11-25 03:58:37    open    null    5    65    0.0    0.0    test_comment
+acc06    test_account    2024-11-25 03:58:38    open    null    5    65    0.0    0.0    test_comment
+acc07    test_account    2024-11-25 03:58:38    open    null    5    65    0.0    0.0    test_comment
+sys    root    2024-11-25 01:45:12    open    null    7    98    5.394876    0.0    system account
+restore cluster from snapshot snapshot_01;
+show accounts;
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc01    test_account    2024-11-25 03:58:40    open    null    5    65    0.0    0.0    
+acc02    test_account    2024-11-25 03:58:41    open    null    5    65    0.0    0.0    test_comment
+acc03    test_account    2024-11-25 03:58:41    open    null    5    65    0.0    0.0    
+acc04    test_account    2024-11-25 03:58:41    open    null    5    65    0.0    0.0    test_comment
+sys    root    2024-11-25 01:45:12    open    null    7    98    5.394876    0.0    system account
+drop account if exists acc01;
+drop account if exists acc02;
+drop account if exists acc03;
+drop account if exists acc04;
+drop account if exists acc05;
+drop account if exists acc06;
+drop account if exists acc07;
+drop snapshot if exists snapshot_01;
