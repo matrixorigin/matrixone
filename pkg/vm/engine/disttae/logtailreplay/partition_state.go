@@ -906,3 +906,38 @@ func (p *PartitionState) IsValid() bool {
 func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
 }
+
+func (p *PartitionState) LogAllRowEntry() string {
+	var buf bytes.Buffer
+	_ = p.ScanRows(false, func(entry RowEntry) (bool, error) {
+		buf.WriteString(entry.String())
+		buf.WriteString("\n")
+		return true, nil
+	})
+	return buf.String()
+}
+
+func (p *PartitionState) ScanRows(
+	reverse bool,
+	onItem func(entry RowEntry) (bool, error),
+) (err error) {
+	var ok bool
+
+	if !reverse {
+		p.rows.Scan(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	} else {
+		p.rows.Reverse(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	}
+
+	return
+}

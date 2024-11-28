@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -28,6 +29,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pubs_add_account_id_column,
 	upg_mo_cdc_task,
 	upg_mo_cdc_watermark,
+	upg_mo_table_stats,
 }
 
 var upg_mo_pubs_add_account_id_column = versions.UpgradeEntry{
@@ -74,5 +76,15 @@ var upg_mo_cdc_watermark = versions.UpgradeEntry{
 			return false, err
 		}
 		return colInfo.IsExits, nil
+	},
+}
+
+var upg_mo_table_stats = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_TABLE_STATS,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoTableStatsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_TABLE_STATS)
 	},
 }
