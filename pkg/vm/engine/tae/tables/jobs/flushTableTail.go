@@ -319,7 +319,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	phaseDesc = "1-merge aobjects"
 	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
 	// after flushAObjsForSnapshot
-	inst := time.Now()
+	inst = time.Now()
 	if err = task.mergeAObjs(ctx, false); err != nil {
 		return
 	}
@@ -352,7 +352,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	///////////////////
 
 	phaseDesc = "1-flushing appendable objects for snapshot"
-	inst = time.Now()
+	inst := time.Now()
 	snapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, false)
 	statFlushAobj := time.Since(inst)
 	defer func() {
@@ -854,18 +854,19 @@ func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, e
 			common.AnyField("error", err),
 			zap.String("task", ftask.Name()),
 		)
-		// add a timeout to avoid WaitDone block the whole process
-		ictx, cancel := context.WithTimeoutCause(
-			context.Background(),
-			10*time.Second, /*6*time.Minute,*/
-			moerr.CauseReleaseFlushObjTasks,
-		)
-		defer cancel()
-		for _, subtask := range subtasks {
-			if subtask != nil {
-				// wait done, otherwise the data might be released before flush, and cause data race
-				subtask.WaitDone(ictx)
-			}
+	}
+
+	// add a timeout to avoid WaitDone block the whole process
+	ictx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		10*time.Second, /*6*time.Minute,*/
+		moerr.CauseReleaseFlushObjTasks,
+	)
+	defer cancel()
+	for _, subtask := range subtasks {
+		if subtask != nil {
+			// wait done, otherwise the data might be released before flush, and cause data race
+			subtask.WaitDone(ictx)
 		}
 	}
 	for _, subtask := range subtasks {
