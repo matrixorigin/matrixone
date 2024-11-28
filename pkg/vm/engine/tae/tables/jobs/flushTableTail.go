@@ -346,42 +346,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	/////////////////////
 	//// phase separator
 	///////////////////
-
-	phaseDesc = "1-merge aobjects"
-	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
-	// after flushAObjsForSnapshot
-	inst = time.Now()
-	if err = task.mergeAObjs(ctx, false); err != nil {
-		return
-	}
-	statMergeAobj := time.Since(inst)
-
-	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
-		err = moerr.NewInternalErrorNoCtx("test merge bail out")
-		return
-	}
-
-	/////////////////////
-	//// phase separator
-	///////////////////
-
-	phaseDesc = "1-merge atombstones"
-	// merge atombstones, no need to wait, it is a sync procedure, that is why put it
-	// after flushAObjsForSnapshot
-	inst = time.Now()
-	if err = task.mergeAObjs(ctx, true); err != nil {
-		return
-	}
-	statMergeATombstones := time.Since(inst)
-
-	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
-		err = moerr.NewInternalErrorNoCtx("test merge bail out")
-		return
-	}
-
-	/////////////////////
-	//// phase separator
-	///////////////////
 	phaseDesc = "1-waiting flushing appendable blocks for snapshot"
 	// wait flush tasks
 	inst = time.Now()
@@ -433,6 +397,40 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	}
 	statNewFlushEntry := time.Since(inst)
 	/////////////////////
+	//// phase separator
+	///////////////////
+
+	phaseDesc = "1-merge aobjects"
+	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
+	// after flushAObjsForSnapshot
+	inst = time.Now()
+	if err = task.mergeAObjs(ctx, false); err != nil {
+		return
+	}
+	statMergeAobj := time.Since(inst)
+
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
+		err = moerr.NewInternalErrorNoCtx("test merge bail out")
+		return
+	}
+
+	/////////////////////
+	//// phase separator
+	///////////////////
+
+	phaseDesc = "1-merge atombstones"
+	// merge atombstones, no need to wait, it is a sync procedure, that is why put it
+	// after flushAObjsForSnapshot
+	inst = time.Now()
+	if err = task.mergeAObjs(ctx, true); err != nil {
+		return
+	}
+	statMergeATombstones := time.Since(inst)
+
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
+		err = moerr.NewInternalErrorNoCtx("test merge bail out")
+		return
+	}
 
 	duration := time.Since(now)
 	logutil.Info("[FLUSH-END]",
