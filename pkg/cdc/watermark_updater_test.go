@@ -17,32 +17,35 @@ package cdc
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type wmMockSQLExecutor struct {
-	mp       map[string]string
-	insertRe *regexp.Regexp
-	updateRe *regexp.Regexp
-	selectRe *regexp.Regexp
+	mp          map[string]string
+	insertRe    *regexp.Regexp
+	updateRe    *regexp.Regexp
+	selectRe    *regexp.Regexp
+	selectAllRe *regexp.Regexp
 }
 
 func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
-		mp:       make(map[string]string),
-		insertRe: regexp.MustCompile(`^insert .* values \(.*\, .*\, \'(.*)\'\, .*\, .*\, \'(.*)\'\, \'\'\)$`),
-		updateRe: regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and table_id \= '(.*)'$`),
-		selectRe: regexp.MustCompile(`^select .* and table_id \= '(.*)'$`),
+		mp:          make(map[string]string),
+		insertRe:    regexp.MustCompile(`^insert .* values \(.*\, .*\, \'(.*)\'\, .*\, .*\, \'(.*)\'\, \'\'\)$`),
+		updateRe:    regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and table_id \= '(.*)'$`),
+		selectRe:    regexp.MustCompile(`^select .* and table_id \= '(.*)'$`),
+		selectAllRe: regexp.MustCompile(`^select .* where account_id \= (.*) and task_id .*`),
 	}
 }
 
@@ -118,18 +121,24 @@ func (res *internalExecResult) GetString(ctx context.Context, i uint64, j uint64
 
 func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
 	if strings.HasPrefix(sql, "select table_id") {
-		var data [][]interface{}
-		for k, v := range m.mp {
-			data = append(data, []interface{}{k, v})
-		}
-		return &internalExecResult{
-			affectedRows: 1,
-			resultSet: &MysqlResultSet{
-				Columns:    nil,
-				Name2Index: nil,
-				Data:       data,
-			},
-			err: nil,
+		matches := m.selectAllRe.FindStringSubmatch(sql)
+		accountId, _ := strconv.Atoi(matches[1])
+		if accountId == 1 { // normal path
+			var data [][]interface{}
+			for k, v := range m.mp {
+				data = append(data, []interface{}{k, v})
+			}
+			return &internalExecResult{
+				affectedRows: 1,
+				resultSet: &MysqlResultSet{
+					Columns:    nil,
+					Name2Index: nil,
+					Data:       data,
+				},
+				err: nil,
+			}
+		} else { // error path
+			return &internalExecResult{err: moerr.NewInternalErrorNoCtx("error")}
 		}
 	} else if strings.HasPrefix(sql, "select") {
 		matches := m.selectRe.FindStringSubmatch(sql)
@@ -338,4 +347,14 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 	actual, err = u.GetFromDb("3_0")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
+}
+
+func TestWatermarkUpdater_GetAllFromDb(t *testing.T) {
+	u := &WatermarkUpdater{
+		accountId: 2,
+		taskId:    uuid.New(),
+		ie:        newWmMockSQLExecutor(),
+	}
+	_, err := u.GetAllFromDb()
+	assert.Error(t, err)
 }
