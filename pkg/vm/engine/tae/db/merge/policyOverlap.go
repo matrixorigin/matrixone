@@ -66,7 +66,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 		}
 	}
 
-	reviseResults := make([]reviseResult, len(levels))
+	reviseResults := make([]reviseResult, 0, len(levels))
 	for i := range 4 {
 		if len(m.leveledObjects[i]) < 2 {
 			continue
@@ -103,7 +103,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 					continue
 				}
 			}
-			reviseResults[i] = result
+			reviseResults = append(reviseResults, result)
 		}
 	}
 	return reviseResults
