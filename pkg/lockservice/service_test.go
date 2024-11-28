@@ -3469,12 +3469,12 @@ func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 }
 
 func TestIssue19913(t *testing.T) {
-	err := os.Setenv("mo_reuse_enable_checker", "true")
-	require.NoError(t, err)
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
+			err := os.Setenv("mo_reuse_enable_checker", "true")
+			require.NoError(t, err)
 			l1 := s[0]
 
 			ctx, cancel := context.WithTimeout(
@@ -3487,7 +3487,7 @@ func TestIssue19913(t *testing.T) {
 				Policy:      pb.WaitPolicy_Wait,
 			}
 
-			_, err := l1.Lock(
+			_, err = l1.Lock(
 				ctx,
 				0,
 				[][]byte{{1}},
