@@ -872,6 +872,16 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
 
+	var tombstones []objectio.ObjectStats
+	s3FlushedDeletes.Range(func(key, value any) bool {
+		tombstones = append(tombstones, key.(objectio.ObjectStats))
+		return true
+	})
+
+	if len(tombstones) == 0 {
+		return
+	}
+
 	release := func() {}
 	if deletedRows == nil {
 		bm := objectio.GetReusableBitmap()
@@ -879,12 +889,6 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 		release = bm.Release
 	}
 	defer release()
-
-	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
-	})
 
 	curr := 0
 	getTombstone := func() (*objectio.ObjectStats, error) {
