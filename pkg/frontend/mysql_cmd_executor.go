@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -390,20 +391,22 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
 	getTableStats := func(funcName string, dbName string, tblNames []string) (stats []int64, err error) {
-		if _, err = executeSQLInBackgroundSession(ctx, bh, "set reset_update_time = yes"); err != nil {
+		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
 			return
 		}
 		defer func() {
-			_, _ = executeSQLInBackgroundSession(ctx, bh, "set reset_update_time = no")
-		}()
-		if _, err = executeSQLInBackgroundSession(ctx, bh, "create table tmp (db varchar, tbl varchar)"); err != nil {
-			return
-		}
-		defer func() {
-			_, _ = executeSQLInBackgroundSession(ctx, bh, "drop table tmp")
+			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
 		}()
 
-		sql := fmt.Sprintf("insert into tmp values ('%s', '%s')", dbName, tblNames[0])
+		tmpTblName := fmt.Sprintf("tmp_%d", rand.Uint32())
+		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("create table %s (db varchar, tbl varchar)", tmpTblName)); err != nil {
+			return
+		}
+		defer func() {
+			_, _ = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("drop table %s", tmpTblName))
+		}()
+
+		sql := fmt.Sprintf("insert into %s values ('%s', '%s')", tmpTblName, dbName, tblNames[0])
 		for i := 1; i < len(tblNames); i++ {
 			sql += fmt.Sprintf(", ('%s', '%s')", dbName, tblNames[i])
 		}
@@ -412,12 +415,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		var rets []ExecResult
-		sql = fmt.Sprintf("select %s(db, tbl) from tmp", funcName)
+		sql = fmt.Sprintf("select %s(db, tbl) from %s", funcName, tmpTblName)
 		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
 			return
 		}
 
-		stats = make([]int64, 0, len(tblNames))
+		stats = make([]int64, len(tblNames))
 		idx := 0
 		for _, result := range rets {
 			for i := uint64(0); i < result.GetRowCount(); i++ {

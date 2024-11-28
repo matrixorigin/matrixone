@@ -973,6 +973,8 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return true, nil
 	case "lower_case_table_names":
 		return int64(1), nil
+	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil
 }
