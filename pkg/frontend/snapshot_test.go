@@ -239,7 +239,7 @@ func Test_getRestoreDropedAccounts(t *testing.T) {
 
 		sql = fmt.Sprintf(getRestoreDropedAccountsFmt, 0)
 		mrs = newMrsForPitrRecord([][]interface{}{
-			{"abc", "sys", "root", types.Day_Hour},
+			{uint64(0), "sys", "root", types.Day_Hour},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -317,6 +317,51 @@ func Test_getRestoreToDropAccount(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		_, err = getRestoreToDropAccount(ctx, "", bh, "sp01", 0)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func Test_restoreAccountUsingClusterSnapshotToNew(t *testing.T) {
+	convey.Convey("restoreAccountUsingClusterSnapshotToNew ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		err := restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		mrs := newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
+		bh.sql2result[sql] = mrs
+
+		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, nil, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
