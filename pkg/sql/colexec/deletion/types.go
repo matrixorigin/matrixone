@@ -287,6 +287,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			return 0, err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})

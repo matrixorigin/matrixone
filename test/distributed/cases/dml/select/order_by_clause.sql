@@ -95,5 +95,21 @@ select empno, 20 as empno from emp order by empno;
 --17..mysql: ok, mo: error(bug,暂时选择报错) (同上)
 select empno,  space(50) as empno from emp order by empno;
 
+--18.mysql:ok, mo: ok
+select empno, ename, job, mgr, hiredate, sal, empno from emp where deptno != 20 order by empno;
+
+--19.mysql:ok, mo: ok
+select empno, ename, job, mgr, hiredate, sal, emp.empno from emp where deptno != 20 order by empno;
+
+--20.mysql:ok, mo: ok
+select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by t1.deptno;
+
+--21.mysql:error, mo: error
+select t1.ename, t2.loc, deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+
+--22.mysql:error, mo: error
+select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+
+
 drop table if exists dept;
 drop table if exists emp;
