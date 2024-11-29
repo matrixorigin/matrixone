@@ -100,6 +100,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
@@ -200,6 +201,7 @@ func TestKill(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
@@ -1310,6 +1312,7 @@ func TestMysqlResultSet(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 
 	noResultSet := make(map[string]bool)
@@ -1760,6 +1763,7 @@ func Test_writePackets(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		if err != nil {
@@ -1815,6 +1819,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1833,6 +1838,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1857,6 +1863,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1880,6 +1887,7 @@ func Test_beginPacket(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -1982,6 +1990,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2019,6 +2028,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2054,6 +2064,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2180,6 +2191,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2201,6 +2213,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2222,6 +2235,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2246,6 +2260,7 @@ func Test_resultset(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2270,6 +2285,7 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2285,6 +2301,7 @@ func Test_send_packet(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2310,6 +2327,7 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2353,6 +2371,7 @@ func Test_analyse320resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2396,6 +2415,7 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
@@ -2443,6 +2463,7 @@ func Test_analyse41resp(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(tConn, pu, "")
 		convey.ShouldBeNil(err)
@@ -2543,6 +2564,7 @@ func Test_handleHandshake(t *testing.T) {
 		}
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.ShouldBeNil(err)
@@ -2578,6 +2600,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2613,6 +2636,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	convey.ShouldBeNil(err)
