@@ -154,7 +154,10 @@ func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanExprExecutor()
 
 	ctr.tmpBatches = nil
+}
 
+func (rightSemi *RightSemi) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

@@ -121,6 +121,10 @@ func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 }
 
+func (output *Output) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (output *Output) cleanCachedBatch(proc *process.Process) {
 	for _, bat := range output.ctr.cachedBatches {
 		bat.Clean(proc.Mp())

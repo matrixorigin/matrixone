@@ -92,7 +92,6 @@ type DedupJoin struct {
 	UpdateColExprList []*plan.Expr
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (dedupJoin *DedupJoin) GetOperatorBase() *vm.OperatorBase {
@@ -152,6 +151,10 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
+}
+
+func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
 }
 
 func (ctr *container) resetExprExecutor() {

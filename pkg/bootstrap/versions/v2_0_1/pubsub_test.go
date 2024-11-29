@@ -17,6 +17,7 @@ package v2_0_1
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -75,7 +76,7 @@ func Test_migrateMoPubs(t *testing.T) {
 	defer getAccountsStub.Reset()
 
 	getAllPubInfosStub := gostub.Stub(
-		&pubsub.GetAllPubInfos,
+		&versions.GetAllPubInfos,
 		func(_ executor.TxnExecutor, _ map[string]*pubsub.AccountInfo) (map[string]*pubsub.PubInfo, error) {
 			return map[string]*pubsub.PubInfo{
 				"sys#pubName": {

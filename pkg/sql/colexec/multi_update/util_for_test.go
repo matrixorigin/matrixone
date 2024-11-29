@@ -69,7 +69,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		}
 		require.NoError(t, err)
 		for {
-			res, err = tc.op.Call(proc)
+			res, err = vm.Exec(tc.op, proc)
 			if tc.expectErr {
 				require.Error(t, err)
 				break
@@ -103,7 +103,7 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		}
 		require.NoError(t, err)
 		for {
-			res, err = tc.op.Call(proc)
+			res, err = vm.Exec(tc.op, proc)
 			if res.Batch == nil || res.Status == vm.ExecStop {
 				break
 			}

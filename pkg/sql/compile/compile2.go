@@ -144,10 +144,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.proc.ResetCloneTxnOperator()
 	c.InitPipelineContextToExecuteQuery()
 
-	// check if there is any action to cancel this query.
-	if err = thisQueryStillRunning(c.proc, txnOperator); err != nil {
-		return nil, err
-	}
+	// record this query to compile service.
+	MarkQueryRunning(c, txnOperator)
+	defer func() {
+		MarkQueryDone(c, txnOperator)
+	}()
 
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
@@ -158,13 +159,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 
 	// track the entire execution lifecycle and release memory after it ends.
-	var seq = uint64(0)
+	var sequence = uint64(0)
 	var writeOffset = uint64(0)
 	if txnOperator != nil {
-		seq = txnOperator.NextSequence()
+		sequence = txnOperator.NextSequence()
 		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
 		txnOperator.GetWorkspace().IncrSQLCount()
-		txnOperator.EnterRunSql()
 	}
 
 	var isExplainPhyPlan = false
@@ -178,9 +178,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
 			runC.Release()
-		}
-		if txnOperator != nil {
-			txnOperator.ExitRunSql()
 		}
 	}()
 
@@ -202,7 +199,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	crs := new(perfcounter.CounterSet)
 	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
-	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, seq)
+	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, sequence)
 	defer func() {
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
@@ -221,7 +218,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			affectRows = int(queryResult.AffectRows)
 		}
 		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
-			txnOperator, executeSQL, timeCost, seq, affectRows, err)
+			txnOperator, executeSQL, timeCost, sequence, affectRows, err)
 
 		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 			c.setHaveDDL(true)

@@ -538,6 +538,9 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.PrepareString{}},
 		{stmt: &tree.Deallocate{}},
 		{stmt: &tree.ShowBackendServers{}},
+		{stmt: &tree.SavePoint{}},
+		{stmt: &tree.ReleaseSavePoint{}},
+		{stmt: &tree.RollbackToSavePoint{}},
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -7517,8 +7520,9 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	return nil
 }
 
-func (bt *backgroundExecTest) ExecRestore(context.Context, string, uint32, uint32) error {
-	panic("unimplement")
+func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
+	bt.currentSql = s
+	return nil
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {

@@ -113,7 +113,7 @@ func TestOutput(t *testing.T) {
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
@@ -121,7 +121,7 @@ func TestOutput(t *testing.T) {
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		tc.arg.GetChildren(0).Reset(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)

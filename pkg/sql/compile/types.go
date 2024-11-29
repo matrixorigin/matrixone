@@ -251,9 +251,6 @@ type Compile struct {
 	sql       string
 	originSQL string
 
-	// queryStatus is a structure to record query has done.
-	queryStatus queryDoneWaiter
-
 	retryTimes int
 	anal       *AnalyzeModule
 	// e db engine instance.

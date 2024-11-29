@@ -52,7 +52,7 @@ select * from t1 where col3 in (7990, 7698, 7988);
 --命中p0
 select * from t1 where col3 = 7996 and col1 > 25;
 --命中p0, p2
-select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990;
+select * from t1 where col1 = 24 and col3 = 7991 or col3 = 7990 order by col1, col3;
 
 --无分区裁剪
 select * from t1 where col3 > 7992;
@@ -197,7 +197,7 @@ select * from employees where store_id in (1, 2, 6, 7);
 --命中p2, p3
 select * from employees where store_id in (1, 2, 11) or store_id in (6, 7, 18);
 --命中p2, p0
-select * from employees where store_id = 3 and id = 10004 or store_id = 10;
+select * from employees where store_id = 3 and id = 10004 or store_id = 10 order by id;
 --命中p2, p0
 select * from employees where (store_id = 3 and id = 10004) or (store_id = 10 and id = 10022);
 --无分区裁剪

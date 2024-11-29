@@ -97,13 +97,7 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 }
 
 func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := top.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
@@ -160,7 +154,6 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 		}
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 

@@ -224,7 +224,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
-	stm.Statement = text
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
 	stm.SqlSourceType = sqlType
@@ -236,12 +235,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// fix original issue #8165
 		stm.User = ""
 	}
-	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
-		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
-	}
 	if ses.disableAgg {
 		stm.DisableAgg()
 	}
+	// RecordStatementSql need to be the last calling before Report
+	stm.RecordStatementSql(text, envStmt)
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
 
@@ -2324,14 +2322,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	//so we need to make sure the pipewriter.write returns.
 	//issue3976
 	quitC := make(chan int)
-	go func() {
+	go func(ctx context.Context, reader *io.PipeReader) {
 		select {
-		case <-execCtx.reqCtx.Done():
+		case <-ctx.Done():
 			//close reader
 			_ = reader.Close()
 		case <-quitC:
 		}
-	}()
+	}(execCtx.reqCtx, reader)
 	defer func() {
 		close(quitC)
 	}()
@@ -2519,6 +2517,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
 		return nil
+	case *tree.SavePoint, *tree.ReleaseSavePoint:
+		return nil
+	case *tree.RollbackToSavePoint:
+		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
 	//in session migration, the txn forced to be autocommit.

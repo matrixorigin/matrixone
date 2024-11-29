@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -85,7 +86,7 @@ func TestCall(t *testing.T) {
 	}
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(arg, proc)
 	require.NoError(t, err)
 
 	arg.Reset(proc, false, nil)
@@ -94,7 +95,7 @@ func TestCall(t *testing.T) {
 	arg.Reader = reader
 	err = arg.Prepare(proc)
 	require.NoError(t, err)
-	_, err = arg.Call(proc)
+	_, err = vm.Exec(arg, proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
 	proc.Free()

@@ -64,10 +64,6 @@ func (limit *Limit) Prepare(proc *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	if limit.ctr.seen >= limit.ctr.limit {
 		result := vm.NewCallResult()
 		result.Status = vm.ExecStop
@@ -75,8 +71,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	analyzer := limit.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(limit.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -96,6 +90,5 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 	limit.ctr.seen = newSeen
-	analyzer.Output(result.Batch)
 	return result, nil
 }

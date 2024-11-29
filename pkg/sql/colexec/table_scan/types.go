@@ -101,6 +101,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
 	}
+
+	if tableScan.ProjectList != nil {
+		tableScan.FreeProjection(proc)
+	}
 }
 
 func (tableScan *TableScan) closeReader() {
@@ -111,4 +115,14 @@ func (tableScan *TableScan) closeReader() {
 		}
 		tableScan.Reader = nil
 	}
+}
+
+func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	var err error
+	batch := input
+	if tableScan.ProjectList != nil {
+		batch, err = tableScan.EvalProjection(input, proc)
+	}
+
+	return batch, err
 }

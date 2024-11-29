@@ -99,13 +99,9 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return lockOp.GetChildren(0).Call(proc)
+		return vm.Exec(lockOp.GetChildren(0), proc)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -117,8 +113,6 @@ func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -135,7 +129,6 @@ func callNonBlocking(
 		return result, lockOp.ctr.retryError
 	}
 	if result.Batch.IsEmpty() {
-		analyzer.Output(result.Batch)
 		return result, err
 	}
 
@@ -144,7 +137,6 @@ func callNonBlocking(
 		return result, err
 	}
 
-	analyzer.Output(result.Batch)
 	return result, nil
 }
 
@@ -932,6 +924,10 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 	lockOp.cleanParker()
 }
 
+func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (lockOp *LockOp) resetParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Reset()
@@ -988,6 +984,7 @@ func hasNewVersionInRange(
 	defer func() {
 		if analyzer != nil {
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	}()
@@ -1014,10 +1011,6 @@ func lockTalbeIfLockCountIsZero(
 	}
 	for idx := 0; idx < len(lockOp.targets); idx++ {
 		target := lockOp.targets[idx]
-		// do not lock table or rows at the end for hidden table
-		if !target.lockTableAtTheEnd {
-			continue
-		}
 		if target.lockRows != nil {
 			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
 			if err != nil {
@@ -1039,6 +1032,9 @@ func lockTalbeIfLockCountIsZero(
 				return err
 			}
 		} else {
+			if !target.lockTableAtTheEnd {
+				continue
+			}
 			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
 			if err != nil {
 				return err

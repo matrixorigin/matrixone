@@ -532,7 +532,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.ProjectList = t.ProjectList
 		op.TableFunction = table_function.NewArgument()
 		op.TableFunction.FuncName = t.TableFunction.FuncName
 		op.TableFunction.Args = t.TableFunction.Args
@@ -561,13 +560,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Channel = t.Channel
 		op.NumCPU = uint64(maxParallel)
 		op.IsMerger = (index == 0)
-		op.Result = append(op.Result, t.Result...)
+		op.Result = t.Result
 		op.LeftTypes = t.LeftTypes
-		op.RightTypes = append(op.RightTypes, t.RightTypes...)
-		op.Conditions = append(op.Conditions, t.Conditions...)
+		op.RightTypes = t.RightTypes
+		op.Conditions = t.Conditions
 		op.IsShuffle = t.IsShuffle
 		op.ShuffleIdx = t.ShuffleIdx
-		op.RuntimeFilterSpecs = append(op.RuntimeFilterSpecs, t.RuntimeFilterSpecs...)
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
@@ -889,6 +888,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.Limit = n.Limit
 	return arg
 }
 

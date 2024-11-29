@@ -484,19 +484,27 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
-	var stmtStr string
-	stm := ses.GetStmtInfo()
-	if stm == nil {
-		stmtStr = ses.GetSqlOfStmt()
-	} else {
-		stmtStr = stm.Statement
-	}
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
+	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
+// logStatementStringStatus
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// This op is aim to avoid string copy in 'status == success' case.
 func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	var outBytes, outPacket int64
+	var getFormatedSqlStr = func() string {
+		var str = stmtStr
+		if len(stmtStr) == 0 {
+			if stm := ses.GetStmtInfo(); stm == nil {
+				str = ses.GetSqlOfStmt()
+			} else {
+				// case `execute __prepared_stmt_id__;`: this value holds the raw prepare statement and raw args.
+				str = stm.CopyStatementInfo()
+			}
+		}
+		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		return str
+	}
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
 		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
@@ -504,9 +512,13 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	if status == success {
-		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		if ses.LogDebug() {
+			str := getFormatedSqlStr()
+			ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
+		}
 		err = nil // make sure: it is nil for EndStatement
 	} else {
+		str := getFormatedSqlStr()
 		ses.Error(
 			ctx,
 			"query trace status",
@@ -1141,6 +1153,10 @@ type UserInput struct {
 	sqlSourceType       []string
 	isRestore           bool
 	isBinaryProtExecute bool
+	// isInternalInput mark this UserInput is come from mo internal.
+	// replace old logic: (stmt != nil)
+	// cc isInternal()
+	isInternalInput bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	opAccount uint32
@@ -1176,13 +1192,13 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // it means the statement is not from any client.
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
-	return ui.getStmt() != nil
+	return ui.isInternalInput
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
 	sql := ui.getSql()
 	ui.sqlSourceType = nil
-	if ui.getStmt() != nil {
+	if ui.isInternal() {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}

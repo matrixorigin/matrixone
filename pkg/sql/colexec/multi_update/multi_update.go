@@ -132,17 +132,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 }
 
 func (update *MultiUpdate) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := update.OpAnalyzer
-	analyzer.Start()
 
 	t := time.Now()
 	defer func() {
 		analyzer.AddInsertTime(t)
-		analyzer.Stop()
 	}()
 
 	switch update.Action {
@@ -199,7 +193,6 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 		}
 		result := vm.NewCallResult()
 		result.Batch = ctr.s3Writer.outputBat
-		analyzer.Output(result.Batch)
 		return result, nil
 	}
 
@@ -220,8 +213,6 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 	if err != nil {
 		return vm.CancelResult, err
 	}
-
-	analyzer.Output(input.Batch)
 
 	return input, nil
 }
@@ -277,6 +268,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 
 		case actionInsert:
@@ -301,6 +293,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			}
 			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 
 		case actionUpdate:
