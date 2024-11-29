@@ -156,10 +156,6 @@ func (l Lock) release() {
 
 func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	canRemove := func() bool {
-		if !l.isLockRow() {
-			panic("BUG: range lock cannot call closeWaiter")
-		}
-
 		if l.holders.size() > 0 {
 			return false
 		}
