@@ -268,6 +268,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 
 		case actionInsert:
@@ -292,6 +293,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			}
 			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 
 		case actionUpdate:

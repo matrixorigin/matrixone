@@ -97,6 +97,7 @@ func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
 	var old *waiter
+	var oldOffset int
 	var err error
 	table := l.bind.Table
 	for {
@@ -129,6 +130,14 @@ func (l *localLockTable) doLock(
 				return
 			}
 
+			if oldOffset != c.offset {
+				if old != nil {
+					old.disableNotify()
+					old.close("doLock, lock next row", l.logger)
+				}
+				c.txn.clearBlocked(old, l.logger)
+			}
+
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
 			if c.opts.async {
@@ -139,6 +148,7 @@ func (l *localLockTable) doLock(
 		// txn is locked by service.lock or service_remote.lock. We must unlock here. And lock again after
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
+		oldOffset = c.offset
 		oldTxnID := c.txn.txnID
 		old = c.w
 		c.txn.Unlock()

@@ -3468,6 +3468,82 @@ func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	)
 }
 
+func TestIssue19913(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			err := os.Setenv("mo_reuse_enable_checker", "true")
+			require.NoError(t, err)
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// blocked by txn1
+				_, err := l1.Lock(
+					ctx,
+					0,
+					newTestRows(1, 2),
+					[]byte("txn3"),
+					option)
+				require.NoError(t, err)
+			}()
+
+			waitWaiters(t, l1, 0, []byte{1}, 1)
+
+			w := l1.activeTxnHolder.getActiveTxn([]byte("txn3"), false, "").blockedWaiters[0]
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{}))
+
+			waitWaiters(t, l1, 0, []byte{2}, 1)
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{}))
+			wg.Wait()
+
+			require.NoError(t, l1.Unlock(
+				ctx,
+				[]byte("txn3"),
+				timestamp.Timestamp{}))
+
+			require.Less(t, w.refCount.Load(), int32(2))
+		},
+	)
+}
+
 func TestRowLockWithConflictAndUnlock(t *testing.T) {
 	table := uint64(0)
 	getRunner(false)(
