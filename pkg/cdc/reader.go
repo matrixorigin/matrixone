@@ -94,8 +94,14 @@ func (reader *tableReader) Close() {
 func (reader *tableReader) Run(
 	ctx context.Context,
 	ar *ActiveRoutine) {
+	var err error
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 	defer func() {
+		if err != nil {
+			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceTblIdStr, err.Error()); err != nil {
+				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
+			}
+		}
 		reader.Close()
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
 	}()
@@ -111,7 +117,7 @@ func (reader *tableReader) Run(
 		case <-reader.tick.C:
 		}
 
-		if err := reader.readTable(ctx, ar); err != nil {
+		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 
 			// if stale read, try to restart reader

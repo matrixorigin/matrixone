@@ -49,13 +49,7 @@ func (output *Output) Prepare(_ *process.Process) error {
 }
 
 func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := output.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	if !output.ctr.block {
 		result, err := vm.ChildrenCall(output.GetChildren(0), proc, analyzer)
@@ -79,6 +73,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		// TODO: analyzer.Output(result.Batch)
@@ -126,6 +121,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				analyzer.AddS3RequestCount(crs)
+				analyzer.AddFileServiceCacheInfo(crs)
 				analyzer.AddDiskIO(crs)
 
 				result.Batch = bat

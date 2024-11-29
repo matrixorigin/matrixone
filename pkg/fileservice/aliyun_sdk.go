@@ -23,6 +23,7 @@ import (
 	"net/http"
 	gotrace "runtime/trace"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
@@ -234,17 +235,18 @@ func (a *AliyunSDK) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (
 	err error,
 ) {
+	defer wrapSizeMismatchErr(&err)
 
 	err = a.putObject(
 		ctx,
 		key,
 		r,
-		size,
+		sizeHint,
 		expire,
 	)
 	if err != nil {
@@ -397,22 +399,41 @@ func (a *AliyunSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (err error) {
 	defer catch(&err)
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
+
 	// not retryable because Reader may be half consumed
+
 	opts := []oss.Option{
 		oss.WithContext(ctx),
 	}
+
 	if expire != nil {
 		opts = append(opts, oss.Expires(*expire))
 	}
+
+	if sizeHint != nil {
+		opts = append(opts, oss.ContentLength(*sizeHint))
+		var n atomic.Int64
+		r = &countingReader{
+			R: r,
+			C: &n,
+		}
+		defer func() {
+			if err == nil && n.Load() != *sizeHint {
+				err = moerr.NewSizeNotMatchNoCtx(key)
+			}
+		}()
+	}
+
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
+
 	return a.bucket.PutObject(
 		key,
 		r,

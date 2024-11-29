@@ -58,7 +58,7 @@
 
 MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/mo-new-arch.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture.png?raw=true">
 </p>
 
 ## 🎯 <a id="key-features">核心特性</a>

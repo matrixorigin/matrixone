@@ -180,7 +180,7 @@ func TestFilter(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		// 1. First call
-		res, _ := tc.arg.Call(tc.proc)
+		res, _ := vm.Exec(tc.arg, tc.proc)
 		if tc.getRowCount > 0 {
 			require.Equal(t, tc.getRowCount, res.Batch.RowCount())
 		} else {
@@ -189,7 +189,7 @@ func TestFilter(t *testing.T) {
 
 		// 2. Second call
 		for {
-			res, _ = tc.arg.Call(tc.proc)
+			res, _ = vm.Exec(tc.arg, tc.proc)
 			if res.Batch == nil {
 				break
 			}
@@ -206,7 +206,7 @@ func TestFilter(t *testing.T) {
 		resetChildren(tc.arg, tc.proc)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		res, _ = tc.arg.Call(tc.proc)
+		res, _ = vm.Exec(tc.arg, tc.proc)
 		if tc.getRowCount > 0 {
 			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
 		} else {

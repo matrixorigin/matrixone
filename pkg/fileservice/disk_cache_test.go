@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDiskCache(t *testing.T) {
@@ -659,5 +660,46 @@ func TestDiskCacheGlobalSizeHint(t *testing.T) {
 	if ret["test"] > 1<<9 {
 		t.Fatalf("got %v", ret)
 	}
+
+}
+
+func TestDiskCacheSetFromFile(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), nil, false, nil, "")
+	require.Nil(t, err)
+	defer cache.Close(ctx)
+
+	path := filepath.Join(t.TempDir(), "foo")
+	err = os.WriteFile(
+		path,
+		[]byte("foo"),
+		0644,
+	)
+	require.Nil(t, err)
+
+	written, err := cache.writeFile(
+		ctx,
+		cache.pathForFile("foo"),
+		func(ctx context.Context) (io.ReadCloser, error) {
+			return os.Open(path)
+		},
+	)
+	require.Nil(t, err)
+	require.True(t, written)
+}
+
+func TestDiskCacheQuotaExceeded(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(3), nil, false, nil, "")
+	require.Nil(t, err)
+	defer cache.Close(ctx)
+
+	cache.writeFile(
+		ctx,
+		cache.pathForFile("bar"),
+		func(ctx context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte("foo"))), errorStr("disk quota exceeded")
+		},
+	)
 
 }

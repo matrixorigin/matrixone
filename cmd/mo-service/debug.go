@@ -428,6 +428,8 @@ func saveProfiles() {
 	saveProfile(profile.GOROUTINE)
 	// dump malloc profile
 	saveMallocProfile()
+	// dump http connections profile
+	saveHTTPConnectionsProfile()
 }
 
 func saveProfile(typ string) string {
@@ -453,6 +455,10 @@ func saveCpuProfile(cpuProfileInterval time.Duration) {
 
 func saveMallocProfile() {
 	saveProfileWithType("malloc", malloc.WriteProfileData)
+}
+
+func saveHTTPConnectionsProfile() {
+	saveProfileWithType("http-conns", fileservice.WriteHTTPConnsProfile)
 }
 
 func saveProfileWithType(typ string, genData func(writer io.Writer) error) {

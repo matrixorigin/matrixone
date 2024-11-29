@@ -149,9 +149,9 @@ func (e *faultEntry) do() (int64, string) {
 	return 0, ""
 }
 
-func startFaultMap() {
+func startFaultMap() bool {
 	if enabled.Load() != nil {
-		return
+		return false
 	}
 	fm := new(faultMap)
 	fm.faultPoints = make(map[string]*faultEntry)
@@ -162,32 +162,38 @@ func startFaultMap() {
 		var msg faultEntry
 		msg.cmd = STOP
 		fm.chIn <- &msg
+		return false
 	}
+	return true
 }
 
-func stopFaultMap() {
+func stopFaultMap() bool {
 	fm := enabled.Load()
 	if fm == nil {
-		return
+		return false
 	}
 	if !enabled.CompareAndSwap(fm, nil) {
-		return
+		return false
 	}
 
 	var msg faultEntry
 	msg.cmd = STOP
 	fm.chIn <- &msg
+	return true
 }
 
 // Enable fault injection
-func Enable() {
-	startFaultMap()
+func Enable() bool {
+	return startFaultMap()
 }
 
 // Disable fault injection
-func Disable() {
-	stopFaultMap()
+func Disable() bool {
+	return stopFaultMap()
+}
 
+func Status() bool {
+	return enabled.Load() != nil
 }
 
 // Trigger a fault point.

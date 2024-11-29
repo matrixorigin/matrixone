@@ -3101,6 +3101,64 @@ var (
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
+		{
+			input:  "savepoint abc",
+			output: "savepoint abc",
+		},
+		{
+			input:  "savepoint `abc.abc`",
+			output: "savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint `abc.abc`",
+			output: "release savepoint abc.abc",
+		},
+		{
+			input:  "release savepoint abc",
+			output: "release savepoint abc",
+		},
+		{
+			input:  "rollback to savepoint abc",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to savepoint `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback work to `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "rollback to `abc`",
+			output: "rollback to savepoint abc",
+		},
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ * FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows * from tbl_test",
+		},
+
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS * FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows * from tbl_test",
+		},
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ abc FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc from tbl_test",
+		},
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc from tbl_test",
+		},
+
+		{
+			input:  "SELECT /*!40001 SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS */ abc, tbl_test.* FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
+		{
+			input:  "SELECT SQL_NO_CACHE HIGH_PRIORITY STRAIGHT_JOIN SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT SQL_NO_CACHE SQL_CALC_FOUND_ROWS abc, tbl_test.* FROM `tbl_test`;",
+			output: "select high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_calc_found_rows abc, tbl_test.* from tbl_test",
+		},
 	}
 )
 

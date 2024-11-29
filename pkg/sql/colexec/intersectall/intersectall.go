@@ -67,14 +67,7 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
 func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := intersectAll.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-
 	var err error
 	for {
 		switch intersectAll.ctr.state {
@@ -98,7 +91,6 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 				intersectAll.ctr.state = End
 				continue
 			}
-			analyzer.Output(result.Batch)
 			return result, nil
 
 		case End:

@@ -139,7 +139,7 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 
 func EvictCache(ctx context.Context) (target int64) {
 	ch := make(chan int64, 1)
-	metaCache.Evict(ctx, ch)
+	metaCache.Evict(ctx, ch, 0)
 	target = <-ch
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),

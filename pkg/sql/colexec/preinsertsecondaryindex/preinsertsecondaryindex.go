@@ -78,13 +78,7 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResult, error) {
-	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		return vm.CancelResult, err
-	}
-
 	analyzer := preInsertSecIdx.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
 
 	result, err := vm.ChildrenCall(preInsertSecIdx.GetChildren(0), proc, analyzer)
 	if err != nil {
@@ -136,6 +130,5 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	}
 
 	result.Batch = preInsertSecIdx.ctr.buf
-	analyzer.Output(result.Batch)
 	return result, nil
 }

@@ -376,6 +376,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
+
 		if indexInfo.Unique {
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
@@ -407,6 +408,10 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
+					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				}
+			case catalog.MOIndexFullTextAlgo.ToString():
+				if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
 			}

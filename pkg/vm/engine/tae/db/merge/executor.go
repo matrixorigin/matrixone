@@ -62,12 +62,7 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 	}
 
 	if kind == taskHostDN {
-		mObjs := slices.Clone(objs)
-		objScopes := make([]common.ID, 0, len(mObjs))
-		for _, obj := range mObjs {
-			objScopes = append(objScopes, *obj.AsCommonID())
-		}
-		e.scheduleMergeObjects(objScopes, mObjs, entry, isTombstone)
+		e.scheduleMergeObjects(slices.Clone(objs), entry, isTombstone)
 		return
 	}
 
@@ -110,10 +105,14 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 	entry.Stats.SetLastMergeTime()
 }
 
-func (e *executor) scheduleMergeObjects(scopes []common.ID, mobjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool) {
+func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool) {
+	scopes := make([]common.ID, 0, len(mObjs))
+	for _, obj := range mObjs {
+		scopes = append(scopes, *obj.AsCommonID())
+	}
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
+		return jobs.NewMergeObjectsTask(ctx, txn, mObjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
