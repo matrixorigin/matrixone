@@ -94,6 +94,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 				}
 				analyzer.AddWrittenRows(int64(mergeBlock.container.mp[i].RowCount()))
 				analyzer.AddS3RequestCount(crs)
+				analyzer.AddFileServiceCacheInfo(crs)
 				analyzer.AddDiskIO(crs)
 			}
 
@@ -106,6 +107,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 				}
 				analyzer.AddWrittenRows(int64(bat.RowCount()))
 				analyzer.AddS3RequestCount(crs)
+				analyzer.AddFileServiceCacheInfo(crs)
 				analyzer.AddDiskIO(crs)
 
 				bat.Clean(proc.GetMPool())
@@ -124,6 +126,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 
@@ -136,6 +139,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			analyzer.AddWrittenRows(int64(bat.RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 
 			bat.Clean(proc.GetMPool())

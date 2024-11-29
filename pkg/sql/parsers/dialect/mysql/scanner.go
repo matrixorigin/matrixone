@@ -141,9 +141,23 @@ func (s *Scanner) Scan() (int, string) {
 				return strTyp, strStr
 			}
 
-		} else {
+		}
+
+		if ch == '_' {
+			if s.isCollate() {
+				s.incN(8)
+				s.skipBlank()
+				if s.cur() == '\'' {
+					s.inc()
+					return s.scanString('\'', STRING)
+				} else {
+					s.scanIdentifier(false)
+				}
+			}
 			return s.scanIdentifier(false)
 		}
+		return s.scanIdentifier(false)
+
 	case isDigit(ch):
 		return s.scanNumber()
 	case ch == ':':
@@ -250,6 +264,13 @@ func (s *Scanner) Scan() (int, string) {
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+func (s *Scanner) isCollate() bool {
+	if s.peek(1) == 'u' && s.peek(2) == 't' && s.peek(3) == 'f' && s.peek(4) == '8' && s.peek(5) == 'm' && s.peek(6) == 'b' && s.peek(7) == '4' {
+		return true
+	}
+	return false
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR

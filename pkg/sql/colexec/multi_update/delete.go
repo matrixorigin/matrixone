@@ -91,6 +91,7 @@ func (update *MultiUpdate) delete_table(
 				}
 				analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
 				analyzer.AddS3RequestCount(crs)
+				analyzer.AddFileServiceCacheInfo(crs)
 				analyzer.AddDiskIO(crs)
 			}
 		}
@@ -137,6 +138,7 @@ func (update *MultiUpdate) delete_table(
 			}
 			analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	}
