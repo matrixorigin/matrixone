@@ -17,31 +17,39 @@ package bytejson
 import (
 	"iter"
 	"strconv"
-
-	"github.com/matrixorigin/monlp/tokenizer"
 )
+
+const (
+	MAX_TOKEN_SIZE = 127
+)
+
+type Token struct {
+	TokenBytes [1 + MAX_TOKEN_SIZE]byte
+	TokenPos   int32
+	BytePos    int32
+}
 
 // TokenizeValue tokenizes the values of the ByteJson object
 // note that we do not break word with space, do not normalize
-// case, 3-gram, etc etc, only truncate the string to 23 bytes.
-func (bj ByteJson) TokenizeValue(includeKey bool) iter.Seq[tokenizer.Token] {
-	return func(yield func(tokenizer.Token) bool) {
+// case, 3-gram, etc etc, only truncate the string to 127 bytes.
+func (bj ByteJson) TokenizeValue(includeKey bool) iter.Seq[Token] {
+	return func(yield func(Token) bool) {
 		tokenizeOne(bj, 1, includeKey, yield)
 	}
 }
 
-func fillToken(t *tokenizer.Token, s []byte, pos int32) {
+func fillToken(t *Token, s []byte, pos int32) {
 	copy(t.TokenBytes[1:], s)
-	if len(s) > tokenizer.MAX_TOKEN_SIZE {
-		t.TokenBytes[0] = tokenizer.MAX_TOKEN_SIZE
+	if len(s) > MAX_TOKEN_SIZE {
+		t.TokenBytes[0] = MAX_TOKEN_SIZE
 	} else {
 		t.TokenBytes[0] = byte(len(s))
 	}
 	t.TokenPos = pos
 }
 
-func tokenizeOne(bj ByteJson, pos int32, includeKey bool, yield func(tokenizer.Token) bool) int32 {
-	var t tokenizer.Token
+func tokenizeOne(bj ByteJson, pos int32, includeKey bool, yield func(Token) bool) int32 {
+	var t Token
 
 	switch bj.Type {
 	case TpCodeObject:
