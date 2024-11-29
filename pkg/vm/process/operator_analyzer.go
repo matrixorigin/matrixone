@@ -16,6 +16,7 @@ package process
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,6 +49,7 @@ type Analyzer interface {
 	AddIncrementTime(t time.Time)
 	AddWaitLockTime(t time.Time)
 	AddS3RequestCount(counter *perfcounter.CounterSet)
+	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
 
 	GetOpCounterSet() *perfcounter.CounterSet
@@ -267,6 +269,21 @@ func (opAlyzr *operatorAnalyzer) AddS3RequestCount(counter *perfcounter.CounterS
 	opAlyzr.opStats.S3DeleteMul += counter.FileService.S3.DeleteMulti.Load()
 }
 
+func (opAlyzr *operatorAnalyzer) AddFileServiceCacheInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddFileServiceCacheInfo: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.CacheRead += counter.FileService.Cache.Read.Load()
+	opAlyzr.opStats.CacheHit += counter.FileService.Cache.Hit.Load()
+	opAlyzr.opStats.CacheMemoryRead += counter.FileService.Cache.Memory.Read.Load()
+	opAlyzr.opStats.CacheMemoryHit += counter.FileService.Cache.Memory.Hit.Load()
+	opAlyzr.opStats.CacheDiskRead += counter.FileService.Cache.Disk.Read.Load()
+	opAlyzr.opStats.CacheDiskHit += counter.FileService.Cache.Disk.Hit.Load()
+	opAlyzr.opStats.CacheRemoteRead += counter.FileService.Cache.Remote.Read.Load()
+	opAlyzr.opStats.CacheRemoteHit += counter.FileService.Cache.Remote.Hit.Load()
+}
+
 func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.AddDiskIO: operatorAnalyzer.opStats is nil")
@@ -284,28 +301,40 @@ func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 }
 
 type OperatorStats struct {
-	OperatorName     string               `json:"-"`
-	CallNum          int                  `json:"CallCount,omitempty"`
-	TimeConsumed     int64                `json:"TimeConsumed,omitempty"`
-	WaitTimeConsumed int64                `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64                `json:"MemorySize,omitempty"`
-	InputRows        int64                `json:"InputRows,omitempty"`
-	InputSize        int64                `json:"InputSize,omitempty"`
-	OutputRows       int64                `json:"OutputRows,omitempty"`
-	OutputSize       int64                `json:"OutputSize,omitempty"`
-	NetworkIO        int64                `json:"NetworkIO,omitempty"`
-	WrittenRows      int64                `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
-	DeletedRows      int64                `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
-	S3List           int64                `json:"S3List,omitempty"`
-	S3Head           int64                `json:"S3Head,omitempty"`
-	S3Put            int64                `json:"S3Put,omitempty"`
-	S3Get            int64                `json:"S3Get,omitempty"`
-	S3Delete         int64                `json:"S3Delete,omitempty"`
-	S3DeleteMul      int64                `json:"S3DeleteMul,omitempty"`
-	InputBlocks      int64                `json:"-"`
-	ScanBytes        int64                `json:"-"`
-	DiskIO           int64                `json:"DiskIO,omitempty"`
-	OperatorMetrics  map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
+	OperatorName     string `json:"-"`
+	CallNum          int    `json:"CallCount,omitempty"`
+	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
+	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
+	MemorySize       int64  `json:"MemorySize,omitempty"`
+	InputRows        int64  `json:"InputRows,omitempty"`
+	InputSize        int64  `json:"InputSize,omitempty"`
+	OutputRows       int64  `json:"OutputRows,omitempty"`
+	OutputSize       int64  `json:"OutputSize,omitempty"`
+	NetworkIO        int64  `json:"NetworkIO,omitempty"`
+	DiskIO           int64  `json:"DiskIO,omitempty"`
+
+	InputBlocks int64 `json:"-"`
+	ScanBytes   int64 `json:"-"`
+	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
+	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
+
+	S3List      int64 `json:"S3List,omitempty"`
+	S3Head      int64 `json:"S3Head,omitempty"`
+	S3Put       int64 `json:"S3Put,omitempty"`
+	S3Get       int64 `json:"S3Get,omitempty"`
+	S3Delete    int64 `json:"S3Delete,omitempty"`
+	S3DeleteMul int64 `json:"S3DeleteMul,omitempty"`
+
+	CacheRead       int64 `json:"CacheRead,omitempty"`
+	CacheHit        int64 `json:"CacheHit,omitempty"`
+	CacheMemoryRead int64 `json:"CacheMemoryRead,omitempty"`
+	CacheMemoryHit  int64 `json:"CacheMemoryHit,omitempty"`
+	CacheDiskRead   int64 `json:"CacheDiskRead,omitempty"`
+	CacheDiskHit    int64 `json:"CacheDiskHit,omitempty"`
+	CacheRemoteRead int64 `json:"CacheRemoteRead,omitempty"`
+	CacheRemoteHit  int64 `json:"CacheRemoteHit,omitempty"`
+
+	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {
@@ -333,10 +362,93 @@ func (ps *OperatorStats) Reset() {
 }
 
 func (ps *OperatorStats) String() string {
+	// Use strings.Builder for efficient string concatenation
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(" CallNum:%d "+
+		"TimeCost:%dns "+
+		"WaitTime:%dns "+
+		"InRows:%d "+
+		"OutRows:%d "+
+		"InSize:%dbytes "+
+		"InBlock:%d "+
+		"OutSize:%dbytes "+
+		"MemSize:%dbytes "+
+		"ScanBytes:%dbytes "+
+		"NetworkIO:%dbytes "+
+		"DiskIO:%dbytes ",
+		ps.CallNum,
+		ps.TimeConsumed,
+		ps.WaitTimeConsumed,
+		ps.InputRows,
+		ps.OutputRows,
+		ps.InputSize,
+		ps.InputBlocks,
+		ps.OutputSize,
+		ps.MemorySize,
+		ps.ScanBytes,
+		ps.NetworkIO,
+		ps.DiskIO))
+
+	// Collect S3 stats in a slice for efficient concatenation
+	dynamicAttrs := []string{}
+	if ps.WrittenRows > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("WrittenRows:%d ", ps.WrittenRows))
+	}
+	if ps.DeletedRows > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("DeletedRows:%d ", ps.DeletedRows))
+	}
+	if ps.S3List > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3List:%d ", ps.S3List))
+	}
+	if ps.S3Head > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3Head:%d ", ps.S3Head))
+	}
+	if ps.S3Put > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3Put:%d ", ps.S3Put))
+	}
+	if ps.S3Get > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3Get:%d ", ps.S3Get))
+	}
+	if ps.S3Delete > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3Delete:%d ", ps.S3Delete))
+	}
+	if ps.S3DeleteMul > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
+	}
+	//---------------------------------------------------------------------------------------------
+	if ps.CacheRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
+	}
+	if ps.CacheHit > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheHit:%d ", ps.CacheHit))
+	}
+	if ps.CacheMemoryRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryRead:%d ", ps.CacheMemoryRead))
+	}
+	if ps.CacheMemoryHit > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryHit:%d ", ps.CacheMemoryHit))
+	}
+	if ps.CacheDiskRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskRead:%d ", ps.CacheDiskRead))
+	}
+	if ps.CacheDiskHit > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskHit:%d ", ps.CacheDiskHit))
+	}
+	if ps.CacheRemoteRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteRead:%d ", ps.CacheRemoteRead))
+	}
+	if ps.CacheRemoteHit > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteHit:%d ", ps.CacheRemoteHit))
+	}
+
+	// Join and append S3 stats if any
+	if len(dynamicAttrs) > 0 {
+		sb.WriteString(strings.Join(dynamicAttrs, ""))
+	}
+
 	// Convert OperationMetrics map to a formatted string
 	var metricsStr string
 	if len(ps.OperatorMetrics) > 0 {
-		metricsStr = " "
 		for k, v := range ps.OperatorMetrics {
 			metricName := "Unknown"
 			switch k {
@@ -353,46 +465,6 @@ func (ps *OperatorStats) String() string {
 		}
 	}
 
-	return fmt.Sprintf(" CallNum:%d "+
-		"TimeCost:%dns "+
-		"WaitTime:%dns "+
-		"InRows:%d "+
-		"OutRows:%d "+
-		"InSize:%dbytes "+
-		"InBlock:%d "+
-		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
-		"ScanBytes:%dbytes "+
-		"NetworkIO:%dbytes "+
-		"DiskIO:%dbytes "+
-		"WrittenRows:%d "+
-		"DeletedRows:%d "+
-		"S3List:%d "+
-		"S3Head:%d "+
-		"S3Put:%d "+
-		"S3Get:%d "+
-		"S3Delete:%d "+
-		"S3DeleteMul:%d"+
-		"%s",
-		ps.CallNum,
-		ps.TimeConsumed,
-		ps.WaitTimeConsumed,
-		ps.InputRows,
-		ps.OutputRows,
-		ps.InputSize,
-		ps.InputBlocks,
-		ps.OutputSize,
-		ps.MemorySize,
-		ps.ScanBytes,
-		ps.NetworkIO,
-		ps.DiskIO,
-		ps.WrittenRows,
-		ps.DeletedRows,
-		ps.S3List,
-		ps.S3Head,
-		ps.S3Put,
-		ps.S3Get,
-		ps.S3Delete,
-		ps.S3DeleteMul,
-		metricsStr)
+	sb.WriteString(metricsStr)
+	return sb.String()
 }
