@@ -522,11 +522,10 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 	return leadingPos
 }
 
-func checkFilter(fn *plan.Function) (int, *plan.ColRef) {
+func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	if fn == nil {
 		return UnsupportedIndexCondition, nil
 	}
-	// return type 0 means not supported for index, 1 means equal condition, 2 means non-equal condition, for example between / in
 	switch fn.Func.ObjName {
 	case "=":
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
@@ -549,7 +548,7 @@ func checkFilter(fn *plan.Function) (int, *plan.ColRef) {
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 	for i := range node.FilterList {
-		filterType, col := checkFilter(node.FilterList[i].GetF())
+		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		switch filterType {
 		case EqualIndexCondition, NonEqualIndexCondition:
 			if col.ColPos == leadingPos {
@@ -724,7 +723,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	}
 
 	for i := range node.FilterList {
-		filterType, col := checkFilter(node.FilterList[i].GetF())
+		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == NonEqualIndexCondition {
 			idxPos, ok := colPos2Idx[col.ColPos]
 			if ok {
@@ -880,7 +879,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 	col2filter := make(map[int32]int)
 	for i := range node.FilterList {
-		filterType, col := checkFilter(node.FilterList[i].GetF())
+		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = i
 		}
