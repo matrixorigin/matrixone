@@ -1032,7 +1032,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 
 			// txn1 lock k4
 			add(txn1, key4, pb.Granularity_Row)
-			fmt.Println(">>> txn1 lock k4")
 			close(startTxn3)
 
 			v, err := l.getLockTable(0, tableID)
@@ -1043,7 +1042,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 				if bytes.Equal(c.txn.txnID, txn3) {
 					return func() {
 						if txn3WaitTimes == 0 {
-							fmt.Println(">>> txn3 wait at key4")
 							// txn3 wait at key4
 							close(txn3WaitAt4)
 							txn3WaitTimes++
@@ -1051,14 +1049,12 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 						}
 
 						if txn3WaitTimes == 1 {
-							fmt.Println(">>> txn3 wait at key2 ")
 							close(txn3WaitAt2)
 							txn3WaitTimes++
 							return
 						}
 
 						if txn3WaitTimes == 2 {
-							fmt.Println(">>> txn3 wait at key2 again")
 							// step10: txn4 retry lock and wait at key2 again
 							close(txn3WaitAt2Again)
 							txn3WaitTimes++
@@ -1069,7 +1065,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 
 				if bytes.Equal(c.txn.txnID, txn4) {
 					return func() {
-						fmt.Println(">>> txn4 wait at key2")
 						if txn4WaitAt2 != nil {
 							close(txn4WaitAt2)
 							txn4WaitAt2 = nil
@@ -1086,7 +1081,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 					return func() {
 						if txn3NotifiedTimes == 0 {
 							// txn1 closed and txn3 get notified
-							fmt.Println(">>> txn1 closed and txn3 get notified at key4")
 							close(txn3NotifiedAt4)
 							txn3NotifiedTimes++
 							<-txn2Locked
@@ -1094,7 +1088,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 						}
 
 						if txn3NotifiedTimes == 1 {
-							fmt.Println(">>> txn3 notified at key2")
 							<-txn4GetLockAt1
 						}
 					}
@@ -1108,7 +1101,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-startTxn3
-				fmt.Println(">>> txn3 lock [k1, k4]")
 				// txn3 lock range [k1, k4]
 				add(txn3, range14, pb.Granularity_Range)
 			}()
@@ -1117,7 +1109,6 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 				defer wg.Done()
 				<-txn3WaitAt4
 				// txn1 unlock
-				fmt.Println(">>> txn1 unlock")
 				require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			}()
 
@@ -1125,19 +1116,15 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 				defer wg.Done()
 				<-txn3NotifiedAt4
 				// txn2 lock range [k3, k3]
-				fmt.Println(">>> txn2 range lock [k2, k3]")
 				add(txn2, range23, pb.Granularity_Range)
-				fmt.Println(">>> txn2 range lock [k2, k3] end")
 				close(txn2Locked)
 			}()
 
 			go func() {
 				defer wg.Done()
 				<-txn3WaitAt2
-				fmt.Println(">>> txn4 lock k2")
 				// txn4 lock k2
 				add(txn4, key2, pb.Granularity_Row)
-				fmt.Println(">>> txn4 lock k1 end")
 				close(txn4GetLockAt1)
 				<-txn3WaitAt2Again
 
@@ -1150,22 +1137,8 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-txn4WaitAt2
-				fmt.Println(">>> txn2 unlock [k2, k3]")
 				require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{}))
 			}()
-
-			time.Sleep(time.Second * 2)
-			lt.mu.Lock()
-			lock1, ok := lt.mu.store.Get(key2[0])
-			if !ok {
-				fmt.Println(">>> no k2")
-			} else {
-				fmt.Println(">>> k2:" + lock1.String())
-			}
-
-			lock1, _ = lt.mu.store.Get(key4[0])
-			fmt.Println(">>> k4:" + lock1.String())
-			lt.mu.Unlock()
 
 			wg.Wait()
 		},
