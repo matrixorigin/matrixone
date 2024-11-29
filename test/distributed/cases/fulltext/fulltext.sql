@@ -364,5 +364,51 @@ drop table if exists t1;
 create table t1(a int primary key, b varchar(200));
 insert into t1 select result, "test create big fulltext index" from generate_series(3840001) g;
 create fulltext index ftidx on t1 (b);
-select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
+select count(*) from t1 where match(b) against ('test create' in natural language mode);
 drop table t1;
+
+-- #20149
+CREATE TABLE IF NOT EXISTS nation (
+  `n_nationkey`  INT,
+  `n_name`       CHAR(25),
+  `n_regionkey`  INT,
+  `n_comment`    VARCHAR(152),
+  `n_dummy`      VARCHAR(10),
+  PRIMARY KEY (`n_nationkey`));
+
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+
+create fulltext index ftidx on nation(n_comment);
+
+select * from nation where match(n_comment) against('china');
+
+delete from nation where n_nationkey = 0;
+
+select * from nation where match(n_comment) against('china');
+
+drop table nation;
+
+
+-- pushdown limit
+drop table if exists t1;
+create table t1(a int primary key, b varchar(200));
+insert into t1 select result, "pushdown limit is fast" from generate_series(30001) g;
+create fulltext index ftidx on t1 (b);
+-- no pushdown limit
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode);
+-- pushdown limit
+select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
+
+drop table t1;
+
+-- error drop column with multiple index parts
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+
+-- drop column success
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;
