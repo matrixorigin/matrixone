@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -41,6 +42,7 @@ func (be *MVCCSlice[T]) StringLocked() string {
 	var w bytes.Buffer
 
 	length := len(be.MVCC)
+	w.WriteString(fmt.Sprintf("[%d]", length))
 	for i := length - 1; i >= 0; i-- {
 		version := be.MVCC[i]
 		_, _ = w.WriteString(" -> \n")
