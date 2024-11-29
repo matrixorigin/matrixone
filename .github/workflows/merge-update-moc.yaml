@@ -1,0 +1,12 @@
+name: Merge Update MOC
+on:
+  pull_request_target:
+    branches: [ main,'[0-9]+.[0-9]+*' ]
+    types:
+      - closed
+
+jobs:
+  merge-update-moc:
+    if: ${{ github.event.pull_request.merged == true }}
+    uses: matrixorigin/CI/.github/workflows/merge-update-moc.yaml@main
+    secrets: inherit

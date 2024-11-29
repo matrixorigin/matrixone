@@ -955,6 +955,7 @@ type Reader interface {
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)
+	RelationExists(context.Context, string, any) (bool, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
