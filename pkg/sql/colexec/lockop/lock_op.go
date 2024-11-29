@@ -984,6 +984,7 @@ func hasNewVersionInRange(
 	defer func() {
 		if analyzer != nil {
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	}()
@@ -1010,10 +1011,6 @@ func lockTalbeIfLockCountIsZero(
 	}
 	for idx := 0; idx < len(lockOp.targets); idx++ {
 		target := lockOp.targets[idx]
-		// do not lock table or rows at the end for hidden table
-		if !target.lockTableAtTheEnd {
-			continue
-		}
 		if target.lockRows != nil {
 			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
 			if err != nil {
@@ -1035,6 +1032,9 @@ func lockTalbeIfLockCountIsZero(
 				return err
 			}
 		} else {
+			if !target.lockTableAtTheEnd {
+				continue
+			}
 			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
 			if err != nil {
 				return err
