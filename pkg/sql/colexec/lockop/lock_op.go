@@ -984,6 +984,7 @@ func hasNewVersionInRange(
 	defer func() {
 		if analyzer != nil {
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	}()
