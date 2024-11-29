@@ -15,14 +15,18 @@
 package catalog
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 const (
@@ -34,11 +38,53 @@ const (
 	ObjectState_Delete_ApplyCommit
 )
 
+/*
+
+Denote entries with prevVersion != nil as D entries, which means DeletedAt is not empty, and other entries as C entries.
+   a. prevVersion == nil && nextVersion == nil: serving C entries (4, 10, 11, 15)
+   b. prevVersion == nil && nextVersion != nil: C entries having dropping intent (1, 2, 3, 8, 9)
+   c. prevVersion != nil && nextVersion == nil: D entries, the couterpart set of category b. (4, 5, 6, 13, 14)
+   d. prevVersion != nil && nextVersion != nil: impossible
+
+ac - appendable C entry
+ad - appendable D entry
+nc - non-appendable C entry
+nd - non-appendable D entry
+
+              +------------+
+           +--+---------+  |
+         +--+--+-----+  |  |
+         |  |  |     |  |  |
+         1  2  3  4  5  6  7  8  9 10 11    12 13 14 15
+        ac ac ac ac ad ad ad nc nc ac ac  [ ac nd nd nc:TxnActiveZone]
+                              |  |              |  |
+                              +--+--------------+  |
+                                 +-----------------+
+
+ObjectList properties:
+0. Entries are sorted by max(CreatedAt, DeletedAt). For txn active entries, sorted by objectName further.
+1. Elements are splitted into two groups by `IsCommitted`: [committed entries...] [txn active entries]
+2. Category-a + Category-c produce the same result as the ObjectList under the previous implementation(modified inplace & sorted by called time of CreateObject), that's what we want in RecurLoop.
+
+
+Other examples of object states:
+Txn Active Object ( LastestNode.Txn != nil ) (12, 13, 14, 15)
+- Creating Object ( CreatedAt = MaxU64, DeletedAt = 0 ) (12, 15)
+    - Active: CreateNode.Prepare = MaxU64
+    - InQueue: CreateNode.Prepare != MaxU64 (parepare ts is allocated in the queue)
+- Deleting Object ( 0 < CreatedAt < MaxU64, DeletedAt = MaxU64 ) (13, 14)
+    - Active: DeleteNode.Prepare = MaxU64
+    - InQueue: DeleteNode.Prepare != MaxU64
+
+Committed Object ( LastestNode.Txn == nil ) && ( 0 < CreatedAt < MaxU64, 0 <= DeletedAt < MaxU64 ) (1 - 11)
+
+*/
+
 type ObjectList struct {
 	isTombstone bool
 	*sync.RWMutex
-	sortHint_objectID map[objectio.ObjectId]uint64
-	tree              atomic.Pointer[btree.BTreeG[*ObjectEntry]]
+	maxTs_objectID map[objectio.ObjectId]types.TS
+	tree           atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
 func NewObjectList(isTombstone bool) *ObjectList {
@@ -48,75 +94,144 @@ func NewObjectList(isTombstone bool) *ObjectList {
 	}
 	tree := btree.NewBTreeGOptions((*ObjectEntry).Less, opts)
 	list := &ObjectList{
-		RWMutex:           &sync.RWMutex{},
-		sortHint_objectID: make(map[types.Objectid]uint64),
-		isTombstone:       isTombstone,
+		RWMutex:        &sync.RWMutex{},
+		maxTs_objectID: make(map[types.Objectid]types.TS),
+		isTombstone:    isTombstone,
 	}
 	list.tree.Store(tree)
 	return list
 }
 
-func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntry, err error) {
+//// read part
+
+func getObjectEntry(it btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEntry {
+	ok := it.Seek(pivot)
+	if !ok {
+		logutil.Errorf("object not found seek: %s", pivot.ID().ShortStringEx())
+		return nil
+	}
+	obj := it.Item()
+	if !obj.ID().EQ(pivot.ID()) {
+		logutil.Errorf("object not found cmp: %s %s", obj.ID().ShortStringEx(), pivot.ID().ShortStringEx())
+		return nil
+	}
+	return obj
+}
+
+func (l *ObjectList) getNodes(id *objectio.ObjectId, latestOnly bool) []*ObjectEntry {
 	l.RLock()
-	sortHint := l.sortHint_objectID[*objectID]
+	ts, ok := l.maxTs_objectID[*id]
+	tree := l.tree.Load()
 	l.RUnlock()
-	obj = l.GetLastestNode(sortHint)
+	if !ok {
+	}
+	return l.getNodesSnap(tree, ts, id, latestOnly)
+}
+
+// getNodes returns the create and delete (if exists) entries of the object with the given objectID
+func (l *ObjectList) getNodesSnap(
+	tree *btree.BTreeG[*ObjectEntry],
+	ts types.TS,
+	id *objectio.ObjectId,
+	latestOnly bool,
+) []*ObjectEntry {
+	it := tree.Iter()
+	defer it.Release()
+
+	key := &ObjectEntry{
+		EntryMVCCNode:  EntryMVCCNode{DeletedAt: ts},
+		ObjectMVCCNode: ObjectMVCCNode{*objectio.NewObjectStatsWithObjectID(id, true, false, false)},
+	}
+
+	obj := getObjectEntry(it, key)
 	if obj == nil {
+		return nil
+	}
+
+	ret := []*ObjectEntry{obj}
+
+	// the obj is a del Entry, try to find the create entry
+	if !latestOnly && obj.prevVersion != nil {
+		if !obj.prevVersion.ID().EQ(id) {
+			panic("logic error")
+		}
+		ret = append(ret, obj.prevVersion)
+	}
+	return ret
+}
+
+func (l *ObjectList) GetLastestNode(id *objectio.ObjectId) *ObjectEntry {
+	nodes := l.getNodes(id, true)
+	if len(nodes) == 0 {
+		return nil
+	}
+	return nodes[0]
+}
+
+func (l *ObjectList) GetAllNodes(id *objectio.ObjectId) []*ObjectEntry {
+	return l.getNodes(id, false)
+}
+
+func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntry, err error) {
+	obj = l.GetLastestNode(objectID)
+	if obj == nil {
+		logutil.Error("GetObjectByID", zap.String("obj", objectID.ShortStringEx()))
 		err = moerr.GetOkExpectedEOB()
 	}
 	return
 }
 
-func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
+/// write part
+
+func (l *ObjectList) UpdateReplayTs(id *objectio.ObjectId, ts types.TS) {
 	l.Lock()
 	defer l.Unlock()
+	l.maxTs_objectID[*id] = ts
+}
+
+// modify deletes the del entry (if not nil) and inserts the ins entry
+func (l *ObjectList) modify(del, ins *ObjectEntry) (deleted, replaced bool) {
+	maxTs := ins.CreatedAt
+	if maxTs.LT(&ins.DeletedAt) {
+		maxTs = ins.DeletedAt
+	}
+	l.Lock()
+	defer l.Unlock()
+	l.maxTs_objectID[*ins.ID()] = maxTs
+
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	objs := l.GetAllNodes(sortHint)
-	for _, obj := range objs {
-		newTree.Delete(obj)
+
+	if del != nil {
+		if del.IsTombstone != l.isTombstone {
+			panic("logic error")
+		}
+		_, deleted = newTree.Delete(del)
 	}
+	_, replaced = newTree.Set(ins)
 	ok := l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
 		panic("concurrent mutation")
 	}
-	return nil
+	return
 }
 
-func (l *ObjectList) GetAllNodes(sortHint uint64) []*ObjectEntry {
-	it := l.tree.Load().Iter()
-	defer it.Release()
-	key := &ObjectEntry{
-		ObjectNode:  ObjectNode{SortHint: sortHint},
-		ObjectState: ObjectState_Create_Active,
-	}
-	ok := it.Seek(key)
-	if !ok {
-		return nil
-	}
-	obj := it.Item()
-	if obj.SortHint != sortHint {
-		return nil
-	}
-	ret := []*ObjectEntry{it.Item()}
-	for it.Next() {
-		obj := it.Item()
-		if obj.SortHint != sortHint {
-			break
-		}
-		ret = append(ret, obj)
-	}
-	return ret
+// Set inserts the objectstate, used in CreateObject
+func (l *ObjectList) Set(object *ObjectEntry) (replaced bool) {
+	_, replaced = l.modify(nil, object)
+	return
 }
 
-func (l *ObjectList) GetLastestNode(sortHint uint64) *ObjectEntry {
-	objs := l.GetAllNodes(sortHint)
-	if len(objs) == 0 {
-		return nil
+// Update updates the objectstate, used in Prepare\ApplyCommit\Rollback
+func (l *ObjectList) Update(new, old *ObjectEntry) {
+	deleted, _ := l.modify(old, new)
+	if !deleted {
+		// TODO(aptend): remove
+		panic("logic error")
 	}
-	return objs[len(objs)-1]
 }
 
+// DropObjectByID appends a delete node as a marker, used in SoftDeleteObject
 func (l *ObjectList) DropObjectByID(
 	objectID *objectio.ObjectId,
 	txn txnif.TxnReader,
@@ -143,63 +258,15 @@ func (l *ObjectList) DropObjectByID(
 		return nil, false, err
 	}
 	droppedObj, isNew = obj.GetDropEntry(txn)
-	l.Update(droppedObj, obj)
+	replaced := l.Set(droppedObj)
+	if replaced {
+		// TODO(aptend): remove
+		panic("logic error")
+	}
 	return
 }
-func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
-	if object.IsTombstone != l.isTombstone {
-		panic("logic error")
-	}
-	l.Lock()
-	defer l.Unlock()
-	if registerSortHint {
-		// todo remove it
-		for _, sortHint := range l.sortHint_objectID {
-			if sortHint == object.SortHint {
-				panic("logic error")
-			}
-		}
-		l.sortHint_objectID[*object.ID()] = object.SortHint
-	} else {
-		sortHint, ok := l.sortHint_objectID[*object.ID()]
-		if !ok || sortHint != object.SortHint {
-			panic("logic error")
-		}
-	}
-	oldTree := l.tree.Load()
-	newTree := oldTree.Copy()
-	newTree.Set(object)
-	ok := l.tree.CompareAndSwap(oldTree, newTree)
-	if !ok {
-		panic("concurrent mutation")
-	}
-}
-func (l *ObjectList) Update(new, old *ObjectEntry) {
-	l.Lock()
-	defer l.Unlock()
-	oldTree := l.tree.Load()
-	newTree := oldTree.Copy()
-	if new.IsTombstone != l.isTombstone {
-		panic("logic error")
-	}
-	newTree.Delete(old)
-	newTree.Set(new)
-	ok := l.tree.CompareAndSwap(oldTree, newTree)
-	if !ok {
-		panic("concurrent mutation")
-	}
-}
-func (l *ObjectList) Delete(obj *ObjectEntry) {
-	l.Lock()
-	defer l.Unlock()
-	oldTree := l.tree.Load()
-	newTree := oldTree.Copy()
-	newTree.Delete(obj)
-	ok := l.tree.CompareAndSwap(oldTree, newTree)
-	if !ok {
-		panic("concurrent mutation")
-	}
-}
+
+// UpdateObjectInfo must be called after DropObjectByID in a txn refer to flushTableTail
 func (l *ObjectList) UpdateObjectInfo(
 	obj *ObjectEntry,
 	txn txnif.TxnReader,
@@ -213,6 +280,144 @@ func (l *ObjectList) UpdateObjectInfo(
 		return false, err
 	}
 	newObj, isNew := obj.GetUpdateEntry(txn, stats)
-	l.Set(newObj, false)
+	// overwrite the old object
+	replaced := l.Set(newObj)
+	if !replaced {
+		// TODO(aptend): remove
+		panic("logic error")
+	}
 	return
+}
+
+// deleteEntryLocked deletes all entries with the given objectID, used in GC & Rollback
+func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
+	l.Lock()
+	defer l.Unlock()
+	ts, ok := l.maxTs_objectID[*id]
+	if !ok {
+		return nil
+	}
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	objs := l.getNodesSnap(newTree, ts, id, false)
+	for _, obj := range objs {
+		newTree.Delete(obj)
+		delete(l.maxTs_objectID, *obj.ID())
+	}
+	ok = l.tree.CompareAndSwap(oldTree, newTree)
+	if !ok {
+		panic("concurrent mutation")
+	}
+	return nil
+}
+
+// WaitUntilCommitted waits for entries in txn active zone with prepareTS > ts to move to committed zone.
+// As CreateObject will be called in txn queue, when WaitUntilCommitted returns, all creating objects in txn active zone are invisible to ts, because they are created after ts.
+func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
+	it := l.tree.Load().Iter()
+	for ok := it.Last(); ok; ok = it.Prev() {
+		obj := it.Item()
+		if obj.IsCommitted() {
+			break
+		}
+		if needWait, txn := obj.CreateNode.NeedWaitCommitting(ts); needWait {
+			txn.GetTxnState(true)
+		}
+		if needWait, txn := obj.DeleteNode.NeedWaitCommitting(ts); needWait {
+			txn.GetTxnState(true)
+		}
+	}
+}
+
+// Iterator part
+
+type VisibleCommittedObjectIt struct {
+	iter        btree.IterG[*ObjectEntry]
+	curr        *ObjectEntry
+	txn         txnif.TxnReader
+	isMockTxn   bool
+	dropped     map[objectio.ObjectId]struct{} // TODO(aptend): sync.Pool
+	firstCalled bool
+}
+
+// MakeVisibleCommittedObjectIt returns an iterator that iterates over committed objects visible to the given txn
+// two cases:
+// 2. normal txn, wait if needed, return committed non-dropped objects
+// 1. txn is mock txn, no waiting, only return committed non-dropped objects, used for status check
+
+func (l *ObjectList) MakeVisibleCommittedObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
+	tree := l.tree.Load()
+	it := tree.Iter()
+	return &VisibleCommittedObjectIt{
+		iter:      it,
+		txn:       txn,
+		isMockTxn: len(txn.GetCtx()) == 0,
+		dropped:   make(map[objectio.ObjectId]struct{}),
+	}
+}
+
+func (it *VisibleCommittedObjectIt) Next() bool {
+	var ok bool
+	for {
+		if !it.firstCalled {
+			ok = it.iter.Last()
+			it.firstCalled = true
+		} else {
+			ok = it.iter.Prev()
+		}
+		if !ok {
+			return false
+		}
+		entry := it.iter.Item()
+
+		if it.isMockTxn {
+			// mockTxn can see all objects
+			if entry.IsDEntry() || entry.IsCreating() { // exclude D entries & creating C entries
+				continue
+			}
+			if !entry.HasDCounterpart() { // pick only serving committed C entries
+				it.curr = entry
+				return true
+			}
+			// ignore being dropped C entries
+		} else if entry.IsVisible(it.txn) {
+			if entry.IsDEntry() { // exclude D entries
+				continue
+			}
+			if !entry.HasDCounterpart() || !entry.nextVersion.IsVisible(it.txn) {
+				// 1. serving committed C entries or creating C entry created by this txn
+				// 2. C entried being dropped by other invisible txn
+				it.curr = entry
+				return true
+			}
+		}
+	}
+}
+
+func (it *VisibleCommittedObjectIt) Item() *ObjectEntry {
+	return it.curr
+}
+
+func (it *VisibleCommittedObjectIt) Release() {
+	it.iter.Release()
+}
+
+// utils
+
+// Show returns a string representation of the objectlist
+func (l *ObjectList) Show() string {
+	l.RLock()
+	defer l.RUnlock()
+	tree := l.tree.Load()
+	it := tree.Iter()
+	defer it.Release()
+	ret := ""
+	for it.Next() {
+		ret += " " + it.Item().StringWithLevel(common.PPL2) + "\n"
+	}
+	ret += "maxTs_objectID:\n"
+	for id, ts := range l.maxTs_objectID {
+		ret += fmt.Sprintf(" %s: %s\n", id.ShortStringEx(), ts.ToString())
+	}
+	return ret
 }

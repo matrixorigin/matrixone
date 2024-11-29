@@ -736,6 +736,41 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
+func isTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
+	var it btree.IterG[*catalog.ObjectEntry]
+	if isTombstone {
+		table.WaitTombstoneObjectCommitted(end)
+		it = table.MakeTombstoneObjectIt()
+	} else {
+		table.WaitDataObjectCommitted(end)
+		it = table.MakeDataObjectIt()
+	}
+	earlybreak := false
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		if !obj.IsAppendable() || obj.IsDEntry() {
+			continue
+		}
+		// check only appendable C entries
+		if obj.CreatedAt.LT(&start) {
+			earlybreak = true
+		}
+		// the C entry has no counterpart D entry or the D entry is not committed yet
+		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+			return false, obj
+		}
+	}
+	return true, nil
+}
+
 func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
@@ -760,16 +795,33 @@ func (r *runner) TryScheduleCheckpoint(endts types.TS) {
 
 	if entry.IsPendding() {
 		check := func() (done bool) {
-			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
-				return false
+			start, end := entry.GetStart(), entry.GetEnd()
+			tree, _ := r.source.ScanInRange(start, end)
+			ready := true
+			var notFlushed *catalog.ObjectEntry
+			for _, table := range tree.GetTree().Tables {
+				db, err := r.catalog.GetDatabaseByID(table.DbID)
+				if err != nil {
+					continue
+				}
+				table, err := db.GetTableEntryByID(table.ID)
+				if err != nil {
+					continue
+				}
+				ready, notFlushed = isTableTailFlushed(table, start, end, false)
+				if !ready {
+					break
+				}
+				ready, notFlushed = isTableTailFlushed(table, start, end, true)
+				if !ready {
+					break
+				}
 			}
-			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
-			tree.GetTree().Compact()
-			if !tree.IsEmpty() && entry.TooOld() {
-				logutil.Infof("waiting for dirty tree %s", tree.String())
+			if !ready && entry.TooOld() {
+				logutil.Infof("waiting for dirty tree %s", notFlushed.StringWithLevel(2))
 				entry.DeferRetirement()
 			}
-			return tree.IsEmpty()
+			return ready
 		}
 
 		if !check() {
