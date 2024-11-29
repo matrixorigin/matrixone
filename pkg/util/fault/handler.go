@@ -1,0 +1,102 @@
+package fault
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+const (
+	EnableFault  = "enable_fault_injection"
+	DisableFault = "disable_fault_injection"
+	StatusFault  = "status_fault_point"
+	ListFault    = "list_fault_point"
+	AddFault     = "add_fault_point"
+	RemoveFault  = "remove_fault_point"
+)
+
+func HandleFaultInject(
+	ctx context.Context,
+	name string,
+	parameter string,
+) (res string) {
+	switch name {
+	case EnableFault:
+		res = handleEnableFaultInjection()
+	case DisableFault:
+		res = handleDisableFaultInjection()
+	case StatusFault:
+		res = handleStatusFaultPoint()
+	case ListFault:
+		res = handleListFaultPoint()
+	case AddFault:
+		res = handleAddFaultPoint(ctx, parameter)
+	case RemoveFault:
+		res = handleRemoveFaultPoint(ctx, parameter)
+	default:
+		res = "unknown fault injection command"
+	}
+	return
+}
+
+func handleEnableFaultInjection() string {
+	previousStatus := "enabled"
+	if Enable() {
+		previousStatus = "disabled"
+	}
+	return fmt.Sprintf("Fault injection enabled. Previous status: %s", previousStatus)
+}
+
+func handleDisableFaultInjection() string {
+	previousStatus := "disabled"
+	if Disable() {
+		previousStatus = "enabled"
+	}
+	return fmt.Sprintf("Fault injection disabled. Previous status: %s", previousStatus)
+}
+
+func handleStatusFaultPoint() string {
+	status := "disabled"
+	if Status() {
+		status = "enabled"
+	}
+	return fmt.Sprintf("Fault injection is %s", status)
+}
+
+func handleListFaultPoint() string {
+	return ListAllFaultPoints()
+}
+
+func handleRemoveFaultPoint(ctx context.Context, parameter string) string {
+	res, err := RemoveFaultPoint(ctx, parameter)
+	if err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("Fault point '%s' removed. Previously existed: %v", parameter, res)
+}
+
+func handleAddFaultPoint(ctx context.Context, parameter string) string {
+	// parameter like "name.freq.action.iarg.sarg.constant"
+	parameters := strings.Split(parameter, ".")
+	if len(parameters) != 6 {
+		return "Invalid argument! Expected format: name.freq.action.iarg.sarg.constant"
+	}
+
+	name := parameters[0]
+	freq := parameters[1]
+	action := parameters[2]
+
+	iarg, err := strconv.Atoi(parameters[3])
+	if err != nil {
+		return fmt.Sprintf("Invalid argument for iarg: %s. It should be an integer.", parameters[3])
+	}
+	sarg := parameters[4]
+	constant := parameters[5] == "true"
+
+	err = AddFaultPoint(ctx, name, freq, action, int64(iarg), sarg, constant)
+	if err != nil {
+		return err.Error()
+	}
+	return "OK"
+}

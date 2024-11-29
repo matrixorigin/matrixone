@@ -544,3 +544,13 @@ func marshalTransferMaps(
 	}
 	return nil, nil
 }
+
+func (h *Handle) HandleFaultInject(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.FaultInjectReq,
+	resp *api.TNStringResponse,
+) (cb func(), err error) {
+	resp.ReturnStr = fault.HandleFaultInject(ctx, req.Method, req.Parameter)
+	return nil, nil
+}

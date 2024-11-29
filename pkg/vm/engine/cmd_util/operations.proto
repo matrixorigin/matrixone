@@ -170,3 +170,9 @@ message CheckpointEntryResp {
     int32 EntryType                 = 5;
     uint32 Version                  = 6;
 }
+
+message FaultInjectReq {
+    option (gogoproto.typedecl)     = false;
+    string method = 1;
+    string parameter = 2;
+}
