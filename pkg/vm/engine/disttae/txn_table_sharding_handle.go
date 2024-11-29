@@ -681,10 +681,13 @@ func getTxnTable(
 	if err != nil {
 		return nil, err
 	}
+	if item == nil {
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", param.TxnTable.TableName)
+	}
 
 	tbl := newTxnTableWithItem(
 		db,
-		item,
+		*item,
 		proc,
 		engine.(*Engine),
 	)
