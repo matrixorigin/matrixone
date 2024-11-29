@@ -411,14 +411,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// Apply unique/secondary indices for point select
 	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
 	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, scanSnapshot)
+		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
 
 	idxToChoose, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, scanSnapshot)
+		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, NonEqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
@@ -593,7 +593,7 @@ func (builder *QueryBuilder) replaceEqualCondition(filterList []*plan.Expr, filt
 	return expr
 }
 
-func (builder *QueryBuilder) replaceNonEqualFilter(filterList []*plan.Expr, leadingPos []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
+func (builder *QueryBuilder) replaceNonEqualCondition(filterList []*plan.Expr, leadingPos []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
 	expr := DeepCopyExpr(filterList[leadingPos[0]])
 	fn := expr.GetF()
 	fn.Args[0].GetCol().RelPos = idxTag
@@ -615,7 +615,7 @@ func (builder *QueryBuilder) replaceNonEqualFilter(filterList []*plan.Expr, lead
 
 func (builder *QueryBuilder) replaceLeadingFilter(filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		return builder.replaceNonEqualFilter(filterList, leadingPos, idxTag, idxTableDef, numParts)
+		return builder.replaceNonEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
 	}
 	return builder.replaceEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
 }
@@ -745,13 +745,18 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	return -1, nil
 }
 
-func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *plan.Node, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
 	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
 
 	numParts := len(idxDef.Parts)
-	idxFilter := builder.replaceNonEqualFilter(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+	var idxFilter *plan.Expr
+	if filterType == EqualIndexCondition {
+		idxFilter = builder.replaceEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+	} else {
+		idxFilter = builder.replaceNonEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+	}
 
 	idxTableNode := &plan.Node{
 		NodeType:     plan.Node_TABLE_SCAN,
@@ -771,52 +776,6 @@ func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *pl
 		DeepCopyExpr(pkExpr),
 		GetColExpr(pkExpr.Typ, idxTag, 1),
 	})
-	joinNode := &plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{node.NodeId, idxTableNodeID},
-		JoinType: plan.Node_INDEX,
-		OnList:   []*plan.Expr{joinCond},
-	}
-	joinNodeID := builder.appendNode(joinNode, builder.ctxByNode[node.NodeId])
-
-	if len(node.FilterList) == 0 {
-		idxTableNode.Limit, idxTableNode.Offset = node.Limit, node.Offset
-	} else {
-		joinNode.Limit, joinNode.Offset = node.Limit, node.Offset
-	}
-	node.Limit, node.Offset = nil, nil
-
-	return joinNodeID, idxTableNodeID
-}
-
-func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *plan.Node, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
-	numParts := len(idxDef.Parts)
-	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
-	builder.addNameByColRef(idxTag, idxTableDef)
-
-	idxFilter := builder.replaceEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
-
-	idxTableNode := &plan.Node{
-		NodeType:     plan.Node_TABLE_SCAN,
-		TableDef:     idxTableDef,
-		ObjRef:       idxObjRef,
-		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
-		FilterList:   []*plan.Expr{idxFilter},
-		BindingTags:  []int32{idxTag},
-		ScanSnapshot: node.ScanSnapshot,
-	}
-
-	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
-
-	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
-	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
-
-	joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		pkExpr,
-		GetColExpr(pkExpr.Typ, idxTag, 1),
-	})
-
 	joinNode := &plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{node.NodeId, idxTableNodeID},
