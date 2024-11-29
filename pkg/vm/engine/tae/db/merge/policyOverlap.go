@@ -100,33 +100,6 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig
 	clear(m.segments)
 }
 
-type entrySet struct {
-	entries  []*catalog.ObjectEntry
-	maxValue []byte
-	size     int
-}
-
-func (s *entrySet) reset() {
-	s.entries = s.entries[:0]
-	s.maxValue = []byte{}
-	s.size = 0
-}
-
-func (s *entrySet) add(obj *catalog.ObjectEntry) {
-	s.entries = append(s.entries, obj)
-	s.size += int(obj.OriginSize())
-	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 ||
-		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
-		s.maxValue = zm.GetMaxBuf()
-	}
-}
-
-func (s *entrySet) cloneEntries() []*catalog.ObjectEntry {
-	clone := make([]*catalog.ObjectEntry, len(s.entries))
-	copy(clone, s.entries)
-	return clone
-}
-
 func segLevel(length int) int {
 	l := len(levels) - 1
 	for i, level := range levels {
