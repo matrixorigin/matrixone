@@ -880,50 +880,64 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_LEFT:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_RIGHT:
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_DEDUP:
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
 			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_L2: //L2 join is very time-consuming, increase the cost to get more dop
+			node.Stats.Outcnt = leftStats.Outcnt
+			node.Stats.Cost = (leftStats.Cost + rightStats.Cost) * 8
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum * 8
 		}
-		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {

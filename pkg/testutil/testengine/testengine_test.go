@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTestEngine(t *testing.T) {
@@ -39,4 +41,21 @@ func BenchmarkNew(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		New(context.Background())
 	}
+}
+
+func TestRelationExists(t *testing.T) {
+	catalog.SetupDefines("")
+	ctx := context.Background()
+	ctx = defines.AttachAccountId(ctx, 0)
+	eng, _, _ := New(ctx)
+	db, err := eng.Database(ctx, "test", nil)
+	require.NoError(t, err)
+
+	exist, err := db.RelationExists(ctx, "NotExist", nil)
+	require.NoError(t, err)
+	require.False(t, exist)
+
+	exist, err = db.RelationExists(ctx, "r", nil)
+	require.NoError(t, err)
+	require.True(t, exist)
 }
