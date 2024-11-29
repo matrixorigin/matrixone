@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 )
 
 // vectorAppendWildly is a more efficient version of vector.AppendFixed.
@@ -78,25 +79,31 @@ func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 }
 
 func ModifyChunkSizeOfAggregator(a AggFuncExec, n int) {
-	r := a.getOptResult()
-	r.modifyChunkSize(n)
+	r := a.GetOptResult()
+	if r != nil {
+		r.modifyChunkSize(n)
+	}
 }
 
 func GetChunkSizeOfAggregator(a AggFuncExec) int {
-	return a.getOptResult().getChunkSize()
+	r := a.GetOptResult()
+	if r != nil {
+		return r.getChunkSize()
+	}
+	return math.MaxInt64
 }
 
 // SyncAggregatorsChunkSize sync all aggregator with their min chunk size.
 func SyncAggregatorsChunkSize(as []AggFuncExec) (syncLimit int) {
-	m := as[0].getOptResult().getChunkSize()
+	m := GetChunkSizeOfAggregator(as[0])
 	if len(as) > 1 {
 		for i := 1; i < len(as); i++ {
-			if s := as[i].getOptResult().getChunkSize(); s < m {
+			if s := GetChunkSizeOfAggregator(as[i]); s < m {
 				m = s
 			}
 		}
 		for i := range as {
-			as[i].getOptResult().modifyChunkSize(m)
+			ModifyChunkSizeOfAggregator(as[i], m)
 		}
 	}
 	return m

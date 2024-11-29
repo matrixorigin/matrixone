@@ -213,7 +213,7 @@ type aggregatorFromFixedToBytes[from types.FixedSizeTExceptStrType] struct {
 	flush fixedBytesFlush[from]
 }
 
-func (exec *aggregatorFromFixedToBytes[from]) getOptResult() *optSplitResult {
+func (exec *aggregatorFromFixedToBytes[from]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

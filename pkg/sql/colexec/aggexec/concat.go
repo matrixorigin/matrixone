@@ -33,7 +33,7 @@ type groupConcatExec struct {
 	separator []byte
 }
 
-func (exec *groupConcatExec) getOptResult() *optSplitResult {
+func (exec *groupConcatExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

@@ -50,6 +50,11 @@ var blockCapacityMap = map[int]int{
 	128: blockCapacityFor128Byte,
 }
 
+type SplitResult interface {
+	getChunkSize() int
+	modifyChunkSize(int2 int)
+}
+
 // optSplitResult is a more stable version for aggregation basic result.
 //
 // this structure will split the aggregation result as many part of `vector`,

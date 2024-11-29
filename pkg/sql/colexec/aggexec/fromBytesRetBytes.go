@@ -96,7 +96,7 @@ type aggregatorFromBytesToBytes struct {
 	flush bytesBytesFlush
 }
 
-func (exec *aggregatorFromBytesToBytes) getOptResult() *optSplitResult {
+func (exec *aggregatorFromBytesToBytes) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

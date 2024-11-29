@@ -74,7 +74,7 @@ type clusterCentersExec struct {
 	normalize  bool
 }
 
-func (exec *clusterCentersExec) getOptResult() *optSplitResult {
+func (exec *clusterCentersExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

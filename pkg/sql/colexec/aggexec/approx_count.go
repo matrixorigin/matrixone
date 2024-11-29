@@ -31,7 +31,7 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	groups []*hll.Sketch
 }
 
-func (exec *approxCountFixedExec[T]) getOptResult() *optSplitResult {
+func (exec *approxCountFixedExec[T]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
@@ -86,7 +86,7 @@ type approxCountVarExec struct {
 	groups []*hll.Sketch
 }
 
-func (exec *approxCountVarExec) getOptResult() *optSplitResult {
+func (exec *approxCountVarExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

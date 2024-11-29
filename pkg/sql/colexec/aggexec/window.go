@@ -55,7 +55,7 @@ func (exec *singleWindowExec) Fill(groupIndex int, row int, vectors []*vector.Ve
 	return nil
 }
 
-func (exec *singleWindowExec) getOptResult() *optSplitResult {
+func (exec *singleWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

@@ -52,7 +52,7 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 	groups []*vector.Vector
 }
 
-func (exec *medianColumnExecSelf[T, R]) getOptResult() *optSplitResult {
+func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

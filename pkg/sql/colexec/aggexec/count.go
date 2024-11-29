@@ -35,7 +35,7 @@ type countColumnExec struct {
 	ret aggResultWithFixedType[int64]
 }
 
-func (exec *countColumnExec) getOptResult() *optSplitResult {
+func (exec *countColumnExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
@@ -264,7 +264,7 @@ type countStarExec struct {
 	ret aggResultWithFixedType[int64]
 }
 
-func (exec *countStarExec) getOptResult() *optSplitResult {
+func (exec *countStarExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 

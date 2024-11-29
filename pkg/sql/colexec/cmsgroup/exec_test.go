@@ -18,12 +18,85 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
+
+// hackAggExecToTest 是一个不带任何逻辑的AggExec,主要用于单测中检查各种接口的调用次数。
+type hackAggExecToTest struct {
+	toFlush int
+
+	aggexec.AggFuncExec
+	preAllocated   int
+	groupNumber    int
+	doInitTime     int
+	doFillRow      int
+	doBulkFillRow  int
+	doBatchFillRow int
+	doFlushTime    int
+	isFree         bool
+}
+
+func (h *hackAggExecToTest) GetOptResult() aggexec.SplitResult {
+	return nil
+}
+
+func (h *hackAggExecToTest) GroupGrow(more int) error {
+	h.groupNumber += more
+	return nil
+}
+
+func (h *hackAggExecToTest) PreAllocateGroups(more int) error {
+	h.preAllocated += more
+	return nil
+}
+
+func (h *hackAggExecToTest) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	h.doFillRow++
+	return nil
+}
+
+func (h *hackAggExecToTest) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	h.doBulkFillRow++
+	return nil
+}
+
+func (h *hackAggExecToTest) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	h.doBatchFillRow++
+	return nil
+}
+
+var hackVecResult = vector.NewVec(types.T_int64.ToType())
+
+func (h *hackAggExecToTest) Flush() ([]*vector.Vector, error) {
+	h.doFlushTime++
+
+	ret := make([]*vector.Vector, h.toFlush)
+	for i := 0; i < h.toFlush; i++ {
+		ret[i] = hackVecResult
+	}
+	return ret, nil
+}
+
+func (h *hackAggExecToTest) Free() {
+	h.isFree = true
+}
+
+func hackMakeAggToTest(cnt int) *hackAggExecToTest {
+	exec := &hackAggExecToTest{
+		toFlush: cnt,
+	}
+	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) aggexec.AggFuncExec {
+		return exec
+	}
+	return exec
+}
 
 // Group算子的单元测试需要验证以下内容：
 //
@@ -56,10 +129,12 @@ import (
 
 func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 	proc := testutil.NewProcess()
-	hackMakeAggToTest()
 
 	// Only Aggregation.
 	{
+		before := proc.Mp().CurrNB()
+
+		exec := hackMakeAggToTest(1)
 		datas := []*batch.Batch{
 			getGroupTestBatch(proc.Mp(), [][2]int64{
 				{1, 1},
@@ -74,16 +149,46 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 			nil,
 		}
 		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = true
+		g.PreAllocSize = 10
+		g.Exprs = nil
+		g.GroupingFlag = nil
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(0)}, nil),
+		}
+
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		var final *batch.Batch
+		outCnt := 0
+		for {
+			r, err := g.Call(proc)
+			require.NoError(t, err)
+			if r.Batch == nil {
+				break
+			}
+
+			outCnt++
+			final = r.Batch
+			require.Equal(t, 1, outCnt)
+		}
+
+		// result check.
+		require.NotNil(t, final)
+		if final != nil {
+			require.Equal(t, 0, len(final.Aggs))
+			require.Equal(t, hackVecResult, final.Vecs[0])
+		}
+		require.Equal(t, 1, exec.groupNumber)
+		require.Equal(t, 10, exec.preAllocated)
+		require.Equal(t, 2, exec.doBulkFillRow)
+		require.Equal(t, 1, exec.doFlushTime)
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
-	}
 
-}
-
-func hackMakeAggToTest() {
-	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) aggexec.AggFuncExec {
-		return nil
+		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 }
 
@@ -102,6 +207,7 @@ func getGroupTestBatch(mp *mpool.MPool, values [][2]int64) *batch.Batch {
 
 	res := batch.NewWithSize(2)
 	res.Vecs[0], res.Vecs[1] = v1, v2
+	res.SetRowCount(len(values))
 	return res
 }
 
@@ -115,4 +221,16 @@ func getGroupOperatorWithInputs(dataList []*batch.Batch) (*Group, *value_scan.Va
 	res.AppendChild(vscan)
 
 	return res, vscan
+}
+
+func newColumnExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: pos,
+			},
+		},
+	}
 }
