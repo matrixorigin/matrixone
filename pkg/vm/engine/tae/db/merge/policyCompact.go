@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var _ policy = (*objCompactPolicy)(nil)
@@ -82,7 +83,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 	o.tombstoneMetas = o.tombstoneMetas[:0]
 	o.objects = o.objects[:0]
 
-	tIter := entry.MakeTombstoneObjectIt()
+	tIter := entry.MakeTombstoneVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 	for tIter.Next() {
 		tEntry := tIter.Item()
 

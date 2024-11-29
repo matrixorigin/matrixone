@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/tidwall/btree"
 
 	"go.uber.org/zap"
 
@@ -524,20 +525,12 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 	intent := r.store.GetICKPIntent()
 
 	check := func() (done bool) {
-		if !r.source.IsCommitted(intent.GetStart(), intent.GetEnd()) {
-			return false
-		}
-		tree := r.source.ScanInRangePruned(intent.GetStart(), intent.GetEnd())
-		tree.GetTree().Compact()
-		if !tree.IsEmpty() && intent.TooOld() {
-			logutil.Warn(
-				"CheckPoint-Wait-TooOld",
-				zap.String("entry", intent.String()),
-				zap.Duration("age", intent.Age()),
-			)
+		start, end := intent.GetStart(), intent.GetEnd()
+		ready := IsAllDirtyFlushed(r.source, r.catalog, start, end, intent.TooOld())
+		if !ready {
 			intent.DeferRetirement()
 		}
-		return tree.IsEmpty()
+		return ready
 	}
 
 	now := time.Now()
@@ -646,6 +639,73 @@ func (r *runner) softScheduleCheckpoint(ts *types.TS) (ret *CheckpointEntry, err
 		r.TryTriggerExecuteICKP()
 	}
 	return
+}
+
+func IsAllDirtyFlushed(source logtail.Collector, cata *catalog.Catalog, start, end types.TS, doPrint bool) bool {
+	tree, _ := source.ScanInRange(start, end)
+	ready := true
+	var notFlushed *catalog.ObjectEntry
+	for _, table := range tree.GetTree().Tables {
+		db, err := cata.GetDatabaseByID(table.DbID)
+		if err != nil {
+			continue
+		}
+		table, err := db.GetTableEntryByID(table.ID)
+		if err != nil {
+			continue
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, false)
+		if !ready {
+			break
+		}
+		ready, notFlushed = IsTableTailFlushed(table, start, end, true)
+		if !ready {
+			break
+		}
+	}
+	if !ready && doPrint {
+		table := notFlushed.GetTable()
+		tableDesc := fmt.Sprintf("%d-%s", table.ID, table.GetLastestSchemaLocked(false).Name)
+		logutil.Info("waiting for dirty tree %s", zap.String("table", tableDesc), zap.String("obj", notFlushed.StringWithLevel(2)))
+	}
+	return ready
+}
+
+func IsTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
+	var it btree.IterG[*catalog.ObjectEntry]
+	if isTombstone {
+		table.WaitTombstoneObjectCommitted(end)
+		it = table.MakeTombstoneObjectIt()
+	} else {
+		table.WaitDataObjectCommitted(end)
+		it = table.MakeDataObjectIt()
+	}
+	earlybreak := false
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end.Next()}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		if !obj.IsAppendable() || obj.IsDEntry() || obj.CreatedAt.GT(&end) {
+			continue
+		}
+		// check only appendable C entries
+		if obj.CreatedAt.LT(&start) {
+			earlybreak = true
+		}
+		// the C entry has no counterpart D entry or the D entry is not committed yet
+		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+			return false, obj
+		}
+	}
+
+	return true, nil
 }
 
 func (r *runner) TryTriggerExecuteICKP() (err error) {
