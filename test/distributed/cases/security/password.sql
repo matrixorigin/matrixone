@@ -1,4 +1,4 @@
--- @session:id=1&user=dump&password=111
+--@session:id=0&user=dump&password=111
 -- Test cases for Group 0
 create user user1_group0 identified by '1234';
 -- Clean up Group 0
@@ -17,7 +17,7 @@ set global validate_password.policy = '0';
 -- ========================
 -- 1. Test Group 1
 -- ========================
--- @session:id=2&user=dump&password=111
+-- @session:id=1&user=dump&password=111
 show variables like "%validate_password%";
 
 -- test
@@ -44,13 +44,15 @@ set global validate_password.policy = '1';
 -- ========================
 -- 2. Test Group 2
 -- ========================
--- @session:id=3&user=dump&password=111
+-- @session:id=2&user=dump&password=111
 show variables like "%validate_password%";
 
 -- Test cases
 create user user1_group2 identified by '12345678'; -- Expected failure
 create user user2_group2 identified by 'abcdefgH'; -- Expected failure
-create user useR32Go identified by 'oG23Resu'; -- Expected failure
+-- @bvt:issue#4511
+create user useR32Go identified by 'useR32Go'; -- Expected failure
+-- @bvt:issue
 create user user4_group2 identified by 'AbCLq56%'; -- Expected success
 
 -- Verify results
@@ -73,7 +75,7 @@ set global validate_password.policy = '1';
 -- ========================
 -- 3. Test Group 3
 -- ========================
--- @session:id=4&user=dump&password=111
+-- @session:id=3&user=dump&password=111
 -- Test cases
 create user user1_group3 identified by 'abcdefgH'; -- Expected failure
 create user user2_group3 identified by '1234abcd'; -- Expected failure
@@ -100,7 +102,7 @@ set global validate_password.policy = '1';
 -- ========================
 -- 4. Test Group 4
 -- ========================
--- @session:id=5&user=dump&password=111
+-- @session:id=4&user=dump&password=111
 -- Test cases
 create user user1_group4 identified by '123456789abcde'; -- Expected failure
 create user user2_group4 identified by 'Abcdefg1234567'; -- Expected failure
@@ -140,7 +142,7 @@ set global validate_password.policy = '0';
 -- ========================
 -- 1. Set global parameters for password lifecycle and failed connection threshold
 -- ========================
--- @session:id=6&user=dump&password=111
+-- @session:id=5&user=dump&password=111
 -- Create dump user and grant privileges to modify other users
 
 -- Show current variables before setting new values
@@ -160,7 +162,7 @@ SET GLOBAL password_reuse_interval = 0;
 -- 2. Verify parameters for Group 1 in a new session
 -- ========================
 
--- @session:id=7&user=dump&password=111
+-- @session:id=6&user=dump&password=111
 -- Show the current parameter settings after change
 SHOW VARIABLES LIKE "%connection_control_failed_connections_threshold%";
 SHOW VARIABLES LIKE "%connection_control_max_connection_delay%";
@@ -194,7 +196,7 @@ SET GLOBAL password_history = 6;
 SET GLOBAL password_reuse_interval = 10;
 -- @session
 
--- @session:id=8&user=dump&password=111
+-- @session:id=7&user=dump&password=111
 -- Show the current parameter settings before test
 SHOW VARIABLES LIKE "%connection_control_failed_connections_threshold%";
 SHOW VARIABLES LIKE "%connection_control_max_connection_delay%";
@@ -234,7 +236,7 @@ SET GLOBAL password_history = 10;
 SET GLOBAL password_reuse_interval = 30;
 -- @session
 
--- @session:id=9&user=dump&password=111
+-- @session:id=8&user=dump&password=111
 -- Show the current parameter settings before test
 SHOW VARIABLES LIKE "%connection_control_failed_connections_threshold%";
 SHOW VARIABLES LIKE "%connection_control_max_connection_delay%";
@@ -262,7 +264,7 @@ SET GLOBAL password_history = 1;
 SET GLOBAL password_reuse_interval = 7;
 -- @session
 
--- @session:id=10&user=dump&password=111
+-- @session:id=9&user=dump&password=111
 -- Show the current parameter settings before test
 SHOW VARIABLES LIKE "%connection_control_failed_connections_threshold%";
 SHOW VARIABLES LIKE "%connection_control_max_connection_delay%";
@@ -286,16 +288,9 @@ SELECT user_name FROM mo_catalog.mo_user WHERE user_name IN ('user1_group4', 'us
 
 -- Clean up Group 4
 DROP USER IF EXISTS user1_group4, user2_group4;
--- @session
 -- ========================
 -- 6. Test Group 5: Invalid values for lifecycle parameters
 -- ========================
--- @session:id=11&user=dump&password=111
--- Show current variables before testing invalid values
-SHOW VARIABLES LIKE "%connection_control_failed_connections_threshold%";
-SHOW VARIABLES LIKE "%connection_control_max_connection_delay%";
-SHOW VARIABLES LIKE "%password_history%";
-SHOW VARIABLES LIKE "%password_reuse_interval%";
 
 SET GLOBAL connection_control_failed_connections_threshold = -1; -- Invalid: cannot be negative
 SET GLOBAL connection_control_max_connection_delay = -100; -- Invalid: cannot be negative
