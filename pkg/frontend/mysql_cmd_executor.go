@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -356,18 +355,14 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		return err
 	}
 
-	if subMeta == nil {
-		// get db info as current account
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, stmt.DbName, txnOp); err != nil {
-			return err
-		}
-	} else {
-		// as pub account
+	dbName := stmt.DbName
+	if subMeta != nil {
+		dbName = subMeta.DbName
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(subMeta.AccountId))
-		// get db info via subMeta
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, subMeta.DbName, txnOp); err != nil {
-			return err
-		}
+	}
+
+	if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, dbName, txnOp); err != nil {
+		return err
 	}
 
 	getRoleName := func(roleId uint32) (roleName string, err error) {
@@ -390,7 +385,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
-	getTableStats := func(dbName string, tblNames []string) (rows, sizes []int64, err error) {
+	getTableStats := func(tblNames []string) (rows, sizes map[string]int64, err error) {
+		// set session variable
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
 			return
 		}
@@ -398,40 +394,34 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
 		}()
 
-		tmpTblName := fmt.Sprintf("tmp_%d", rand.Uint32())
-		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("create table %s (db varchar, tbl varchar)", tmpTblName)); err != nil {
-			return
+		sql := "select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from ("
+		for i, tblName := range tblNames {
+			if i > 0 {
+				sql += " union all "
+			}
+			sql += fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName)
 		}
-		defer func() {
-			_, _ = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("drop table %s", tmpTblName))
-		}()
-
-		sql := fmt.Sprintf("insert into %s values ('%s', '%s')", tmpTblName, dbName, tblNames[0])
-		for i := 1; i < len(tblNames); i++ {
-			sql += fmt.Sprintf(", ('%s', '%s')", dbName, tblNames[i])
-		}
-		if _, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
-			return
-		}
+		sql += ") tmp"
 
 		var rets []ExecResult
-		sql = fmt.Sprintf("select mo_table_rows(db, tbl), mo_table_size(db, tbl) from %s", tmpTblName)
 		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
 			return
 		}
 
-		rows = make([]int64, len(tblNames))
-		sizes = make([]int64, len(tblNames))
-		idx := 0
+		var tblName string
+		rows = make(map[string]int64, len(tblNames))
+		sizes = make(map[string]int64, len(tblNames))
 		for _, result := range rets {
 			for i := uint64(0); i < result.GetRowCount(); i++ {
-				if rows[idx], err = rets[0].GetInt64(ctx, i, 0); err != nil {
+				if tblName, err = result.GetString(ctx, i, 0); err != nil {
 					return
 				}
-				if sizes[idx], err = rets[0].GetInt64(ctx, i, 1); err != nil {
+				if rows[tblName], err = result.GetInt64(ctx, i, 1); err != nil {
 					return
 				}
-				idx += 1
+				if sizes[tblName], err = result.GetInt64(ctx, i, 2); err != nil {
+					return
+				}
 			}
 		}
 		return
@@ -456,12 +446,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			tblNames = append(tblNames, tableName)
 			tblIdxes = append(tblIdxes, i)
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
-			for i := 0; i < 16; i++ {
+			for j := 0; j < 16; j++ {
 				// only remain name and created_time
-				if i == 0 || i == 10 {
+				if j == 0 || j == 10 {
 					continue
 				}
-				row[i] = nil
+				row[j] = nil
 			}
 			// comment
 			row[16] = "VIEW"
@@ -479,13 +469,14 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	}
 
 	// calculate table row and size
-	rows, sizes, err := getTableStats(stmt.DbName, tblNames)
+	rows, sizes, err := getTableStats(tblNames)
 	if err != nil {
 		return err
 	}
-	for i, idx := range tblIdxes {
-		ses.data[idx][3] = rows[i]
-		ses.data[idx][5] = sizes[i]
+	for i, tblName := range tblNames {
+		idx := tblIdxes[i]
+		ses.data[idx][3] = rows[tblName]
+		ses.data[idx][5] = sizes[tblName]
 	}
 	return nil
 }
