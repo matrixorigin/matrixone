@@ -66,6 +66,8 @@ func TestOpWorker(t *testing.T) {
 	worker := NewOpWorker(ctx, "test", 100)
 	worker.Start()
 	worker.CmdC <- stuck
+	for len(worker.CmdC) > 0 {
+	}
 	for i := 0; i < 100; i++ {
 		require.True(t, worker.SendOp(testOp{}))
 	}

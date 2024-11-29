@@ -1,0 +1,202 @@
+DROP TABLE IF EXISTS dept;
+create table dept(
+deptno int unsigned auto_increment COMMENT '部门编号',
+dname varchar(15) COMMENT '部门名称',
+loc varchar(50)  COMMENT '部门所在位置',
+primary key(deptno)
+) COMMENT='部门表';
+INSERT INTO dept VALUES (10,'ACCOUNTING','NEW YORK');
+INSERT INTO dept VALUES (20,'RESEARCH','DALLAS');
+INSERT INTO dept VALUES (30,'SALES','CHICAGO');
+INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
+DROP TABLE IF EXISTS emp;
+create table emp(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) COMMENT '雇员姓名',
+job varchar(10) COMMENT '雇员职位',
+mgr int unsigned COMMENT '雇员对应的领导的编号',
+hiredate date COMMENT '雇员的雇佣日期',
+sal decimal(7,2) COMMENT '雇员的基本工资',
+comm decimal(7,2) COMMENT '奖金',
+deptno int unsigned COMMENT '所在部门',
+primary key(empno)
+) COMMENT='雇员表';
+INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+INSERT INTO emp VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+INSERT INTO emp VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+INSERT INTO emp VALUES (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+INSERT INTO emp VALUES (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
+INSERT INTO emp VALUES (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+INSERT INTO emp VALUES (7788,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
+INSERT INTO emp VALUES (7839,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
+INSERT INTO emp VALUES (7844,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
+INSERT INTO emp VALUES (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
+INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
+INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
+INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
+select t1.*, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: Column 'deptno' in order clause is ambiguous
+select t1.*, t2.deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: Column 'deptno' in order clause is ambiguous
+mysql> select empno X1, ename X1, sal X1 from emp where sal > 200 order by X1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "mysql> select empno X1, ename X1, sal X1 from emp where sal > 200 order by X1;";
+select t2.dname, t1.* from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+dname    empno    ename    job    mgr    hiredate    sal    comm    deptno
+ACCOUNTING    7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
+ACCOUNTING    7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+ACCOUNTING    7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
+RESEARCH    7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+RESEARCH    7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+RESEARCH    7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
+RESEARCH    7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
+RESEARCH    7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
+SALES    7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
+SALES    7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
+SALES    7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+SALES    7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
+SALES    7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
+SALES    7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+select t2.dname as deptname, t1.* from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+deptname    empno    ename    job    mgr    hiredate    sal    comm    deptno
+ACCOUNTING    7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
+ACCOUNTING    7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+ACCOUNTING    7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
+RESEARCH    7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+RESEARCH    7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+RESEARCH    7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
+RESEARCH    7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
+RESEARCH    7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
+SALES    7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
+SALES    7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
+SALES    7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+SALES    7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
+SALES    7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
+SALES    7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+select t2.dname as deptname, t1.* from emp t1 left join dept t2 on t1.deptno = t2.deptno where  '1' = '1' order by deptno;
+deptname    empno    ename    job    mgr    hiredate    sal    comm    deptno
+ACCOUNTING    7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
+ACCOUNTING    7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+ACCOUNTING    7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
+RESEARCH    7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+RESEARCH    7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+RESEARCH    7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
+RESEARCH    7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
+RESEARCH    7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
+SALES    7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
+SALES    7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
+SALES    7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+SALES    7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
+SALES    7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
+SALES    7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+select t2.dname as deptname, t1.*  from emp t1 left join dept t2 on t1.deptno = t2.deptno  where  '1' = '1' order by deptno, empno;
+deptname    empno    ename    job    mgr    hiredate    sal    comm    deptno
+ACCOUNTING    7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
+ACCOUNTING    7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
+ACCOUNTING    7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+RESEARCH    7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+RESEARCH    7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+RESEARCH    7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
+RESEARCH    7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
+RESEARCH    7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
+SALES    7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+SALES    7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+SALES    7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
+SALES    7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
+SALES    7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
+SALES    7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
+select t2.dname as deptname, t1.*
+from emp t1 left join dept t2 on t1.deptno = t2.deptno where  '1' = '1'
+group by t1.ename
+order by deptno;
+SQL syntax error: column "t2.dname" must appear in the GROUP BY clause or be used in an aggregate function
+select t1.*, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: Column 'deptno' in order clause is ambiguous
+select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+ename    loc    deptno
+CLARK    NEW YORK    10
+MILLER    NEW YORK    10
+KING    NEW YORK    10
+JONES    DALLAS    20
+SMITH    DALLAS    20
+SCOTT    DALLAS    20
+ADAMS    DALLAS    20
+FORD    DALLAS    20
+MARTIN    CHICAGO    30
+BLAKE    CHICAGO    30
+WARD    CHICAGO    30
+TURNER    CHICAGO    30
+JAMES    CHICAGO    30
+ALLEN    CHICAGO    30
+select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: ambiguouse column reference to 'deptno'
+select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno+33;
+ename    loc    deptno
+CLARK    NEW YORK    10
+MILLER    NEW YORK    10
+KING    NEW YORK    10
+JONES    DALLAS    20
+SMITH    DALLAS    20
+SCOTT    DALLAS    20
+ADAMS    DALLAS    20
+FORD    DALLAS    20
+MARTIN    CHICAGO    30
+BLAKE    CHICAGO    30
+WARD    CHICAGO    30
+TURNER    CHICAGO    30
+JAMES    CHICAGO    30
+ALLEN    CHICAGO    30
+select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: ambiguouse column reference to 'deptno'
+select ename, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename from emp order by ename;
+invalid input: Column 'ename' in order clause is ambiguous
+select empno, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename, ename from emp order by ename;
+invalid input: Column 'ename' in order clause is ambiguous
+select empno, 20 as empno from emp order by empno;
+invalid input: Column 'empno' in order clause is ambiguous
+select empno,  space(50) as empno from emp order by empno;
+invalid input: Column 'empno' in order clause is ambiguous
+select empno, ename, job, mgr, hiredate, sal, empno from emp where deptno != 20 order by empno;
+empno    ename    job    mgr    hiredate    sal    empno
+7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    7499
+7521    WARD    SALESMAN    7698    1981-02-22    1250.00    7521
+7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    7654
+7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    7698
+7782    CLARK    MANAGER    7839    1981-06-09    2450.00    7782
+7839    KING    PRESIDENT    null    1981-11-17    5000.00    7839
+7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    7844
+7900    JAMES    CLERK    7698    1981-12-03    950.00    7900
+7934    MILLER    CLERK    7782    1982-01-23    1300.00    7934
+select empno, ename, job, mgr, hiredate, sal, emp.empno from emp where deptno != 20 order by empno;
+empno    ename    job    mgr    hiredate    sal    empno
+7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    7499
+7521    WARD    SALESMAN    7698    1981-02-22    1250.00    7521
+7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    7654
+7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    7698
+7782    CLARK    MANAGER    7839    1981-06-09    2450.00    7782
+7839    KING    PRESIDENT    null    1981-11-17    5000.00    7839
+7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    7844
+7900    JAMES    CLERK    7698    1981-12-03    950.00    7900
+7934    MILLER    CLERK    7782    1982-01-23    1300.00    7934
+select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by t1.deptno;
+ename    loc    deptno    deptno
+CLARK    NEW YORK    10    10
+MILLER    NEW YORK    10    10
+KING    NEW YORK    10    10
+JONES    DALLAS    20    20
+SMITH    DALLAS    20    20
+SCOTT    DALLAS    20    20
+ADAMS    DALLAS    20    20
+FORD    DALLAS    20    20
+MARTIN    CHICAGO    30    30
+BLAKE    CHICAGO    30    30
+WARD    CHICAGO    30    30
+TURNER    CHICAGO    30    30
+JAMES    CHICAGO    30    30
+ALLEN    CHICAGO    30    30
+select t1.ename, t2.loc, deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: ambiguouse column reference to 'deptno'
+select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
+invalid input: Column 'deptno' in order clause is ambiguous
+drop table if exists dept;
+drop table if exists emp;
