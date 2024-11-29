@@ -225,8 +225,10 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			break
 		}
 		obj := objIt.Item()
-		if !inQueue && tbl.lastInvisibleNOBJSortHint == 0 {
-			tbl.lastInvisibleNOBJSortHint = obj.SortHint
+		if !inQueue {
+			if tbl.lastInvisibleNOBJSortHint == 0 {
+				tbl.lastInvisibleNOBJSortHint = obj.SortHint
+			}
 		} else {
 			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
 				naobjDeduped = true
@@ -239,6 +241,10 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			}
 		} else {
 			if naobjDeduped {
+				continue
+			}
+			if !inQueue && obj.DeleteBefore(from) {
+				naobjDeduped = true
 				continue
 			}
 		}
