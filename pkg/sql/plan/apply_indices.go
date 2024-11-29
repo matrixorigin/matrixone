@@ -409,16 +409,16 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	// Apply unique/secondary indices for point select
-	idxToChoose, idxSel, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
+	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
 
-	idxToChoose, idxSel, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
+	idxToChoose, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		retID, idxTableNodeID := builder.applyIndexForNonEquiCond(indexes[idxToChoose], node, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
@@ -718,7 +718,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	return idxTableNodeID
 }
 
-func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, float64, []int32) {
+func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
 	// Apply single-column unique/secondary indices for non-equi expression
 	colPos2Idx := make(map[int32]int)
 	for i, idxDef := range indexes {
@@ -738,26 +738,20 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if filterType == NonEqualIndexCondition {
 			idxPos, ok := colPos2Idx[col.ColPos]
 			if ok {
-				return idxPos, node.FilterList[i].Selectivity, []int32{int32(i)}
+				return idxPos, []int32{int32(i)}
 			}
 		}
 	}
-	return -1, 1, nil
+	return -1, nil
 }
 
-func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *plan.Node, filterIdx []int32, idxSel float64, scanSnapshot *Snapshot) (int32, int32) {
+func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *plan.Node, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
 	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
 	builder.addNameByColRef(idxTag, idxTableDef)
-	expr := DeepCopyExpr(node.FilterList[filterIdx[0]])
-	fn := expr.GetF()
-	col := fn.Args[0].GetCol()
-	col.RelPos = idxTag
-	col.ColPos = 0
 
 	numParts := len(idxDef.Parts)
 	idxFilter := builder.replaceNonEqualFilter(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
-	idxFilter.Selectivity = idxSel
 
 	idxTableNode := &plan.Node{
 		NodeType:     plan.Node_TABLE_SCAN,
@@ -841,7 +835,7 @@ func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *pl
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, float64, []int32) {
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node) (int, []int32) {
 	currentSel := 1.0
 	currentIdx := -1
 	savedFilterIdx := make([]int32, 0)
@@ -857,7 +851,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 	firstPkColIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
 	_, ok := col2filter[firstPkColIdx]
 	if ok { //point select filter on first column of primary key, no need to go index
-		return -1, 0, nil
+		return -1, nil
 	}
 
 	filterIdx := make([]int32, 0, len(col2filter))
@@ -902,7 +896,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			savedFilterIdx = append(savedFilterIdx, filterIdx...)
 		}
 	}
-	return currentIdx, currentSel, savedFilterIdx
+	return currentIdx, savedFilterIdx
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
