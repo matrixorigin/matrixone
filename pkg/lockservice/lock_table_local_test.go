@@ -1029,6 +1029,7 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 			txn3WaitAt2Again := make(chan struct{})
 			txn3WaitAt4 := make(chan struct{})
 			txn3NotifiedAt4 := make(chan struct{})
+			var once sync.Once
 
 			// txn1 lock k4
 			add(txn1, key4, pb.Granularity_Row)
@@ -1065,10 +1066,9 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 
 				if bytes.Equal(c.txn.txnID, txn4) {
 					return func() {
-						if txn4WaitAt2 != nil {
+						once.Do(func() {
 							close(txn4WaitAt2)
-							txn4WaitAt2 = nil
-						}
+						})
 					}
 				}
 
