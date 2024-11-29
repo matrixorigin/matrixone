@@ -215,6 +215,10 @@ func startService(
 		return err
 	}
 
+	if err := clearSpillFiles(ctx, fs); err != nil {
+		return err
+	}
+
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
 		globalServiceType = st.String()
@@ -513,4 +517,16 @@ func maybeRunInDaemonMode() {
 		logutil.Infof("mo-service is running in daemon mode, child process is %d", cpid)
 		os.Exit(0)
 	}
+}
+
+func clearSpillFiles(ctx context.Context, fs fileservice.FileService) error {
+	localFS, err := fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
+	if err != nil {
+		return err
+	}
+	spillFS := fileservice.SubPath(localFS, defines.SpillFileServiceName)
+	for entry := range spillFS.List(ctx, "/") {
+		_ = spillFS.Delete(ctx, entry.Name)
+	}
+	return nil
 }
