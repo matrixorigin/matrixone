@@ -22,6 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+const (
+	UnsupportedIndexCondition = 0
+	EqualIndexCondition       = 1
+	NonEqualIndexCondition    = 2
+)
+
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:
@@ -516,29 +522,41 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 	return leadingPos
 }
 
+func checkFilter(fn *plan.Function) (int, *plan.ColRef) {
+	if fn == nil {
+		return UnsupportedIndexCondition, nil
+	}
+	// return type 0 means not supported for index, 1 means equal condition, 2 means non-equal condition, for example between / in
+	switch fn.Func.ObjName {
+	case "=":
+		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+		}
+		col := fn.Args[0].GetCol()
+		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return EqualIndexCondition, col
+		}
+
+	case "in", "between":
+		col := fn.Args[0].GetCol()
+		if col != nil {
+			return NonEqualIndexCondition, col
+		}
+	}
+	return UnsupportedIndexCondition, nil
+}
+
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 	for i := range node.FilterList {
-		fn := node.FilterList[i].GetF()
-		if fn == nil {
-			continue
-		}
-		switch fn.Func.ObjName {
-		case "=":
-			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
-				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
-			}
-			col := fn.Args[0].GetCol()
-			if col != nil && col.ColPos == leadingPos && isRuntimeConstExpr(fn.Args[1]) {
+		filterType, col := checkFilter(node.FilterList[i].GetF())
+		switch filterType {
+		case EqualIndexCondition, NonEqualIndexCondition:
+			if col.ColPos == leadingPos {
 				return []int32{int32(i)}, true
 			}
-
-		case "in", "between":
-			col := fn.Args[0].GetCol()
-			if col != nil && col.ColPos == leadingPos {
-				return []int32{int32(i)}, false
-			}
 		}
+		continue
 	}
 	return nil, false
 }
@@ -706,23 +724,12 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	}
 
 	for i := range node.FilterList {
-		expr := node.FilterList[i]
-		fn := expr.GetF()
-		if fn == nil {
-			continue
-		}
-		col := fn.Args[0].GetCol()
-		if col == nil {
-			continue
-		}
-		switch fn.Func.ObjName {
-		case "between", "in":
-		default:
-			continue
-		}
-		idxPos, ok := colPos2Idx[col.ColPos]
-		if ok {
-			return idxPos, node.FilterList[i].Selectivity, []int{i}
+		filterType, col := checkFilter(node.FilterList[i].GetF())
+		if filterType == NonEqualIndexCondition {
+			idxPos, ok := colPos2Idx[col.ColPos]
+			if ok {
+				return idxPos, node.FilterList[i].Selectivity, []int{i}
+			}
 		}
 	}
 	return -1, 1, nil
@@ -872,26 +879,11 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 	savedFilterIdx := make([]int, 0)
 
 	col2filter := make(map[int32]int)
-	for i, expr := range node.FilterList {
-		fn := expr.GetF()
-		if fn == nil {
-			continue
+	for i := range node.FilterList {
+		filterType, col := checkFilter(node.FilterList[i].GetF())
+		if filterType == EqualIndexCondition {
+			col2filter[col.ColPos] = i
 		}
-
-		if fn.Func.ObjName != "=" {
-			continue
-		}
-
-		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
-			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
-		}
-
-		col := fn.Args[0].GetCol()
-		if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
-			continue
-		}
-
-		col2filter[col.ColPos] = i
 	}
 
 	firstPkColIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
