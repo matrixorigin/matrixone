@@ -281,6 +281,11 @@ func (u *pluginState) start(tf *TableFunction, proc *process.Process, nthRow int
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("plugin exit with error %d. err %v", exit, err))
 	}
 
+	if len(out) == 0 {
+		u.batch.SetRowCount(0)
+		return nil
+	}
+
 	nitem := 0
 	var jserr error
 	jsonparser.ArrayEach(out, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
