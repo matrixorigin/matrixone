@@ -411,7 +411,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// Apply unique/secondary indices for point select
 	idxToChoose, idxSel, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node)
 	if idxToChoose != -1 {
-		retID, idxTableNodeID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, idxSel, scanSnapshot)
+		retID, idxTableNodeID := builder.applyIndexForPointSelect(indexes[idxToChoose], node, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
@@ -593,27 +593,30 @@ func (builder *QueryBuilder) replaceEqualCondition(filterList []*plan.Expr, filt
 	return expr
 }
 
+func (builder *QueryBuilder) replaceNonEqualFilter(filterList []*plan.Expr, leadingPos []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
+	expr := DeepCopyExpr(filterList[leadingPos[0]])
+	fn := expr.GetF()
+	fn.Args[0].GetCol().RelPos = idxTag
+	fn.Args[0].GetCol().ColPos = 0
+	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
+	if numParts > 1 {
+		switch fn.Func.ObjName {
+		case "between":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
+		case "in":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
+		}
+	}
+	return expr
+}
+
 func (builder *QueryBuilder) replaceLeadingFilter(filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		expr := DeepCopyExpr(filterList[leadingPos[0]])
-		fn := expr.GetF()
-		fn.Args[0].GetCol().RelPos = idxTag
-		fn.Args[0].GetCol().ColPos = 0
-		fn.Args[0].Typ = idxTableDef.Cols[0].Typ
-		if numParts > 1 {
-			switch fn.Func.ObjName {
-			case "between":
-				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-				fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-				expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
-			case "in":
-				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-				expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
-			}
-		}
-		return expr
+		return builder.replaceNonEqualFilter(filterList, leadingPos, idxTag, idxTableDef, numParts)
 	}
-
 	return builder.replaceEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
 }
 
@@ -752,23 +755,8 @@ func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *pl
 	col.RelPos = idxTag
 	col.ColPos = 0
 
-	var idxFilter *plan.Expr
-	if idxDef.Unique {
-		idxFilter = expr
-	} else {
-		fn.Args[0].Typ = idxTableDef.Cols[0].Typ
-
-		switch fn.Func.ObjName {
-		case "in":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
-
-		case "between":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
-		}
-	}
+	numParts := len(idxDef.Parts)
+	idxFilter := builder.replaceNonEqualFilter(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
 	idxFilter.Selectivity = idxSel
 
 	idxTableNode := &plan.Node{
@@ -807,7 +795,7 @@ func (builder *QueryBuilder) applyIndexForNonEquiCond(idxDef *IndexDef, node *pl
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *plan.Node, filterIdx []int32, idxSel float64, scanSnapshot *Snapshot) (int32, int32) {
+func (builder *QueryBuilder) applyIndexForPointSelect(idxDef *IndexDef, node *plan.Node, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	numParts := len(idxDef.Parts)
 	idxTag := builder.genNewTag()
 	idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, scanSnapshot)
