@@ -15,7 +15,6 @@
 package merge
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -65,14 +64,6 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 	if kind == taskHostDN {
 		e.scheduleMergeObjects(slices.Clone(objs), entry, isTombstone)
 		return
-	}
-
-	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.Rows(), b.Rows())
-	})
-
-	for estimateMergeSize(objs) > 16*common.Const1GBytes {
-		objs = objs[:len(objs)-1]
 	}
 
 	stats := make([][]byte, 0, len(objs))
