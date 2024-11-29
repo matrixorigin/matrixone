@@ -152,6 +152,10 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
+	if objstats.GetAppendable() {
+		//aobj always shuffle to local CN
+		return !rsp.IsLocalCN
+	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		zm := objstats.SortKeyZoneMap()
 		if !zm.IsInited() {

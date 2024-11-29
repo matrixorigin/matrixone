@@ -826,6 +826,7 @@ type RangesShuffleParam struct {
 	Node               *plan.Node
 	CNCNT              int32 // number of all cns
 	CNIDX              int32 // cn index , starts from 0
+	IsLocalCN          bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	Init               bool

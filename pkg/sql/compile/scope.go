@@ -636,6 +636,9 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		CNIDX: s.NodeInfo.CNIDX,
 		Init:  false,
 	}
+	if !s.IsRemote { // this is local CN
+		rsp.IsLocalCN = true
+	}
 
 	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
 	if err != nil {
