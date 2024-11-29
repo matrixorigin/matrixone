@@ -320,7 +320,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
-		{Op: int32(vm.DedupJoin), PostDml: &pipeline.DedupJoin{}},
+		{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
