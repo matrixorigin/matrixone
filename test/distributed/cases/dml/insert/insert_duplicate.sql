@@ -236,10 +236,10 @@ SELECT * FROM `serial_numbers` WHERE `biz_type` = 4 and `namespace` = '202409111
 
 drop table if exists indup_11;
 create table indup_11(a int primary key, b int);
-insert into indup_11(a) select result from generate_series(1, 100000) g;
+insert into indup_11 values(1, 1), (1, 1), (2, 2) on duplicate key update b = b + 10;
+select * from indup_11 where b;
+insert ignore into indup_11(a) select result from generate_series(1, 100000) g;
 insert into indup_11 values(1, 1);
 insert ignore into indup_11 values(1, 1);
-insert into indup_11 values(1, 1) on duplicate key update b = a + 10;
-select * from indup_11 where b is not null;
-insert into indup_11 values(1, 1), (1, 1), (2, 2) on duplicate key update b = b + 10;
-select * from indup_11 where b is not null;
+insert into indup_11 values(1, 1) on duplicate key update b = a + 100;
+select * from indup_11 where b is not null order by a;

@@ -346,6 +346,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					return err
 				}
 
+				if ctr.joinBat2 == nil {
+					ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+				}
+
 				for _, sel := range sels[1:] {
 					idx1, idx2 = sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 					err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)

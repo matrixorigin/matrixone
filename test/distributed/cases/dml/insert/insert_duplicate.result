@@ -393,15 +393,17 @@ id    biz_type    namespace    sn
 100001    4    2024091117    1
 drop table if exists indup_11;
 create table indup_11(a int primary key, b int);
-insert into indup_11(a) select result from generate_series(1, 100000) g;
+insert into indup_11 values(1, 1), (1, 1), (2, 2) on duplicate key update b = b + 10;
+select * from indup_11 where b;
+a    b
+1    11
+2    2
+insert ignore into indup_11(a) select result from generate_series(1, 100000) g;
 insert into indup_11 values(1, 1);
 Duplicate entry '1' for key 'a'
 insert ignore into indup_11 values(1, 1);
-insert into indup_11 values(1, 1) on duplicate key update b = a + 10;
-select * from indup_11 where b is not null;
+insert into indup_11 values(1, 1) on duplicate key update b = a + 100;
+select * from indup_11 where b is not null order by a;
 a    b
-1    11
-insert into indup_11 values(1, 1), (1, 1), (2, 2) on duplicate key update b = b + 10;
-select * from indup_11 where b is not null;
-a    b
-1    31
+1    101
+2    2
