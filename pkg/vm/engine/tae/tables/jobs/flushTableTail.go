@@ -780,7 +780,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 			continue
 		}
 		if len(dataVers) != 1 {
-			return nil, moerr.NewInternalErrorNoCtx("L#783: logic err")
+			panic("logic err")
 		}
 		var dataVer *containers.BatchWithVersion
 		for _, data := range dataVers {
