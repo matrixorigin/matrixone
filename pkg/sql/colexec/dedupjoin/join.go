@@ -199,14 +199,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			//ap.ctr.buf = ctr.batches
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
-				ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 				batSize := ctr.batches[i].Vecs[0].Length()
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
 						ap.ctr.buf[i].SetVector(int32(j), ctr.batches[i].Vecs[rp.Pos])
 						ctr.batches[i].Vecs[rp.Pos] = nil
 					} else {
-						ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
 						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
 							return err
 						}
@@ -242,10 +242,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				newSels = sels[i*colexec.DefaultBatchSize:]
 			}
 
-			ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+			ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 			for j, rp := range ap.Result {
 				if rp.Rel == 1 {
-					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.RightTypes[rp.Pos])
 					for _, sel := range newSels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := ap.ctr.buf[i].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
@@ -253,7 +253,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				} else {
-					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
 					if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, len(newSels), proc.Mp()); err != nil {
 						return err
 					}
@@ -280,10 +280,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		//		batSize = len(sels) - fillCnt
 		//	}
 		//
-		//	ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+		//	ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 		//	for i, rp := range ap.Result {
 		//		if rp.Rel == 1 {
-		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.RightTypes[rp.Pos])
 		//			for _, sel := range sels[fillCnt : fillCnt+batSize] {
 		//				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 		//				if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
@@ -291,7 +291,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		//				}
 		//			}
 		//		} else {
-		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
+		//			ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.LeftTypes[rp.Pos])
 		//			if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
 		//				return err
 		//			}
@@ -316,12 +316,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			}
 
 			if rowIdx == 0 {
-				ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 				for i, rp := range ap.Result {
 					if rp.Rel == 1 {
-						ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.RightTypes[rp.Pos])
 					} else {
-						ap.ctr.buf[batIdx].Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.LeftTypes[rp.Pos])
 					}
 				}
 			}
@@ -626,13 +626,13 @@ func (dedupJoin *DedupJoin) resetRBat() {
 	if ctr.rbat != nil {
 		ctr.rbat.CleanOnlyData()
 	} else {
-		ctr.rbat = batch.NewOffHeapWithSize(len(dedupJoin.Result))
+		ctr.rbat = batch.NewWithSize(len(dedupJoin.Result))
 
 		for i, rp := range dedupJoin.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.LeftTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.LeftTypes[rp.Pos])
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.RightTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.RightTypes[rp.Pos])
 			}
 		}
 	}
