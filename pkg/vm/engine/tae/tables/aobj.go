@@ -332,16 +332,16 @@ func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
 
 func (obj *aobject) Init() (err error) { return }
 
-func (obj *aobject) EstimateMemSize() (int, int) {
+func (obj *aobject) EstimateMemSize() int {
 	node := obj.PinNode()
 	defer node.Unref()
 	obj.RLock()
 	defer obj.RUnlock()
-	asize := obj.appendMVCC.EstimateMemSizeLocked()
+	size := obj.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
-		asize += node.MustMNode().EstimateMemSizeLocked()
+		size += node.MustMNode().EstimateMemSizeLocked()
 	}
-	return asize, 0
+	return size
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {

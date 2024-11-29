@@ -364,10 +364,11 @@ func BlockDataReadBackup(
 				if err != nil {
 					return
 				}
-				logutil.Debug("[BlockDataReadBackup]",
+				logutil.Info("[BlockDataReadBackup]",
 					zap.String("commitTs", commitTs.ToString()),
 					zap.String("ts", ts.ToString()),
-					zap.String("location", info.MetaLocation().String()))
+					zap.String("location", info.MetaLocation().String()),
+					zap.Int("rows", v))
 				break
 			}
 		}
@@ -379,6 +380,7 @@ func BlockDataReadBackup(
 	defer tombstones.Release()
 	rows := tombstones.ToI64Array()
 	if len(rows) > 0 {
+		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
 		loaded.Shrink(rows, true)
 	}
 	return

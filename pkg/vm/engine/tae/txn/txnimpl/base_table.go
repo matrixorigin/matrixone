@@ -21,12 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/tidwall/btree"
 )
 
 var (
@@ -39,8 +41,6 @@ type baseTable struct {
 	isTombstone bool
 
 	tableSpace *tableSpace
-
-	lastInvisibleNOBJSortHint uint64
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
@@ -151,8 +151,13 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	}
 	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
-func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, checkWW bool) (rowIDs containers.Vector, err error) {
-	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone, true)
+func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs containers.Vector, err error) {
+	var it *catalog.VisibleCommittedObjectIt
+	if tbl.isTombstone {
+		it = tbl.txnTable.entry.MakeTombstoneVisibleObjectIt(tbl.txnTable.store.txn)
+	} else {
+		it = tbl.txnTable.entry.MakeDataVisibleObjectIt(tbl.txnTable.store.txn)
+	}
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	pkType := pks.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -168,17 +173,12 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, ch
 	); err != nil {
 		return
 	}
-	snapshotTS := tbl.txnTable.store.txn.GetSnapshotTS()
 	for it.Next() {
-		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
-			continue
-		}
+		obj := it.Item()
 		objData := obj.GetObjectData()
 		if objData == nil {
 			continue
 		}
-
 		if obj.HasCommittedPersistedData() {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
@@ -197,6 +197,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, ch
 			common.WorkspaceAllocator,
 		)
 		if err != nil {
+			logutil.Infof("getRowsByPK failed GetDuplicate: %v", err)
 			return
 		}
 	}
@@ -204,12 +205,18 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, ch
 }
 
 /*
-start-> now
-visible: now && nobj.c>start
-break: last invisible nobj && aobj.c < start
+similar to findDeletes
 */
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
-	objIt := tbl.txnTable.entry.MakeObjectIt(tbl.isTombstone)
+	// TODO(aptend): handle the iterator correctly
+	var objIt btree.IterG[*catalog.ObjectEntry]
+	if tbl.isTombstone {
+		tbl.txnTable.entry.WaitTombstoneObjectCommitted(to)
+		objIt = tbl.txnTable.entry.MakeTombstoneObjectIt()
+	} else {
+		tbl.txnTable.entry.WaitDataObjectCommitted(to)
+		objIt = tbl.txnTable.entry.MakeDataObjectIt()
+	}
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
@@ -218,59 +225,32 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-	var aobjDeduped, naobjDeduped bool
-	defer objIt.Release()
+
+	var earlybreak bool
 	for ok := objIt.Last(); ok; ok = objIt.Prev() {
-		if aobjDeduped && naobjDeduped {
+		if earlybreak {
 			break
 		}
 		obj := objIt.Item()
-		if !inQueue {
-			if tbl.lastInvisibleNOBJSortHint == 0 {
-				tbl.lastInvisibleNOBJSortHint = obj.SortHint
-			}
-		} else {
-			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
-				naobjDeduped = true
-			}
 
-		}
-		if obj.IsAppendable() {
-			if aobjDeduped {
-				continue
-			}
-		} else {
-			if naobjDeduped {
-				continue
-			}
-			if !inQueue && obj.DeleteBefore(from) {
-				naobjDeduped = true
-				continue
-			}
-		}
-
-		needWait, txn := obj.CreateNode.NeedWaitCommitting(to)
-		if needWait {
-			txn.GetTxnState(true)
-		}
-		needWait2, txn := obj.DeleteNode.NeedWaitCommitting(to)
-		if needWait2 {
-			txn.GetTxnState(true)
-		}
-		if needWait || needWait2 {
-			obj = obj.GetLatestNode()
-		}
-		if obj.IsAppendable() && obj.CreatedAt.LT(&from) {
-			aobjDeduped = true
-		}
-		visible := obj.VisibleByTS(to)
-		if !visible {
-			if !inQueue && !obj.IsAppendable() && obj.IsCreating() {
-				tbl.lastInvisibleNOBJSortHint = obj.SortHint
-			}
+		if obj.CreatedAt.GT(&to) {
 			continue
 		}
-		if !obj.IsAppendable() && obj.CreatedAt.LT(&from) {
+
+		if obj.IsAppendable() {
+			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
+				earlybreak = true
+			}
+		} else if obj.CreatedAt.LT(&from) {
+			continue
+		}
+
+		// only keep the category-a + category-c for candidates.
+		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
+			continue
+		}
+
+		if !obj.VisibleByTS(to) {
 			continue
 		}
 		objData := obj.GetObjectData()
@@ -287,6 +267,19 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			return
 		}
 	}
+	// s := ""
+	// for _, v := range candidates {
+	// 	s += v.StringWithLevel(2) + ","
+	// }
+	// logutil.Info("incr",
+	// 	zap.Bool("inQueue", inQueue),
+	// 	zap.String("table", tbl.txnTable.store.txn.Repr()),
+	// 	zap.String("from", from.ToString()),
+	// 	zap.String("to", to.ToString()),
+	// 	zap.String("rowIDs", rowIDs.String()),
+	// 	zap.String("pks", pks.String()),
+	// 	zap.String("candidates", s),
+	// )
 	return
 }
 
