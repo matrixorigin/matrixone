@@ -409,9 +409,10 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	pu := getPu(rm.service)
-	if pu != nil {
+	if pu != nil && pu.SV != nil {
+		tout := pu.SV.CleanKillQueueInterval
 		for toKillAccount, killRecord := range ar.killIdQueue {
-			if time.Since(killRecord.killTime) > time.Duration(pu.SV.CleanKillQueueInterval)*time.Minute {
+			if time.Since(killRecord.killTime) > time.Duration(tout)*time.Minute {
 				delete(ar.killIdQueue, toKillAccount)
 			}
 		}
@@ -507,30 +508,34 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		cancel:           cancel,
 		service:          service,
 	}
-	if getPu(rm.service).SV.EnableTls {
-		err := initTlsConfig(rm, getPu(rm.service).SV)
+	pu := getPu(rm.service)
+	sv := pu.SV
+	if sv != nil && sv.EnableTls {
+		err := initTlsConfig(rm, sv)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// add kill connect routine
-	go func() {
-		for {
-			select {
-			case <-rm.ctx.Done():
-				return
-			default:
+	tout := pu.SV.KillRountinesInterval
+	if tout != 0 {
+		go func() {
+			for {
+				select {
+				case <-rm.ctx.Done():
+					return
+				default:
+				}
+				rm.KillRoutineConnections()
+				if tout != 0 {
+					time.Sleep(time.Duration(tout) * time.Second)
+				} else {
+					break
+				}
 			}
-			rm.KillRoutineConnections()
-			pu := getPu(rm.service)
-			if pu != nil {
-				time.Sleep(time.Duration(pu.SV.KillRountinesInterval) * time.Second)
-			} else {
-				break
-			}
-		}
-	}()
+		}()
+	}
 
 	return rm, nil
 }
