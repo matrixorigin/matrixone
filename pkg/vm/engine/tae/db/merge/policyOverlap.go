@@ -15,13 +15,11 @@
 package merge
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
@@ -73,94 +71,25 @@ func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyCon
 		}
 
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
-		t := m.leveledObjects[i][0].SortKeyZoneMap().GetType()
-		var revisedResults []reviseResult
-		if t.FixedLength() > 0 {
-			objs := objectsWithMaximumOverlaps(m.leveledObjects[i])
-			if len(objs) > 4 {
-				revisedResults = []reviseResult{{objs: objs, kind: taskHostDN}}
-			}
-		} else {
-			objs, kind := m.reviseLeveledObjs(i)
-			revisedResults = []reviseResult{{objs: objs, kind: kind}}
+		result := reviseResult{objs: objectsWithMaximumOverlaps(m.leveledObjects[i]), kind: taskHostDN}
+		if len(result.objs) < 4 {
+			continue
 		}
-		for _, result := range revisedResults {
-			if len(result.objs) < 2 {
+
+		if result.kind == taskHostDN {
+			if rc.cpuPercent > 80 {
 				continue
 			}
 
-			if result.kind == taskHostDN {
-				if rc.cpuPercent > 80 {
-					continue
-				}
-
-				if rc.resourceAvailable(result.objs) {
-					rc.reserveResources(result.objs)
-				} else {
-					continue
-				}
+			if rc.resourceAvailable(result.objs) {
+				rc.reserveResources(result.objs)
+			} else {
+				continue
 			}
-			reviseResults = append(reviseResults, result)
 		}
+		reviseResults = append(reviseResults, result)
 	}
 	return reviseResults
-}
-
-func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, taskHostKind) {
-	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
-		zmA := a.SortKeyZoneMap()
-		zmB := b.SortKeyZoneMap()
-		if c := zmA.CompareMin(zmB); c != 0 {
-			return c
-		}
-		return zmA.CompareMax(zmB)
-	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
-	for _, obj := range m.leveledObjects[level] {
-		if len(set.entries) == 0 {
-			set.add(obj)
-			continue
-		}
-
-		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
-			// zm is overlapped
-			set.add(obj)
-			continue
-		}
-
-		// obj is not added in the set.
-		// either dismiss the set or add the set in m.overlappingObjsSet
-		if len(set.entries) > 1 {
-			m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
-		}
-
-		set.reset()
-		set.add(obj)
-	}
-	// there is still more than one entry in set.
-	if len(set.entries) > 1 {
-		m.overlappingObjsSet = append(m.overlappingObjsSet, set.cloneEntries())
-		set.reset()
-	}
-	if len(m.overlappingObjsSet) == 0 {
-		return nil, taskHostDN
-	}
-
-	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
-		return cmp.Compare(len(a), len(b))
-	})
-
-	// get the overlapping set with most objs.
-	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
-	if len(objs) < 2 {
-		return nil, taskHostDN
-	}
-
-	if len(objs) > levels[3] {
-		objs = objs[:levels[3]]
-	}
-
-	return objs, taskHostDN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
