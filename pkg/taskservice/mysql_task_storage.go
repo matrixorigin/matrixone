@@ -271,6 +271,9 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			if t.ExecuteResult != nil {
 				execResult.Code = t.ExecuteResult.Code
 				execResult.Error = t.ExecuteResult.Error
+				if len(execResult.Error) > 1000 {
+					execResult.Error = execResult.Error[:1000]
+				}
 			}
 
 			j, err := json.Marshal(t.Metadata.Options)
