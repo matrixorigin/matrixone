@@ -289,6 +289,11 @@ const (
 	JSON_QUOTE
 	JSON_UNQUOTE
 	JSON_ROW
+
+	JSON_SET
+	JSON_INSERT
+	JSON_REPLACE
+
 	JQ
 	TRY_JQ
 	WASM
@@ -601,6 +606,9 @@ var functionIdRegister = map[string]int32{
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
+	"josn_set":                       JSON_SET,
+	"json_insert":                    JSON_INSERT,
+	"json_replace":                   JSON_REPLACE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"wasm":                           WASM,
