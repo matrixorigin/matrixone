@@ -550,9 +550,13 @@ func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		switch filterType {
-		case EqualIndexCondition, NonEqualIndexCondition:
+		case EqualIndexCondition:
 			if col.ColPos == leadingPos {
 				return []int32{int32(i)}, true
+			}
+		case NonEqualIndexCondition:
+			if col.ColPos == leadingPos {
+				return []int32{int32(i)}, false
 			}
 		}
 		continue
