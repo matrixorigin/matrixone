@@ -472,6 +472,42 @@ func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
 	}
 }
 
+func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
+	var (
+		newBj = bj
+		err   error
+	)
+
+	if len(pathList) != len(valList) {
+		return Null, moerr.NewInvalidInputNoCtx("pathList and valList should have the same length")
+	}
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for i := 0; i < len(pathList); i++ {
+		path := pathList[i]
+		val := valList[i]
+
+		modifier := &bytejsonModifier{bj: bj}
+
+		switch modifyType {
+		case JsonModifySet:
+			newBj, err = modifier.set(path, val)
+			if err != nil {
+				return Null, err
+			}
+		case JsonModifyInsert:
+			// to do
+		case JsonModifyReplace:
+			// to do
+		default:
+			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
+		}
+	}
+	return newBj, nil
+}
+
 func (bj ByteJson) canUnnest() bool {
 	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
 }

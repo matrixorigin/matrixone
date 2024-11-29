@@ -817,6 +817,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_set`
+	{
+		functionId: JSON_SET,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonSet
+				},
+			},
+		},
+	},
+
 	// function `left`
 	{
 		functionId: LEFT,

@@ -161,6 +161,19 @@ var jsonTpOrder = map[string]int{
 	"NULL":             -7,
 }
 
+type JsonModifyType byte
+
+const (
+	// JsonModifyInsert is for insert a new element into a JSON.
+	// If an old elemList exists, it would NOT replace it.
+	JsonModifyInsert JsonModifyType = 0x01
+	// JsonModifyReplace is for replace an old elemList from a JSON.
+	// If no elemList exists, it would NOT insert it.
+	JsonModifyReplace JsonModifyType = 0x02
+	// JsonModifySet = JsonModifyInsert | JsonModifyReplace
+	JsonModifySet JsonModifyType = 0x03
+)
+
 func CompareByteJson(left, right ByteJson) int {
 	order1 := jsonTpOrder[left.TYPE()]
 	order2 := jsonTpOrder[right.TYPE()]
