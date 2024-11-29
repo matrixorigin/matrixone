@@ -244,7 +244,9 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 				FullText: &postdml.PostDmlFullTextCtx{},
 			},
 		},
-		&dedupjoin.DedupJoin{},
+		&dedupjoin.DedupJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
 	}
 	ctx := &scopeContext{
 		id:       1,
