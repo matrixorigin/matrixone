@@ -19,11 +19,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/robfig/cron/v3"
 )
 
 // genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.
@@ -63,7 +64,7 @@ func GenInitCronTaskSQL() (string, error) {
 	}
 	cronTasks = append(cronTasks, task1)
 
-	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), export.MergeTaskCronExprEvery05Min)
+	task2, err := createCronTask(mometric.TaskMetadata(mometric.StorageUsageCronTask, task.TaskCode_MetricStorageUsage), mometric.StorageUsageTaskCronExpr)
 	if err != nil {
 		return "", err
 	}
