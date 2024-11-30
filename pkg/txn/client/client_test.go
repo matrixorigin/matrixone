@@ -251,3 +251,27 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 
 	require.Error(t, c.openTxn(op))
 }
+
+func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient(
+		"",
+		newTestTxnSender(),
+		WithEnableSacrificingFreshness(),
+		WithTimestampWaiter(NewTimestampWaiter(rt.Logger())),
+	)
+	c.Resume()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := c.New(ctx, newTestTimestamp(10000))
+	assert.Error(t, err)
+	v := c.(*txnClient)
+	v.mu.Lock()
+	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+	v.mu.Unlock()
+}

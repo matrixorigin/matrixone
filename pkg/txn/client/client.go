@@ -338,11 +338,7 @@ func (client *txnClient) doCreateTxn(
 		cb(op)
 	}
 
-	ts, err := client.determineTxnSnapshot(minTS)
-	if err != nil {
-		_ = op.Rollback(ctx)
-		return nil, errors.Join(err, moerr.NewTxnError(ctx, "determine txn snapshot"))
-	}
+	ts := client.determineTxnSnapshot(minTS)
 	if !op.opts.skipWaitPushClient {
 		if err := op.UpdateSnapshot(ctx, ts); err != nil {
 			_ = op.Rollback(ctx)
@@ -442,7 +438,7 @@ func (client *txnClient) updateLastCommitTS(event TxnEvent) {
 // determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
 // returned will be ts+1. This is because we need to see the submitted data for ts, and the
 // timestamp for all things is ts+1.
-func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) timestamp.Timestamp {
 	start := time.Now()
 	defer func() {
 		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
@@ -459,7 +455,7 @@ func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) (timest
 		minTS = client.adjustTimestamp(minTS)
 	}
 
-	return minTS, nil
+	return minTS
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
