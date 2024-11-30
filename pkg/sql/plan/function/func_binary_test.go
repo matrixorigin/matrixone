@@ -2166,6 +2166,61 @@ func TestInstr(t *testing.T) {
 	}
 }
 
+// STRCMP
+func initStrcmpTestCase() []tcTemp {
+	cases := []struct {
+		s1    string
+		s2    string
+		wants int8
+	}{
+		{"", "", 0},
+		{"", "a", -1},
+		{"a", "", 1},
+		{"0", "0", 0},
+		{"0", "1", -1},
+		{"0", "-1", 1},
+		{"ab", "abc", -1},
+		{"abcd", "abc", 1},
+		{"abce", "abcd", 1},
+		{"abce", "abcda", 1},
+		{"我们", "我", 1},
+		{"我们", "wo", 1},
+		{"我们", "woo", 1},
+		{"我们", "我们", 0},
+		{"我 们", "我们", -1},
+		{"-ae", "我", -1},
+		{":=符号只允许在函数中使用，即只能在声明局部变量的时候使用，而var没有这个限制", "a b cd ", -1},
+		{"符号只允许在函数中使用，即只能在声明局部变量的时候使用，而var没有这个限制", "a b cd ", 1},
+		{"符号只允许在函数中使用，即只能在声明局部变量的时候使用，而var没有这个限制", "符号只允许在函数中使用，即只能在声明局部变量的时候使用，而var没有这个限制", 0},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		testInputs = append(testInputs, tcTemp{
+			info: "test strcmp ",
+			inputs: []FunctionTestInput{
+				// Create a input entry <str, str>
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{c.s1}, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{c.s2}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false, []int8{c.wants}, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestStrcmp(t *testing.T) {
+	testCases := initStrcmpTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Strcmp)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // Left
 func initLeftTestCase() []tcTemp {
 	cases := []struct {
