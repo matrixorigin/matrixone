@@ -392,3 +392,56 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	}
 	return nil
 }
+
+type opBuiltInJsonSet struct {
+	allConst bool
+	npath    int
+	pathStrs []string
+	paths    []*bytejson.Path
+	simple   bool
+}
+
+func newOpBuiltInJsonSet() *opBuiltInJsonSet {
+	return &opBuiltInJsonSet{}
+}
+
+// JSON_SET
+func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 2 {
+		ts := make([]types.Type, 0, len(inputs))
+		allMatch := true
+		for _, input := range inputs {
+			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
+				ts = append(ts, input)
+			} else {
+				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+					ts = append(ts, types.T_varchar.ToType())
+					allMatch = false
+				} else {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
+		}
+		if allMatch {
+			return newCheckResultWithSuccess(0)
+		}
+		return newCheckResultWithCast(0, ts)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+// func (op *opBuiltInJsonSet) bu
+
+// func (op *opBuiltInJsonSet) buildPath(params []*vector.Vector, length int) error {
+// 	op.npath = (len(params) - 1) / 2
+
+// 	if op.npath == 0 {
+// 		return nil
+// 	}
+// 	for i := 0; i < op.npath; i++ {
+// 		if !params[i*2+1].IsConst() {
+
+// 		op.paths = append(op.paths, p)
+// 	}
+// 	return nil
+// }
