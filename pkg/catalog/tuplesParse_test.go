@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,6 +139,8 @@ func TestParseError(t *testing.T) {
 }
 
 func TestShowReqs(t *testing.T) {
+	t.Log(common.MoBatchToString(nil, 10))
+	t.Log(common.MoBatchToString(&batch.Batch{Vecs: []*vector.Vector{nil}}, 10))
 	reqs := []any{
 		&CreateDatabaseReq{Cmds: []CreateDatabase{{DatabaseId: 10000, Name: "db0"}}},
 		&DropDatabaseReq{Cmds: []DropDatabase{{Id: 10000, Name: "db9"}}},

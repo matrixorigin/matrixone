@@ -285,6 +285,7 @@ func MoBatchToString(moBat *batch.Batch, printN int) string {
 	for i, vec := range moBat.Vecs {
 		if vec == nil {
 			fmt.Fprintf(buf, "[col%v] = nil\n", i)
+			continue
 		}
 		if n = vec.Length(); n < printN {
 			printN = n
