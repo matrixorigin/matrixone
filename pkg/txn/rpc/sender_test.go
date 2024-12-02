@@ -356,6 +356,7 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 }
 
 func TestSendWithRequestRetry(t *testing.T) {
+	ch := make(chan struct{})
 	var s morpc.RPCServer
 	go func() {
 		time.Sleep(time.Second)
@@ -372,9 +373,11 @@ func TestSendWithRequestRetry(t *testing.T) {
 				},
 			})
 		})
+		ch <- struct{}{}
 	}()
 
 	defer func() {
+		<-ch
 		if s != nil {
 			assert.NoError(t, s.Close())
 		}
@@ -450,12 +453,7 @@ func TestSendWithTxnUnknown(t *testing.T) {
 func newTestTxnServer(
 	t assert.TestingT,
 	addr string,
-	h func(
-	ctx context.Context,
-	request morpc.RPCMessage,
-	sequence uint64,
-	cs morpc.ClientSession,
-) error,
+	h func(ctx context.Context, request morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error,
 	opts ...morpc.CodecOption,
 ) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
