@@ -390,14 +390,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Es.Attrs,
 					Cols:            t.Es.Cols,
+					ColumnListLen:   t.Es.ColumnListLen,
 					Idx:             index,
-					Name2ColIndex:   t.Es.Name2ColIndex,
 					CreateSql:       t.Es.CreateSql,
 					FileList:        t.Es.FileList,
 					FileSize:        t.Es.FileSize,
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
-					TbColToDataCol:  t.Es.TbColToDataCol,
 					StrictSqlMode:   t.Es.StrictSqlMode,
 				},
 				ExParam: external.ExParam{
@@ -835,11 +834,14 @@ func constructProjection(n *plan.Node) *projection.Projection {
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
-	var attrs []string
+	var attrs []plan.ExternAttr
 
 	for _, col := range n.TableDef.Cols {
 		if !col.Hidden {
-			attrs = append(attrs, col.Name)
+			attr := plan.ExternAttr{ColName: col.Name,
+				ColIndex:      n.TableDef.Name2ColIndex[col.Name],
+				ColFieldIndex: n.ExternScan.TbColToDataCol[col.Name]}
+			attrs = append(attrs, attr)
 		}
 	}
 
@@ -848,9 +850,8 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
 				Cols:            n.TableDef.Cols,
+				ColumnListLen:   int32(len(n.ExternScan.TbColToDataCol)),
 				Extern:          param,
-				Name2ColIndex:   n.TableDef.Name2ColIndex,
-				TbColToDataCol:  n.ExternScan.TbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,
