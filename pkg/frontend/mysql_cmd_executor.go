@@ -447,12 +447,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			tblNames = append(tblNames, tableName)
 			tblIdxes = append(tblIdxes, i)
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
-			for j := 0; j < 16; j++ {
+			for i := 0; i < 16; i++ {
 				// only remain name and created_time
-				if j == 0 || j == 10 {
+				if i == 0 || i == 10 {
 					continue
 				}
-				row[j] = nil
+				row[i] = nil
 			}
 			// comment
 			row[16] = "VIEW"
