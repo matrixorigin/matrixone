@@ -40,19 +40,15 @@ type NodeT interface {
 		keys containers.Vector,
 		keysZM index.ZM,
 		txn txnif.TxnReader,
-		isCommitting bool,
 		mp *mpool.MPool,
 	) (err error)
 	GetDuplicatedRows(
 		ctx context.Context,
 		txn txnif.TxnReader,
-		maxVisibleRow uint32,
+		getRowOffset func() (min, max int32, err error),
 		keys containers.Vector,
 		keysZM index.ZM,
 		rowIDs containers.Vector,
-		isCommitting bool,
-		checkWWConflict bool,
-		skipCommittedBeforeTxnForAblk bool,
 		mp *mpool.MPool,
 	) (err error)
 
