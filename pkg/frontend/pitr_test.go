@@ -130,6 +130,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -169,6 +170,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -210,6 +212,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -253,6 +256,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -330,6 +334,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -411,6 +416,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -493,6 +499,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -574,6 +581,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -670,6 +678,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -767,6 +776,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -863,6 +873,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -960,6 +971,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1040,6 +1052,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1124,6 +1137,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1204,6 +1218,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1376,6 +1391,7 @@ func Test_doRestorePitr_Account(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1501,6 +1517,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1619,6 +1636,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1739,6 +1757,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1857,6 +1876,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1978,6 +1998,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2097,6 +2118,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2222,6 +2244,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2343,6 +2366,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2484,6 +2508,7 @@ func Test_doCreatePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2615,6 +2640,7 @@ func Test_RestorePitrBadTimeStamp(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2668,6 +2694,7 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2720,6 +2747,7 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2769,6 +2797,7 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2820,6 +2849,7 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2886,6 +2916,7 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")

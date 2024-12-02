@@ -81,6 +81,8 @@ const (
 	consumerBufferLength   = 8192
 	consumerWarningPercent = 0.9
 
+	defaultRPCReadTimeout = time.Minute * 2
+
 	logTag = "[logtail-consumer]"
 )
 
@@ -1383,6 +1385,7 @@ func DefaultNewRpcStreamToTnLogTailService(
 				goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
 			),
 			morpc.WithBackendLogger(logger),
+			morpc.WithBackendReadTimeout(defaultRPCReadTimeout),
 		)
 
 		c, err := morpc.NewClient(
