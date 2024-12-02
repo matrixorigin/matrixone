@@ -541,6 +541,23 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		if col != nil {
 			return NonEqualIndexCondition, col
 		}
+
+	case "or":
+		var col *plan.ColRef
+		for i := range fn.Args {
+			typ1, col1 := checkIndexFilter(fn.Args[i].GetF())
+			if typ1 != NonEqualIndexCondition {
+				return UnsupportedIndexCondition, nil
+			}
+			if col == nil {
+				col = col1
+			} else {
+				if col.RelPos != col1.RelPos || col.ColPos != col1.ColPos {
+					return UnsupportedIndexCondition, nil
+				}
+			}
+		}
+		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
 }
@@ -593,9 +610,16 @@ func (builder *QueryBuilder) replaceEqualCondition(filterList []*plan.Expr, filt
 	return expr
 }
 
-func (builder *QueryBuilder) replaceNonEqualCondition(filterList []*plan.Expr, leadingPos []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
-	expr := DeepCopyExpr(filterList[leadingPos[0]])
+func (builder *QueryBuilder) replaceNonEqualCondition(filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
+	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
+	if fn.Func.ObjName == "or" {
+		for i := range expr.GetF().Args {
+			expr.GetF().Args[i] = builder.replaceNonEqualCondition(expr.GetF().Args[i], idxTag, idxTableDef, numParts)
+		}
+		return expr
+	}
+
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
@@ -615,7 +639,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(filterList []*plan.Expr, l
 
 func (builder *QueryBuilder) replaceLeadingFilter(filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		return builder.replaceNonEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
+		return builder.replaceNonEqualCondition(filterList[leadingPos[0]], idxTag, idxTableDef, numParts)
 	}
 	return builder.replaceEqualCondition(filterList, leadingPos, idxTag, idxTableDef, numParts)
 }
@@ -755,7 +779,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
 	} else {
-		idxFilter = builder.replaceNonEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+		idxFilter = builder.replaceNonEqualCondition(node.FilterList[filterIdx[0]], idxTag, idxTableDef, numParts)
 	}
 
 	idxTableNode := &plan.Node{
