@@ -2150,13 +2150,15 @@ func (tbl *txnTable) MergeObjects(
 
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
 
-	// check object visibility
-	for _, objstat := range objStats {
+	// check object visibility and set object stats.
+	for i, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
+		objectio.SetObjectStats(&objstat, &info.ObjectStats)
+		objStats[i] = objstat
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()

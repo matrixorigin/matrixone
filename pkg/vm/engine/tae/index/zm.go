@@ -1243,7 +1243,7 @@ func ZMPlus(v1, v2, res ZM) ZM {
 }
 
 // max = v1.max-v2.min
-// min = v1.max-v2.min
+// min = v1.min-v2.max
 func ZMMinus(v1, v2, res ZM) ZM {
 	res.Reset()
 	if !v1.compareCheck(v2) {
