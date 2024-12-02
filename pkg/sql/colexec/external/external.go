@@ -1066,6 +1066,7 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return err
 	}
 	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
