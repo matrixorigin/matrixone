@@ -257,15 +257,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry3, defaultBasicConfig))
 	require.True(t, policy.onObject(entry4, defaultBasicConfig))
 	objs = policy.revise(rc, defaultBasicConfig)
-	for i, obj := range objs {
-		if i == 0 {
-			require.Equal(t, 2, len(obj.objs))
-			continue
-		}
-		require.Equal(t, 0, len(obj.objs))
-	}
-	require.Equal(t, taskHostDN, objs[0].kind)
-
+	require.Zero(t, len(objs))
 	policy.resetForTable(nil, nil)
 
 	// entry is not sorted
@@ -298,9 +290,7 @@ func TestObjOverlap(t *testing.T) {
 	require.True(t, policy.onObject(entry11, defaultBasicConfig))
 
 	objs = policy.revise(rc, defaultBasicConfig)
-	require.Equal(t, 6, len(objs))
-	require.Equal(t, 3, len(objs[0].objs))
-	require.Equal(t, taskHostDN, objs[0].kind)
+	require.Zero(t, len(objs))
 
 	policy.resetForTable(nil, nil)
 
@@ -457,4 +447,20 @@ func TestCheckTombstone(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestObjectsWithMaximumOverlaps(t *testing.T) {
+	o1 := newSortedTestObjectEntry(t, 0, 50, 0)
+	o2 := newSortedTestObjectEntry(t, 51, 100, 0)
+	require.Equal(t, 1, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2})))
+	o3 := newSortedTestObjectEntry(t, 49, 52, 0)
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o3})))
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o2, o3})))
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3})))
+
+	o4 := newSortedTestObjectEntry(t, 0, 52, 0)
+	require.Equal(t, 3, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o2, o3, o4})))
+
+	o5 := newSortedTestObjectEntry(t, 50, 51, 0)
+	require.Equal(t, 2, len(objectsWithMaximumOverlaps([]*catalog.ObjectEntry{o1, o5})))
 }
