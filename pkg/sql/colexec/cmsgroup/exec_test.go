@@ -150,7 +150,6 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 		}
 		g, src := getGroupOperatorWithInputs(datas)
 		g.NeedEval = true
-		g.PreAllocSize = 10
 		g.Exprs = nil
 		g.GroupingFlag = nil
 		g.Aggs = []aggexec.AggFuncExecExpression{
@@ -172,18 +171,18 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 			outCnt++
 			final = r.Batch
 			require.Equal(t, 1, outCnt)
-		}
 
-		// result check.
-		require.NotNil(t, final)
-		if final != nil {
-			require.Equal(t, 0, len(final.Aggs))
-			require.Equal(t, hackVecResult, final.Vecs[0])
+			// result check.
+			require.NotNil(t, final)
+			if final != nil {
+				require.Equal(t, 0, len(final.Aggs))
+				require.Equal(t, 1, len(final.Vecs))
+				require.Equal(t, hackVecResult, final.Vecs[0])
+			}
+			require.Equal(t, 1, exec.groupNumber)
+			require.Equal(t, 2, exec.doBulkFillRow)
+			require.Equal(t, 1, exec.doFlushTime)
 		}
-		require.Equal(t, 1, exec.groupNumber)
-		require.Equal(t, 10, exec.preAllocated)
-		require.Equal(t, 2, exec.doBulkFillRow)
-		require.Equal(t, 1, exec.doFlushTime)
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)

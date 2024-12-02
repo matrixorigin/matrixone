@@ -198,7 +198,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			}
 			limit := aggexec.SyncAggregatorsChunkSize(aggs)
 
-			group.ctr.result1.Init(limit, aggs, bat)
+			group.ctr.result1.InitOnlyAgg(limit, aggs)
 			for i := range group.ctr.result1.AggList {
 				if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
 					return err

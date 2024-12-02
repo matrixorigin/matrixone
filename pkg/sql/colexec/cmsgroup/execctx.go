@@ -115,6 +115,13 @@ func (buf *GroupResultBuffer) IsEmpty() bool {
 	return len(buf.ToPopped) == 0
 }
 
+func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
+	buf.ChunkSize = chunkSize
+	buf.AggList = aggList
+	buf.ToPopped = make([]*batch.Batch, 0, 1)
+	buf.ToPopped = append(buf.ToPopped, batch.NewOffHeapEmpty())
+}
+
 func (buf *GroupResultBuffer) Init(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
@@ -192,7 +199,7 @@ func (buf *GroupResultBuffer) PopResult(m *mpool.MPool) (*batch.Batch, error) {
 			}
 
 			for j := range vec {
-				buf.ToPopped[i].Vecs = append(buf.ToPopped[i].Vecs, vec[j])
+				buf.ToPopped[j].Vecs = append(buf.ToPopped[i].Vecs, vec[j])
 			}
 		}
 
