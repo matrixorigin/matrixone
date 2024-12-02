@@ -39,7 +39,7 @@ var (
 )
 
 func TestSendWithSingleRequest(t *testing.T) {
-	s := newTestTxnServer(t, testTN1Addr)
+	s := newTestTxnServer(t, testTN1Addr, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -80,7 +80,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 }
 
 func TestSendEnableCompressWithSingleRequest(t *testing.T) {
-	s := newTestTxnServer(t, testTN1Addr, morpc.WithCodecEnableCompress(malloc.GetDefault(nil)))
+	s := newTestTxnServer(t, testTN1Addr, nil, morpc.WithCodecEnableCompress(malloc.GetDefault(nil)))
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -123,7 +123,7 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 func TestSendWithMultiTN(t *testing.T) {
 	addrs := []string{testTN1Addr, testTN2Addr, testTN3Addr}
 	for _, addr := range addrs {
-		s := newTestTxnServer(t, addr)
+		s := newTestTxnServer(t, addr, nil)
 		defer func() {
 			assert.NoError(t, s.Close())
 		}()
@@ -186,7 +186,7 @@ func TestSendWithMultiTN(t *testing.T) {
 func TestSendWithMultiTNAndLocal(t *testing.T) {
 	addrs := []string{testTN1Addr, testTN2Addr, testTN3Addr}
 	for _, addr := range addrs[1:] {
-		s := newTestTxnServer(t, addr)
+		s := newTestTxnServer(t, addr, nil)
 		defer func() {
 			assert.NoError(t, s.Close())
 		}()
@@ -309,7 +309,7 @@ func BenchmarkLocalSend(b *testing.B) {
 
 func TestCanSendWithLargeRequest(t *testing.T) {
 	size := 1024 * 1024 * 20
-	s := newTestTxnServer(t, testTN1Addr, morpc.WithCodecMaxBodySize(size+1024))
+	s := newTestTxnServer(t, testTN1Addr, nil, morpc.WithCodecMaxBodySize(size+1024))
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -359,8 +359,7 @@ func TestSendWithRequestRetry(t *testing.T) {
 	var s morpc.RPCServer
 	go func() {
 		time.Sleep(time.Second)
-		s = newTestTxnServer(t, testTN1Addr)
-		s.RegisterRequestHandler(func(
+		s = newTestTxnServer(t, testTN1Addr, func(
 			ctx context.Context,
 			request morpc.RPCMessage,
 			sequence uint64,
@@ -410,7 +409,7 @@ func TestSendWithRequestRetry(t *testing.T) {
 }
 
 func TestSendWithTxnUnknown(t *testing.T) {
-	s := newTestTxnServer(t, testTN1Addr)
+	s := newTestTxnServer(t, testTN1Addr, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -448,7 +447,17 @@ func TestSendWithTxnUnknown(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption) morpc.RPCServer {
+func newTestTxnServer(
+	t assert.TestingT,
+	addr string,
+	h func(
+	ctx context.Context,
+	request morpc.RPCMessage,
+	sequence uint64,
+	cs morpc.ClientSession,
+) error,
+	opts ...morpc.CodecOption,
+) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
 	opts = append(opts,
 		morpc.WithCodecIntegrationHLC(newTestClock()),
@@ -457,7 +466,11 @@ func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption)
 		"",
 		func() morpc.Message { return &txn.TxnRequest{} },
 		opts...)
-	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
+	var serverOpts []morpc.ServerOption
+	if h != nil {
+		serverOpts = append(serverOpts, morpc.WithServerHandler(h))
+	}
+	s, err := morpc.NewRPCServer("test-txn-server", addr, codec, serverOpts...)
 	assert.NoError(t, err)
 	assert.NoError(t, s.Start())
 	return s
