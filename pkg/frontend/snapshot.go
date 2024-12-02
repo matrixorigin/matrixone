@@ -341,8 +341,10 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
+	bh.SetRestore(true)
 	defer func() {
 		stats = bh.GetExecStatsArray()
+		bh.SetRestore(false)
 		bh.Close()
 	}()
 
