@@ -720,10 +720,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
+	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
@@ -2170,7 +2170,7 @@ func (tbl *txnTable) MergeObjects(
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost, false)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err

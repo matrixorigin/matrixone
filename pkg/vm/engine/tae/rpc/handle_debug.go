@@ -569,7 +569,7 @@ func (h *Handle) HandleCommitMerge(
 		stat := objectio.ObjectStats(o)
 		ids = append(ids, *stat.ObjectName().ObjectId())
 	}
-	merge.ActiveCNObj.RemoveActiveCNObj(ids)
+	h.GetDB().MergeScheduler.RemoveCNActiveObjects(ids)
 	if req.Err != "" {
 		resp.ReturnStr = req.Err
 		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
