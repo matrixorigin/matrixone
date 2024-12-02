@@ -89,17 +89,6 @@ func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.
 	}
 }
 
-func newTestObjectEntryWithRowCnt(t *testing.T, size, rowCnt uint32, isTombstone bool) *catalog.ObjectEntry {
-	stats := objectio.NewObjectStats()
-	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rowCnt))
-
-	return &catalog.ObjectEntry{
-		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
-		ObjectNode:     catalog.ObjectNode{IsTombstone: isTombstone},
-	}
-}
-
 func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.ObjectEntry {
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
