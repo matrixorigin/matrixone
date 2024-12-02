@@ -3,6 +3,3 @@ USE test;
 CREATE TABLE t1 (retry INT);
 SELECT retry FROM t1;
 retry
-SELECT git_version();
-git_version()
-103e19f
