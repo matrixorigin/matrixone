@@ -4869,6 +4869,29 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `fault_inject`
+	{
+		functionId: FAULT_INJECT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FaultInject
+				},
+			},
+		},
+	},
+
 	// function `mo_ctl`
 	{
 		functionId: MO_CTL,

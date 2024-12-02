@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	EnableFault  = "enable_fault_injection"
-	DisableFault = "disable_fault_injection"
-	StatusFault  = "status_fault_point"
-	ListFault    = "list_fault_point"
-	AddFault     = "add_fault_point"
-	RemoveFault  = "remove_fault_point"
+	EnableFault  = "ENABLE_FAULT_INJECTION"
+	DisableFault = "DISABLE_FAULT_INJECTION"
+	StatusFault  = "STATUS_FAULT_POINT"
+	ListFault    = "LIST_FAULT_POINT"
+	AddFault     = "ADD_FAULT_POINT"
+	RemoveFault  = "REMOVE_FAULT_POINT"
 )
 
 func HandleFaultInject(

@@ -148,9 +148,9 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 }
 
 func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.FaultInjectionResponse = new(query.FaultInjectResponse)
-	resp.FaultInjectionResponse.Resp = fault.HandleFaultInject(
-		ctx, req.FaultInjectionRequest.Method, req.FaultInjectionRequest.Parameters,
+	resp.FaultInjectResponse = new(query.FaultInjectResponse)
+	resp.FaultInjectResponse.Resp = fault.HandleFaultInject(
+		ctx, req.FaultInjectRequest.Method, req.FaultInjectRequest.Parameters,
 	)
 	return nil
 }

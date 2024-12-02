@@ -1,28 +1,31 @@
 package fj
 
 import (
+	"strings"
+
+	"github.com/fagongzi/util/protoc"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/util/json"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type PodResponse struct {
-	PodID     string `json:"cn_id,omitempty"`
-	ReturnStr string `json:"return_str,omitempty"`
-	ErrorStr  string `json:"error_str,omitempty"`
+	PodType   serviceType `json:"pod_type,omitempty"`
+	PodID     string      `json:"pod_id,omitempty"`
+	ReturnStr string      `json:"return_str,omitempty"`
+	ErrorStr  string      `json:"error_str,omitempty"`
 
 	ReturnList []fault.Point `json:"return_list,omitempty"`
 }
@@ -35,7 +38,7 @@ func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	args2 := vector.GenerateFunctionStrParameter(ivecs[2])
 
 	if length != 1 {
-		return moerr.NewInvalidInput(proc.Ctx, "mo_ctl can only be called with const args")
+		return moerr.NewInvalidInput(proc.Ctx, "fault inject can only be called with const args")
 	}
 
 	arg0, _ := args0.GetStrValue(0)
@@ -43,28 +46,34 @@ func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	arg2, _ := args2.GetStrValue(0)
 
 	args := strings.Split(functionUtil.QuickBytesToStr(arg0), ".")
-	service, pods := serviceType(args[0]), args[1:]
+	service, pods := serviceType(strings.ToUpper(args[0])), args[1:]
+	if pods[0] == "" {
+		pods = []string{}
+	}
 	command := strings.ToUpper(functionUtil.QuickBytesToStr(arg1))
 	parameter := functionUtil.QuickBytesToStr(arg2)
+
+	if service != tn && service != cn && service != all {
+		return moerr.NewNotSupportedf(proc.Ctx, "service %s not supported", service)
+	}
 
 	var res []PodResponse
 
 	if service == tn || service == all {
-		res = append(res, FaultInjectTn(pods, command, parameter, proc)...)
+		res = append(res, TNFaultInject(pods, command, parameter, proc)...)
 	}
 
 	if service == cn || service == all {
-		res = append(res, FaultInjectCn(pods, command, parameter, proc)...)
+		res = append(res, CNFaultInject(pods, command, parameter, proc)...)
 	}
 
-	return nil
+	return rs.AppendBytes(json.Pretty(res), false)
 }
 
-func FaultInjectCn(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
+func CNFaultInject(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
 	var cnRes []PodResponse
 
 	if len(pods) == 0 {
-		pods = make([]string, 0)
 		clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 			pods = append(pods, cn.ServiceID)
 			return true
@@ -73,7 +82,8 @@ func FaultInjectCn(pods []string, command string, parameter string, proc *proces
 
 	for idx := range pods {
 		res := PodResponse{
-			PodID: pods[idx],
+			PodType: cn,
+			PodID:   pods[idx],
 		}
 		// the current cn also need to process this span cmd
 		if pods[idx] == proc.GetQueryClient().ServiceID() {
@@ -81,7 +91,7 @@ func FaultInjectCn(pods []string, command string, parameter string, proc *proces
 			res.ReturnStr = str
 		} else {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_FaultInject)
-			request.FaultInjectionRequest = &query.FaultInjectRequest{
+			request.FaultInjectRequest = &query.FaultInjectRequest{
 				Method:     command,
 				Parameters: parameter,
 			}
@@ -89,12 +99,8 @@ func FaultInjectCn(pods []string, command string, parameter string, proc *proces
 			resp, err := ctl.TransferRequest2OtherCNs(proc, pods[idx], request)
 			if err != nil {
 				res.ErrorStr = err.Error()
-			} else if command == fault.ListFault {
-				if err = jsoniter.Unmarshal([]byte(resp.FaultInjectionResponse.Resp), &res.ReturnList); err != nil {
-					res.ErrorStr = err.Error()
-				}
 			} else {
-				res.ReturnStr = resp.FaultInjectionResponse.Resp
+				unMarshalResp(command, []byte(resp.FaultInjectResponse.Resp), &res)
 			}
 		}
 		cnRes = append(cnRes, res)
@@ -103,9 +109,16 @@ func FaultInjectCn(pods []string, command string, parameter string, proc *proces
 	return cnRes
 }
 
-func FaultInjectTn(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
+func TNFaultInject(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
 	var tnRes []PodResponse
 	cluster := clusterservice.GetMOCluster(proc.GetService())
+
+	if len(pods) == 0 {
+		cluster.GetTNService(clusterservice.NewSelector(), func(store metadata.TNService) bool {
+			pods = append(pods, store.ServiceID)
+			return true
+		})
+	}
 
 	containsTN := func(id string) bool {
 		if len(pods) == 0 {
@@ -119,46 +132,78 @@ func FaultInjectTn(pods []string, command string, parameter string, proc *proces
 		return false
 	}
 
-	var requests []txn.CNOpRequest
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(store metadata.TNService) bool {
-			if !containsTN(store.ServiceID) {
-				return true
-			}
-			for _, shard := range store.Shards {
-				payLoad, e := types.Encode(&cmd_util.FaultInjectReq{
-					Method:    command,
-					Parameter: parameter,
-				})
-				if e != nil {
-					return false
+	unmarshaler := func(data []byte) any {
+		resp := api.TNStringResponse{}
+		protoc.MustUnmarshal(&resp, data)
+		return resp
+	}
+
+	excuteRequest := func(id string) PodResponse {
+		res := PodResponse{
+			PodType: tn,
+			PodID:   id,
+		}
+		var requests []txn.CNOpRequest
+		cluster.GetTNService(clusterservice.NewServiceIDSelector(id),
+			func(store metadata.TNService) bool {
+				if !containsTN(store.ServiceID) {
+					return true
 				}
-				requests = append(requests, txn.CNOpRequest{
-					OpCode: uint32(api.OpCode_OpFaultInject),
-					Target: metadata.TNShard{
-						TNShardRecord: metadata.TNShardRecord{
-							ShardID: shard.ShardID,
+				for _, shard := range store.Shards {
+					payLoad, e := types.Encode(&cmd_util.FaultInjectReq{
+						Method:    command,
+						Parameter: parameter,
+					})
+					if e != nil {
+						return false
+					}
+					requests = append(requests, txn.CNOpRequest{
+						OpCode: uint32(api.OpCode_OpFaultInject),
+						Target: metadata.TNShard{
+							TNShardRecord: metadata.TNShardRecord{
+								ShardID: shard.ShardID,
+							},
+							ReplicaID: shard.ReplicaID,
+							Address:   store.TxnServiceAddress,
 						},
-						ReplicaID: shard.ReplicaID,
-						Address:   store.TxnServiceAddress,
-					},
-					Payload: payLoad,
-				})
+						Payload: payLoad,
+					})
 
+				}
+				return true
+			})
+
+		if len(requests) > 0 {
+			responses, err := ctl.MoCtlTNCmdSender(proc.Ctx, proc, requests)
+			if err != nil {
+				res.ErrorStr = err.Error()
+				return res
 			}
-			return true
-		})
-
-	if len(requests) > 0 {
-		responses, err := ctl.MoCtlTNCmdSender(proc.Ctx, proc, requests)
-		if err != nil {
-			return nil
+			if len(responses) != len(requests) {
+				panic("requests and response not match")
+			}
+			for _, resp := range responses {
+				rs := unmarshaler(resp.Payload).(api.TNStringResponse)
+				unMarshalResp(command, []byte(rs.ReturnStr), &res)
+			}
 		}
-		if len(responses) != len(requests) {
-			panic("requests and response not match")
-		}
+		return res
+	}
 
+	for idx := range pods {
+		tnRes = append(tnRes, excuteRequest(pods[idx]))
 	}
 
 	return tnRes
+}
+
+func unMarshalResp(command string, payload []byte, res *PodResponse) {
+	switch command {
+	case fault.ListFault:
+		if err := jsoniter.Unmarshal(payload, &res.ReturnList); err != nil {
+			res.ErrorStr = string(payload)
+		}
+	default:
+		res.ReturnStr = string(payload)
+	}
 }
