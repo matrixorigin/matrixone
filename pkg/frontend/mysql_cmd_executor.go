@@ -394,17 +394,18 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
 		}()
 
-		sql := "select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from ("
+		sqlBuilder := strings.Builder{}
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (")
 		for i, tblName := range tblNames {
 			if i > 0 {
-				sql += " union all "
+				sqlBuilder.WriteString(" union all ")
 			}
-			sql += fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName)
+			sqlBuilder.WriteString(fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName))
 		}
-		sql += ") tmp"
+		sqlBuilder.WriteString(") tmp")
 
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
 			return
 		}
 
