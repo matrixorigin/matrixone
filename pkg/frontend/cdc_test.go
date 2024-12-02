@@ -2598,11 +2598,10 @@ func TestCdcTask_Resume(t *testing.T) {
 		sunkWatermarkUpdater *cdc2.WatermarkUpdater
 	}
 
-	stub1 := gostub.Stub(&Start,
+	gostub.Stub(&Start,
 		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
-	defer stub1.Reset()
 
 	tests := []struct {
 		name    string
@@ -2677,11 +2676,10 @@ func TestCdcTask_Restart(t *testing.T) {
 		db: db,
 	}
 
-	stub1 := gostub.Stub(&Start,
+	gostub.Stub(&Start,
 		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
-	defer stub1.Reset()
 
 	tests := []struct {
 		name    string
