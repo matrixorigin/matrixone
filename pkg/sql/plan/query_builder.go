@@ -2709,7 +2709,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
-				LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 			}
 			if tableDef.Partition != nil {
 				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)

@@ -33,6 +33,7 @@ prepare s from select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit
 set @a_var = 5;
 set @b_var = 30;
 execute s using @a_var,@b_var;
--- @separator:table
+-- @bvt:issue#4509
 explain select user from system.statement_info where request_at > date_sub(now(), interval 10 second) order by request_at desc limit 1;
+-- @bvt:issue
 drop database if exists d1;

@@ -38,9 +38,6 @@ func stageListPrepare(proc *process.Process, tableFunction *TableFunction) (tvfS
 	var err error
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
-	for i := range tableFunction.Attrs {
-		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
-	}
 	return &stagelistState{}, err
 }
 

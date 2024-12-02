@@ -15,13 +15,11 @@
 package merge
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ policy = (*objOverlapPolicy)(nil)
@@ -31,7 +29,7 @@ var levels = [6]int{
 }
 
 type objOverlapPolicy struct {
-	leveledObjects [6][]*catalog.ObjectEntry
+	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
 	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 	overlappingObjsSet [][]*catalog.ObjectEntry
@@ -48,9 +46,6 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 	if obj.IsTombstone {
 		return false
 	}
-	if obj.OriginSize() < config.ObjectMinOsize {
-		return false
-	}
 	if !obj.SortKeyZoneMap().IsInited() {
 		return false
 	}
@@ -63,92 +58,38 @@ func (m *objOverlapPolicy) onObject(obj *catalog.ObjectEntry, config *BasicPolic
 
 func (m *objOverlapPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
 	for _, objects := range m.segments {
-		segLevel := segLevel(len(objects))
+		l := segLevel(len(objects))
 		for obj := range objects {
-			m.leveledObjects[segLevel] = append(m.leveledObjects[segLevel], obj)
+			m.leveledObjects[l] = append(m.leveledObjects[l], obj)
 		}
 	}
 
-	reviseResults := make([]reviseResult, len(levels))
+	reviseResults := make([]reviseResult, 0, len(levels))
 	for i := range 4 {
 		if len(m.leveledObjects[i]) < 2 {
 			continue
 		}
 
-		if rc.cpuPercent > 80 {
+		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+		result := reviseResult{objs: objectsWithMaximumOverlaps(m.leveledObjects[i]), kind: taskHostDN}
+		if len(result.objs) < 4 {
 			continue
 		}
 
-		m.overlappingObjsSet = m.overlappingObjsSet[:0]
+		if result.kind == taskHostDN {
+			if rc.cpuPercent > 80 {
+				continue
+			}
 
-		objs, taskHostKind := m.reviseLeveledObjs(i)
-		if len(objs) > 1 && rc.resourceAvailable(objs) {
-			rc.reserveResources(objs)
-			reviseResults[i] = reviseResult{slices.Clone(objs), taskHostKind}
+			if rc.resourceAvailable(result.objs) {
+				rc.reserveResources(result.objs)
+			} else {
+				continue
+			}
 		}
+		reviseResults = append(reviseResults, result)
 	}
 	return reviseResults
-}
-
-func (m *objOverlapPolicy) reviseLeveledObjs(level int) ([]*catalog.ObjectEntry, taskHostKind) {
-	slices.SortFunc(m.leveledObjects[level], func(a, b *catalog.ObjectEntry) int {
-		zmA := a.SortKeyZoneMap()
-		zmB := b.SortKeyZoneMap()
-		if c := zmA.CompareMin(zmB); c != 0 {
-			return c
-		}
-		return zmA.CompareMax(zmB)
-	})
-	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: []byte{}}
-	for _, obj := range m.leveledObjects[level] {
-		if len(set.entries) == 0 {
-			set.add(obj)
-			continue
-		}
-
-		if zm := obj.SortKeyZoneMap(); index.StrictlyCompareZmMaxAndMin(set.maxValue, zm.GetMinBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) > 0 {
-			// zm is overlapped
-			set.add(obj)
-			continue
-		}
-
-		// obj is not added in the set.
-		// either dismiss the set or add the set in m.overlappingObjsSet
-		if len(set.entries) > 1 {
-			objs := make([]*catalog.ObjectEntry, len(set.entries))
-			copy(objs, set.entries)
-			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
-		}
-
-		set.reset()
-		set.add(obj)
-	}
-	// there is still more than one entry in set.
-	if len(set.entries) > 1 {
-		objs := make([]*catalog.ObjectEntry, len(set.entries))
-		copy(objs, set.entries)
-		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
-		set.reset()
-	}
-	if len(m.overlappingObjsSet) == 0 {
-		return nil, taskHostDN
-	}
-
-	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
-		return cmp.Compare(len(a), len(b))
-	})
-
-	// get the overlapping set with most objs.
-	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
-	if len(objs) < 2 {
-		return nil, taskHostDN
-	}
-
-	if level < 3 && len(objs) > levels[3] {
-		objs = objs[:levels[3]]
-	}
-
-	return objs, taskHostDN
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
@@ -157,27 +98,6 @@ func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig
 		m.leveledObjects[i] = m.leveledObjects[i][:0]
 	}
 	clear(m.segments)
-}
-
-type entrySet struct {
-	entries  []*catalog.ObjectEntry
-	maxValue []byte
-	size     int
-}
-
-func (s *entrySet) reset() {
-	s.entries = s.entries[:0]
-	s.maxValue = []byte{}
-	s.size = 0
-}
-
-func (s *entrySet) add(obj *catalog.ObjectEntry) {
-	s.entries = append(s.entries, obj)
-	s.size += int(obj.OriginSize())
-	if zm := obj.SortKeyZoneMap(); len(s.maxValue) == 0 ||
-		compute.Compare(s.maxValue, zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) < 0 {
-		s.maxValue = zm.GetMaxBuf()
-	}
 }
 
 func segLevel(length int) int {
@@ -189,4 +109,56 @@ func segLevel(length int) int {
 		}
 	}
 	return l
+}
+
+type endPoint struct {
+	val []byte
+	s   int
+
+	obj *catalog.ObjectEntry
+}
+
+func objectsWithMaximumOverlaps(objects []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	if len(objects) < 2 {
+		return nil
+	}
+	points := make([]endPoint, 0, 2*len(objects))
+	for _, obj := range objects {
+		zm := obj.SortKeyZoneMap()
+		points = append(points, endPoint{val: zm.GetMinBuf(), obj: obj, s: 1})
+		points = append(points, endPoint{val: zm.GetMaxBuf(), obj: obj, s: -1})
+	}
+	t := objects[0].SortKeyZoneMap().GetType()
+	slices.SortFunc(points, func(a, b endPoint) int {
+		c := compute.Compare(a.val, b.val, t,
+			a.obj.SortKeyZoneMap().GetScale(), b.obj.SortKeyZoneMap().GetScale())
+		if c != 0 {
+			return c
+		}
+		if a.s == 1 {
+			// left node is first
+			return -1
+		}
+		return 1
+	})
+
+	globalMax, tmpMax := 0, 0
+	res := make([]*catalog.ObjectEntry, 0, len(objects))
+	tmp := make(map[*catalog.ObjectEntry]struct{})
+	for _, p := range points {
+		if p.s == 1 {
+			tmp[p.obj] = struct{}{}
+		} else {
+			delete(tmp, p.obj)
+		}
+		tmpMax += p.s
+		if tmpMax > globalMax {
+			globalMax = tmpMax
+			res = res[:0]
+			for obj := range tmp {
+				res = append(res, obj)
+			}
+		}
+	}
+	return res
 }
