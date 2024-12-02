@@ -189,6 +189,70 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
+
+	// Aggregation and GroupBy clause.
+	{
+		before := proc.Mp().CurrNB()
+
+		exec := hackMakeAggToTest(1)
+		datas := []*batch.Batch{
+			getGroupTestBatch(proc.Mp(), [][2]int64{
+				{1, 1},
+				{1, 2},
+				{2, 3},
+			}),
+			batch.EmptyBatch,
+			getGroupTestBatch(proc.Mp(), [][2]int64{
+				{2, 4},
+				{3, 5},
+			}),
+			nil,
+		}
+
+		// select x, agg(y) group by x;
+		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = true
+		g.GroupingFlag = nil
+		g.PreAllocSize = 20
+		g.Exprs = []*plan.Expr{newColumnExpression(0)}
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
+		}
+
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		var final *batch.Batch
+		outCnt := 0
+		for {
+			r, err := g.Call(proc)
+			require.NoError(t, err)
+			if r.Batch == nil {
+				break
+			}
+
+			outCnt++
+			final = r.Batch
+			require.Equal(t, 1, outCnt)
+
+			// result check.
+			require.NotNil(t, final)
+			if final != nil {
+				require.Equal(t, 0, len(final.Aggs))
+				require.Equal(t, 2, len(final.Vecs))
+				require.Equal(t, hackVecResult, final.Vecs[1])
+			}
+			require.Equal(t, 20, exec.preAllocated)
+			require.Equal(t, 3, exec.groupNumber) // 1, 2, 3
+			require.Equal(t, 2, exec.doBatchFillRow)
+			require.Equal(t, 1, exec.doFlushTime)
+		}
+
+		g.Free(proc, false, nil)
+		src.Free(proc, false, nil)
+
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
 }
 
 func getGroupTestBatch(mp *mpool.MPool, values [][2]int64) *batch.Batch {

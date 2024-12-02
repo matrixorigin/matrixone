@@ -51,7 +51,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		}
 		hr.Hash = h
 
-		if hr.Itr != nil {
+		if hr.Itr == nil {
 			hr.Itr = h.NewIterator()
 		}
 		if preAllocated > 0 {
@@ -68,7 +68,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	}
 	hr.Hash = h
 
-	if hr.Itr != nil {
+	if hr.Itr == nil {
 		hr.Itr = h.NewIterator()
 	}
 	if preAllocated > 0 {
@@ -87,9 +87,12 @@ func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (ins
 	}
 
 	insertCount = hr.Hash.GroupCount() - before
+
+	last := before
 	for k, val := range vals {
-		if val > before {
+		if val > last {
 			hr.inserted[k] = 1
+			last++
 		} else {
 			hr.inserted[k] = 0
 		}
@@ -122,16 +125,24 @@ func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFu
 	buf.ToPopped = append(buf.ToPopped, batch.NewOffHeapEmpty())
 }
 
-func (buf *GroupResultBuffer) Init(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
+func (buf *GroupResultBuffer) InitWithGroupBy(chunkSize int, aggList []aggexec.AggFuncExec, groupByVec []*vector.Vector) {
 	buf.ChunkSize = chunkSize
 	buf.AggList = aggList
 	buf.ToPopped = make([]*batch.Batch, 0, 1)
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameType(vecExampleBatch))
+	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(groupByVec))
+}
+
+func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
+	buf.ChunkSize = chunkSize
+	buf.AggList = aggList
+	buf.ToPopped = make([]*batch.Batch, 0, 1)
+	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(vecExampleBatch.Vecs))
 }
 
 func (buf *GroupResultBuffer) AppendBatch(
 	mp *mpool.MPool,
-	bat *batch.Batch, offset int, insertList []uint8) (rowIncrease int, err error) {
+	vs []*vector.Vector,
+	offset int, insertList []uint8) (rowIncrease int, err error) {
 
 	spaceNonBatchExpand := buf.ChunkSize - buf.ToPopped[len(buf.ToPopped)-1].RowCount()
 	toIncrease, k := countNonZeroAndFindKth(insertList, spaceNonBatchExpand)
@@ -141,18 +152,18 @@ func (buf *GroupResultBuffer) AppendBatch(
 	}
 
 	if spaceNonBatchExpand > toIncrease {
-		if err = buf.unionToSpecificBatch(mp, len(buf.ToPopped)-1, bat, int64(offset), insertList, toIncrease); err != nil {
+		if err = buf.unionToSpecificBatch(mp, len(buf.ToPopped)-1, vs, int64(offset), insertList, toIncrease); err != nil {
 			return toIncrease, err
 		}
 		return toIncrease, nil
 	}
 
-	if err = buf.unionToSpecificBatch(mp, len(buf.ToPopped)-1, bat, int64(offset), insertList[:k+1], spaceNonBatchExpand); err != nil {
+	if err = buf.unionToSpecificBatch(mp, len(buf.ToPopped)-1, vs, int64(offset), insertList[:k+1], spaceNonBatchExpand); err != nil {
 		return toIncrease, err
 	}
 
-	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameType(bat))
-	_, err = buf.AppendBatch(mp, bat, offset+k+1, insertList[k+1:])
+	buf.ToPopped = append(buf.ToPopped, getInitialBatchWithSameTypeVecs(vs))
+	_, err = buf.AppendBatch(mp, vs, offset+k+1, insertList[k+1:])
 
 	return toIncrease, err
 }
@@ -163,9 +174,9 @@ func (buf *GroupResultBuffer) GetAggList() []aggexec.AggFuncExec {
 
 func (buf *GroupResultBuffer) unionToSpecificBatch(
 	mp *mpool.MPool,
-	idx int, bat *batch.Batch, offset int64, insertList []uint8, rowIncrease int) error {
+	idx int, vs []*vector.Vector, offset int64, insertList []uint8, rowIncrease int) error {
 	for i, vec := range buf.ToPopped[idx].Vecs {
-		if err := vec.UnionBatch(bat.Vecs[i], offset, len(insertList), insertList, mp); err != nil {
+		if err := vec.UnionBatch(vs[i], offset, len(insertList), insertList, mp); err != nil {
 			return err
 		}
 	}
@@ -298,10 +309,10 @@ func (r *GroupResultNoneBlock) Free0(m *mpool.MPool) {
 	}
 }
 
-func getInitialBatchWithSameType(src *batch.Batch) *batch.Batch {
-	b := batch.NewOffHeapWithSize(len(src.Vecs))
+func getInitialBatchWithSameTypeVecs(src []*vector.Vector) *batch.Batch {
+	b := batch.NewOffHeapWithSize(len(src))
 	for i := range b.Vecs {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+		b.Vecs[i] = vector.NewOffHeapVecWithType(*src[i].GetType())
 	}
 	b.SetRowCount(0)
 	return b
@@ -323,11 +334,13 @@ func countNonZeroAndFindKth(values []uint8, k int) (int, int) {
 		}
 	}
 
-	for i := kth + 1; i < len(values); i++ {
-		if values[i] == 0 {
-			continue
+	if kth != -1 {
+		for i := kth + 1; i < len(values); i++ {
+			if values[i] == 0 {
+				continue
+			}
+			count++
 		}
-		count++
 	}
 	return count, kth
 }

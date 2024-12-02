@@ -226,7 +226,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 				return err
 			}
 			limit := aggexec.SyncAggregatorsChunkSize(aggs)
-			group.ctr.result1.Init(limit, aggs, bat)
+			group.ctr.result1.InitWithGroupBy(limit, aggs, group.ctr.groupByEvaluate.Vec)
 			if err = preExtendAggExecs(aggs, group.PreAllocSize); err != nil {
 				return err
 			}
@@ -248,7 +248,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			}
 			insertList, _ := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
 
-			more, err = group.ctr.result1.AppendBatch(proc.Mp(), bat, i, insertList)
+			more, err = group.ctr.result1.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
 				return err
 			}

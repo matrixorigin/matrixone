@@ -51,7 +51,7 @@ func (r *GroupResult) consumeInputBatch(
 
 	// first time.
 	if r.GroupResultBuffer.IsEmpty() {
-		r.GroupResultBuffer.Init(aggexec.GetChunkSizeOfAggregator(bat.Aggs[0]), bat.Aggs, bat)
+		r.GroupResultBuffer.InitWithBatch(aggexec.GetChunkSizeOfAggregator(bat.Aggs[0]), bat.Aggs, bat)
 		bat.Aggs = nil
 	}
 
@@ -72,7 +72,7 @@ func (r *GroupResult) consumeInputBatch(
 		}
 		insertList, _ := r.GetBinaryInsertList(vals, rowCount)
 
-		more, err = r.AppendBatch(proc.Mp(), bat, i, insertList)
+		more, err = r.AppendBatch(proc.Mp(), bat.Vecs, i, insertList)
 		if err != nil {
 			return err
 		}
@@ -91,7 +91,7 @@ func (r *GroupResult) consumeInputBatchOnlyAgg(
 	}
 
 	if r.GroupResultBuffer.IsEmpty() {
-		r.GroupResultBuffer.Init(math.MaxInt32, bat.Aggs, bat)
+		r.GroupResultBuffer.InitWithBatch(math.MaxInt32, bat.Aggs, bat)
 		bat.Aggs = nil
 		r.GroupResultBuffer.ToPopped[0].SetRowCount(1)
 	}
