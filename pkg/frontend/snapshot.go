@@ -2445,7 +2445,3 @@ func getFkDepsWithDropped(ctx context.Context, bh BackgroundExec, from, to uint3
 	}
 	return
 }
-
-// func getLowerCaseTableValue(ctx context.Context, bh BackgroundExec, snapshotName string) (string, error) {
-// 	sql
-// }
