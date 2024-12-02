@@ -3545,7 +3545,7 @@ func lockRows(
 	return err
 }
 
-func maybeCreateAutoIncrement(
+var maybeCreateAutoIncrement = func(
 	ctx context.Context,
 	sid string,
 	db engine.Database,
