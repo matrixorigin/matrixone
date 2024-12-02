@@ -2051,7 +2051,3 @@ func checkDbIsSubDb(ctx context.Context, createDbsql string) (bool, error) {
 	}
 	return false, nil
 }
-
-// func getLowerCaseTableValue(ctx context.Context, bh BackgroundExec, snapshotName string) (string, error) {
-// 	sql
-// }

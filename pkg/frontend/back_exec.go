@@ -149,7 +149,25 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		back.statsArray.Add(tmpStatsArray)
 	}()
 
-	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
+	err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput) // statsInfo ,
+	if err != nil {
+		// if is restore and stmt is create view
+		if back.backSes.GetRestore() {
+			if _, ok := statements[0].(*tree.CreateView); ok {
+				// reset restore flag
+				// redo doComQueryInBack
+				back.backSes.SetRestoreFail(true)
+				defer func() {
+					back.backSes.SetRestoreFail(false)
+				}()
+				err = doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return err
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -169,7 +187,11 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	// For determine this is a background sql.
 	ctx = context.WithValue(ctx, defines.BgKey{}, true)
 	//logutil.Debugf("-->bh:%s", sql)
-	statements, err := mysql.Parse(ctx, sql, int64(0))
+	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		v = int64(1)
+	}
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -973,7 +995,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
-		if backSes.GetRestore() {
+		if backSes.GetRestore() && !backSes.GetRestoreFail() {
 			return int64(0), nil
 		}
 		return int64(1), nil
@@ -1090,6 +1112,14 @@ func (backSes *backSession) SetRestore(b bool) {
 
 func (backSes *backSession) GetRestore() bool {
 	return backSes.isRestore
+}
+
+func (backSes *backSession) SetRestoreFail(b bool) {
+	backSes.isRestoreFail = b
+}
+
+func (backSes *backSession) GetRestoreFail() bool {
+	return backSes.isRestoreFail
 }
 
 type SqlHelper struct {
