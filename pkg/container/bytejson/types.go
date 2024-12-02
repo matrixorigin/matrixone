@@ -73,6 +73,7 @@ const (
 	subPathKey
 	subPathRange
 )
+
 const (
 	pathFlagSingleStar pathFlag = iota + 1
 	pathFlagDoubleStar
@@ -137,7 +138,7 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeArray:
 		return "ARRAY"
 	case TpCodeLiteral:
-		return "NULL"
+		return "LITERAL"
 	case TpCodeInt64:
 		return "INTEGER"
 	case TpCodeUint64:
@@ -158,7 +159,7 @@ var jsonTpOrder = map[string]int{
 	"INTEGER":          -4,
 	"UNSIGNED INTEGER": -5,
 	"DOUBLE":           -6,
-	"NULL":             -7,
+	"LITERAL":          -7,
 }
 
 type JsonModifyType byte
@@ -180,7 +181,7 @@ func CompareByteJson(left, right ByteJson) int {
 
 	var cmp int
 	if order1 == order2 {
-		if order1 == jsonTpOrder["NULL"] {
+		if order1 == jsonTpOrder["LITERAL"] {
 			cmp = 0
 		}
 		switch left.Type {
