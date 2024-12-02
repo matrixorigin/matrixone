@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -39,9 +38,9 @@ type baseTable struct {
 	schema      *catalog.Schema
 	isTombstone bool
 
-	tableSpace          *tableSpace
-	dedupedAObjectHint  uint64
-	dedupedNAObjectHint uint64
+	tableSpace *tableSpace
+
+	lastInvisibleNOBJSortHint uint64
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
@@ -152,7 +151,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	}
 	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
-func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, dedupAfterSnapshotTS bool, checkWW bool) (rowIDs containers.Vector, err error) {
+func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, checkWW bool) (rowIDs containers.Vector, err error) {
 	it := newObjectItOnSnap(tbl.txnTable, tbl.isTombstone, true)
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	pkType := pks.GetType()
@@ -170,19 +169,8 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 		return
 	}
 	snapshotTS := tbl.txnTable.store.txn.GetSnapshotTS()
-	maxAObjectHint, maxNAObjectHint := uint64(0), uint64(0)
 	for it.Next() {
 		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objectHint := obj.SortHint
-		if obj.IsAppendable() {
-			if objectHint > maxAObjectHint {
-				maxAObjectHint = objectHint
-			}
-		} else {
-			if objectHint > maxNAObjectHint {
-				maxNAObjectHint = objectHint
-			}
-		}
 		if obj.DeletedAt.LT(&snapshotTS) && !obj.DeletedAt.IsEmpty() {
 			continue
 		}
@@ -191,13 +179,6 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 			continue
 		}
 
-		// if it is in the incremental deduplication scenario
-		// coarse check whether all rows in this block are committed before the snapshot timestamp
-		// if true, skip this block's deduplication
-		if dedupAfterSnapshotTS &&
-			objData.CoarseCheckAllRowsCommittedBefore(snapshotTS) {
-			continue
-		}
 		if obj.HasCommittedPersistedData() {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
@@ -211,9 +192,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			false,
-			checkWW,
-			dedupAfterSnapshotTS,
+			types.TS{}, types.MaxTs(),
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
@@ -221,11 +200,15 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector, de
 			return
 		}
 	}
-	tbl.updateDedupedObjectHintAndBlockID(maxAObjectHint, maxNAObjectHint)
 	return
 }
 
-func (tbl *baseTable) preCommitGetRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs containers.Vector, err error) {
+/*
+start-> now
+visible: now && nobj.c>start
+break: last invisible nobj && aobj.c < start
+*/
+func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
 	objIt := tbl.txnTable.entry.MakeObjectIt(tbl.isTombstone)
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	vector.AppendMultiFixed[types.Rowid](
@@ -235,9 +218,6 @@ func (tbl *baseTable) preCommitGetRowsByPK(ctx context.Context, pks containers.V
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-	dedupedAHint := tbl.dedupedAObjectHint
-	dedupedNAHint := tbl.dedupedNAObjectHint
-
 	var aobjDeduped, naobjDeduped bool
 	defer objIt.Release()
 	for ok := objIt.Last(); ok; ok = objIt.Prev() {
@@ -245,29 +225,61 @@ func (tbl *baseTable) preCommitGetRowsByPK(ctx context.Context, pks containers.V
 			break
 		}
 		obj := objIt.Item()
+		if !inQueue {
+			if tbl.lastInvisibleNOBJSortHint == 0 {
+				tbl.lastInvisibleNOBJSortHint = obj.SortHint
+			}
+		} else {
+			if obj.SortHint <= tbl.lastInvisibleNOBJSortHint {
+				naobjDeduped = true
+			}
+
+		}
 		if obj.IsAppendable() {
-			if obj.SortHint < dedupedAHint {
-				aobjDeduped = true
+			if aobjDeduped {
 				continue
 			}
 		} else {
-			if obj.SortHint <= dedupedNAHint {
+			if naobjDeduped {
+				continue
+			}
+			if !inQueue && obj.DeleteBefore(from) {
 				naobjDeduped = true
 				continue
 			}
 		}
-		shouldSkip := obj.HasDropCommitted() || obj.IsCreatingOrAborted()
-		if shouldSkip {
+
+		needWait, txn := obj.CreateNode.NeedWaitCommitting(to)
+		if needWait {
+			txn.GetTxnState(true)
+		}
+		needWait2, txn := obj.DeleteNode.NeedWaitCommitting(to)
+		if needWait2 {
+			txn.GetTxnState(true)
+		}
+		if needWait || needWait2 {
+			obj = obj.GetLatestNode()
+		}
+		if obj.IsAppendable() && obj.CreatedAt.LT(&from) {
+			aobjDeduped = true
+		}
+		visible := obj.VisibleByTS(to)
+		if !visible {
+			if !inQueue && !obj.IsAppendable() && obj.IsCreating() {
+				tbl.lastInvisibleNOBJSortHint = obj.SortHint
+			}
 			continue
 		}
-		err = obj.GetObjectData().GetDuplicatedRows(
+		if !obj.IsAppendable() && obj.CreatedAt.LT(&from) {
+			continue
+		}
+		objData := obj.GetObjectData()
+		err = objData.GetDuplicatedRows(
 			ctx,
 			tbl.txnTable.store.txn,
 			pks,
 			nil,
-			true,
-			true,
-			false,
+			from, to,
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
@@ -276,25 +288,6 @@ func (tbl *baseTable) preCommitGetRowsByPK(ctx context.Context, pks containers.V
 		}
 	}
 	return
-}
-
-func (tbl *baseTable) updateDedupedObjectHintAndBlockID(ahint, ohint uint64) {
-	if tbl.dedupedAObjectHint == 0 {
-		tbl.dedupedAObjectHint = ahint
-	} else {
-		if tbl.dedupedAObjectHint > ahint {
-			logutil.Warnf("table %v, current aobj hint %d, incoming hint %d", tbl.txnTable.getSchema(false).Name, tbl.dedupedAObjectHint, ahint)
-			tbl.dedupedAObjectHint = ahint
-		}
-	}
-	if tbl.dedupedNAObjectHint == 0 {
-		tbl.dedupedNAObjectHint = ohint
-	} else {
-		if tbl.dedupedNAObjectHint > ohint {
-			logutil.Warnf("table %v, current aobj hint %d, incoming hint %d", tbl.txnTable.getSchema(false).Name, tbl.dedupedNAObjectHint, ohint)
-			tbl.dedupedNAObjectHint = ohint
-		}
-	}
 }
 
 func (tbl *baseTable) CleanUp() {
