@@ -130,7 +130,8 @@ func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batc
 // container
 // running context.
 type container struct {
-	state vm.CtrState
+	state             vm.CtrState
+	dataSourceIsEmpty bool
 
 	// hash.
 	hr          ResHashRelated
@@ -152,6 +153,10 @@ type container struct {
 	// `select agg(x) from data_source` and data_source is empty.
 	// we should return 0 for count, and return NULL for the others.
 	alreadyOutputAnything bool
+}
+
+func (ctr *container) isDataSourceEmpty() bool {
+	return ctr.dataSourceIsEmpty
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {

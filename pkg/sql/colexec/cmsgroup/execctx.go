@@ -254,6 +254,20 @@ type GroupResultNoneBlock struct {
 	res *batch.Batch
 }
 
+func (r *GroupResultNoneBlock) resetLastPopped() {
+	if r.res == nil {
+		return
+	}
+	for _, ag := range r.res.Aggs {
+		if ag != nil {
+			ag.Free()
+		}
+	}
+	for i := range r.res.Vecs {
+		r.res.Vecs[i].CleanOnlyData()
+	}
+}
+
 func (r *GroupResultNoneBlock) getResultBatch(
 	proc *process.Process,
 	gEval *ExprEvalVector,
@@ -268,15 +282,6 @@ func (r *GroupResultNoneBlock) getResultBatch(
 		}
 		r.res.Aggs = make([]aggexec.AggFuncExec, len(aExpressions))
 	} else {
-		for _, ag := range r.res.Vecs {
-			if ag != nil {
-				ag.Free(proc.Mp())
-			}
-		}
-		for i := range r.res.Vecs {
-			r.res.Vecs[i].CleanOnlyData()
-		}
-
 		if cap(r.res.Aggs) >= len(aExpressions) {
 			r.res.Aggs = r.res.Aggs[:len(aExpressions)]
 			for i := range r.res.Aggs {
@@ -289,7 +294,7 @@ func (r *GroupResultNoneBlock) getResultBatch(
 
 	// set agg.
 	for i := range r.res.Aggs {
-		r.res.Aggs[i] = aggexec.MakeAgg(
+		r.res.Aggs[i] = makeAggExec(
 			proc, aExpressions[i].GetAggID(), aExpressions[i].IsDistinct(), aEval[i].Typ...)
 
 		if config := aExpressions[i].GetExtraConfig(); config != nil {

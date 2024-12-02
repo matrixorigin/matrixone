@@ -27,6 +27,7 @@ var makeAggExec = aggexec.MakeAgg
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
+	group.ctr.dataSourceIsEmpty = true
 	group.prepareAnalyzer()
 	if err = group.prepareAgg(proc); err != nil {
 		return err
@@ -175,6 +176,8 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		if res.IsEmpty() {
 			continue
 		}
+
+		group.ctr.dataSourceIsEmpty = false
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
 		}
@@ -312,6 +315,7 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 // we do not engage in any waiting actions at this operator,
 // once a batch is received, a batch with the corresponding intermediate result will be returned.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
+	group.ctr.result2.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
@@ -323,11 +327,28 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		}
 		if res == nil {
 			group.ctr.state = vm.End
+
+			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
+				r, er := group.ctr.result2.getResultBatch(
+					proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
+				if er != nil {
+					return nil, er
+				}
+				for i := range r.Aggs {
+					if err = r.Aggs[i].GroupGrow(1); err != nil {
+						return nil, err
+					}
+				}
+				r.SetRowCount(1)
+				return r, nil
+			}
+
 			return nil, nil
 		}
 		if res.IsEmpty() {
 			continue
 		}
+		group.ctr.dataSourceIsEmpty = false
 		return group.consumeBatchToGetIntermediateResult(proc, res)
 	}
 }
