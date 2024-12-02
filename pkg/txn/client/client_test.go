@@ -232,8 +232,14 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			defer cancel()
 			_, err = tc.New(ctx2, newTestTimestamp(0), WithUserTxn())
 			require.Error(t, err)
+
+			v := tc.(*txnClient)
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			require.Equal(t, 0, len(v.mu.waitActiveTxns))
 		},
-		WithMaxActiveTxn(1))
+		WithMaxActiveTxn(1),
+	)
 }
 
 func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {

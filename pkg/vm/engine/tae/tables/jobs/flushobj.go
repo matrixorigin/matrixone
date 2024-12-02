@@ -19,23 +19,22 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
 
 type flushObjTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
-	delta     *containers.Batch
 	meta      *catalog.ObjectEntry
 	fs        *objectio.ObjectFS
 	name      objectio.ObjectName
@@ -43,7 +42,6 @@ type flushObjTask struct {
 	schemaVer uint32
 	seqnums   []uint16
 	stat      objectio.ObjectStats
-	isAObj    bool
 
 	createAt    time.Time
 	partentTask string
@@ -58,12 +56,9 @@ func NewFlushObjTask(
 	fs *objectio.ObjectFS,
 	meta *catalog.ObjectEntry,
 	data *containers.Batch,
-	delta *containers.Batch,
-	isAObj bool,
 	parentTask string,
 ) *flushObjTask {
-
-	if isAObj && meta.IsTombstone {
+	if meta.IsTombstone {
 		// [data rowId, pk, tombstone rowId, commitTS]
 		// remove the `tombstone rowId`
 		seqnums = append(seqnums[:2], seqnums[3:]...)
@@ -80,8 +75,6 @@ func NewFlushObjTask(
 		data:        data,
 		meta:        meta,
 		fs:          fs,
-		delta:       delta,
-		isAObj:      isAObj,
 		createAt:    time.Now(),
 		partentTask: parentTask,
 	}
@@ -109,9 +102,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if task.isAObj {
-		writer.SetAppendable()
-	}
+	writer.SetAppendable()
 
 	if task.meta.IsTombstone {
 		writer.SetPrimaryKeyWithType(
@@ -140,19 +131,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if task.delta != nil {
-		cnBatch := containers.ToCNBatch(task.delta)
-		for _, vec := range cnBatch.Vecs {
-			if vec == nil {
-				// this task has been canceled
-				return nil
-			}
-		}
-		_, err := writer.WriteBatch(cnBatch)
-		if err != nil {
-			return err
-		}
-	}
 	copyT := time.Since(inst)
 	inst = time.Now()
 	task.blocks, _, err = writer.Sync(ctx)
@@ -161,10 +139,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	}
 	ioT := time.Since(inst)
 	if time.Since(task.createAt) > SlowFlushIOTask {
-		irow, drow := task.data.Length(), 0
-		if task.delta != nil {
-			drow = task.delta.Length()
-		}
 		logutil.Info(
 			"[FLUSH-SLOW-OBJ]",
 			zap.String("task", task.partentTask),
@@ -172,8 +146,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait", waitT),
 			common.AnyField("copy", copyT),
 			common.AnyField("io", ioT),
-			common.AnyField("data-rows", irow),
-			common.AnyField("delete-rows", drow),
+			common.AnyField("data-rows", task.data.Length()),
 		)
 	}
 	task.Stats = writer.GetObjectStats()
@@ -183,4 +156,21 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	})
 	task.stat = writer.Stats()
 	return err
+}
+
+func (task *flushObjTask) release() {
+	if task == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		10*time.Second,
+		moerr.CauseReleaseFlushObjTasks,
+	)
+	defer cancel()
+	task.WaitDone(ctx)
+
+	if task.data != nil {
+		task.data.Close()
+	}
 }
