@@ -16,7 +16,11 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
+	"io"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,16 +173,45 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		}
 	}
 
-	start := time.Now()
-	f, err := s.client.Send(ctx, tn.Address, &request)
-	if err != nil {
-		return txn.TxnResponse{}, err
+	var f *morpc.Future
+	reqFn := func() error {
+		var err error
+		start := time.Now()
+		f, err = s.client.Send(ctx, tn.Address, &request)
+		if err != nil {
+			return err
+		}
+		v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
+		return nil
 	}
-	v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
-	defer f.Close()
 
+	for {
+		err := reqFn()
+		if err != nil {
+			// These errors are retriable error.
+			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+				time.Sleep(time.Millisecond * 300)
+				continue
+			}
+			return txn.TxnResponse{}, err
+		}
+		break
+	}
+
+	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
+		// if the error is io.EOF, means the connection to TN node is ended,
+		// but no response is returned from TN txn service.
+		if errors.Is(err, io.EOF) ||
+			strings.Contains(err.Error(), "connection reset by peer") {
+			return txn.TxnResponse{},
+				moerr.NewTxnUnknown(
+					ctx,
+					hex.EncodeToString(request.Txn.ID),
+				)
+		}
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
