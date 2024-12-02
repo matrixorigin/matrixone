@@ -972,7 +972,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
-		return int64(1), nil
+		return int64(0), nil
 	}
 	return nil, nil
 }
