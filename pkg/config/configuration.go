@@ -930,13 +930,13 @@ func (c *OBCUConfig) SetDefaultValues() {
 	if c.IoDeletePrice < 0 {
 		c.IoDeletePrice = c.IoInPrice
 	}
-	if c.TrafficPrice0 <= 0 {
+	if c.TrafficPrice0 < 0 {
 		c.TrafficPrice0 = CUTrafficPrice0Default
 	}
-	if c.TrafficPrice1 <= 0 {
+	if c.TrafficPrice1 < 0 {
 		c.TrafficPrice1 = CUTrafficPrice1Default
 	}
-	if c.TrafficPrice2 <= 0 {
+	if c.TrafficPrice2 < 0 {
 		c.TrafficPrice2 = CUTrafficPrice2Default
 	}
 }
