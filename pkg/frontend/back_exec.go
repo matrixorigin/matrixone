@@ -103,6 +103,13 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		v = int64(1)
 	}
+
+	var isRestore bool
+	if strings.Contains(strings.ToLower(sql), "mo_ts =") || strings.Contains(strings.ToLower(sql), "snapshot = ") {
+		isRestore = true
+		v = int64(0)
+	}
+
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
@@ -123,13 +130,6 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 			case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 				return moerr.NewInternalErrorf(ctx, "Exec() can not run transaction statement in share transaction, sql = %s", sql)
 			}
-		}
-	}
-
-	var isRestore bool
-	if _, ok := statements[0].(*tree.Insert); ok {
-		if strings.Contains(sql, "MO_TS =") {
-			isRestore = true
 		}
 	}
 
@@ -972,7 +972,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
-		return int64(0), nil
+		return int64(1), nil
 	}
 	return nil, nil
 }
