@@ -602,6 +602,7 @@ func TestCheckPasswordExpired(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -673,6 +674,7 @@ func Test_CheckLockTimeExpired(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -717,6 +719,7 @@ func Test_OperatorLock(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")

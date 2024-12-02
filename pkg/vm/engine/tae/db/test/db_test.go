@@ -6682,7 +6682,6 @@ func TestSnapshotGC(t *testing.T) {
 	}
 	snapWG.Wait()
 	wg.Wait()
-	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -6691,6 +6690,7 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	db.DiskCleaner.GetCleaner().EnableGC()
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil

@@ -237,6 +237,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 			}
 			analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 			analyzer.AddS3RequestCount(crs)
+			analyzer.AddFileServiceCacheInfo(crs)
 			analyzer.AddDiskIO(crs)
 		}
 	} else {
@@ -261,6 +262,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 		analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 	}
 
@@ -281,6 +283,7 @@ func writeBatch(proc *process.Process, writer *colexec.S3Writer, bat *batch.Batc
 			return err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		err = writer.FillBlockInfoBat(blockInfos, stats, proc.GetMPool())
@@ -300,6 +303,7 @@ func flushTailBatch(proc *process.Process, writer *colexec.S3Writer, result *vm.
 		return err
 	}
 	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
 	// if stats is not zero, then the blockInfos must not be nil
