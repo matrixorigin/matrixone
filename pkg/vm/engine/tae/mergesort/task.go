@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/go-units"
@@ -204,16 +205,18 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 }
 
 func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
-	fromObjsDesc := ""
+	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
 	for _, o := range mergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
+		fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
 			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
-			obj.Rows())
+			obj.Rows(),
+			obj.SortKeyZoneMap().GetMin(),
+			obj.SortKeyZoneMap().GetMax()))
 		fromSize += float64(obj.OriginSize())
 		estSize += float64(obj.Rows() * 20)
 		rows += int(obj.Rows())
@@ -226,7 +229,7 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 		common.AnyField("txn-info", txnInfo),
 		common.AnyField("host", host),
 		common.AnyField("timestamp", startTS),
-		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-objs", fromObjsDescBuilder.String()),
 		zap.String("from-size", units.BytesSize(fromSize)),
 		zap.String("est-size", units.BytesSize(estSize)),
 		zap.Int("num-obj", len(mergedObjs)),
