@@ -444,12 +444,31 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 			delete(db.tables, table.GetID())
 		}
 	}
+	nowTS := db.store.rt.Now()
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(
-			ctx, txnif.FreezePhase, table.store.rt.Now(),
+			ctx, txnif.FreezePhase, nowTS,
 		); err != nil {
 			return
 		}
+	}
+
+	dedupType := db.store.txn.GetDedupType()
+	if dedupType.SkipTargetOldCommitted() {
+		now := time.Now()
+		for _, table := range db.tables {
+			if err = table.PrePrepareDedup(
+				ctx, false, txnif.FreezePhase, nowTS,
+			); err != nil {
+				return
+			}
+			if err = table.PrePrepareDedup(
+				ctx, true, txnif.FreezePhase, nowTS,
+			); err != nil {
+				return
+			}
+		}
+		v2.TxnTNAppendDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
 	}
 	return
 }
@@ -474,11 +493,12 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	}
 
 	now := time.Now()
+	nowTS := db.store.rt.Now()
 	for _, table := range db.tables {
-		if err = table.PrePrepareDedup(ctx, true); err != nil {
+		if err = table.PrePrepareDedup(ctx, true, txnif.PrePreparePhase, nowTS); err != nil {
 			return
 		}
-		if err = table.PrePrepareDedup(ctx, false); err != nil {
+		if err = table.PrePrepareDedup(ctx, false, txnif.PrePreparePhase, nowTS); err != nil {
 			return
 		}
 	}
