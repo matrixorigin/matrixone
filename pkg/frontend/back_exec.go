@@ -168,11 +168,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	// For determine this is a background sql.
 	ctx = context.WithValue(ctx, defines.BgKey{}, true)
 	//logutil.Debugf("-->bh:%s", sql)
-	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
-	if err != nil {
-		v = int64(1)
-	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	statements, err := mysql.Parse(ctx, sql, int64(0))
 	if err != nil {
 		return err
 	}
