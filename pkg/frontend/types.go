@@ -689,7 +689,7 @@ type feSessionImpl struct {
 	//that the internal or background program executes
 	fromRealUser bool
 
-	//
+	//isRestore denotes the session is used to restore the snapshot
 	isRestore bool
 }
 
