@@ -242,3 +242,82 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 		})
 	}
 }
+
+func TestOBCUConfig_SetDefaultValues(t *testing.T) {
+	type fields struct {
+		CUUnit        float64
+		CpuPrice      float64
+		MemPrice      float64
+		IoInPrice     float64
+		IoOutPrice    float64
+		IoListPrice   float64
+		IoDeletePrice float64
+		TrafficPrice0 float64
+		TrafficPrice1 float64
+		TrafficPrice2 float64
+	}
+	tests := []struct {
+		name              string
+		fields            fields
+		wantTrafficPrice0 float64
+		wantTrafficPrice1 float64
+		wantTrafficPrice2 float64
+	}{
+		{
+			name: "TrafficPrice_set_0",
+			fields: fields{
+				CUUnit:        1.1,
+				CpuPrice:      1.2,
+				MemPrice:      1.3,
+				IoInPrice:     1.4,
+				IoOutPrice:    1.5,
+				IoListPrice:   1.6,
+				IoDeletePrice: 1.7,
+				TrafficPrice0: 0,
+				TrafficPrice1: 0,
+				TrafficPrice2: 0,
+			},
+			wantTrafficPrice0: 0,
+			wantTrafficPrice1: 0,
+			wantTrafficPrice2: 0,
+		},
+		{
+			name: "TrafficPrice_set_-1",
+			fields: fields{
+				CUUnit:        1.1,
+				CpuPrice:      1.2,
+				MemPrice:      1.3,
+				IoInPrice:     1.4,
+				IoOutPrice:    1.5,
+				IoListPrice:   1.6,
+				IoDeletePrice: 1.7,
+				TrafficPrice0: -1,
+				TrafficPrice1: -1,
+				TrafficPrice2: -1,
+			},
+			wantTrafficPrice0: CUTrafficPrice0Default,
+			wantTrafficPrice1: CUTrafficPrice0Default,
+			wantTrafficPrice2: CUTrafficPrice0Default,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &OBCUConfig{
+				CUUnit:        tt.fields.CUUnit,
+				CpuPrice:      tt.fields.CpuPrice,
+				MemPrice:      tt.fields.MemPrice,
+				IoInPrice:     tt.fields.IoInPrice,
+				IoOutPrice:    tt.fields.IoOutPrice,
+				IoListPrice:   tt.fields.IoListPrice,
+				IoDeletePrice: tt.fields.IoDeletePrice,
+				TrafficPrice0: tt.fields.TrafficPrice0,
+				TrafficPrice1: tt.fields.TrafficPrice1,
+				TrafficPrice2: tt.fields.TrafficPrice2,
+			}
+			c.SetDefaultValues()
+			require.Equal(t, tt.wantTrafficPrice0, c.TrafficPrice0)
+			require.Equal(t, tt.wantTrafficPrice1, c.TrafficPrice1)
+			require.Equal(t, tt.wantTrafficPrice2, c.TrafficPrice2)
+		})
+	}
+}
