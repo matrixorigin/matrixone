@@ -104,10 +104,6 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		v = int64(1)
 	}
 
-	if strings.Contains(strings.ToLower(sql), "mo_ts =") || strings.Contains(strings.ToLower(sql), "snapshot = ") {
-		v = int64(0)
-	}
-
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
@@ -229,6 +225,10 @@ func (back *backExec) GetExecResultSet() []interface{} {
 		ret[i] = mr
 	}
 	return ret
+}
+
+func (back *backExec) SetRestore(b bool) {
+	back.backSes.SetRestore(b)
 }
 
 func (back *backExec) ClearExecResultSet() {
@@ -973,6 +973,9 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
+		if backSes.GetRestore() {
+			return int64(0), nil
+		}
 		return int64(1), nil
 	}
 	return nil, nil
@@ -1079,6 +1082,14 @@ func (backSes *backSession) Fatalf(ctx context.Context, msg string, args ...any)
 
 func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any) {
 	backSes.logf(ctx, zap.DebugLevel, msg, args...)
+}
+
+func (backSes *backSession) SetRestore(b bool) {
+	backSes.isRestore = b
+}
+
+func (backSes *backSession) GetRestore() bool {
+	return backSes.isRestore
 }
 
 type SqlHelper struct {
