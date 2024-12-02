@@ -910,20 +910,20 @@ func (c *OBCUConfig) SetDefaultValues() {
 	if c.CUUnit <= 0 {
 		c.CUUnit = CUUnitDefault
 	}
-	if c.CpuPrice <= 0 {
+	if c.CpuPrice < 0 {
 		c.CpuPrice = CUCpuPriceDefault
 	}
-	if c.MemPrice <= 0 {
+	if c.MemPrice < 0 {
 		c.MemPrice = CUMemPriceDefault
 	}
-	if c.IoInPrice <= 0 {
+	if c.IoInPrice < 0 {
 		c.IoInPrice = CUIOInPriceDefault
 	}
-	if c.IoOutPrice <= 0 {
+	if c.IoOutPrice < 0 {
 		c.IoOutPrice = CUIOOutPriceDefault
 	}
 	// default as c.IoInPrice
-	if c.IoListPrice <= 0 {
+	if c.IoListPrice < 0 {
 		c.IoListPrice = c.IoInPrice
 	}
 	// default as c.IoInPrice, allow value: 0

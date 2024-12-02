@@ -257,47 +257,52 @@ func TestOBCUConfig_SetDefaultValues(t *testing.T) {
 		TrafficPrice2 float64
 	}
 	tests := []struct {
-		name              string
-		fields            fields
-		wantTrafficPrice0 float64
-		wantTrafficPrice1 float64
-		wantTrafficPrice2 float64
+		name   string
+		fields fields
+		want   OBCUConfig
 	}{
 		{
-			name: "TrafficPrice_set_0",
-			fields: fields{
-				CUUnit:        1.1,
-				CpuPrice:      1.2,
-				MemPrice:      1.3,
-				IoInPrice:     1.4,
-				IoOutPrice:    1.5,
-				IoListPrice:   1.6,
-				IoDeletePrice: 1.7,
+			name:   "Price_set_0",
+			fields: fields{},
+			want: OBCUConfig{
+				CUUnit:        CUUnitDefault,
+				CpuPrice:      0,
+				MemPrice:      0,
+				IoInPrice:     0,
+				IoOutPrice:    0,
+				IoListPrice:   0,
+				IoDeletePrice: 0,
 				TrafficPrice0: 0,
 				TrafficPrice1: 0,
 				TrafficPrice2: 0,
 			},
-			wantTrafficPrice0: 0,
-			wantTrafficPrice1: 0,
-			wantTrafficPrice2: 0,
 		},
 		{
-			name: "TrafficPrice_set_-1",
+			name: "Price_set_negative",
 			fields: fields{
-				CUUnit:        1.1,
-				CpuPrice:      1.2,
-				MemPrice:      1.3,
-				IoInPrice:     1.4,
-				IoOutPrice:    1.5,
-				IoListPrice:   1.6,
-				IoDeletePrice: 1.7,
+				CUUnit:        -1,
+				CpuPrice:      -1,
+				MemPrice:      -1,
+				IoInPrice:     -1,
+				IoOutPrice:    -1,
+				IoListPrice:   -1,
+				IoDeletePrice: -1,
 				TrafficPrice0: -1,
 				TrafficPrice1: -1,
 				TrafficPrice2: -1,
 			},
-			wantTrafficPrice0: CUTrafficPrice0Default,
-			wantTrafficPrice1: CUTrafficPrice0Default,
-			wantTrafficPrice2: CUTrafficPrice0Default,
+			want: OBCUConfig{
+				CUUnit:        CUUnitDefault,
+				CpuPrice:      CUCpuPriceDefault,
+				MemPrice:      CUMemPriceDefault,
+				IoInPrice:     CUIOInPriceDefault,
+				IoOutPrice:    CUIOOutPriceDefault,
+				IoListPrice:   CUIOInPriceDefault, // default as ioin price.
+				IoDeletePrice: CUIOInPriceDefault,
+				TrafficPrice0: CUTrafficPrice0Default,
+				TrafficPrice1: CUTrafficPrice0Default,
+				TrafficPrice2: CUTrafficPrice0Default,
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -315,9 +320,7 @@ func TestOBCUConfig_SetDefaultValues(t *testing.T) {
 				TrafficPrice2: tt.fields.TrafficPrice2,
 			}
 			c.SetDefaultValues()
-			require.Equal(t, tt.wantTrafficPrice0, c.TrafficPrice0)
-			require.Equal(t, tt.wantTrafficPrice1, c.TrafficPrice1)
-			require.Equal(t, tt.wantTrafficPrice2, c.TrafficPrice2)
+			require.Equal(t, tt.want, *c)
 		})
 	}
 }
