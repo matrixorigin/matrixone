@@ -177,6 +177,8 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	reqFn := func() error {
 		var err error
 		start := time.Now()
+		// TODO(volgariver6): when try to send request, we may need
+		// to refresh the tn address.
 		f, err = s.client.Send(ctx, tn.Address, &request)
 		if err != nil {
 			return err
@@ -188,7 +190,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	for {
 		err := reqFn()
 		if err != nil {
-			// These errors are retriable error.
+			// These errors are retriable error. Retry to send request to TN.
 			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
 				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 				time.Sleep(time.Millisecond * 300)
@@ -202,8 +204,10 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
-		// if the error is io.EOF, means the connection to TN node is ended,
-		// but no response is returned from TN txn service.
+		// if the error is io.EOF or "connection is reset by peer",
+		// means the connection to TN node is ended, but no response
+		// is returned from TN txn service. In this case, the result
+		// of the txn status is unknown.
 		if errors.Is(err, io.EOF) ||
 			strings.Contains(err.Error(), "connection reset by peer") {
 			return txn.TxnResponse{},
