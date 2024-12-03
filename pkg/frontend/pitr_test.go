@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,13 +25,10 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func Test_checkPitrInValidDurtion(t *testing.T) {
@@ -130,6 +126,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -169,6 +166,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -210,6 +208,7 @@ func Test_createPubByPitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -253,6 +252,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -330,6 +330,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -411,6 +412,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -493,6 +495,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -574,6 +577,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -670,6 +674,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -767,6 +772,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -863,6 +869,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -960,6 +967,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1040,6 +1048,7 @@ func Test_doRestorePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1124,6 +1133,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1204,6 +1214,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1376,6 +1387,7 @@ func Test_doRestorePitr_Account(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1501,6 +1513,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1619,6 +1632,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1739,6 +1753,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1857,6 +1872,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -1978,6 +1994,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2097,6 +2114,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2222,6 +2240,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2343,6 +2362,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2484,6 +2504,7 @@ func Test_doCreatePitr(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2615,6 +2636,7 @@ func Test_RestorePitrBadTimeStamp(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2652,22 +2674,15 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
-			if query == "begin;" {
-				return moerr.NewInternalErrorNoCtx("exec begin; failed")
-			}
-			return nil
-		}).AnyTimes()
-
-		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2683,14 +2698,18 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
 		stmt := &tree.RestorePitr{
 			Level:     tree.RESTORELEVELACCOUNT,
 			Name:      "pitr01",
 			TimeStamp: "2024-05-21 00:00:00",
 		}
-
-		ses.SetTenantInfo(tenant)
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
 		_, err := doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
@@ -2703,23 +2722,15 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
-			if strings.HasPrefix(query, "select pitr_id from mo_catalog.mo_pitr") {
-				return moerr.NewInternalErrorNoCtx("check Pitr failed")
-			}
-			return nil
-		}).AnyTimes()
-
-		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2735,63 +2746,18 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		stmt := &tree.RestorePitr{
-			Level:     tree.RESTORELEVELACCOUNT,
-			Name:      "pitr01",
-			TimeStamp: "2024-05-21 00:00:00",
-		}
-
-		ses.SetTenantInfo(tenant)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := doRestorePitr(ctx, ses, stmt)
-		assert.Error(t, err)
-	})
-
-	convey.Convey("doRestorePitr check Pitr exists", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{}).AnyTimes()
-
-		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		setPu("", pu)
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
 
 		stmt := &tree.RestorePitr{
 			Level:     tree.RESTORELEVELACCOUNT,
 			Name:      "pitr01",
 			TimeStamp: "2024-05-21 00:00:00",
 		}
-
-		ses.SetTenantInfo(tenant)
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
 		_, err := doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
@@ -2804,22 +2770,15 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		mrs1 := mock_frontend.NewMockExecResult(ctrl)
-		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
-
-		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2835,15 +2794,18 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		stmt := &tree.RestorePitr{
-			Level:        tree.RESTORELEVELACCOUNT,
-			Name:         "pitr01",
-			DatabaseName: "system",
-			TimeStamp:    "2024-05-21 00:00:00",
-		}
-
-		ses.SetTenantInfo(tenant)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-21 00:00:00",
+		}
 
 		_, err := doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
@@ -2856,36 +2818,15 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
 
-		pitrName := "pitr01"
-		stmt := &tree.RestorePitr{
-			Level:     tree.RESTORELEVELACCOUNT,
-			Name:      tree.Identifier(pitrName),
-			TimeStamp: "2024-05-21 00:00:00",
-		}
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		//bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		// fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, accountId)
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, query string) error {
-			if strings.Contains(query, fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, sysAccountID)) {
-				return moerr.NewInternalErrorNoCtx("get Pitr record failed")
-			}
-			return nil
-		}).AnyTimes()
-
-		mrs1 := mock_frontend.NewMockExecResult(ctrl)
-		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
-
-		bh.EXPECT().GetExecStatsArray().Return(statistic.StatsArray{}).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -2901,8 +2842,18 @@ func Test_RestorePitrFaultTolerance(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		ses.SetTenantInfo(tenant)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		stmt := &tree.RestorePitr{
+			Level:     tree.RESTORELEVELACCOUNT,
+			Name:      "pitr01",
+			TimeStamp: "2024-05-21 00:00:00",
+		}
 
 		_, err := doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)

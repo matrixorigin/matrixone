@@ -17,11 +17,18 @@ package compile
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -75,4 +82,312 @@ func Test_lockIndexTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScope_CreateTable(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "dept",
+		Cols: []*plan.ColDef{
+			{
+				ColId: 0,
+				Name:  "deptno",
+				Alg:   plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          27,
+					NotNullable: false,
+					AutoIncr:    true,
+					Width:       32,
+					Scale:       -1,
+				},
+				Default: &plan2.Default{},
+				NotNull: true,
+				Primary: true,
+				Pkidx:   0,
+			},
+			{
+				ColId: 1,
+				Name:  "dname",
+				Alg:   plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          61,
+					NotNullable: false,
+					AutoIncr:    false,
+					Width:       15,
+					Scale:       0,
+				},
+				Default: &plan2.Default{},
+				NotNull: false,
+				Primary: false,
+				Pkidx:   0,
+			},
+			{
+				ColId: 2,
+				Name:  "loc",
+				Alg:   plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          61,
+					NotNullable: false,
+					AutoIncr:    false,
+					Width:       50,
+					Scale:       0,
+				},
+				Default: &plan2.Default{},
+				NotNull: false,
+				Primary: false,
+				Pkidx:   0,
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Cols:        nil,
+			PkeyColId:   0,
+			PkeyColName: "deptno",
+			Names:       []string{"deptno"},
+		},
+		Defs: []*plan2.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{
+								Key:   "relkind",
+								Value: "r",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	createTableDef := &plan2.CreateTable{
+		IfNotExists: false,
+		Database:    "test",
+		Replace:     false,
+		TableDef:    tableDef,
+	}
+
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_CREATE_TABLE,
+				Definition: &plan2.DataDefinition_CreateTable{
+					CreateTable: createTableDef,
+				},
+			},
+		},
+	}
+
+	s := &Scope{
+		Magic:     CreateTable,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	sql := `create table dept(
+		deptno int unsigned auto_increment COMMENT '部门编号',
+		dname varchar(15) COMMENT '部门名称',
+		loc varchar(50)  COMMENT '部门所在位置',
+		primary key(deptno)
+	) COMMENT='部门表'`
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := context.Background()
+		proc.Ctx = context.Background()
+		proc.ReplaceTopCtx(ctx)
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil)
+
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := context.Background()
+		proc.Ctx = context.Background()
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+
+		mockDbMeta2 := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, name string, arg any) (engine.Database, error) {
+			if name == defines.TEMPORARY_DBNAME {
+				return mockDbMeta2, nil
+			}
+			return mockDbMeta, nil
+		}).AnyTimes()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
+
+}
+
+func TestScope_CreateView(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "v1",
+		Cols: []*plan.ColDef{
+			{
+				Name: "deptno",
+				Alg:  plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          27,
+					NotNullable: true,
+					AutoIncr:    true,
+					Width:       32,
+					Scale:       -1,
+				},
+				Default: &plan2.Default{},
+				NotNull: false,
+				Primary: false,
+			},
+			{
+				Name: "dname",
+				Alg:  plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          61,
+					NotNullable: false,
+					AutoIncr:    false,
+					Width:       15,
+					Scale:       0,
+				},
+				Default: &plan2.Default{},
+				NotNull: false,
+				Primary: false,
+			},
+			{
+				Name: "loc",
+				Alg:  plan2.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:          61,
+					NotNullable: false,
+					AutoIncr:    false,
+					Width:       50,
+					Scale:       0,
+				},
+				Default: &plan2.Default{},
+				NotNull: false,
+				Primary: false,
+			},
+		},
+		ViewSql: &plan2.ViewDef{
+			View: `{"Stmt":"create view v1 as select * from dept","DefaultDatabase":"db1"}`,
+		},
+		Defs: []*plan2.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{
+								Key:   "relkind",
+								Value: "v",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	createViewDef := &plan2.CreateView{
+		IfNotExists: false,
+		Database:    "test",
+		Replace:     false,
+		TableDef:    tableDef,
+	}
+
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_CREATE_VIEW,
+				Definition: &plan2.DataDefinition_CreateView{
+					CreateView: createViewDef,
+				},
+			},
+		},
+	}
+
+	s := &Scope{
+		Magic:     CreateView,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := context.Background()
+		proc.Ctx = context.Background()
+		proc.ReplaceTopCtx(ctx)
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil)
+
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+
+		sql := `create view v1 as select * from dept`
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateView(c))
+	})
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := context.Background()
+		proc.Ctx = context.Background()
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+
+		mockDbMeta2 := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, name string, arg any) (engine.Database, error) {
+			if name == defines.TEMPORARY_DBNAME {
+				return mockDbMeta2, nil
+			}
+			return mockDbMeta, nil
+		}).AnyTimes()
+
+		sql := `create view v1 as select * from dept`
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateView(c))
+	})
+
 }
