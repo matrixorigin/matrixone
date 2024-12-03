@@ -54,8 +54,14 @@ var dummyBaseTime time.Time
 func init() {
 	// Tips: Op 'time.Local = time.FixedZone(...)' would cause DATA RACE against to time.Now()
 
+	CU := *config.NewOBCUConfig()
+	CU.SetDefaultValues()
+
 	dummyBaseTime = time.Unix(0, 0).UTC()
-	SV := config.ObservabilityParameters{}
+	SV := config.ObservabilityParameters{
+		CU:   CU,
+		CUv1: CU,
+	}
 	SV.SetDefaultValues("v0.test.0")
 	SV.TraceExportInterval = 15
 	SV.LongQueryTime = 0
