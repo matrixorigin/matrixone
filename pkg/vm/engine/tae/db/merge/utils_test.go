@@ -15,7 +15,14 @@
 package merge
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"os"
+	"path"
 	"testing"
 )
 
@@ -30,4 +37,33 @@ func TestResourceController(t *testing.T) {
 	require.Equal(t, int64(1), rc.availableMem())
 
 	require.Panics(t, func() { rc.setMemLimit(0) })
+}
+
+func Test_CleanUpUselessFiles(t *testing.T) {
+	tDir := os.TempDir()
+	dir := path.Join(tDir, "/local")
+	assert.NoError(t, os.RemoveAll(dir))
+	defer func() {
+		_ = os.RemoveAll(dir)
+	}()
+
+	c := fileservice.Config{
+		Name:    defines.ETLFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fs, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	ent := &api.MergeCommitEntry{
+		BookingLoc: []string{"abc"},
+	}
+
+	CleanUpUselessFiles(ent, fs)
 }

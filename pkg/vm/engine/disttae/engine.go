@@ -708,12 +708,6 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	}
 }
 
-func (e *Engine) abortAllRunningTxn() {
-	e.Lock()
-	defer e.Unlock()
-	e.cli.AbortAllRunningTxn()
-}
-
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
 	defer e.Unlock()

@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"path"
 	"strings"
@@ -140,4 +141,18 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 
 func (s *subPathFS) Cost() *CostAttr {
 	return s.upstream.Cost()
+}
+
+var _ MutableFileService = new(subPathFS)
+
+func (s *subPathFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+	return fs.NewMutator(ctx, p)
 }
