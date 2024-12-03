@@ -638,14 +638,15 @@ func (mgr *TxnManager) ResetHeartbeat() {
 	newJob := NewCancelableJob(func(ctx context.Context) {
 		prevReportTime := time.Now()
 		ticker := time.NewTicker(time.Millisecond * 2)
+		defer ticker.Stop()
 		logutil.Info(
-			"TxnManager-Heartbeat-Start",
+			"TxnManager-HB-Start",
 			zap.Duration("interval", time.Millisecond*2),
 		)
 		for {
 			select {
 			case <-ctx.Done():
-				logutil.Info("TxnManager-Heartbeat-Exit")
+				logutil.Info("TxnManager-HB-Exit")
 				return
 			case <-ticker.C:
 				op := mgr.newHeartbeatOpTxn(ctx)
