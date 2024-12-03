@@ -171,6 +171,16 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		node.AnalyzeInfo.S3Delete += op.OpStats.S3Delete
 		node.AnalyzeInfo.S3DeleteMul += op.OpStats.S3DeleteMul
 		node.AnalyzeInfo.DiskIO += op.OpStats.DiskIO
+
+		node.AnalyzeInfo.CacheRead += op.OpStats.CacheRead
+		node.AnalyzeInfo.CacheHit += op.OpStats.CacheHit
+		node.AnalyzeInfo.CacheMemoryRead += op.OpStats.CacheMemoryRead
+		node.AnalyzeInfo.CacheMemoryHit += op.OpStats.CacheMemoryHit
+		node.AnalyzeInfo.CacheDiskRead += op.OpStats.CacheDiskRead
+		node.AnalyzeInfo.CacheDiskHit += op.OpStats.CacheDiskHit
+		node.AnalyzeInfo.CacheRemoteRead += op.OpStats.CacheRemoteRead
+		node.AnalyzeInfo.CacheRemoteHit += op.OpStats.CacheRemoteHit
+
 		node.AnalyzeInfo.WrittenRows += op.OpStats.WrittenRows
 		node.AnalyzeInfo.DeletedRows += op.OpStats.DeletedRows
 

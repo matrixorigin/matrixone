@@ -79,6 +79,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 		analyzer.AddS3RequestCount(crs)
+		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
 		// TODO: analyzer.Output(result.Batch)
@@ -126,6 +127,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				analyzer.AddS3RequestCount(crs)
+				analyzer.AddFileServiceCacheInfo(crs)
 				analyzer.AddDiskIO(crs)
 
 				result.Batch = bat
