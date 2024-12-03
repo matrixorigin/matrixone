@@ -242,3 +242,85 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 		})
 	}
 }
+
+func TestOBCUConfig_SetDefaultValues(t *testing.T) {
+	type fields struct {
+		CUUnit        float64
+		CpuPrice      float64
+		MemPrice      float64
+		IoInPrice     float64
+		IoOutPrice    float64
+		IoListPrice   float64
+		IoDeletePrice float64
+		TrafficPrice0 float64
+		TrafficPrice1 float64
+		TrafficPrice2 float64
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   OBCUConfig
+	}{
+		{
+			name:   "Price_set_0",
+			fields: fields{},
+			want: OBCUConfig{
+				CUUnit:        CUUnitDefault,
+				CpuPrice:      0,
+				MemPrice:      0,
+				IoInPrice:     0,
+				IoOutPrice:    0,
+				IoListPrice:   0,
+				IoDeletePrice: 0,
+				TrafficPrice0: 0,
+				TrafficPrice1: 0,
+				TrafficPrice2: 0,
+			},
+		},
+		{
+			name: "Price_set_negative",
+			fields: fields{
+				CUUnit:        -1,
+				CpuPrice:      -1,
+				MemPrice:      -1,
+				IoInPrice:     -1,
+				IoOutPrice:    -1,
+				IoListPrice:   -1,
+				IoDeletePrice: -1,
+				TrafficPrice0: -1,
+				TrafficPrice1: -1,
+				TrafficPrice2: -1,
+			},
+			want: OBCUConfig{
+				CUUnit:        CUUnitDefault,
+				CpuPrice:      CUCpuPriceDefault,
+				MemPrice:      CUMemPriceDefault,
+				IoInPrice:     CUIOInPriceDefault,
+				IoOutPrice:    CUIOOutPriceDefault,
+				IoListPrice:   CUIOInPriceDefault, // default as ioin price.
+				IoDeletePrice: CUIOInPriceDefault,
+				TrafficPrice0: CUTrafficPrice0Default,
+				TrafficPrice1: CUTrafficPrice0Default,
+				TrafficPrice2: CUTrafficPrice0Default,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &OBCUConfig{
+				CUUnit:        tt.fields.CUUnit,
+				CpuPrice:      tt.fields.CpuPrice,
+				MemPrice:      tt.fields.MemPrice,
+				IoInPrice:     tt.fields.IoInPrice,
+				IoOutPrice:    tt.fields.IoOutPrice,
+				IoListPrice:   tt.fields.IoListPrice,
+				IoDeletePrice: tt.fields.IoDeletePrice,
+				TrafficPrice0: tt.fields.TrafficPrice0,
+				TrafficPrice1: tt.fields.TrafficPrice1,
+				TrafficPrice2: tt.fields.TrafficPrice2,
+			}
+			c.SetDefaultValues()
+			require.Equal(t, tt.want, *c)
+		})
+	}
+}
