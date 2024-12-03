@@ -81,33 +81,33 @@ func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
-type LoopController struct {
+type CancelableJob struct {
 	wg        sync.WaitGroup
 	ctx       context.Context
 	cancel    context.CancelFunc
-	looper    func(context.Context)
+	job       func(context.Context)
 	onceStart sync.Once
 	onceStop  sync.Once
 }
 
-func NewLoopController(looper func(context.Context)) *LoopController {
-	ctl := new(LoopController)
-	ctl.looper = looper
+func NewCancelableJob(job func(context.Context)) *CancelableJob {
+	ctl := new(CancelableJob)
+	ctl.job = job
 	ctl.ctx, ctl.cancel = context.WithCancel(context.Background())
 	return ctl
 }
 
-func (ctl *LoopController) Start() {
+func (ctl *CancelableJob) Start() {
 	ctl.onceStart.Do(func() {
 		ctl.wg.Add(1)
 		go func() {
 			defer ctl.wg.Done()
-			ctl.looper(ctl.ctx)
+			ctl.job(ctl.ctx)
 		}()
 	})
 }
 
-func (ctl *LoopController) Stop() {
+func (ctl *CancelableJob) Stop() {
 	ctl.onceStop.Do(func() {
 		ctl.cancel()
 		ctl.wg.Wait()
@@ -127,7 +127,7 @@ type TxnManager struct {
 	CommitListener  *batchTxnCommitListener
 	workers         *ants.Pool
 
-	heartbeatCtl atomic.Pointer[LoopController]
+	heartbeatJob atomic.Pointer[CancelableJob]
 
 	ts struct {
 		mu        sync.Mutex
@@ -618,24 +618,24 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 }
 
 func (mgr *TxnManager) StopHeartbeat() {
-	old := mgr.heartbeatCtl.Load()
+	old := mgr.heartbeatJob.Load()
 	if old == nil {
 		return
 	}
 	old.Stop()
-	for swapped := mgr.heartbeatCtl.CompareAndSwap(old, nil); !swapped; {
-		if old = mgr.heartbeatCtl.Load(); old != nil {
+	for swapped := mgr.heartbeatJob.CompareAndSwap(old, nil); !swapped; {
+		if old = mgr.heartbeatJob.Load(); old != nil {
 			old.Stop()
 		}
 	}
 }
 
 func (mgr *TxnManager) ResetHeartbeat() {
-	old := mgr.heartbeatCtl.Load()
+	old := mgr.heartbeatJob.Load()
 	if old != nil {
 		old.Stop()
 	}
-	newCtl := NewLoopController(func(ctx context.Context) {
+	newJob := NewCancelableJob(func(ctx context.Context) {
 		prevReportTime := time.Now()
 		ticker := time.NewTicker(time.Millisecond * 2)
 		logutil.Info(
@@ -661,12 +661,12 @@ func (mgr *TxnManager) ResetHeartbeat() {
 			}
 		}
 	})
-	for swapped := mgr.heartbeatCtl.CompareAndSwap(old, newCtl); !swapped; {
-		if old = mgr.heartbeatCtl.Load(); old != nil {
+	for swapped := mgr.heartbeatJob.CompareAndSwap(old, newJob); !swapped; {
+		if old = mgr.heartbeatJob.Load(); old != nil {
 			old.Stop()
 		}
 	}
-	newCtl.Start()
+	newJob.Start()
 }
 
 func (mgr *TxnManager) Start(ctx context.Context) {
