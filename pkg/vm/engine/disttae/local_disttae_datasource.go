@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"sort"
 
@@ -313,6 +314,11 @@ func (ls *LocalDisttaeDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
+			if ok1, ok2 := ls.memPKFilter.Exact(); ok1 && ok2 {
+				state = engine.End
+				return
+			}
+
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				return nil, engine.End, nil
 			}
@@ -673,6 +679,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 	if summaryBuf != nil {
 		summaryBuf.WriteString(fmt.Sprintf("[PScan] scan:%d, inserted:%d, delInFile:%d, outBatchRowCnt: %v\n", scan, inserted, delInFile, outBatch.RowCount()))
+	}
+
+	if outBatch.RowCount()-inputRowCnt == 1 {
+		ls.memPKFilter.RecordExactHit()
 	}
 
 	return nil

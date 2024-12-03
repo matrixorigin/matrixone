@@ -548,6 +548,10 @@ func (r *reader) Read(
 		return false, err
 	}
 
+	if outBatch.RowCount() == 1 {
+		r.withFilterMixin.filterState.memFilter.RecordExactHit()
+	}
+
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		gatherStats(numRead, numHit)
