@@ -2598,11 +2598,10 @@ func TestCdcTask_Resume(t *testing.T) {
 		sunkWatermarkUpdater *cdc2.WatermarkUpdater
 	}
 
-	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+	gostub.Stub(&Start,
+		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
-	defer stub1.Reset()
 
 	tests := []struct {
 		name    string
@@ -2645,6 +2644,7 @@ func TestCdcTask_Resume(t *testing.T) {
 			assert.NoErrorf(t, err, "Resume()")
 		})
 	}
+	time.Sleep(5 * time.Second)
 }
 
 func TestCdcTask_Restart(t *testing.T) {
@@ -2676,11 +2676,10 @@ func TestCdcTask_Restart(t *testing.T) {
 		db: db,
 	}
 
-	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+	gostub.Stub(&Start,
+		func(_ context.Context, _ *CdcTask) error {
 			return nil
 		})
-	defer stub1.Reset()
 
 	tests := []struct {
 		name    string
@@ -2728,15 +2727,22 @@ func TestCdcTask_Restart(t *testing.T) {
 			assert.NoErrorf(t, err, "Restart()")
 		})
 	}
+	time.Sleep(5 * time.Second)
 }
 
 func TestCdcTask_Pause(t *testing.T) {
+	holdCh := make(chan int, 1)
+	go func() {
+		<-holdCh
+	}()
+
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		isRunning: true,
+		holdCh:    holdCh,
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")
