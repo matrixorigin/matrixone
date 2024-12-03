@@ -84,7 +84,7 @@ func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func CNFaultInject(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
-	var cnRes []PodResponse
+	cnRes := make([]PodResponse, len(pods))
 
 	if len(pods) == 0 {
 		clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
@@ -123,7 +123,7 @@ func CNFaultInject(pods []string, command string, parameter string, proc *proces
 }
 
 func TNFaultInject(pods []string, command string, parameter string, proc *process.Process) []PodResponse {
-	var tnRes []PodResponse
+	tnRes := make([]PodResponse, len(pods))
 	cluster := clusterservice.GetMOCluster(proc.GetService())
 
 	if len(pods) == 0 {

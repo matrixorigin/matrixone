@@ -122,11 +122,12 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 
 	// disable fault injection
 	res = []PodResponse{{
-		PodType:   tn,
+		PodType:   cn,
 		PodID:     id,
 		ReturnStr: "Fault injection disabled. Previous status: enabled",
 	}}
-	ret = TNFaultInject([]string{}, "DISABLE_FAULT_INJECTION", "", proc)
+	ret = CNFaultInject([]string{}, "DISABLE_FAULT_INJECTION", "", proc)
+	require.Equal(t, res, ret)
 }
 
 func Test_CanTransferCnFaultInject(t *testing.T) {
