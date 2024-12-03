@@ -190,9 +190,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	if hb.IsDedup && hb.InputBatchRowCount == 1 && needUniqueVec {
-		hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
+		if len(hb.UniqueJoinKeys) == 0 {
+			hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executor))
+			for j, vec := range hb.vecs[0] {
+				hb.UniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+			}
+		}
+
 		for i, vec := range hb.vecs[0] {
-			hb.UniqueJoinKeys[i] = vector.NewVec(*vec.GetType())
 			err = hb.UniqueJoinKeys[i].UnionOne(vec, 0, proc.Mp())
 			if err != nil {
 				return err
@@ -241,7 +246,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	var (
 		cardinality uint64
-		sels        []int32
+		newSels     []int64
 	)
 
 	vOld := uint64(0)
@@ -349,25 +354,22 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				}
 			} else {
-				if sels == nil {
-					sels = make([]int32, hashmap.UnitLimit)
+				if newSels == nil {
+					newSels = make([]int64, hashmap.UnitLimit)
 				}
 
-				sels = sels[:0]
+				newSels = newSels[:0]
 				for j, v := range vals[:n] {
 					if v > cardinality {
-						sels = append(sels, int32(i+j))
+						newSels = append(newSels, int64(vecIdx2+j))
 						cardinality = v
 					}
 				}
 
 				for j, vec := range hb.vecs[vecIdx1] {
-					for _, sel := range sels {
-						_, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						err = hb.UniqueJoinKeys[j].UnionOne(vec, int64(idx2), proc.Mp())
-						if err != nil {
-							return err
-						}
+					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
+					if err != nil {
+						return err
 					}
 				}
 			}
