@@ -1502,7 +1502,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string) (bool, error) {
-		err = fault.RemoveFaultPoint(proc.Ctx, v)
+		_, err = fault.RemoveFaultPoint(proc.Ctx, v)
 		return true, err
 	}, selectList)
 }

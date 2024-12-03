@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -4868,6 +4869,29 @@ var supportedControlBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `fault_inject`
+	{
+		functionId: FAULT_INJECT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FaultInject
+				},
+			},
+		},
+	},
+
 	// function `mo_ctl`
 	{
 		functionId: MO_CTL,
@@ -6822,4 +6846,8 @@ func fulltext_expand_overload(rettyp types.T) []overload {
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
 	return ctl.MoCtl(ivecs, result, proc, length)
+}
+
+func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
+	return fj.FaultInject(ivecs, result, proc, length)
 }

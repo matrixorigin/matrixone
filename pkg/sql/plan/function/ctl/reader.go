@@ -74,7 +74,7 @@ func handleCtlReader(
 				Cfg:   args[1],
 				Extra: types.EncodeStringSlice([]string{extra}),
 			}
-			resp, err := transferRequest2OtherCNs(proc, cns[idx], request)
+			resp, err := TransferRequest2OtherCNs(proc, cns[idx], request)
 			if resp == nil || err != nil {
 				// no such cn service
 				info[cns[idx]] = fmt.Sprintf("transfer to %s failed, err: %v", cns[idx], err)
