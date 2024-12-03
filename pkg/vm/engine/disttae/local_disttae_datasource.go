@@ -319,8 +319,7 @@ func (ls *LocalDisttaeDataSource) Next(
 			//    2. already found one row
 			// then skip all the following blocks
 			if ok1, ok2 := ls.memPKFilter.Exact(); ok1 && ok2 {
-				state = engine.End
-				return
+				return nil, engine.End, nil
 			}
 
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
