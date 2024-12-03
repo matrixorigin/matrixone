@@ -56,4 +56,8 @@ drop table if exists t1;
 create table t1 (a int primary key, b int);
 INSERT INTO t1 SELECT result,result FROM generate_series(1,2000000) g;
 update t1 set b = 10 where a < 1000000;
+drop table if exists t1;
+create table t1(a bigint primary key, b int, c int, key(b));
+insert into t1  select result,result,result from generate_series(200000) g;
+update t1 set b = b + 1;
 drop database if exists test;

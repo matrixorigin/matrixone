@@ -350,6 +350,7 @@ type BackgroundExec interface {
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
 	GetExecStatsArray() statistic.StatsArray
+	SetRestore(b bool)
 
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
@@ -687,6 +688,12 @@ type feSessionImpl struct {
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
 	fromRealUser bool
+
+	//isRestore denotes the session is used to restore the snapshot
+	isRestore bool
+
+	//isRestoreFail
+	isRestoreFail bool
 }
 
 func (ses *feSessionImpl) GetService() string {
@@ -1160,6 +1167,30 @@ func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.debugStr
+}
+
+func (ses *Session) SetRestore(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isRestore = b
+}
+
+func (ses *Session) IsRestore() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isRestore
+}
+
+func (ses *Session) SetRestoreFail(b bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.isRestoreFail = b
+}
+
+func (ses *Session) IsRestoreFail() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.isRestoreFail
 }
 
 type PropertyID int
