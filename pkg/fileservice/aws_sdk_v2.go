@@ -327,11 +327,13 @@ func (a *AwsSDKv2) Write(
 
 	if sizeHint == nil {
 		// multipart
-		output, err := a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-			Bucket:  ptrTo(a.bucket),
-			Key:     ptrTo(key),
-			Expires: expire,
-		})
+		output, err := DoWithRetry("create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+			return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+				Bucket:  ptrTo(a.bucket),
+				Key:     ptrTo(key),
+				Expires: expire,
+			})
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return err
 		}
@@ -360,13 +362,15 @@ func (a *AwsSDKv2) Write(
 			if len(content) == 0 {
 				break
 			}
-			uploadOutput, err := a.client.UploadPart(ctx, &s3.UploadPartInput{
-				Bucket:     ptrTo(a.bucket),
-				Key:        ptrTo(key),
-				PartNumber: &num,
-				UploadId:   output.UploadId,
-				Body:       bytes.NewReader(content),
-			})
+			uploadOutput, err := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				return a.client.UploadPart(ctx, &s3.UploadPartInput{
+					Bucket:     ptrTo(a.bucket),
+					Key:        ptrTo(key),
+					PartNumber: &num,
+					UploadId:   output.UploadId,
+					Body:       bytes.NewReader(content),
+				})
+			}, maxRetryAttemps, IsRetryableError)
 			if err != nil {
 				return err
 			}
@@ -382,12 +386,38 @@ func (a *AwsSDKv2) Write(
 		}
 
 		// complete
-		_, err = a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-			Bucket:          ptrTo(a.bucket),
-			Key:             ptrTo(key),
-			UploadId:        output.UploadId,
-			MultipartUpload: completed,
-		})
+		_, err = DoWithRetry("complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+			return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+				Bucket:          ptrTo(a.bucket),
+				Key:             ptrTo(key),
+				UploadId:        output.UploadId,
+				MultipartUpload: completed,
+			})
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else if *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (*s3.PutObjectOutput, error) {
+			return a.putObject(
+				ctx,
+				&s3.PutObjectInput{
+					Bucket:        ptrTo(a.bucket),
+					Key:           ptrTo(key),
+					Body:          bytes.NewReader(data),
+					ContentLength: sizeHint,
+					Expires:       expire,
+				},
+				func(opts *s3.Options) {
+					opts.Retryer = aws.NopRetryer{}
+				},
+			)
+		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
 			return err
 		}
