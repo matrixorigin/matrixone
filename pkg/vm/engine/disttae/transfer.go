@@ -457,13 +457,19 @@ func doTransferRowids(
 
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
 	expr := engine_util.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	rangesParam := engine.RangesParam{
+		BlockFilters:   []*plan.Expr{expr},
+		PreAllocBlocks: 2,
+		TxnOffset:      0,
+		Policy:         engine.Policy_CollectAllData,
+	}
 
 	var blockList objectio.BlockInfoSlice
 	if _, err = engine_util.TryFastFilterBlocks(
 		ctx,
 		table.db.op.SnapshotTS(),
 		table.GetTableDef(ctx),
-		[]*plan.Expr{expr},
+		rangesParam,
 		nil,
 		objectList,
 		nil,
