@@ -1695,6 +1695,10 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 		return b.err
 	}
 
+	bh.SetRestore(false)
+	defer func() {
+		bh.SetRestore(true)
+	}()
 	err = InitGeneralTenant(ctx, bh, ses, stmt)
 	if err != nil {
 		return
