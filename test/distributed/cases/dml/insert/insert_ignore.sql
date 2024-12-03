@@ -69,3 +69,9 @@ insert into insert_ignore_08 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222
 insert ignore into insert_ignore_08 select * from insert_ignore_07;
 select count(*) from insert_ignore_08;
 select * from insert_ignore_08 where c2 in (45,55,22,1,222,19);
+
+create table insert_ignore_09(c1 int primary key, c2 int);
+insert into insert_ignore_09 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222),(99999,19);
+insert ignore into insert_ignore_09 select result, result from generate_series(1,10000000) g;
+select count(*) from insert_ignore_09;
+select count(*) from insert_ignore_09 where c1 != c2;

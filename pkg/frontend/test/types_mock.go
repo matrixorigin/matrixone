@@ -534,6 +534,16 @@ func (mr *MockBackgroundExecMockRecorder) Clear() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clear", reflect.TypeOf((*MockBackgroundExec)(nil).Clear))
 }
 
+func (m *MockBackgroundExec) SetRestore(bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetRestore")
+}
+
+func (mr *MockBackgroundExecMockRecorder) SetRestore() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestore", reflect.TypeOf((*MockBackgroundExec)(nil).SetRestore))
+}
+
 // ClearExecResultBatches mocks base method.
 func (m *MockBackgroundExec) ClearExecResultBatches() {
 	m.ctrl.T.Helper()

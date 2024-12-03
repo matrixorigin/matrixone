@@ -53,6 +53,8 @@ type localLockTable struct {
 
 	options struct {
 		beforeCloseFirstWaiter func(c *lockContext)
+		beforeWait             func(c *lockContext) func()
+		afterWait              func(c *lockContext) func()
 	}
 }
 
@@ -97,6 +99,7 @@ func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
 	var old *waiter
+	var oldOffset int
 	var err error
 	table := l.bind.Table
 	for {
@@ -129,6 +132,14 @@ func (l *localLockTable) doLock(
 				return
 			}
 
+			if oldOffset != c.offset {
+				if old != nil {
+					old.disableNotify()
+					old.close("doLock, lock next row", l.logger)
+				}
+				c.txn.clearBlocked(old, l.logger)
+			}
+
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
 			if c.opts.async {
@@ -139,10 +150,21 @@ func (l *localLockTable) doLock(
 		// txn is locked by service.lock or service_remote.lock. We must unlock here. And lock again after
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
+		oldOffset = c.offset
 		oldTxnID := c.txn.txnID
 		old = c.w
 		c.txn.Unlock()
+
+		if l.options.beforeWait != nil {
+			l.options.beforeWait(c)()
+		}
+
 		v := c.w.wait(c.ctx, l.logger)
+
+		if l.options.afterWait != nil {
+			l.options.afterWait(c)()
+		}
+
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v)
@@ -474,7 +496,8 @@ func (l *localLockTable) addRowLockLocked(
 func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
-	conflictWith Lock) error {
+	conflictWith Lock,
+) error {
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
@@ -502,6 +525,21 @@ func (l *localLockTable) handleLockConflictLocked(
 	// waiter added, we need to active deadlock check.
 	c.txn.setBlocked(c.w, l.logger)
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
+
+	if c.opts.Granularity != pb.Granularity_Range {
+		return nil
+	}
+
+	if len(c.rangeLastWaitKey) > 0 {
+		v, ok := l.mu.store.Get(c.rangeLastWaitKey)
+		if !ok {
+			panic("BUG: missing range last wait key")
+		}
+		if ok && v.closeWaiter(c.w, l.logger) {
+			l.mu.store.Delete(c.rangeLastWaitKey)
+		}
+	}
+	c.rangeLastWaitKey = key
 	return nil
 }
 

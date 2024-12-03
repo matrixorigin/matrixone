@@ -305,8 +305,8 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		if err != nil {
 			logutil.Error("[FLUSH-ERR]",
 				zap.String("task", task.Name()),
-				common.AnyField("error", err),
 				common.AnyField("phase", phaseDesc),
+				zap.Error(err),
 			)
 		}
 	}()
@@ -322,7 +322,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	snapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, false)
 	statFlushAobj := time.Since(inst)
 	defer func() {
-		releaseFlushObjTasks(task, snapshotSubtasks, err)
+		releaseTasks(task.Name(), snapshotSubtasks, err)
 	}()
 	if err != nil {
 		return
@@ -336,17 +336,16 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	inst = time.Now()
 	tombstoneSnapshotSubtasks, err := task.flushAObjsForSnapshot(ctx, true)
 	statFlushTombStone := time.Since(inst)
+	defer func() {
+		releaseTasks(task.Name(), tombstoneSnapshotSubtasks, err)
+	}()
 	if err != nil {
 		return
 	}
-	defer func() {
-		releaseFlushObjTasks(task, tombstoneSnapshotSubtasks, err)
-	}()
 
 	/////////////////////
 	//// phase separator
 	///////////////////
-
 	phaseDesc = "1-merge aobjects"
 	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
 	// after flushAObjsForSnapshot
@@ -364,7 +363,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	/////////////////////
 	//// phase separator
 	///////////////////
-
 	phaseDesc = "1-merge atombstones"
 	// merge atombstones, no need to wait, it is a sync procedure, that is why put it
 	// after flushAObjsForSnapshot
@@ -393,7 +391,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	/////////////////////
 	//// phase separator
 	///////////////////
-
 	phaseDesc = "1-waiting flushing appendable tombstones for snapshot"
 	inst = time.Now()
 	if err = task.waitFlushAObjForSnapshot(ctx, tombstoneSnapshotSubtasks, true); err != nil {
@@ -432,7 +429,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	statNewFlushEntry := time.Since(inst)
-	/////////////////////
 
 	duration := time.Since(now)
 	logutil.Info("[FLUSH-END]",
@@ -758,7 +754,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTombstone bool) (subtasks []*flushObjTask, err error) {
 	defer func() {
 		if err != nil {
-			releaseFlushObjTasks(task, subtasks, err)
+			releaseTasks(task.Name(), subtasks, err)
 		}
 	}()
 
@@ -814,8 +810,6 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 			task.rt.Fs,
 			obj,
 			dataVer.Batch,
-			nil,
-			true,
 			task.Name(),
 		)
 		if err = task.rt.Scheduler.Schedule(aobjectTask); err != nil {
@@ -851,34 +845,18 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 	return nil
 }
 
-func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, err error) {
+func releaseTasks(taskName string, subtasks []*flushObjTask, err error) {
 	if err != nil {
 		logutil.Info(
 			"[FLUSH-AOBJ-ERR]",
-			common.AnyField("error", err),
-			zap.String("task", ftask.Name()),
+			zap.String("task", taskName),
+			zap.Error(err),
 		)
-		// add a timeout to avoid WaitDone block the whole process
-		ictx, cancel := context.WithTimeoutCause(
-			context.Background(),
-			10*time.Second, /*6*time.Minute,*/
-			moerr.CauseReleaseFlushObjTasks,
-		)
-		defer cancel()
-		for _, subtask := range subtasks {
-			if subtask != nil {
-				// wait done, otherwise the data might be released before flush, and cause data race
-				subtask.WaitDone(ictx)
-			}
-		}
 	}
-	for _, subtask := range subtasks {
-		if subtask != nil && subtask.data != nil {
-			subtask.data.Close()
-		}
-		if subtask != nil && subtask.delta != nil {
-			subtask.delta.Close()
-		}
+
+	// add a timeout to avoid WaitDone block the whole process
+	for _, subTask := range subtasks {
+		subTask.release()
 	}
 }
 
