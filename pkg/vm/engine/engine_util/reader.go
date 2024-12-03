@@ -549,6 +549,7 @@ func (r *reader) Read(
 	}
 
 	if outBatch.RowCount() == 1 {
+		// found one row in this blk for the pk equal, record it
 		r.withFilterMixin.filterState.memFilter.RecordExactHit()
 	}
 

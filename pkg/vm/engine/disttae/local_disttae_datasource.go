@@ -314,6 +314,10 @@ func (ls *LocalDisttaeDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
+			// if satisfies:
+			//	  1. pk equal
+			//    2. already found one row
+			// then skip all the following blocks
 			if ok1, ok2 := ls.memPKFilter.Exact(); ok1 && ok2 {
 				state = engine.End
 				return
@@ -682,6 +686,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	}
 
 	if outBatch.RowCount()-inputRowCnt == 1 {
+		// found one row in InMemCommitted for the pk equal, record it
 		ls.memPKFilter.RecordExactHit()
 	}
 
