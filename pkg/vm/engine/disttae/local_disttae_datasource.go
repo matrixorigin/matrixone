@@ -943,6 +943,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 
 func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	bid *types.Blockid,
+	offsetCnt int,
 ) (logtailreplay.RowsIter, bool) {
 
 	inMemTombstoneCnt := ls.pState.ApproxInMemTombstones()
@@ -950,7 +951,8 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 		return nil, true
 	}
 
-	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
+	if offsetCnt <= logtailreplay.IndexScaleTiny &&
+		ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
 
@@ -983,7 +985,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 
 	leftRows = offsets
 
-	delIter, fastReturn := ls.getInMemDelIter(bid)
+	delIter, fastReturn := ls.getInMemDelIter(bid, len(offsets))
 	if fastReturn {
 		return leftRows
 	}

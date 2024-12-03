@@ -41,6 +41,7 @@ import (
 
 const (
 	IndexScaleZero        = 0
+	IndexScaleTiny        = 10
 	MuchGreaterThanFactor = 100
 )
 
