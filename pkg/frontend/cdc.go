@@ -1011,6 +1011,9 @@ type CdcTask struct {
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
 	isRunning            bool
 	holdCh               chan int
+
+	// start wrapper, for ut
+	startFunc func(ctx context.Context) error
 }
 
 func NewCdcTask(
@@ -1023,7 +1026,7 @@ func NewCdcTask(
 	cnEngine engine.Engine,
 	cdcMp *mpool.MPool,
 ) *CdcTask {
-	return &CdcTask{
+	task := &CdcTask{
 		logger:      logger,
 		ie:          ie,
 		cdcTask:     cdcTask,
@@ -1045,6 +1048,8 @@ func NewCdcTask(
 			},
 		),
 	}
+	task.startFunc = task.Start
+	return task
 }
 
 func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
@@ -1121,10 +1126,6 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	return
 }
 
-var Start = func(ctx context.Context, cdc *CdcTask) error {
-	return cdc.Start(ctx)
-}
-
 // Resume cdc task from last recorded watermark
 func (cdc *CdcTask) Resume() (err error) {
 	logutil.Infof("cdc task %s resume", cdc.cdcTask.TaskName)
@@ -1139,7 +1140,7 @@ func (cdc *CdcTask) Resume() (err error) {
 	go func() {
 		// closed in Pause, need renew
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		_ = Start(context.Background(), cdc)
+		_ = cdc.startFunc(context.Background())
 	}()
 	return
 }
@@ -1162,7 +1163,7 @@ func (cdc *CdcTask) Restart() (err error) {
 	go func() {
 		// closed in Pause, need renew
 		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		_ = Start(context.Background(), cdc)
+		_ = cdc.startFunc(context.Background())
 	}()
 	return
 }
