@@ -484,9 +484,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 			}
 
 			ctr.matched.Add(0)
+			ctr.rbat.AddRowCount(1)
 		}
 
-		ctr.rbat.AddRowCount(1)
 		result.Batch = ctr.rbat
 		ap.ctr.lastPos = 0
 
