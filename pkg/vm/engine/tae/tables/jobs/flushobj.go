@@ -161,16 +161,18 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 }
 
 func (task *flushObjTask) release() {
-	if task == nil || task.done {
+	if task == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		10*time.Second,
-		moerr.CauseReleaseFlushObjTasks,
-	)
-	defer cancel()
-	task.WaitDone(ctx)
+	if !task.done {
+		ctx, cancel := context.WithTimeoutCause(
+			context.Background(),
+			10*time.Second,
+			moerr.CauseReleaseFlushObjTasks,
+		)
+		defer cancel()
+		task.WaitDone(ctx)
+	}
 
 	if task.data != nil {
 		task.data.Close()
