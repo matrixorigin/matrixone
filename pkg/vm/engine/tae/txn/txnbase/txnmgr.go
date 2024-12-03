@@ -86,7 +86,6 @@ type TxnManager struct {
 	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
-	IDMap           *sync.Map
 	IdAlloc         *common.TxnIDAllocator
 	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
@@ -96,6 +95,10 @@ type TxnManager struct {
 	workers         *ants.Pool
 
 	heartbeatJob atomic.Pointer[tasks.CancelableJob]
+	txns         struct {
+		store *sync.Map
+		wg    sync.WaitGroup
+	}
 
 	ts struct {
 		mu        sync.Mutex
@@ -113,13 +116,14 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
-		IDMap:           new(sync.Map),
 		IdAlloc:         common.NewTxnIDAllocator(),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
 	}
+	mgr.txns.store = new(sync.Map)
+	mgr.txns.wg = sync.WaitGroup{}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
@@ -154,7 +158,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.IDMap.Store(txn.GetID(), txn)
+	mgr.storeTxn(txn)
 	return
 }
 
@@ -171,7 +175,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	mgr.storeTxn(txn)
 	return
 }
 
@@ -188,36 +192,80 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	mgr.storeTxn(txn)
 	return
+}
+
+func (mgr *TxnManager) loadTxn(
+	id string,
+) (txnif.AsyncTxn, bool) {
+	if res, ok := mgr.txns.store.Load(id); ok {
+		return res.(txnif.AsyncTxn), true
+	}
+	return nil, false
+}
+
+func (mgr *TxnManager) loadAndDeleteTxn(
+	id string,
+) (txnif.AsyncTxn, bool) {
+	if res, ok := mgr.txns.store.LoadAndDelete(id); ok {
+		mgr.txns.wg.Done()
+		return res.(txnif.AsyncTxn), true
+	}
+	return nil, false
+}
+
+func (mgr *TxnManager) storeTxn(
+	newTxn txnif.AsyncTxn,
+) {
+	mgr.txns.wg.Add(1)
+	mgr.txns.store.Store(newTxn.GetID(), newTxn)
+}
+
+func (mgr *TxnManager) loadOrStoreTxn(
+	newTxn txnif.AsyncTxn,
+) (txnif.AsyncTxn, bool) {
+	mgr.txns.wg.Add(1)
+	if actual, loaded := mgr.txns.store.LoadOrStore(
+		newTxn.GetID(), newTxn,
+	); loaded {
+		mgr.txns.wg.Done()
+		return actual.(txnif.AsyncTxn), true
+	}
+	return newTxn, false
 }
 
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
 func (mgr *TxnManager) GetOrCreateTxnWithMeta(
-	info []byte,
-	id []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	info []byte, id []byte, ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); ok {
-		txn = value.(txnif.AsyncTxn)
-	} else {
-		store := mgr.TxnStoreFactory()
-		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
-		store.BindTxn(txn)
-		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
+	var ok bool
+	if txn, ok = mgr.loadTxn(util.UnsafeBytesToString(id)); ok {
+		return
 	}
+
+	store := mgr.TxnStoreFactory()
+	txn = mgr.TxnFactory(mgr, store, id, ts, ts)
+	store.BindTxn(txn)
+	txn, _ = mgr.loadOrStoreTxn(txn)
 	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id string) (err error) {
-	if _, ok := mgr.IDMap.LoadAndDelete(id); !ok {
+	if _, ok := mgr.loadAndDeleteTxn(id); !ok {
 		err = moerr.NewTxnNotFoundNoCtx()
-		logutil.Warnf("Txn %s not found", id)
-		return
+	}
+	if err != nil {
+		logutil.Warn(
+			"DeleteTxnError",
+			zap.String("txn", id),
+			zap.Error(err),
+		)
 	}
 	return
 }
@@ -227,10 +275,11 @@ func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
 }
 
 func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
-	if res, ok := mgr.IDMap.Load(id); ok {
-		return res.(txnif.AsyncTxn)
+	res, ok := mgr.loadTxn(id)
+	if !ok || res == nil {
+		return nil
 	}
-	return nil
+	return res.(txnif.AsyncTxn)
 }
 
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
@@ -574,7 +623,7 @@ func (mgr *TxnManager) OnException(new error) {
 // files that have been gc will not be used.
 func (mgr *TxnManager) MinTSForTest() types.TS {
 	minTS := types.MaxTs()
-	mgr.IDMap.Range(func(key, value any) bool {
+	mgr.txns.store.Range(func(key, value any) bool {
 		txn := value.(txnif.AsyncTxn)
 		startTS := txn.GetStartTS()
 		if startTS.LT(&minTS) {
