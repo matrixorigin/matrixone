@@ -18,10 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"sort"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -276,8 +275,8 @@ func (ls *LocalDisttaeDataSource) Next(
 ) (info *objectio.BlockInfo, state engine.DataState, err error) {
 
 	if ls.memPKFilter == nil {
-		ff := filter.(engine_util.MemPKFilter)
-		ls.memPKFilter = &ff
+		ff := filter.(*engine_util.MemPKFilter)
+		ls.memPKFilter = ff
 	}
 
 	if len(cols) == 0 {
@@ -350,6 +349,11 @@ func (ls *LocalDisttaeDataSource) Next(
 			return
 
 		case engine.Persisted:
+			if ok1, ok2 := ls.memPKFilter.Exact(); ok1 && ok2 {
+				state = engine.End
+				return
+			}
+
 			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				state = engine.End
 				return
@@ -685,6 +689,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 	if summaryBuf != nil {
 		summaryBuf.WriteString(fmt.Sprintf("[PScan] scan:%d, inserted:%d, delInFile:%d, outBatchRowCnt: %v\n", scan, inserted, delInFile, outBatch.RowCount()))
+	}
+
+	if outBatch.RowCount()-inputRowCnt == 1 {
+		ls.memPKFilter.RecordExactHit()
 	}
 
 	return nil
