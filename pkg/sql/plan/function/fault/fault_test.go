@@ -15,91 +15,119 @@
 package fj
 
 import (
-	"context"
+	"testing"
+
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/require"
-	"sync"
-	"testing"
-	"time"
 )
 
-//func Test_CanHandleCnFaultInjection(t *testing.T) {
-//	var a1, a2, a3, a4 struct {
-//		proc      *process.Process
-//		service   serviceType
-//		parameter string
-//		sender    requestSender
-//	}
-//	id := uuid.New().String()
-//	addr := "127.0.0.1:7777"
-//	initRuntime([]string{id}, []string{addr})
-//
-//	runtime.SetupServiceBasedRuntime(id, runtime.ServiceRuntime(""))
-//
-//	cli, err := qclient.NewQueryClient(id, morpc.Config{})
-//	require.Nil(t, err)
-//
-//	proc := new(process.Process)
-//	proc.Base = &process.BaseProcess{}
-//	proc.Base.QueryClient = cli
-//
-//	// testing query with wrong serviceType
-//	a1.proc = proc
-//	a1.service = "log"
-//	ret, err := handleAddFaultPoint(a1.proc, a1.service, a1.parameter, a1.sender)
-//	require.Equal(t, ret, Result{})
-//	require.Equal(t, err, moerr.NewWrongServiceNoCtx("CN or DN", string(a1.service)))
-//
-//	// testing query with tn cmd
-//	a2.proc = proc
-//	a2.service = tn
-//	a2.parameter = "test.:::.echo.0."
-//	_, err = handleAddFaultPoint(a2.proc, a2.service, a2.parameter, a2.sender)
-//	require.NoError(t, err)
-//
-//	// testing query with cn cmd
-//	a3.proc = proc
-//	a3.service = cn
-//	a3.parameter = "all.enable_fault_injection"
-//	ret, err = handleAddFaultPoint(a3.proc, a3.service, a3.parameter, a3.sender)
-//	require.NoError(t, err)
-//	res := CNResponse{
-//		CNid:      id,
-//		ReturnStr: "fault injection enabled, previous status: disabled",
-//	}
-//
-//	require.Equal(t, ret, Result{
-//		Method: AddFaultPointMethod,
-//		Data:   []CNResponse{res},
-//	})
-//
-//	a4.proc = proc
-//	a4.service = cn
-//	a4.parameter = "all.test.:::.echo.0."
-//	ret, err = handleAddFaultPoint(a4.proc, a4.service, a4.parameter, a4.sender)
-//	require.NoError(t, err)
-//
-//	res.ReturnStr = "OK"
-//
-//	require.Equal(t, ret, Result{
-//		Method: AddFaultPointMethod,
-//		Data:   []CNResponse{res},
-//	})
-//
-//}
+func Test_CanHandleFaultInjection(t *testing.T) {
+	id := uuid.New().String()
+	addr := "127.0.0.1:7777"
+	initRuntime([]string{id}, []string{addr})
+
+	runtime.SetupServiceBasedRuntime(id, runtime.ServiceRuntime(""))
+
+	cli, err := qclient.NewQueryClient(id, morpc.Config{})
+	require.Nil(t, err)
+
+	proc := new(process.Process)
+	proc.Base = &process.BaseProcess{}
+	proc.Base.QueryClient = cli
+
+	// query with wrong command
+	res := []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "unknown fault injection command",
+	}}
+	ret := CNFaultInject([]string{}, "enable", "", proc)
+	require.Equal(t, res, ret)
+
+	// enable fault injection
+	res = []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "Fault injection enabled. Previous status: disabled",
+	}}
+	ret = CNFaultInject([]string{}, "ENABLE_FAULT_INJECTION", "", proc)
+	require.Equal(t, res, ret)
+
+	// status fault point
+	res = []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "Fault injection is enabled",
+	}}
+	ret = CNFaultInject([]string{}, "STATUS_FAULT_POINT", "", proc)
+	require.Equal(t, res, ret)
+
+	// add fault point
+	res = []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "OK",
+	}}
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test.:::.echo.0..true", proc)
+	require.Equal(t, res, ret)
+
+	// modify constant fault point
+	res = []PodResponse{{
+		PodType:  cn,
+		PodID:    id,
+		ErrorStr: "internal error: failed to add fault point; it may already exist and be constant.",
+	}}
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test.:::.echo.0..true", proc)
+	require.Equal(t, res, ret)
+
+	// list fault point
+	res = []PodResponse{{
+		PodType: cn,
+		PodID:   id,
+		ReturnList: []fault.Point{{
+			Name:     "test",
+			Iarg:     0,
+			Sarg:     "",
+			Constant: true,
+		}},
+	}}
+	ret = CNFaultInject([]string{}, "LIST_FAULT_POINT", "", proc)
+	require.Equal(t, res, ret)
+
+	// remove fault point
+	res = []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "Fault point 'test' successfully removed. Previously existed: true",
+	}}
+	ret = CNFaultInject([]string{}, "REMOVE_FAULT_POINT", "test", proc)
+	require.Equal(t, res, ret)
+
+	// remove non-existent fault point
+	res = []PodResponse{{
+		PodType:   cn,
+		PodID:     id,
+		ReturnStr: "Fault point 'test' successfully removed. Previously existed: false",
+	}}
+	ret = CNFaultInject([]string{}, "REMOVE_FAULT_POINT", "test", proc)
+	require.Equal(t, res, ret)
+
+	// disable fault injection
+	res = []PodResponse{{
+		PodType:   tn,
+		PodID:     id,
+		ReturnStr: "Fault injection disabled. Previous status: enabled",
+	}}
+	ret = TNFaultInject([]string{}, "DISABLE_FAULT_INJECTION", "", proc)
+}
 
 func Test_CanTransferCnFaultInject(t *testing.T) {
 	var a1 struct {
@@ -143,55 +171,19 @@ func Test_CanTransferCnFaultInject(t *testing.T) {
 		qs2.Close()
 	}()
 
-	rs := TNFaultInject([]string{}, "enable_fault_injection", "", a1.proc)
-	t.Logf("%v", rs)
-
-}
-
-func mockHandleFaultInject(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.FaultInjectResponse = new(query.FaultInjectResponse)
-	resp.FaultInjectResponse.Resp = fault.HandleFaultInject(
-		ctx, req.FaultInjectRequest.Method, req.FaultInjectRequest.Parameters,
-	)
-	return nil
-}
-
-func initRuntime(uuids []string, queryAddress []string) {
-	runtime.RunTest(
-		"",
-		func(rt runtime.Runtime) {
-			cns := make([]metadata.CNService, len(uuids))
-			for idx := range uuids {
-				cns[idx] = metadata.CNService{
-					ServiceID:    uuids[idx],
-					QueryAddress: queryAddress[idx],
-				}
-				runtime.SetupServiceBasedRuntime(uuids[idx], rt)
-			}
-
-			moCluster := clusterservice.NewMOCluster(
-				"",
-				new(testHAKeeperClient),
-				time.Duration(time.Second),
-				clusterservice.WithDisableRefresh(),
-				clusterservice.WithServices(cns, nil))
-			rt.SetGlobalVariables(runtime.ClusterService, moCluster)
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	// enable fault injection
+	res := []PodResponse{
+		{
+			PodType:   cn,
+			PodID:     uuids[0],
+			ReturnStr: "Fault injection enabled. Previous status: disabled",
 		},
-	)
-
-}
-
-type testHAKeeperClient struct {
-	sync.RWMutex
-	value logpb.ClusterDetails
-	err   error
-}
-
-func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
-	c.RLock()
-	defer c.RUnlock()
-	// deep copy the cluster details to avoid data race.
-	copied := deepcopy.Copy(c.value)
-	return copied.(logpb.ClusterDetails), c.err
+		{
+			PodType:   cn,
+			PodID:     uuids[1],
+			ReturnStr: "Fault injection enabled. Previous status: enabled",
+		},
+	}
+	ret := CNFaultInject([]string{}, "ENABLE_FAULT_INJECTION", "", a1.proc)
+	require.Equal(t, res, ret)
 }

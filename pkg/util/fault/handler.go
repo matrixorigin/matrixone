@@ -73,7 +73,7 @@ func handleRemoveFaultPoint(ctx context.Context, parameter string) string {
 	if err != nil {
 		return err.Error()
 	}
-	return fmt.Sprintf("Fault point '%s' removed. Previously existed: %v", parameter, res)
+	return fmt.Sprintf("Fault point '%s' successfully removed. Previously existed: %v", parameter, res)
 }
 
 func handleAddFaultPoint(ctx context.Context, parameter string) string {

@@ -318,7 +318,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	if out == nil {
 		return moerr.NewInternalError(
 			ctx,
-			"failed to add fault injection point; it may already exist and be constant.",
+			"failed to add fault point; it may already exist and be constant.",
 		)
 	}
 	return nil
