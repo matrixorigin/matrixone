@@ -66,7 +66,11 @@ func (op *Op) Waitable() bool {
 }
 
 func (op *Op) WaitDone(ctx context.Context) error {
-	if op.WaitedOnce.CompareAndSwap(false, true) {
+	if op.ErrorC == nil {
+		return moerr.NewTAEErrorNoCtx("wait done without error channel")
+	}
+
+	if !op.WaitedOnce.CompareAndSwap(false, true) {
 		select {
 		case <-op.ErrorC:
 			return op.Err
@@ -79,9 +83,6 @@ func (op *Op) WaitDone(ctx context.Context) error {
 		close(op.ErrorC)
 	}()
 
-	if op.ErrorC == nil {
-		return moerr.NewTAEErrorNoCtx("wait done without error channel")
-	}
 	select {
 	case err := <-op.ErrorC:
 		return err
