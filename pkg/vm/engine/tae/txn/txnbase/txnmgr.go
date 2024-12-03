@@ -81,6 +81,39 @@ func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
+type LoopController struct {
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	looper    func(context.Context)
+	onceStart sync.Once
+	onceStop  sync.Once
+}
+
+func NewLoopController(looper func(context.Context)) *LoopController {
+	ctl := new(LoopController)
+	ctl.looper = looper
+	ctl.ctx, ctl.cancel = context.WithCancel(context.Background())
+	return ctl
+}
+
+func (ctl *LoopController) Start() {
+	ctl.onceStart.Do(func() {
+		ctl.wg.Add(1)
+		go func() {
+			defer ctl.wg.Done()
+			ctl.looper(ctl.ctx)
+		}()
+	})
+}
+
+func (ctl *LoopController) Stop() {
+	ctl.onceStop.Do(func() {
+		ctl.cancel()
+		ctl.wg.Wait()
+	})
+}
+
 type TxnManager struct {
 	sm.ClosedState
 	PreparingSM     sm.StateMachine
@@ -92,10 +125,9 @@ type TxnManager struct {
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
 	workers         *ants.Pool
+
+	heartbeatCtl atomic.Pointer[LoopController]
 
 	ts struct {
 		mu        sync.Mutex
@@ -119,7 +151,6 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
-		wg:              sync.WaitGroup{},
 	}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
@@ -128,7 +159,6 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
-	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
 }
@@ -238,24 +268,6 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
 	return
-}
-
-func (mgr *TxnManager) heartbeat(ctx context.Context) {
-	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
-	for {
-		select {
-		case <-mgr.ctx.Done():
-			return
-		case <-heartbeatTicker.C:
-			op := mgr.newHeartbeatOpTxn(ctx)
-			op.Txn.(*Txn).Add(1)
-			_, err := mgr.PreparingSM.EnqueueReceived(op)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
 }
 
 func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
@@ -605,16 +617,66 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	return minTS
 }
 
+func (mgr *TxnManager) StopHeartbeat() {
+	old := mgr.heartbeatCtl.Load()
+	if old == nil {
+		return
+	}
+	old.Stop()
+	for swapped := mgr.heartbeatCtl.CompareAndSwap(old, nil); !swapped; {
+		if old = mgr.heartbeatCtl.Load(); old != nil {
+			old.Stop()
+		}
+	}
+}
+
+func (mgr *TxnManager) ResetHeartbeat() {
+	old := mgr.heartbeatCtl.Load()
+	if old != nil {
+		old.Stop()
+	}
+	newCtl := NewLoopController(func(ctx context.Context) {
+		prevReportTime := time.Now()
+		ticker := time.NewTicker(time.Millisecond * 2)
+		logutil.Info(
+			"TxnManager-Heartbeat-Start",
+			zap.Duration("interval", time.Millisecond*2),
+		)
+		for {
+			select {
+			case <-ctx.Done():
+				logutil.Info("TxnManager-Heartbeat-Exit")
+				return
+			case <-ticker.C:
+				op := mgr.newHeartbeatOpTxn(ctx)
+				op.Txn.(*Txn).Add(1)
+				if err := mgr.OnOpTxn(op); err != nil {
+					if time.Since(prevReportTime) > time.Second*10 {
+						logutil.Warn(
+							"TxnManager-HB-Error",
+							zap.Error(err),
+						)
+					}
+				}
+			}
+		}
+	})
+	for swapped := mgr.heartbeatCtl.CompareAndSwap(old, newCtl); !swapped; {
+		if old = mgr.heartbeatCtl.Load(); old != nil {
+			old.Stop()
+		}
+	}
+	newCtl.Start()
+}
+
 func (mgr *TxnManager) Start(ctx context.Context) {
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
-	mgr.wg.Add(1)
-	go mgr.heartbeat(ctx)
+	mgr.ResetHeartbeat()
 }
 
 func (mgr *TxnManager) Stop() {
-	mgr.cancel()
-	mgr.wg.Wait()
+	mgr.StopHeartbeat()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
 	mgr.OnException(sm.ErrClose)
