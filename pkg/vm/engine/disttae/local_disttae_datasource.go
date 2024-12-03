@@ -973,6 +973,14 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 
 	leftRows = offsets
 
+	if len(leftRows) == logtailreplay.IndexScaleOne {
+		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, *types.NewRowid(bid, uint32(offsets[0]))) {
+			return nil
+		}
+
+		return leftRows
+	}
+
 	delIter, fastReturn := ls.getInMemDelIter(bid, len(offsets))
 	if fastReturn {
 		return leftRows
