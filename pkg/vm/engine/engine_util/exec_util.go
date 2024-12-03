@@ -17,6 +17,9 @@ package engine_util
 import (
 	"context"
 
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -98,6 +101,7 @@ func ForeachObjectsExecute(
 
 func FilterObjects(
 	ctx context.Context,
+	rangesParam engine.RangesParam,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
 	objectFilterOp ObjectFilterOp,
@@ -121,6 +125,10 @@ func FilterObjects(
 	err error,
 ) {
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
+		//if need to shuffle objects
+		if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
+			return
+		}
 		var ok bool
 		totalBlocks += int(objStats.BlkCnt())
 		if fastFilterOp != nil {
@@ -217,20 +225,21 @@ func TryFastFilterBlocks(
 	ctx context.Context,
 	snapshotTS timestamp.Timestamp,
 	tableDef *plan.TableDef,
-	exprs []*plan.Expr,
+	rangesParam engine.RangesParam,
 	snapshot *logtailreplay.PartitionState,
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (ok bool, err error) {
-	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, tableDef, fs)
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(rangesParam.BlockFilters, tableDef, fs)
 	if !ok {
 		return false, nil
 	}
 
 	err = FilterTxnObjects(
 		ctx,
+		rangesParam,
 		snapshotTS,
 		fastFilterOp,
 		loadOp,
@@ -249,6 +258,7 @@ func TryFastFilterBlocks(
 
 func FilterTxnObjects(
 	ctx context.Context,
+	rangesParam engine.RangesParam,
 	snapshotTS timestamp.Timestamp,
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -297,6 +307,7 @@ func FilterTxnObjects(
 		fastFilterTotal, fastFilterHit,
 		err := FilterObjects(
 		ctx,
+		rangesParam,
 		fastFilterOp,
 		loadOp,
 		objectFilterOp,
