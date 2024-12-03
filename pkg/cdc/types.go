@@ -287,8 +287,10 @@ func (bat *AtomicBatch) Close() {
 	for _, oneBat := range bat.Batches {
 		oneBat.Clean(bat.Mp)
 	}
-	bat.Rows.Clear()
-	bat.Rows = nil
+	if bat.Rows != nil {
+		bat.Rows.Clear()
+		bat.Rows = nil
+	}
 	bat.Batches = nil
 	bat.Mp = nil
 }
