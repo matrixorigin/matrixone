@@ -41,6 +41,8 @@ import (
 
 const (
 	IndexScaleZero        = 0
+	IndexScaleOne         = 1
+	IndexScaleTiny        = 10
 	MuchGreaterThanFactor = 100
 )
 
@@ -912,4 +914,24 @@ func (p *PartitionState) IsValid() bool {
 
 func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
+}
+
+func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) bool {
+	iter := p.rows.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(RowEntry{
+		Time:    ts,
+		BlockID: rowId.CloneBlockID(),
+		RowID:   rowId,
+	}) {
+		return false
+	}
+
+	item := iter.Item()
+	if !item.Deleted {
+		return false
+	}
+
+	return item.RowID.EQ(&rowId)
 }
