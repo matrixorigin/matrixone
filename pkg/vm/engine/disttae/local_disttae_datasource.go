@@ -951,7 +951,7 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 		return nil, true
 	}
 
-	if offsetCnt <= logtailreplay.IndexScaleTiny &&
+	if offsetCnt <= logtailreplay.IndexScaleTiny ||
 		ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
