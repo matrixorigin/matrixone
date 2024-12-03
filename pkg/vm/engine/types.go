@@ -41,13 +41,12 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Data             RelData
-	NeedExpandRanges bool
-	CNCNT            int32 // number of all cns
-	CNIDX            int32 // cn index , starts from 0
+	Mcpu  int
+	Id    string `json:"id"`
+	Addr  string `json:"address"`
+	Data  RelData
+	CNCNT int32 // number of all cns
+	CNIDX int32 // cn index , starts from 0
 }
 
 // Attribute is a column
@@ -703,6 +702,7 @@ type RelData interface {
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
+	AppendBlockInfoSlice(objectio.BlockInfoSlice)
 }
 
 // ForRangeShardID [begin, end)
@@ -726,6 +726,9 @@ func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
 	onBlock func(blk *objectio.BlockInfo) (bool, error)) error {
+	if begin >= relData.DataCnt() {
+		return nil
+	}
 	slice := relData.GetBlockInfoSlice()
 	slice = slice.Slice(begin, end)
 	sliceLen := slice.Len()
@@ -818,14 +821,36 @@ type ChangesHandle interface {
 	Close() error
 }
 
+type RangesShuffleParam struct {
+	// these are for shuffle objects
+	Node               *plan.Node
+	CNCNT              int32 // number of all cns
+	CNIDX              int32 // cn index , starts from 0
+	IsLocalCN          bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
+}
+
+type RangesParam struct {
+	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks int          //estimated count of blocks
+	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
+	Policy         DataCollectPolicy
+	Rsp            *RangesShuffleParam
+}
+
+var DefaultRangesParam RangesParam = RangesParam{
+	BlockFilters:   nil,
+	PreAllocBlocks: 2,
+	TxnOffset:      0,
+	Policy:         Policy_CollectAllData,
+}
+
 type Relation interface {
 	Statistics
 
-	// Ranges Parameters:
-	// first parameter: Context
-	// second parameter: Slice of expressions used to filter the data.
-	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int, int, DataCollectPolicy) (RelData, error)
+	Ranges(context.Context, RangesParam) (RelData, error)
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
@@ -931,6 +956,7 @@ type Reader interface {
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)
+	RelationExists(context.Context, string, any) (bool, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -1063,6 +1089,10 @@ func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 }
 
 func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
 	panic("not supported")
 }
 

@@ -19,9 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/google/uuid"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -250,9 +251,6 @@ type Compile struct {
 	// sql sql text.
 	sql       string
 	originSQL string
-
-	// queryStatus is a structure to record query has done.
-	queryStatus queryDoneWaiter
 
 	retryTimes int
 	anal       *AnalyzeModule

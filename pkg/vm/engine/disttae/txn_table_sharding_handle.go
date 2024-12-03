@@ -222,13 +222,13 @@ func HandleShardingReadRanges(
 	if err != nil {
 		return nil, err
 	}
-	ranges, err := tbl.doRanges(
-		ctx,
-		param.RangesParam.Exprs,
-		int(param.RangesParam.PreAllocSize),
-		engine.DataCollectPolicy(param.RangesParam.DataCollectPolicy),
-		int(param.RangesParam.TxnOffset),
-	)
+	rangesParam := engine.RangesParam{
+		BlockFilters:   param.RangesParam.Exprs,
+		PreAllocBlocks: int(param.RangesParam.PreAllocSize),
+		TxnOffset:      int(param.RangesParam.TxnOffset),
+		Policy:         engine.DataCollectPolicy(param.RangesParam.DataCollectPolicy),
+	}
+	ranges, err := tbl.doRanges(ctx, rangesParam)
 	if err != nil {
 		return nil, err
 	}
@@ -681,10 +681,13 @@ func getTxnTable(
 	if err != nil {
 		return nil, err
 	}
+	if item == nil {
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", param.TxnTable.TableName)
+	}
 
 	tbl := newTxnTableWithItem(
 		db,
-		item,
+		*item,
 		proc,
 		engine.(*Engine),
 	)

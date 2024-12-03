@@ -269,37 +269,25 @@ func (tbl *txnTableDelegate) Size(
 	return size, nil
 }
 
-func (tbl *txnTableDelegate) Ranges(
-	ctx context.Context,
-	exprs []*plan.Expr,
-	preAllocSize int,
-	txnOffset int,
-	policy engine.DataCollectPolicy,
-) (engine.RelData, error) {
+func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.RangesParam) (engine.RelData, error) {
 	is, err := tbl.isLocal()
 	if err != nil {
 		return nil, err
 	}
 	if is {
-		return tbl.origin.Ranges(
-			ctx,
-			exprs,
-			preAllocSize,
-			txnOffset,
-			policy,
-		)
+		return tbl.origin.Ranges(ctx, rangesParam)
 	}
 
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
-	if policy != engine.Policy_CheckCommittedOnly {
-		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
+		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
 		nil,
 		tbl.origin.tableDef,
-		exprs,
+		rangesParam,
 		&blocks,
 		tbl.origin.proc.Load(),
 		uncommitted,
@@ -313,7 +301,7 @@ func (tbl *txnTableDelegate) Ranges(
 		ctx,
 		shardservice.ReadRanges,
 		func(param *shard.ReadParam) {
-			param.RangesParam.Exprs = exprs
+			param.RangesParam.Exprs = rangesParam.BlockFilters
 			param.RangesParam.PreAllocSize = 2
 			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
 			param.RangesParam.TxnOffset = 0

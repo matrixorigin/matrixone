@@ -87,5 +87,9 @@ select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000
 explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
 -- @bvt:issue
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+delete from t1 where c3%5=1;
+insert into t1 values(-1,-2,-3);
+insert into t1 values(10,11,12);
+select count(*) from t1 where c3!=0;
 drop table t3;
 drop database if exists d1;

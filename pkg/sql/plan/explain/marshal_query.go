@@ -725,6 +725,14 @@ const S3Put = "S3 Put Count"
 const S3Get = "S3 Get Count"
 const S3Delete = "S3 Delete Count"
 const S3DeleteMul = "S3 DeleteMul Count"
+const FSCacheRead = "FileService Cache Read"
+const FSCacheHit = "FileService Cache Hit"
+const FSCacheMemoryRead = "FileService Cache Memory Read"
+const FSCacheMemoryHit = "FileService Cache Memory Hit"
+const FSCacheDiskRead = "FileService Cache Disk Read"
+const FSCacheDiskHit = "FileService Cache Disk Hit"
+const FSCacheRemoteRead = "FileService Cache Remote Read"
+const FSCacheRemoteHit = "FileService Cache Remote Hit"
 
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
@@ -858,6 +866,48 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 				Value: analyzeInfo.S3DeleteMul,
 				Unit:  Statistic_Unit_count, //"count",
 			},
+			//--------------------------------------------------------------------------------------
+			{
+				Name:  FSCacheRead,
+				Value: analyzeInfo.CacheRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheHit,
+				Value: analyzeInfo.CacheHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheMemoryRead,
+				Value: analyzeInfo.CacheMemoryRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheMemoryHit,
+				Value: analyzeInfo.CacheMemoryHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheDiskRead,
+				Value: analyzeInfo.CacheDiskRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheDiskHit,
+				Value: analyzeInfo.CacheDiskHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheRemoteRead,
+				Value: analyzeInfo.CacheRemoteRead,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			{
+				Name:  FSCacheRemoteHit,
+				Value: analyzeInfo.CacheRemoteHit,
+				Unit:  Statistic_Unit_count, //"count",
+			},
+			//--------------------------------------------------------------------------------------
 		}
 
 		nw := []models.StatisticValue{
