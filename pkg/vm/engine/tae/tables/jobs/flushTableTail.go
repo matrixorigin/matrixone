@@ -841,6 +841,7 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 		if err = subtask.WaitDone(ictx); err != nil {
 			return moerr.AttachCause(ictx, err)
 		}
+		subtask.done = true
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
 			return
