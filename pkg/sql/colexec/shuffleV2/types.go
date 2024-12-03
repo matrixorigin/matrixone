@@ -27,6 +27,7 @@ var _ vm.Operator = new(ShuffleV2)
 
 type ShuffleV2 struct {
 	ctr                container
+	CurrentShuffleIdx  int32
 	ShuffleColIdx      int32
 	ShuffleType        int32
 	BucketNum          int32
@@ -72,7 +73,6 @@ func (shuffle *ShuffleV2) Release() {
 
 type container struct {
 	ending               bool
-	lastForShufflePool   bool
 	sels                 [][]int32
 	buf                  *batch.Batch
 	shufflePool          *ShufflePoolV2

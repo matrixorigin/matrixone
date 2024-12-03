@@ -70,25 +70,20 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 SENDLAST:
 	if shuffle.ctr.ending {
-		if shuffle.ctr.lastForShufflePool {
-			//send shuffle pool
-			result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
-			if result.Batch == nil {
-				result.Status = vm.ExecStop
-			} else {
-				result.Status = vm.ExecHasMore
-			}
-			shuffle.ctr.buf = result.Batch
+		//send last batch in shuffle pool
+		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
+		if result.Batch == nil {
+			result.Status = vm.ExecStop
+		} else {
+			result.Status = vm.ExecHasMore
 		}
+		shuffle.ctr.buf = result.Batch
 		return result, nil
 	}
 
 	var err error
 	for {
-		shuffle.ctr.buf, err = shuffle.ctr.shufflePool.GetFullBatch(shuffle.ctr.buf, proc)
-		if err != nil {
-			return result, err
-		}
+		shuffle.ctr.buf = shuffle.ctr.shufflePool.GetFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
 		if shuffle.ctr.buf != nil && shuffle.ctr.buf.RowCount() > 0 { // find a full batch
 			break
 		}
@@ -100,7 +95,7 @@ SENDLAST:
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
+			shuffle.ctr.shufflePool.Ending()
 			goto SENDLAST
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
