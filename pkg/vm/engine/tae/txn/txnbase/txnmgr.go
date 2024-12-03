@@ -37,6 +37,89 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
+type TxnControllerMask uint64
+type TxnControllerType = TxnControllerMask
+
+const (
+	TxnType_NormalTxn TxnControllerType = 1 << iota
+	TxnType_ReplayTxn
+	TxnType_HeartbeatTxn
+)
+
+const (
+	CtlMask_RejectCommitTxn    = TxnType_NormalTxn
+	CtlMask_RejectReplayTxn    = TxnType_ReplayTxn
+	CtlMask_RejectHeartbeatTxn = TxnType_HeartbeatTxn
+)
+
+func (m TxnControllerMask) ToMaskString() string {
+	if m.IsWriteMode() {
+		return "CtlMask-WriteMode"
+	}
+	if m.IsReplayOnlyMode() {
+		return "CtlMask-ReplayOnly"
+	}
+	if m.IsReadonlyMode() {
+		return "CtlMask-ReadonlyMode"
+	}
+	return fmt.Sprintf("CtlMask-Unknown-%d", m)
+}
+
+func (m TxnControllerMask) ToTypeString() string {
+	if m|TxnType_NormalTxn == TxnType_NormalTxn {
+		return "NormalTxn"
+	}
+	if m|TxnType_ReplayTxn == TxnType_ReplayTxn {
+		return "ReplayTxn"
+	}
+	if m|TxnType_HeartbeatTxn == TxnType_HeartbeatTxn {
+		return "HeartbeatTxn"
+	}
+	return fmt.Sprintf("UnknownTxnType-%d", m)
+}
+
+func (m TxnControllerMask) IsReplayOnlyMode() bool {
+	return m&^CtlMask_RejectReplayTxn == 0
+}
+
+func (m TxnControllerMask) IsWriteMode() bool {
+	return m == 0
+}
+
+func (m TxnControllerType) IsReadonlyMode() bool {
+	return m == CtlMask_RejectCommitTxn|CtlMask_RejectHeartbeatTxn|CtlMask_RejectReplayTxn
+}
+
+func (m TxnControllerMask) CheckTxnType(txnType TxnControllerType) bool {
+	return m&txnType == 0
+}
+
+type TxnManagerOption func(*TxnManager)
+
+func WithTxnControllerMask(mask TxnControllerMask) TxnManagerOption {
+	return func(m *TxnManager) {
+		prevMask := TxnControllerMask(m.txns.mask.Load())
+		m.txns.mask.Store(uint64(mask))
+		logutil.Info(
+			"TxnManagerController-Change",
+			zap.String("prev", prevMask.ToMaskString()),
+			zap.String("current", mask.ToMaskString()),
+		)
+	}
+}
+
+func WithWriteMode(mgr *TxnManager) {
+	WithTxnControllerMask(0)(mgr)
+}
+
+func WithReplayMode(mgr *TxnManager) {
+	WithTxnControllerMask(CtlMask_RejectCommitTxn | CtlMask_RejectHeartbeatTxn)(mgr)
+}
+
+func WithReadonlyMode(mgr *TxnManager) {
+	WithTxnControllerMask(CtlMask_RejectCommitTxn | CtlMask_RejectHeartbeatTxn | CtlMask_RejectReplayTxn)(mgr)
+}
+
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
@@ -98,6 +181,7 @@ type TxnManager struct {
 	txns         struct {
 		store *sync.Map
 		wg    sync.WaitGroup
+		mask  atomic.Uint64
 	}
 
 	ts struct {
@@ -111,7 +195,12 @@ type TxnManager struct {
 	prevPrepareTSInPrepareWAL types.TS
 }
 
-func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
+func NewTxnManager(
+	txnStoreFactory TxnStoreFactory,
+	txnFactory TxnFactory,
+	clock clock.Clock,
+	opts ...TxnManagerOption,
+) *TxnManager {
 	if txnFactory == nil {
 		txnFactory = DefaultTxnFactory
 	}
@@ -124,6 +213,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	}
 	mgr.txns.store = new(sync.Map)
 	mgr.txns.wg = sync.WaitGroup{}
+	for _, opt := range opts {
+		opt(mgr)
+	}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
@@ -149,6 +241,26 @@ func (mgr *TxnManager) Now() types.TS {
 	return mgr.ts.allocator.Alloc()
 }
 
+func (mgr *TxnManager) ToWriteMode() {
+	WithWriteMode(mgr)
+}
+
+func (mgr *TxnManager) ToReplayMode() {
+	WithReplayMode(mgr)
+}
+
+func (mgr *TxnManager) ToReadonlyMode(waitFlushed bool) {
+	WithReadonlyMode(mgr)
+	if waitFlushed {
+		now := time.Now()
+		mgr.WaitEmpty()
+		logutil.Info(
+			"Wait-TxnManager-To-Readonly",
+			zap.Duration("duration", time.Since(now)),
+		)
+	}
+}
+
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.ts.allocator.SetStart(prevTs)
@@ -158,7 +270,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.storeTxn(txn)
+	mgr.storeTxn(txn, TxnType_ReplayTxn)
 	return
 }
 
@@ -175,7 +287,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.storeTxn(txn)
+	mgr.storeTxn(txn, TxnType_NormalTxn)
 	return
 }
 
@@ -192,8 +304,12 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.storeTxn(txn)
+	err = mgr.storeTxn(txn, TxnType_NormalTxn)
 	return
+}
+
+func (mgr *TxnManager) WaitEmpty() {
+	mgr.txns.wg.Wait()
 }
 
 func (mgr *TxnManager) loadTxn(
@@ -216,23 +332,35 @@ func (mgr *TxnManager) loadAndDeleteTxn(
 }
 
 func (mgr *TxnManager) storeTxn(
-	newTxn txnif.AsyncTxn,
-) {
+	newTxn txnif.AsyncTxn, txnTyp TxnControllerType,
+) (err error) {
 	mgr.txns.wg.Add(1)
+	ctlMask := TxnControllerMask(mgr.txns.mask.Load())
+	if !ctlMask.CheckTxnType(TxnControllerType(txnTyp)) {
+		mgr.txns.wg.Done()
+		return moerr.NewTxnControlErrorNoCtx(fmt.Sprintf("txn type %d is not allowed", txnTyp))
+	}
 	mgr.txns.store.Store(newTxn.GetID(), newTxn)
+	return
 }
 
 func (mgr *TxnManager) loadOrStoreTxn(
-	newTxn txnif.AsyncTxn,
-) (txnif.AsyncTxn, bool) {
+	newTxn txnif.AsyncTxn, txnTyp TxnControllerType,
+) (txnif.AsyncTxn, bool, error) {
 	mgr.txns.wg.Add(1)
+	ctlMask := TxnControllerMask(mgr.txns.mask.Load())
+	if !ctlMask.CheckTxnType(TxnControllerType(txnTyp)) {
+		mgr.txns.wg.Done()
+		return nil, false, moerr.NewTxnControlErrorNoCtx(fmt.Sprintf("txn type %d is not allowed", txnTyp))
+	}
+
 	if actual, loaded := mgr.txns.store.LoadOrStore(
 		newTxn.GetID(), newTxn,
 	); loaded {
 		mgr.txns.wg.Done()
-		return actual.(txnif.AsyncTxn), true
+		return actual.(txnif.AsyncTxn), true, nil
 	}
-	return newTxn, false
+	return newTxn, false, nil
 }
 
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
@@ -252,7 +380,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 	store.BindTxn(txn)
-	txn, _ = mgr.loadOrStoreTxn(txn)
+	txn, _, err = mgr.loadOrStoreTxn(txn, TxnType_NormalTxn)
 	return
 }
 

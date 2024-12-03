@@ -334,6 +334,10 @@ func NewCantDelGCCheckerNoCtx() *Error {
 	return newError(Context(), ErrCantDelGCChecker)
 }
 
+func NewTxnControlErrorNoCtx(msg string) *Error {
+	return newError(Context(), ErrTxnControl, msg)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
