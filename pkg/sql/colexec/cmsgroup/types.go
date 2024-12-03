@@ -148,11 +148,6 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
-
-	// alreadyOutputAnything is a special flag for the case
-	// `select agg(x) from data_source` and data_source is empty.
-	// we should return 0 for count, and return NULL for the others.
-	alreadyOutputAnything bool
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -160,6 +155,7 @@ func (ctr *container) isDataSourceEmpty() bool {
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
+	group.ctr.hr.Free0()
 	group.ctr.result1.Free0(proc.Mp())
 	group.ctr.result2.Free0(proc.Mp())
 	group.ctr.freeAggEvaluate()
