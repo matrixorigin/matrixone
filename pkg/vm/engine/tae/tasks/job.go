@@ -65,16 +65,6 @@ type JobResult struct {
 	Res any
 }
 
-var SerialJobScheduler = new(simpleJobScheduler)
-
-type simpleJobScheduler struct{}
-
-func (s *simpleJobScheduler) Stop() {}
-func (s *simpleJobScheduler) Schedule(job *Job) (err error) {
-	job.Run()
-	return
-}
-
 type parallelJobScheduler struct {
 	pool *ants.Pool
 }
@@ -175,4 +165,37 @@ func (job *Job) Init(
 	job.exec = exec
 	job.typ = typ
 	job.wg.Add(1)
+}
+
+type CancelableJob struct {
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	job       func(context.Context)
+	onceStart sync.Once
+	onceStop  sync.Once
+}
+
+func NewCancelableJob(job func(context.Context)) *CancelableJob {
+	ctl := new(CancelableJob)
+	ctl.job = job
+	ctl.ctx, ctl.cancel = context.WithCancel(context.Background())
+	return ctl
+}
+
+func (ctl *CancelableJob) Start() {
+	ctl.onceStart.Do(func() {
+		ctl.wg.Add(1)
+		go func() {
+			defer ctl.wg.Done()
+			ctl.job(ctl.ctx)
+		}()
+	})
+}
+
+func (ctl *CancelableJob) Stop() {
+	ctl.onceStop.Do(func() {
+		ctl.cancel()
+		ctl.wg.Wait()
+	})
 }

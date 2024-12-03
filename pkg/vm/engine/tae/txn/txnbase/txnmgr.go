@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type TxnCommitListener interface {
@@ -81,39 +82,6 @@ func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
-type CancelableJob struct {
-	wg        sync.WaitGroup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	job       func(context.Context)
-	onceStart sync.Once
-	onceStop  sync.Once
-}
-
-func NewCancelableJob(job func(context.Context)) *CancelableJob {
-	ctl := new(CancelableJob)
-	ctl.job = job
-	ctl.ctx, ctl.cancel = context.WithCancel(context.Background())
-	return ctl
-}
-
-func (ctl *CancelableJob) Start() {
-	ctl.onceStart.Do(func() {
-		ctl.wg.Add(1)
-		go func() {
-			defer ctl.wg.Done()
-			ctl.job(ctl.ctx)
-		}()
-	})
-}
-
-func (ctl *CancelableJob) Stop() {
-	ctl.onceStop.Do(func() {
-		ctl.cancel()
-		ctl.wg.Wait()
-	})
-}
-
 type TxnManager struct {
 	sm.ClosedState
 	PreparingSM     sm.StateMachine
@@ -127,7 +95,7 @@ type TxnManager struct {
 	CommitListener  *batchTxnCommitListener
 	workers         *ants.Pool
 
-	heartbeatJob atomic.Pointer[CancelableJob]
+	heartbeatJob atomic.Pointer[tasks.CancelableJob]
 
 	ts struct {
 		mu        sync.Mutex
@@ -635,7 +603,7 @@ func (mgr *TxnManager) ResetHeartbeat() {
 	if old != nil {
 		old.Stop()
 	}
-	newJob := NewCancelableJob(func(ctx context.Context) {
+	newJob := tasks.NewCancelableJob(func(ctx context.Context) {
 		prevReportTime := time.Now()
 		ticker := time.NewTicker(time.Millisecond * 2)
 		defer ticker.Stop()
