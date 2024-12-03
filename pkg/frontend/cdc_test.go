@@ -935,14 +935,16 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, dbId)
 			rowValues = append(rowValues, tableId)
 		} else if idx == mSqlIdx3 {
-			count := uint64(0)
+			tableIdStr := ""
+			watermark := ""
 			err = rows.Scan(
-				&count,
+				&tableIdStr,
+				&watermark,
 			)
 			if err != nil {
 				panic(err)
 			}
-			rowValues = append(rowValues, count)
+			rowValues = append(rowValues, tableIdStr, watermark)
 		} else if idx == mSqlIdx5 {
 			watermark := ""
 			err = rows.Scan(
@@ -1171,17 +1173,16 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	),
 	)
 
-	sql3 := "select count.*1.* from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000'"
-	mock.ExpectQuery(sql3).WillReturnRows(sqlmock.NewRows(
-		[]string{
-			"count",
-		},
-	).AddRow(
-		uint64(0),
-	))
+	sql3 := "select table_id, watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000'"
+	mock.ExpectQuery(sql3).WillReturnRows(
+		sqlmock.NewRows([]string{"table_id", "watermark"}).
+			AddRow("1001_1", "0-0"))
 
 	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', '1001_0', 'db1', 't1', '0-0'.*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	sql41 := "delete from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_1'"
+	mock.ExpectExec(sql41).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectQuery(sql5).WillReturnRows(sqlmock.NewRows(
@@ -1207,6 +1208,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		assert.NoError(t, err)
 		mSql4, err := regexp.MatchString(sql4, sql)
 		assert.NoError(t, err)
+		mSql41, err := regexp.MatchString(sql41, sql)
+		assert.NoError(t, err)
 		mSql5, err := regexp.MatchString(sql5, sql)
 		assert.NoError(t, err)
 		mSql6, err := regexp.MatchString(sql6, sql)
@@ -1220,6 +1223,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			return mSqlIdx3
 		} else if mSql4 {
 			return mSqlIdx4
+		} else if mSql41 {
+			return mSqlIdx41
 		} else if mSql5 {
 			return mSqlIdx5
 		} else if mSql6 {
