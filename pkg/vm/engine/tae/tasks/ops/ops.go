@@ -66,10 +66,18 @@ func (op *Op) Waitable() bool {
 }
 
 func (op *Op) WaitDone(ctx context.Context) error {
-	if op.WaitedOnce.Load() {
-		return moerr.NewTAEErrorNoCtx("wait done twice")
+	if op.WaitedOnce.CompareAndSwap(false, true) {
+		select {
+		case <-op.ErrorC:
+			return op.Err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	defer op.WaitedOnce.Store(true)
+
+	defer func() {
+		close(op.ErrorC)
+	}()
 
 	if op.ErrorC == nil {
 		return moerr.NewTAEErrorNoCtx("wait done without error channel")
