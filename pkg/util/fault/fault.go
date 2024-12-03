@@ -359,6 +359,8 @@ type Point struct {
 	Name string `json:"name"`
 	Iarg int64  `json:"iarg"`
 	Sarg string `json:"sarg"`
+
+	Constant bool `json:"constant"`
 }
 
 func ListAllFaultPoints() string {
@@ -378,9 +380,10 @@ func ListAllFaultPoints() string {
 			break
 		}
 		points = append(points, Point{
-			Name: out.name,
-			Iarg: out.iarg,
-			Sarg: out.sarg,
+			Name:     out.name,
+			Iarg:     out.iarg,
+			Sarg:     out.sarg,
+			Constant: out.constant,
 		})
 	}
 

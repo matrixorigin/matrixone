@@ -46,7 +46,7 @@ func FaultInject(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	arg2, _ := args2.GetStrValue(0)
 
 	args := strings.Split(functionUtil.QuickBytesToStr(arg0), ".")
-	service, pods := serviceType(strings.ToUpper(args[0])), args[1:]
+	service, pods := serviceType(strings.ToUpper(args[0])), strings.Split(args[1], ",")
 	if pods[0] == "" {
 		pods = []string{}
 	}
@@ -88,7 +88,7 @@ func CNFaultInject(pods []string, command string, parameter string, proc *proces
 		// the current cn also need to process this span cmd
 		if pods[idx] == proc.GetQueryClient().ServiceID() {
 			str := fault.HandleFaultInject(proc.Ctx, command, parameter)
-			res.ReturnStr = str
+			unmarshalResp(command, []byte(str), &res)
 		} else {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_FaultInject)
 			request.FaultInjectRequest = &query.FaultInjectRequest{
@@ -100,7 +100,7 @@ func CNFaultInject(pods []string, command string, parameter string, proc *proces
 			if err != nil {
 				res.ErrorStr = err.Error()
 			} else {
-				unMarshalResp(command, []byte(resp.FaultInjectResponse.Resp), &res)
+				unmarshalResp(command, []byte(resp.FaultInjectResponse.Resp), &res)
 			}
 		}
 		cnRes = append(cnRes, res)
@@ -184,7 +184,7 @@ func TNFaultInject(pods []string, command string, parameter string, proc *proces
 			}
 			for _, resp := range responses {
 				rs := unmarshaler(resp.Payload).(api.TNStringResponse)
-				unMarshalResp(command, []byte(rs.ReturnStr), &res)
+				unmarshalResp(command, []byte(rs.ReturnStr), &res)
 			}
 		}
 		return res
@@ -197,7 +197,7 @@ func TNFaultInject(pods []string, command string, parameter string, proc *proces
 	return tnRes
 }
 
-func unMarshalResp(command string, payload []byte, res *PodResponse) {
+func unmarshalResp(command string, payload []byte, res *PodResponse) {
 	switch command {
 	case fault.ListFault:
 		if err := jsoniter.Unmarshal(payload, &res.ReturnList); err != nil {
