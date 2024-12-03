@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -90,4 +91,9 @@ func TestBuildTable_AlterView(t *testing.T) {
 	bc := NewBindContext(qb, nil)
 	_, err = qb.buildTable(tb, bc, -1, nil)
 	assert.Error(t, err)
+}
+
+func TestDefaultBigStats(t *testing.T) {
+	stats := DefaultBigStats()
+	require.Greater(t, stats.BlockNum, int32(BlockThresholdForOneCN))
 }
