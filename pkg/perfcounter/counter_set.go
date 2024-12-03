@@ -38,15 +38,15 @@ type FileServiceCounterSet struct {
 	}
 
 	Cache struct {
-		Read   stats.Counter
-		Hit    stats.Counter
+		Read   stats.Counter // CacheRead
+		Hit    stats.Counter // CacheHit
 		Memory struct {
-			Read stats.Counter
-			Hit  stats.Counter
+			Read stats.Counter // CacheMemoryRead
+			Hit  stats.Counter // CacheMemoryHit
 		}
 		Disk struct {
-			Read            stats.Counter
-			Hit             stats.Counter
+			Read            stats.Counter // CacheDiskRead
+			Hit             stats.Counter // CacheDiskHit
 			OpenIOEntryFile stats.Counter
 			OpenFullFile    stats.Counter
 			CreateFile      stats.Counter
@@ -56,8 +56,8 @@ type FileServiceCounterSet struct {
 			Evict           stats.Counter
 		}
 		Remote struct {
-			Read stats.Counter
-			Hit  stats.Counter
+			Read stats.Counter // CacheRemoteRead
+			Hit  stats.Counter // CacheRemoteHit
 		}
 	}
 
