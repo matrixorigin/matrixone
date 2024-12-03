@@ -471,7 +471,7 @@ func (r *reader) Read(
 		cols,
 		r.columns.colTypes,
 		r.columns.seqnums,
-		r.filterState.memFilter,
+		&r.filterState.memFilter,
 		mp,
 		outBatch)
 
@@ -527,6 +527,10 @@ func (r *reader) Read(
 	)
 	if err != nil {
 		return false, err
+	}
+
+	if outBatch.RowCount() == 1 {
+		r.withFilterMixin.filterState.memFilter.RecordExactHit()
 	}
 
 	if filter.Valid {
