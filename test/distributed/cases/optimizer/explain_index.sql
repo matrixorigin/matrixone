@@ -60,6 +60,21 @@ select * from t1 where c3 between 200 and 300 and c2 <650;
 -- @separator:table
 explain select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
 select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
+-- @separator:table
+explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+-- @separator:table
+explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 between 1300 and 1500;
+-- @separator:table
+explain select * from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+-- @separator:table
+explain select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+select count(*) from t1 where c2 between 100 and 500 or c2 between 1000 and 1100 or c2 between 1300 and 1500;
+-- @separator:table
+explain select * from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+-- @separator:table
+explain select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
+select count(*) from t1 where c3 between 100 and 500 or c3 between 1000 and 1100 or c3 in (271461, 271485, 271386);
 drop table if exists t2;
 create table t2(c1 int primary key, c2 int, c3 int, c4 int, c5 int);
 insert into t2 select result, (result+1) %50000, result %100, (result*3) %40000, result % 20 +1 from generate_series(1,100000)g;

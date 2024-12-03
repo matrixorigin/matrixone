@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 	"strconv"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,20 +41,12 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
+const BlockThresholdForOneCN = 512
+const costThresholdForOneCN = 160000
 const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
-
-func BlockThresholdForOneCN(ncpu int) int {
-	if ncpu == 0 {
-		ncpu = system.GoMaxProcs()
-	}
-	return ncpu * blockThresholdForTpQuery
-}
-func costThresholdForOneCN() int {
-	return system.GoMaxProcs() * costThresholdForTpQuery
-}
 
 type ExecType int
 
@@ -1392,10 +1384,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN())
-	stats.Outcnt = float64(costThresholdForOneCN())
+	stats.Cost = float64(costThresholdForOneCN + 1)
+	stats.Outcnt = float64(costThresholdForOneCN + 1)
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN(0))
+	stats.BlockNum = int32(BlockThresholdForOneCN + 1)
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1559,7 +1551,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) Exe
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1666,7 +1658,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel
 	}
 	overlap := getOverlap(s, colname)
-	if overlap < overlapThreshold/2 {
+	if overlap < overlapThreshold/3 {
 		//very good overlap
 		return sel
 	}
