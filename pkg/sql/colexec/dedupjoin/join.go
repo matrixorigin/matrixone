@@ -386,6 +386,32 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
 			if zvals[k] == 0 || vals[k] == 0 {
+				// values not in hashtable MUST NOT pass through IN-filter
+				if ctr.mp.PushedRuntimeFilterIn() {
+					var rowStr string
+					if len(ap.DedupColTypes) == 1 {
+						if ap.DedupColName == catalog.IndexTableIndexColName {
+							if ctr.vecs[0].GetType().Oid == types.T_varchar {
+								t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
+								if err == nil && len(schema) > 1 {
+									rowStr = t.ErrString(make([]int32, len(schema)))
+								}
+							}
+						}
+
+						if len(rowStr) == 0 {
+							rowStr = ctr.vecs[0].RowToString(i + k)
+						}
+					} else {
+						rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
+						if err != nil {
+							return err
+						}
+						rowStr = "(" + strings.Join(rowItems, ",") + ")"
+					}
+					return moerr.NewInternalErrorf(proc.Ctx, "runtime filter not consistent with hashtable: %s = %s", ap.DedupColName, rowStr)
+				}
+
 				continue
 			}
 
