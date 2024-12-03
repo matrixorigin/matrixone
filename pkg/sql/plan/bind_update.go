@@ -450,10 +450,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			insertCols[1].ColPos = finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 
 			updateCtxList = append(updateCtxList, &plan.UpdateCtx{
-				ObjRef:     idxNode.ObjRef,
-				TableDef:   idxNode.TableDef,
-				InsertCols: insertCols,
-				DeleteCols: deleteCols,
+				ObjRef:          idxNode.ObjRef,
+				TableDef:        idxNode.TableDef,
+				InsertCols:      insertCols,
+				DeleteCols:      deleteCols,
+				OldPartitionIdx: -1,
+				NewPartitionIdx: -1,
 			})
 		}
 	}
