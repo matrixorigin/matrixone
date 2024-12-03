@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
@@ -531,7 +533,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// only one scan reader, it can just run without any merge.
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
@@ -558,44 +559,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ms, nil
 }
 
-func (s *Scope) handleRuntimeFilter(c *Compile) error {
-	var err error
-	var runtimeInExprList []*plan.Expr
-	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
-
-	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
-		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
-			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
-			if err != nil {
-				return err
-			}
-			if ctxDone {
-				return nil
-			}
-			for i := range msgs {
-				msg, ok := msgs[i].(message.RuntimeFilterMessage)
-				if !ok {
-					panic("expect runtime filter message, receive unknown message!")
-				}
-				switch msg.Typ {
-				case message.RuntimeFilter_PASS:
-					continue
-				case message.RuntimeFilter_DROP:
-					return nil
-				case message.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
-
-					// TODO: implement BETWEEN expression
-				}
-				exprs = append(exprs, spec.Expr)
-				filters = append(filters, msg)
-			}
-		}
-	}
-
+func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) error {
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
@@ -620,7 +584,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err = arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
 		if err != nil {
 			return err
 		}
@@ -635,61 +599,109 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
 	}
 
+	for _, e := range s.DataSource.BlockFilterList {
+		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		if err != nil {
+			return err
+		}
+	}
+
+	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(s.DataSource.node.BlockFilterList) > 0 {
+		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+	}
+
 	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
 	}
 
-	if s.NodeInfo.NeedExpandRanges {
-		scanNode := s.DataSource.node
-		if scanNode == nil {
-			panic("can not expand ranges on remote pipeline!")
-		}
-
-		for _, e := range s.DataSource.BlockFilterList {
-			err = plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
-
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-		if len(s.DataSource.node.BlockFilterList) > 0 {
-			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-		}
-
-		counterSet := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, counterSet, s.IsRemote)
+	if s.NodeInfo.CNCNT == 1 {
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
 		if err != nil {
 			return err
 		}
-
-		stats := statistic.StatsInfoFromContext(ctx)
-		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:      counterSet.FileService.S3.List.Load(),
-			Head:      counterSet.FileService.S3.Head.Load(),
-			Put:       counterSet.FileService.S3.Put.Load(),
-			Get:       counterSet.FileService.S3.Get.Load(),
-			Delete:    counterSet.FileService.S3.Delete.Load(),
-			DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
-		})
-
-		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
-		//relData.AttachTombstones()
-		s.NodeInfo.Data = relData
-
-	} else if len(runtimeInExprList) > 0 {
-		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+		err = s.aggOptimize(c, rel, ctx)
 		if err != nil {
 			return err
 		}
+		return nil
 	}
 
-	err = s.aggOptimize(c, rel, ctx)
+	//need to shuffle blocks when cncnt>1
+	var commited engine.RelData
+	rsp := &engine.RangesShuffleParam{
+		Node:  s.DataSource.node,
+		CNCNT: s.NodeInfo.CNCNT,
+		CNIDX: s.NodeInfo.CNIDX,
+		Init:  false,
+	}
+	if !s.IsRemote { // this is local CN
+		rsp.IsLocalCN = true
+	}
+
+	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
 	if err != nil {
 		return err
 	}
+	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
+	if commited.DataCnt() < int(average*0.8) || commited.DataCnt() > int(average*1.2) {
+		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
+			s.DataSource.TableDef.Name, s.DataSource.node.Stats.BlockNum, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX, average, commited.DataCnt())
+	}
+
+	//collect uncommited data if it's local cn
+	if !s.IsRemote {
+		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
+		if err != nil {
+			return err
+		}
+		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
+	} else {
+		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
+		if err != nil {
+			return err
+		}
+		commited.AttachTombstones(tombstones)
+		s.NodeInfo.Data = commited
+	}
 	return nil
+}
+
+func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
+	var runtimeInExprList []*plan.Expr
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
+			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if err != nil {
+				return nil, false, err
+			}
+			if ctxDone {
+				return nil, false, nil
+			}
+			for i := range msgs {
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case message.RuntimeFilter_PASS:
+					continue
+				case message.RuntimeFilter_DROP:
+					return nil, true, nil
+				case message.RuntimeFilter_IN:
+					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					runtimeInExprList = append(runtimeInExprList, inExpr)
+
+					// TODO: implement BETWEEN expression
+				}
+			}
+		}
+	}
+
+	return runtimeInExprList, false, nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -892,30 +904,28 @@ func removeStringBetween(s, start, end string) string {
 }
 
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
-	scanNode := s.DataSource.node
-	if scanNode != nil && len(scanNode.AggList) > 0 {
-		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
+	node := s.DataSource.node
+	if node != nil && len(node.AggList) > 0 {
+		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
-
+			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			blk := s.NodeInfo.Data.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
-
-			tombstones, err := collectTombstones(c, scanNode, rel)
-			if err != nil {
-				return err
-			}
-
-			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
-			if err != nil {
-				return err
-			}
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
 			var (
 				hasTombstone bool
 				err2         error
 			)
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return err
+			}
+			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
+			if err != nil {
+				return err
+			}
 			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
@@ -925,7 +935,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 					newRelData.AppendBlockInfo(blk)
 					return true, nil
 				}
-				if c.evalAggOptimize(scanNode, blk, partialResults, partialResultTypes, columnMap) != nil {
+				if c.evalAggOptimize(node, blk, partialResults, partialResultTypes, columnMap) != nil {
 					partialResults = nil
 					return false, nil
 				}
@@ -967,9 +977,18 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
-	// receive runtime filter and optimized the datasource.
-	if err = s.handleRuntimeFilter(c); err != nil {
+	// receive runtime filter and optimize the datasource.
+	var runtimeFilterList []*plan.Expr
+	var shouldDrop bool
+	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	if err != nil {
 		return
+	}
+	if !shouldDrop {
+		err = s.handleBlockList(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
 	}
 
 	switch {

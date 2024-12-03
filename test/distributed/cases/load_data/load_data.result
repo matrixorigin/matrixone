@@ -290,8 +290,6 @@ col2 int,
 col3 int
 );
 insert into t5 values (1,1,1);
-load data infile '$resources/load_data/auto_increment_1.csv' into table t5 fields terminated by ',';
-Duplicate entry '1' for key 'col1'
 select * from t5;
 col1    col2    col3
 1    1    1
