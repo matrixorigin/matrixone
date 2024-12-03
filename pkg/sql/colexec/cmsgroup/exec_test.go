@@ -265,7 +265,7 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	// only aggregation.
+	// datasource.
 	{
 		before := proc.Mp().CurrNB()
 
@@ -312,7 +312,7 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 
-	// only aggregation and datasource is empty.
+	// datasource is empty.
 	{
 		before := proc.Mp().CurrNB()
 
@@ -357,7 +357,108 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 }
 
 func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
+	proc := testutil.NewProcess()
 
+	// datasource.
+	{
+		before := proc.Mp().CurrNB()
+		datas := []*batch.Batch{
+			getGroupTestBatch(proc.Mp(), [][2]int64{
+				{1, 1},
+				{1, 2},
+				{2, 3},
+			}),
+			getGroupTestBatch(proc.Mp(), [][2]int64{
+				{1, 1},
+				{1, 2},
+				{2, 3},
+			}),
+			batch.EmptyBatch,
+			nil,
+		}
+		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = false
+		g.Exprs = []*plan.Expr{newColumnExpression(0)}
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
+		}
+
+		exec := hackMakeAggToTest(1)
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		// get from datas[0]
+		r, err := g.Call(proc)
+		require.NoError(t, err)
+		require.NotNil(t, r.Batch)
+		if b := r.Batch; b != nil {
+			require.Equal(t, 1, len(b.Aggs))
+			require.Equal(t, exec, b.Aggs[0])
+			require.Equal(t, 1, len(b.Vecs))
+			require.Equal(t, 2, exec.groupNumber)
+			require.Equal(t, 1, exec.doBatchFillRow)
+			require.Equal(t, 0, exec.doFlushTime)
+		}
+
+		// get from datas[1]
+		exec2 := hackMakeAggToTest(1)
+		r, err = g.Call(proc)
+		require.NoError(t, err)
+		require.NotNil(t, r.Batch)
+		if b := r.Batch; b != nil {
+			require.Equal(t, 1, len(b.Aggs))
+			require.Equal(t, exec2, b.Aggs[0])
+			require.Equal(t, 1, len(b.Vecs))
+			require.Equal(t, 2, exec.groupNumber)
+			require.Equal(t, 1, exec.doBatchFillRow)
+			require.Equal(t, 0, exec.doFlushTime)
+		}
+
+		// get from Empty and nil.
+		r, err = g.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, r.Batch)
+
+		g.Free(proc, false, nil)
+		src.Free(proc, false, nil)
+
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+
+	// datasource is empty.
+	{
+		before := proc.Mp().CurrNB()
+		datas := []*batch.Batch{
+			batch.EmptyBatch,
+			nil,
+		}
+		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = false
+		g.Exprs = []*plan.Expr{newColumnExpression(0)}
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
+		}
+
+		exec := hackMakeAggToTest(1)
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		// get nil if datasource is just empty.
+		r, err := g.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, r.Batch)
+
+		{
+			require.Equal(t, 0, exec.doFlushTime)
+			require.Equal(t, 0, exec.groupNumber)
+			require.Equal(t, 0, exec.doBatchFillRow)
+		}
+
+		g.Free(proc, false, nil)
+		src.Free(proc, false, nil)
+
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
 }
 
 func getGroupTestBatch(mp *mpool.MPool, values [][2]int64) *batch.Batch {

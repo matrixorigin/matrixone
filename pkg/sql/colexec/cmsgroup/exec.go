@@ -366,7 +366,7 @@ func (group *Group) consumeBatchToGetIntermediateResult(
 		return nil, err
 	}
 
-	switch group.ctr.state {
+	switch group.ctr.mtyp {
 	case H0:
 		// without group by.
 		for i := range res.Aggs {
