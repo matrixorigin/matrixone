@@ -63,7 +63,7 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
-type computeJsonSetFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
+type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
 
 func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
@@ -102,6 +102,32 @@ func computeStringJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson
 		return bytejson.Null, err
 	}
 	return bj.Modify(paths, newVal, bytejson.JsonModifySet)
+}
+
+func computeJsonInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyInsert)
+}
+
+func computeStringJsonInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyInsert)
+}
+
+func computeJsonReplace(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
+}
+
+func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
 func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) error {
@@ -443,21 +469,50 @@ func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifySet)
+}
+
+func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyInsert)
+}
+
+func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
+}
+
+func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
 	// implement json_set function
 	// the first parameter is the json object
 	// the rest of the parameters are the path-value pairs
 	// the path is a string, the value is a json object
 	var err error
-	var fn computeJsonSetFn
+	var fn computeJsonFn
 
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	if jsonVec.GetType().Oid == types.T_json {
-		fn = computeJsonSet
-	} else {
-		fn = computeStringJsonSet
+	switch jsonFuncType {
+	case bytejson.JsonModifySet:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonSet
+		} else {
+			fn = computeStringJsonSet
+		}
+	case bytejson.JsonModifyInsert:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonInsert
+		} else {
+			fn = computeStringJsonInsert
+		}
+	case bytejson.JsonModifyReplace:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonReplace
+		} else {
+			fn = computeStringJsonReplace
+		}
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
