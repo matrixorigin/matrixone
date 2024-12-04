@@ -1147,6 +1147,24 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_results"),
 		Default:           "utf8mb4",
 	},
+
+	"cl_host": {
+		Name:              "cl_host",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_host"),
+		Default:           "CGO",
+	},
+	"cl_runtime": {
+		Name:              "cl_runtime",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_runtime"),
+		Default:           "C",
+	},
+
 	"collation_connection": {
 		Name:              "collation_connection",
 		Scope:             ScopeBoth,

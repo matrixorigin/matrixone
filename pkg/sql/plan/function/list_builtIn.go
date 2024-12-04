@@ -2139,6 +2139,7 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+
 	// function `l2_distance`
 	{
 		functionId: L2_DISTANCE,
@@ -2169,6 +2170,38 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+
+	// function `l2_distance_xc`
+	{
+		functionId: L2_DISTANCE_XC,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newXCallFunction(XCALL_L2DISTANCE_F32).XCall
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newXCallFunction(XCALL_L2DISTANCE_F64).XCall
+				},
+			},
+		},
+	},
+
 	// function `l2_distance_sq`
 	{
 		functionId: L2_DISTANCE_SQ,
@@ -2199,6 +2232,38 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+
+	// function `l2_distance_sq_xc`
+	{
+		functionId: L2_DISTANCE_SQ_XC,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newXCallFunction(XCALL_L2DISTANCE_SQ_F32).XCall
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newXCallFunction(XCALL_L2DISTANCE_SQ_F64).XCall
+				},
+			},
+		},
+	},
+
 	// function `cosine_distance`
 	{
 		functionId: COSINE_DISTANCE,

@@ -4,6 +4,7 @@
 *.exe
 *.lib
 *.swp
+*.fatbin
 bin/
 y.go
 *.output

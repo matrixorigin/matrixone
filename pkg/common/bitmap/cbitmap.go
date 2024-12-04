@@ -18,7 +18,7 @@ package bitmap
 #include "mo.h"
 
 #cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo -lm
+#cgo LDFLAGS: -L../../../cgo -lmo
 */
 import "C"
 import "unsafe"
@@ -47,4 +47,11 @@ func (n *Bitmap) C_And(m *Bitmap) {
 func (n *Bitmap) C_Or(m *Bitmap) {
 	n.TryExpand(m)
 	C.Bitmap_Or(n.cPtr(), n.cPtr(), m.cPtr(), n.cLen())
+}
+
+func (n *Bitmap) RawPtrLen() (uintptr, uintptr) {
+	if n == nil || len(n.data) == 0 {
+		return 0, 0
+	}
+	return uintptr(unsafe.Pointer(&n.data[0])), uintptr(n.len)
 }
