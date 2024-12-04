@@ -68,7 +68,12 @@ func fillRuntimeOptions(opts *options.Options) {
 	}
 }
 
-func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
+func Open(
+	ctx context.Context,
+	dirname string,
+	opts *options.Options,
+	dbOpts ...DBOption,
+) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
@@ -118,6 +123,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		Opts:      opts,
 		Closed:    new(atomic.Value),
 		usageMemo: logtail.NewTNUsageMemo(nil),
+	}
+	for _, opt := range dbOpts {
+		opt(db)
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)

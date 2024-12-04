@@ -47,8 +47,27 @@ var (
 	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
 
+type DBTxnMode uint8
+
+const (
+	DBTxnMode_Write DBTxnMode = iota
+	DBTxnMode_WriteToReplay
+	DBTxnMode_Replay
+	DBTxnMode_ReplayToWrite
+)
+
+type DBOption func(*DB)
+
+func WithTxnMode(mode DBTxnMode) DBOption {
+	return func(db *DB) {
+		db.TxnMode = mode
+	}
+}
+
 type DB struct {
-	Dir  string
+	Dir     string
+	TxnMode DBTxnMode
+
 	Opts *options.Options
 
 	usageMemo *logtail.TNUsageMemo
