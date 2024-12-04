@@ -802,6 +802,36 @@ func TestIssue11838(t *testing.T) {
 	)
 }
 
+func TestCannotBusyLoopIfWriteCIsFull(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			var wg sync.WaitGroup
+			for i := 0; i < 10; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for i := 0; i < 100; i++ {
+						req := newTestMessage(1)
+						f, err := b.Send(ctx, req)
+						assert.NoError(t, err)
+
+						_, err = f.Get()
+						assert.NoError(t, err)
+					}
+				}()
+			}
+			wg.Wait()
+		},
+		WithBackendBufferSize(1),
+	)
+}
+
 func TestCannotChangeStoppedToStopping(t *testing.T) {
 	b := &remoteBackend{}
 	b.stateMu.state = stateStopped
