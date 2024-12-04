@@ -752,7 +752,6 @@ type mergePolicyArg struct {
 	maxMergeObjN      int32
 	minOsizeQualified int32
 	maxOsizeObject    int32
-	cnMinMergeSize    int32
 	hints             []api.MergeHint
 
 	stopMerge bool
