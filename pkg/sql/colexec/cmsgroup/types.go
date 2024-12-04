@@ -71,40 +71,6 @@ type Group struct {
 	Aggs []aggexec.AggFuncExecExpression
 }
 
-// requireDefaultAggResult
-// see the comments for the filed `alreadyOutputAnything` of container.
-func (group *Group) requireDefaultAggResult(proc *process.Process) (*batch.Batch, bool, error) {
-	if !group.NeedEval {
-		return nil, false, nil
-	}
-	if group.ctr.alreadyOutputAnything || len(group.Exprs) > 0 {
-		return nil, false, nil
-	}
-	group.ctr.result1.cleanLastPopped(proc.Mp())
-
-	aggs, err := group.generateAggExec(proc)
-	if err != nil {
-		return nil, false, err
-	}
-	b := batch.NewOffHeapEmpty()
-	group.ctr.result1.Popped = b
-	b.Aggs = aggs
-	b.SetRowCount(1)
-	for i := range b.Aggs {
-		if err = b.Aggs[i].GroupGrow(1); err != nil {
-			return nil, false, err
-		}
-	}
-	for i := range b.Aggs {
-		vs, er := b.Aggs[i].Flush()
-		if er != nil {
-			return nil, false, er
-		}
-		b.Vecs = append(b.Vecs, vs...)
-	}
-	return group.ctr.result1.Popped, true, nil
-}
-
 func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
 

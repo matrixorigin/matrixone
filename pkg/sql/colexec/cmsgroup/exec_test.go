@@ -127,10 +127,10 @@ func hackMakeAggToTest(cnt int) *hackAggExecToTest {
 // 2. batch list : empty, nil.
 // 3. batch list : nil.
 
-func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
+func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	// Only Aggregation.
+	// datasource.
 	{
 		before := proc.Mp().CurrNB()
 
@@ -190,7 +190,47 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 
-	// Aggregation and GroupBy clause.
+	// datasource is empty.
+	{
+		before := proc.Mp().CurrNB()
+
+		exec := hackMakeAggToTest(1)
+		datas := []*batch.Batch{
+			nil,
+		}
+		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = true
+		g.Exprs, g.GroupingFlag = nil, nil
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(0)}, nil),
+		}
+
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		// get the initial result.
+		r, err := g.Call(proc)
+		require.NoError(t, err)
+		require.NotNil(t, r.Batch)
+		if b := r.Batch; b != nil {
+			require.Equal(t, 1, len(b.Vecs))
+			require.Equal(t, hackVecResult, b.Vecs[0])
+			require.Equal(t, 0, len(b.Aggs))
+			require.Equal(t, 1, exec.doFlushTime)
+			require.Equal(t, 1, exec.groupNumber)
+		}
+
+		g.Free(proc, false, nil)
+		src.Free(proc, false, nil)
+
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+}
+
+func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	// datasource.
 	{
 		before := proc.Mp().CurrNB()
 
@@ -258,6 +298,33 @@ func TestGroup_ShouldDoFinalEvaluation(t *testing.T) {
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
 
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+
+	// datasource is empty.
+	{
+		before := proc.Mp().CurrNB()
+		exec := hackMakeAggToTest(1)
+		datas := []*batch.Batch{
+			nil,
+		}
+		g, src := getGroupOperatorWithInputs(datas)
+		g.NeedEval = true
+		g.Exprs = []*plan.Expr{newColumnExpression(0)}
+		g.Aggs = []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
+		}
+
+		require.NoError(t, src.Prepare(proc))
+		require.NoError(t, g.Prepare(proc))
+
+		r, err := g.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, r.Batch)
+
+		exec.Free()
+		g.Free(proc, false, nil)
+		src.Free(proc, false, nil)
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 }

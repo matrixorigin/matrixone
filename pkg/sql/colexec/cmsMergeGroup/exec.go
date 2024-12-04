@@ -107,5 +107,6 @@ func (mergeGroup *MergeGroup) getInputBatch(proc *process.Process) (*batch.Batch
 }
 
 func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch) error {
+
 	return nil
 }

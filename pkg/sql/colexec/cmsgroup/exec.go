@@ -171,6 +171,12 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		}
 		if res == nil {
 			group.ctr.state = vm.Eval
+
+			if group.ctr.isDataSourceEmpty() && len(group.Exprs) == 0 {
+				if err = group.generateInitialResult1WithoutGroupBy(proc); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		if res.IsEmpty() {
@@ -184,6 +190,22 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 	}
 }
 
+func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) error {
+	aggs, err := group.generateAggExec(proc)
+	if err != nil {
+		return err
+	}
+	limit := aggexec.SyncAggregatorsChunkSize(aggs)
+
+	group.ctr.result1.InitOnlyAgg(limit, aggs)
+	for i := range group.ctr.result1.AggList {
+		if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (group *Group) consumeBatchToGetFinalResult(
 	proc *process.Process, bat *batch.Batch) error {
 
@@ -195,17 +217,8 @@ func (group *Group) consumeBatchToGetFinalResult(
 	case H0:
 		// without group by.
 		if group.ctr.result1.IsEmpty() {
-			aggs, err := group.generateAggExec(proc)
-			if err != nil {
+			if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 				return err
-			}
-			limit := aggexec.SyncAggregatorsChunkSize(aggs)
-
-			group.ctr.result1.InitOnlyAgg(limit, aggs)
-			for i := range group.ctr.result1.AggList {
-				if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
-					return err
-				}
 			}
 		}
 
