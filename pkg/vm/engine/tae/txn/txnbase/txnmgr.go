@@ -37,87 +37,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type TxnControllerMask uint64
-type TxnControllerType = TxnControllerMask
-
-const (
-	TxnType_NormalTxn TxnControllerType = 1 << iota
-	TxnType_ReplayTxn
-	TxnType_HeartbeatTxn
-)
-
-const (
-	CtlMask_RejectCommitTxn    = TxnType_NormalTxn
-	CtlMask_RejectReplayTxn    = TxnType_ReplayTxn
-	CtlMask_RejectHeartbeatTxn = TxnType_HeartbeatTxn
-)
-
-func (m TxnControllerMask) ToMaskString() string {
-	if m.IsWriteMode() {
-		return "CtlMask-WriteMode"
-	}
-	if m.IsReplayOnlyMode() {
-		return "CtlMask-ReplayOnly"
-	}
-	if m.IsReadonlyMode() {
-		return "CtlMask-ReadonlyMode"
-	}
-	return fmt.Sprintf("CtlMask-Unknown-%d", m)
-}
-
-func (m TxnControllerMask) ToTypeString() string {
-	if m|TxnType_NormalTxn == TxnType_NormalTxn {
-		return "NormalTxn"
-	}
-	if m|TxnType_ReplayTxn == TxnType_ReplayTxn {
-		return "ReplayTxn"
-	}
-	if m|TxnType_HeartbeatTxn == TxnType_HeartbeatTxn {
-		return "HeartbeatTxn"
-	}
-	return fmt.Sprintf("UnknownTxnType-%d", m)
-}
-
-func (m TxnControllerMask) IsReplayOnlyMode() bool {
-	return m&^CtlMask_RejectReplayTxn == 0
-}
-
-func (m TxnControllerMask) IsWriteMode() bool {
-	return m == 0
-}
-
-func (m TxnControllerType) IsReadonlyMode() bool {
-	return m == CtlMask_RejectCommitTxn|CtlMask_RejectHeartbeatTxn|CtlMask_RejectReplayTxn
-}
-
-func (m TxnControllerMask) CheckTxnType(txnType TxnControllerType) bool {
-	return m&txnType == 0
-}
-
 type TxnManagerOption func(*TxnManager)
 
-func WithTxnControllerMask(mask TxnControllerMask) TxnManagerOption {
+// WithTxnSkipFlag set the TxnSkipFlag
+// 0 or TxnSkipFlag_None: skip nothing
+// TxnFlag_Normal: skip normal txn
+// TxnFlag_Replay|TxnFlag_Normal: skip normal and replay txn
+// TxnFlag_Heartbeat|TxnFlag_Normal|TxnFlag_Replay or TxnSkipFlag_All: skip all txn
+func WithTxnSkipFlag(flag TxnFlag) TxnManagerOption {
 	return func(m *TxnManager) {
-		prevMask := TxnControllerMask(m.txns.mask.Load())
-		m.txns.mask.Store(uint64(mask))
+		prevFlag := TxnFlag(m.txns.skipFlags.Load())
+		m.txns.skipFlags.Store(uint64(flag))
 		logutil.Info(
-			"TxnManagerController-Change",
-			zap.String("prev", prevMask.ToMaskString()),
-			zap.String("current", mask.ToMaskString()),
+			"TxnManager-TxnSkipFlag-Change",
+			zap.String("prev", prevFlag.String()),
+			zap.String("current", flag.String()),
 		)
 	}
 }
 
+// Here define the write mode:
+// TxnSkipFlag_None: skip nothing
 func WithWriteMode(mgr *TxnManager) {
-	WithTxnControllerMask(0)(mgr)
+	WithTxnSkipFlag(TxnSkipFlag_None)(mgr)
 }
 
+// Here define the replay mode:
+// TxnFlag_Normal|TxnFlag_Heartbeat: skip normal and heartbeat txn
 func WithReplayMode(mgr *TxnManager) {
-	WithTxnControllerMask(CtlMask_RejectCommitTxn | CtlMask_RejectHeartbeatTxn)(mgr)
-}
-
-func WithReadonlyMode(mgr *TxnManager) {
-	WithTxnControllerMask(CtlMask_RejectCommitTxn | CtlMask_RejectHeartbeatTxn | CtlMask_RejectReplayTxn)(mgr)
+	WithTxnSkipFlag(TxnFlag_Normal | TxnFlag_Heartbeat)(mgr)
 }
 
 type TxnCommitListener interface {
@@ -178,10 +126,21 @@ type TxnManager struct {
 	workers         *ants.Pool
 
 	heartbeatJob atomic.Pointer[tasks.CancelableJob]
-	txns         struct {
+
+	txns struct {
+		// store all txns
 		store *sync.Map
-		wg    sync.WaitGroup
-		mask  atomic.Uint64
+
+		// wg is used to wait all txns to be done
+		wg sync.WaitGroup
+
+		// TxnSkipFlag to skip some txn type
+		// 0: skip nothing
+		// TxnFlag_Normal: skip normal txn
+		// TxnFlag_Replay: skip replay txn
+		// TxnFlag_Heartbeat: skip heartbeat txn
+		// TxnFlag_Normal | TxnFlag_Replay: skip normal and replay txn
+		skipFlags atomic.Uint64
 	}
 
 	ts struct {
@@ -245,17 +204,13 @@ func (mgr *TxnManager) ToWriteMode() {
 	WithWriteMode(mgr)
 }
 
-func (mgr *TxnManager) ToReplayMode() {
+func (mgr *TxnManager) ToReplayMode(waitFlushed bool) {
 	WithReplayMode(mgr)
-}
-
-func (mgr *TxnManager) ToReadonlyMode(waitFlushed bool) {
-	WithReadonlyMode(mgr)
 	if waitFlushed {
 		now := time.Now()
 		mgr.WaitEmpty()
 		logutil.Info(
-			"Wait-TxnManager-To-Readonly",
+			"Wait-TxnManager-To-ReplayMode",
 			zap.Duration("duration", time.Since(now)),
 		)
 	}
@@ -270,7 +225,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.storeTxn(txn, TxnType_ReplayTxn)
+	mgr.storeTxn(txn, TxnFlag_Replay)
 	return
 }
 
@@ -287,7 +242,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.storeTxn(txn, TxnType_NormalTxn)
+	mgr.storeTxn(txn, TxnFlag_Normal)
 	return
 }
 
@@ -304,7 +259,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	err = mgr.storeTxn(txn, TxnType_NormalTxn)
+	err = mgr.storeTxn(txn, TxnFlag_Normal)
 	return
 }
 
@@ -331,27 +286,36 @@ func (mgr *TxnManager) loadAndDeleteTxn(
 	return nil, false
 }
 
+// flag: specify the txn type. only one bit is set
 func (mgr *TxnManager) storeTxn(
-	newTxn txnif.AsyncTxn, txnTyp TxnControllerType,
+	newTxn txnif.AsyncTxn, flag TxnFlag,
 ) (err error) {
 	mgr.txns.wg.Add(1)
-	ctlMask := TxnControllerMask(mgr.txns.mask.Load())
-	if !ctlMask.CheckTxnType(TxnControllerType(txnTyp)) {
+
+	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
+	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
-		return moerr.NewTxnControlErrorNoCtx(fmt.Sprintf("txn type %d is not allowed", txnTyp))
+		return moerr.NewTxnControlErrorNoCtx(
+			fmt.Sprintf("%s Skip %s", skipFlags.String(), flag.String()),
+		)
 	}
+
 	mgr.txns.store.Store(newTxn.GetID(), newTxn)
 	return
 }
 
+// flag: specify the txn type. only one bit is set
 func (mgr *TxnManager) loadOrStoreTxn(
-	newTxn txnif.AsyncTxn, txnTyp TxnControllerType,
+	newTxn txnif.AsyncTxn, flag TxnFlag,
 ) (txnif.AsyncTxn, bool, error) {
 	mgr.txns.wg.Add(1)
-	ctlMask := TxnControllerMask(mgr.txns.mask.Load())
-	if !ctlMask.CheckTxnType(TxnControllerType(txnTyp)) {
+
+	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
+	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
-		return nil, false, moerr.NewTxnControlErrorNoCtx(fmt.Sprintf("txn type %d is not allowed", txnTyp))
+		return nil, false, moerr.NewTxnControlErrorNoCtx(
+			fmt.Sprintf("%s Skip %s", skipFlags.String(), flag.String()),
+		)
 	}
 
 	if actual, loaded := mgr.txns.store.LoadOrStore(
@@ -380,7 +344,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 	store.BindTxn(txn)
-	txn, _, err = mgr.loadOrStoreTxn(txn, TxnType_NormalTxn)
+	txn, _, err = mgr.loadOrStoreTxn(txn, TxnFlag_Normal)
 	return
 }
 
