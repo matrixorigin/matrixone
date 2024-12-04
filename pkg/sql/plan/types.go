@@ -225,16 +225,6 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
-type cteInBinding struct {
-	//ctx where the cte is defined
-	ctx  *BindContext
-	name string
-}
-
-func (cte *cteInBinding) isSameCte(o *cteInBinding) bool {
-	return cte.ctx == o.ctx && cte.name == o.name
-}
-
 type BindContext struct {
 	binder Binder
 
@@ -254,8 +244,10 @@ type BindContext struct {
 	isGroupingSet          bool
 	recRecursiveScanNodeId int32
 
-	cteName  cteInBinding
-	headings []string
+	cteName string
+	//cte in binding or bound already
+	boundCtes map[string]*CTERef
+	headings  []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -309,6 +301,8 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+	//view in binding or already bound
+	boundViews map[string]*tree.CreateView
 
 	// lower is sys var lower_case_table_names
 	lower int64

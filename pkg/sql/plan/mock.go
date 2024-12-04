@@ -751,6 +751,17 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 	}
 
+	cteTestSchema["v2"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t)\n",
+			db:  "cte_test",
+		},
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)

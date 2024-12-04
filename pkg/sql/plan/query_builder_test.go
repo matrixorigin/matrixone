@@ -98,7 +98,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 func Test_cte(t *testing.T) {
 	sqls := []string{
 		//"with recursive c as (select a from cte_test.t1 union all select a+1 from c where a < 2 union all select a from c where a < 2), d as (select a from c union all select a+1 from d where a < 2) select distinct tt.* from ( SELECT * FROM c UNION ALL SELECT * FROM d) tt order by tt.a;",
-		"select * from cte_test.c",
+		"select * from cte_test.v2",
 	}
 	testutil.NewProc()
 	mock := NewMockOptimizer(false)

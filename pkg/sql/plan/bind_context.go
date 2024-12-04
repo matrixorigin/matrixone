@@ -40,6 +40,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByCol:   make(map[string]*Binding),
 		lower:          1,
 		parent:         parent,
+		boundCtes:      make(map[string]*CTERef),
+		boundViews:     make(map[string]*tree.CreateView),
 	}
 
 	if builder != nil {
@@ -87,42 +89,21 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		return cte
 	}
 
-	//if name == bc.cteName.name {
-	//	panic("cte recursive")
-	//}
-
-	oldbc := bc
-	cur := bc
 	parent := bc.parent
-	//
-	for parent != nil && parent != bc.cteName.ctx {
+	for parent != nil {
 		if cte, ok := parent.cteByName[name]; ok {
-			if !cur.maskedCTEs[name] {
+			if !parent.maskedCTEs[name] {
 				return cte
 			}
 		}
 
-		cur = parent
-		parent = cur.parent
+		parent = parent.parent
 	}
 
 	var cte *CTERef
-	//
-	if parent != nil && parent == bc.cteName.ctx {
-		if name == bc.cteName.name {
-			//recursive
-			panic("panic: cte recursive")
-		}
-		if cte2, ok := parent.cteByName[name]; ok {
-			if !cur.maskedCTEs[name] {
-				cte = cte2
-			}
-		}
-	}
-
 	{
 		fmt.Println()
-		x := oldbc
+		x := bc
 		cnt := 0
 		fmt.Println(fmt.Sprintf("%p ctename: %v", bc, bc.cteName), "find", name)
 		for x != nil {
@@ -138,6 +119,36 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	}
 
 	return cte
+}
+
+func (bc *BindContext) recordCteInBinding(name string, cte *CTERef) {
+	bc.boundCtes[name] = cte
+}
+
+func (bc *BindContext) cteInBinding(name string) bool {
+	if _, ok := bc.boundCtes[name]; ok {
+		return true
+	}
+	cur := bc.parent
+	for cur != nil {
+		if _, ok := cur.boundCtes[name]; ok {
+			return true
+		}
+		cur = cur.parent
+	}
+	return false
+}
+
+func (bc *BindContext) viewInBinding(name string, view *tree.CreateView) bool {
+	cur := bc
+	for cur != nil {
+		if _, ok := cur.boundViews[name]; ok {
+			return true
+		}
+		cur = cur.parent
+	}
+	bc.boundViews[name] = view
+	return false
 }
 
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {

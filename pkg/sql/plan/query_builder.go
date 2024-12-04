@@ -2410,7 +2410,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			} else if !isR {
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.normalCTE = true
-				subCtx.cteName = cteInBinding{ctx, table}
+				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
 
@@ -3905,11 +3905,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			break
 		}
 
-		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName.name {
+		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
 		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
+				if ctx.cteInBinding(table) {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
+				}
 				if ctx.recSelect {
 					nodeID = ctx.recRecursiveScanNodeId
 					return
@@ -3939,8 +3942,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if !isR {
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
-					subCtx.cteName = cteInBinding{ctx, table}
+					subCtx.cteName = table
 					subCtx.snapshot = cteRef.snapshot
+					subCtx.recordCteInBinding(table, cteRef)
 					//reset defaultDatabase
 					if len(cteRef.defaultDatabase) > 0 {
 						subCtx.defaultDatabase = cteRef.defaultDatabase
@@ -3992,7 +3996,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					for i, r := range stmts {
 						subCtx := NewBindContext(builder, ctx)
 						subCtx.maskedCTEs = cteRef.maskedCTEs
-						subCtx.cteName = cteInBinding{ctx, table}
+						subCtx.cteName = table
 						if len(cteRef.defaultDatabase) > 0 {
 							subCtx.defaultDatabase = cteRef.defaultDatabase
 						}
@@ -4186,9 +4190,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			viewDefString := tableDef.ViewSql.View
 
 			if viewDefString != "" {
-				if ctx.cteByName == nil {
-					ctx.cteByName = make(map[string]*CTERef)
-				}
+				viewCtx := NewBindContext(builder, nil)
+				//if viewCtx.cteByName == nil {
+				//	viewCtx.cteByName = make(map[string]*CTERef)
+				//}
 
 				viewData := ViewData{}
 				err := json.Unmarshal([]byte(viewDefString), &viewData)
@@ -4219,40 +4224,57 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					viewStmt.AsSource = alterstmt.AsSource
 				}
 
-				viewName := viewStmt.Name.ObjectName
-				var maskedCTEs map[string]bool
-				if len(ctx.cteByName) > 0 {
-					maskedCTEs = make(map[string]bool)
-					for name := range ctx.cteByName {
-						maskedCTEs[name] = true
-					}
-				}
-				defaultDatabase := viewData.DefaultDatabase
-				if obj.PubInfo != nil {
-					defaultDatabase = obj.SubscriptionName
-				}
-				ctx.cteByName[string(viewName)] = &CTERef{
-					ast: &tree.CTE{
-						Name: &tree.AliasClause{
-							Alias: viewName,
-							Cols:  viewStmt.ColNames,
-						},
-						Stmt: viewStmt.AsSource,
-					},
-					defaultDatabase: defaultDatabase,
-					maskedCTEs:      maskedCTEs,
-					snapshot:        snapshot,
-				}
+				//viewName := viewStmt.Name.ObjectName
+				//var maskedCTEs map[string]bool
+				//if len(viewCtx.cteByName) > 0 {
+				//	maskedCTEs = make(map[string]bool)
+				//	for name := range viewCtx.cteByName {
+				//		maskedCTEs[name] = true
+				//	}
+				//}
+				//defaultDatabase := viewData.DefaultDatabase
+				//if obj.PubInfo != nil {
+				//	defaultDatabase = obj.SubscriptionName
+				//}
+				//viewCtx.cteByName[string(viewName)] = &CTERef{
+				//	ast: &tree.CTE{
+				//		Name: &tree.AliasClause{
+				//			Alias: viewName,
+				//			Cols:  viewStmt.ColNames,
+				//		},
+				//		Stmt: viewStmt.AsSource,
+				//	},
+				//	defaultDatabase: defaultDatabase,
+				//	maskedCTEs:      maskedCTEs,
+				//	snapshot:        snapshot,
+				//}
 				// consist with frontend.genKey()
-				ctx.views = append(ctx.views, schema+"#"+table)
+				viewCtx.views = append(viewCtx.views, schema+"#"+table)
 
-				newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
-					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
-					SchemaName:      tree.Identifier(""),
-					ExplicitCatalog: false,
-					ExplicitSchema:  false,
-				}, nil)
-				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
+				//FIXME:
+				//newTableName := tree.NewTableName(viewName, tree.ObjectNamePrefix{
+				//	CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+				//	SchemaName:      tree.Identifier(""),
+				//	ExplicitCatalog: false,
+				//	ExplicitSchema:  false,
+				//}, nil)
+				//return builder.buildTable(newTableName, viewCtx, preNodeId, leftCtx)
+
+				viewName := string(viewStmt.Name.ObjectName)
+				if viewCtx.viewInBinding(viewName, viewStmt) {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", viewName)
+				}
+
+				aliasSubquery := &tree.AliasedTableExpr{
+					Expr: viewStmt.AsSource,
+					As: tree.AliasClause{
+						Alias: viewStmt.Name.ObjectName,
+						Cols:  viewStmt.ColNames,
+					},
+				}
+
+				nodeID, err = builder.buildTable(aliasSubquery, viewCtx, preNodeId, leftCtx)
+				return nodeID, err
 			}
 		}
 
@@ -4495,7 +4517,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "11111 table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
-		table = subCtx.cteName.name
+		table = subCtx.cteName
 		if len(alias.Alias) > 0 {
 			table = string(alias.Alias)
 		}
