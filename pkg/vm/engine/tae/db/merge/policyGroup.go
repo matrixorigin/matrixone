@@ -16,9 +16,6 @@ package merge
 
 import (
 	"context"
-	"go.uber.org/zap"
-	"slices"
-	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 type reviseResult struct {
@@ -59,7 +57,7 @@ func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 func (g *policyGroup) revise(rc *resourceController) []reviseResult {
 	results := make([]reviseResult, 0, len(g.policies))
 	for _, p := range g.policies {
-		pResult := p.revise(rc, g.config)
+		pResult := p.revise(rc)
 		for _, r := range pResult {
 			if len(r.objs) > 0 {
 				results = append(results, r)
@@ -165,7 +163,7 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	}
 	return tblHandle.AlterTable(
 		ctx,
-		NewUpdatePolicyReq(cfg),
+		newUpdatePolicyReq(cfg),
 	)
 }
 
@@ -180,156 +178,4 @@ func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 		}
 	}
 	return r
-}
-
-type basic struct {
-	schema  *catalog.Schema
-	objects []*catalog.ObjectEntry
-
-	lastMergeTime time.Time
-
-	objectsSize int
-	accBuf      []int
-}
-
-func newBasicPolicy() policy {
-	return &basic{
-		objects: make([]*catalog.ObjectEntry, 0, 16),
-		accBuf:  make([]int, 1, 32),
-	}
-}
-
-// impl policy for Basic
-func (o *basic) onObject(obj *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
-	if obj.IsTombstone {
-		return false
-	}
-
-	osize := int(obj.OriginSize())
-
-	isCandidate := func() bool {
-		if len(o.objects) >= config.MergeMaxOneRun {
-			return false
-		}
-		if osize < int(config.ObjectMinOsize) {
-			if o.objectsSize > 8*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-				return false
-			}
-			o.objectsSize += osize
-			return true
-		}
-		// skip big object as an insurance
-		if osize > common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
-			return false
-		}
-
-		return false
-	}
-
-	if isCandidate() {
-		o.objects = append(o.objects, obj)
-		return true
-	}
-	return false
-}
-
-func (o *basic) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
-	slices.SortFunc(o.objects, func(a, b *catalog.ObjectEntry) int {
-		zmA := a.SortKeyZoneMap()
-		zmB := b.SortKeyZoneMap()
-		if c := zmA.CompareMin(zmB); c != 0 {
-			return c
-		}
-		return zmA.CompareMax(zmB)
-	})
-	objs := o.objects
-
-	/*
-		isStandalone := common.IsStandaloneBoost.Load()
-		mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
-	*/
-	dnobjs := o.optimize(objs, config)
-
-	if !rc.resourceAvailable(objs) {
-		return nil
-	}
-
-	dnosize := originalSize(dnobjs)
-
-	schedDN := func() []reviseResult {
-		if rc.cpuPercent > 85 {
-			if dnosize > 25*common.Const1MBytes {
-				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %f", rc.cpuPercent)
-				return nil
-			}
-		}
-		if len(dnobjs) > 1 {
-			rc.reserveResources(dnobjs)
-			return []reviseResult{{dnobjs, taskHostDN}}
-		}
-		return nil
-	}
-
-	/*
-		schedCN := func() []reviseResult {
-			if ok, _ := controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load())); !ok {
-				return nil
-			}
-			cnobjs := o.optimize(objs, config)
-			return []reviseResult{{cnobjs, TaskHostCN}}
-		}
-		if isStandalone && mergeOnDNIfStandalone {
-			return schedDN()
-		}
-		// CNs come into the picture in two cases:
-		// 1.cluster deployed
-		// 2.standalone deployed but it's asked to merge on cn
-		if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
-			return schedCN()
-		}
-	*/
-
-	// CNs don't take over the task, leave it on dn.
-	return schedDN()
-}
-
-func (o *basic) optimize(objs []*catalog.ObjectEntry, config *BasicPolicyConfig) []*catalog.ObjectEntry {
-	// objs are sorted by remaining rows
-	o.accBuf = o.accBuf[:1]
-	for i, obj := range objs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+int(obj.Rows()))
-	}
-	acc := o.accBuf
-
-	isBigGap := func(small, big int) bool {
-		if big < int(o.schema.Extra.BlockMaxRows) {
-			return false
-		}
-		return big-small > 3*small
-	}
-
-	var i int
-	// skip merging objects with big row count gaps, 3x and more
-	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
-	}
-
-	readyToMergeRows := acc[i]
-
-	// avoid frequent small object merge
-	if readyToMergeRows < int(o.schema.Extra.BlockMaxRows) &&
-		!o.lastMergeTime.Before(time.Now().Add(-constSmallMergeGap)) &&
-		i < config.MergeMaxOneRun {
-		return nil
-	}
-
-	objs = objs[:i]
-
-	return objs
-}
-
-func (o *basic) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
-	o.schema = entry.GetLastestSchemaLocked(false)
-	o.lastMergeTime = entry.Stats.GetLastMergeTime()
-	o.objects = o.objects[:0]
-	o.objectsSize = 0
 }

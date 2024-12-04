@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -379,6 +380,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		needCount = math.MaxInt
 	}
 
+	objEntries := make([]*ObjectEntry, 0)
 	for it.Next() {
 		objectEntry := it.Item()
 		if !objectEntry.IsActive() {
@@ -392,6 +394,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 			break
 		}
 		needCount--
+		objEntries = append(objEntries, objectEntry)
+
 		stat.ObjectCnt += 1
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
@@ -399,21 +403,36 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 			stat.OSize += int(objectEntry.OriginSize())
 			stat.Csize += int(objectEntry.Size())
 		}
-		if level > common.PPL0 {
-			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(objectEntry.ID().String())
-			_ = w.WriteByte('\n')
-			_, _ = w.WriteString("    ")
-			_, _ = w.WriteString(objectEntry.StatsString(zonemapKind))
+	}
+
+	slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+
+		c := zmA.CompareMin(zmB)
+		if c != 0 {
+			return c
 		}
-		if w.Len() > 8*common.Const1MBytes {
-			w.WriteString("\n...(truncated for too long, more than 8 MB)")
-			break
+		return zmA.CompareMax(zmB)
+	})
+
+	if level > common.PPL0 {
+		for _, objEntry := range objEntries {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(objEntry.ID().String())
+			_, _ = w.WriteString("\n    ")
+			_, _ = w.WriteString(objEntry.StatsString(zonemapKind))
+
+			if w.Len() > 8*common.Const1MBytes {
+				w.WriteString("\n...(truncated for too long, more than 8 MB)")
+				break
+			}
+		}
+		if stat.ObjectCnt > 0 {
+			w.WriteByte('\n')
 		}
 	}
-	if level > common.PPL0 && stat.ObjectCnt > 0 {
-		w.WriteByte('\n')
-	}
+
 	return
 }
 
@@ -428,8 +447,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int,
 	}
 
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
-		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
+		"summary: %d objs, %d unloaded, total orignal size:%s, average orignal size:%s, average rows:%d, average compressed size:%s",
+		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded,
+		common.HumanReadableBytes(stat.OSize), common.HumanReadableBytes(avgOsize),
+		avgRow, common.HumanReadableBytes(avgCsize),
 	)
 	detail.WriteString(summary)
 	return detail.String()
