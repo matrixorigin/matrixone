@@ -26,6 +26,7 @@ import (
 )
 
 type ShufflePoolV2 struct {
+	waitFactor    int32
 	bucketNum     int32
 	maxHolders    int32
 	holders       int32
@@ -41,6 +42,10 @@ type ShufflePoolV2 struct {
 
 func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp := &ShufflePoolV2{bucketNum: bucketNum, maxHolders: maxHolders}
+	sp.waitFactor = sp.bucketNum / 2
+	if sp.waitFactor > 64 {
+		sp.waitFactor = 64
+	}
 	sp.holders = 0
 	sp.finished = 0
 	sp.stoppers = 0
@@ -180,7 +185,7 @@ func (sp *ShufflePoolV2) initBatch(srcBatch *batch.Batch, proc *process.Process,
 
 func (sp *ShufflePoolV2) waitIfTooLarge(proc *process.Process, shuffleIDX int32) bool {
 	for {
-		if sp.batches[shuffleIDX] != nil && sp.batches[shuffleIDX].RowCount() > colexec.DefaultBatchSize*4 {
+		if sp.batches[shuffleIDX] != nil && sp.batches[shuffleIDX].RowCount() > int(colexec.DefaultBatchSize*sp.waitFactor) {
 			// batch too large, need to wait
 			sp.batchLocks[shuffleIDX].Unlock()
 			select {
