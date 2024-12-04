@@ -225,6 +225,16 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+type cteInBinding struct {
+	//ctx where the cte is defined
+	ctx  *BindContext
+	name string
+}
+
+func (cte *cteInBinding) isSameCte(o *cteInBinding) bool {
+	return cte.ctx == o.ctx && cte.name == o.name
+}
+
 type BindContext struct {
 	binder Binder
 
@@ -244,7 +254,7 @@ type BindContext struct {
 	isGroupingSet          bool
 	recRecursiveScanNodeId int32
 
-	cteName  string
+	cteName  cteInBinding
 	headings []string
 
 	groupTag     int32

@@ -2342,6 +2342,11 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
+	fctx := tree.NewFmtCtx(dialect.MYSQL)
+	stmt.Format(fctx)
+	fmt.Println("bindSelect===>")
+	fmt.Println(fctx.String())
+
 	// preprocess CTEs
 	if stmt.With != nil {
 		ctx.cteByName = make(map[string]*CTERef)
@@ -2364,7 +2369,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 			}
 
-			maskedNames = append(maskedNames, name)
+			maskedNames[i] = name
 
 			ctx.cteByName[name] = &CTERef{
 				ast:         cte,
@@ -2405,7 +2410,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			} else if !isR {
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.normalCTE = true
-				subCtx.cteName = table
+				subCtx.cteName = cteInBinding{ctx, table}
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
 
@@ -3900,7 +3905,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			break
 		}
 
-		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
+		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName.name {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
 		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
@@ -3934,7 +3939,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if !isR {
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
-					subCtx.cteName = table
+					subCtx.cteName = cteInBinding{ctx, table}
 					subCtx.snapshot = cteRef.snapshot
 					//reset defaultDatabase
 					if len(cteRef.defaultDatabase) > 0 {
@@ -3987,7 +3992,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					for i, r := range stmts {
 						subCtx := NewBindContext(builder, ctx)
 						subCtx.maskedCTEs = cteRef.maskedCTEs
-						subCtx.cteName = table
+						subCtx.cteName = cteInBinding{ctx, table}
 						if len(cteRef.defaultDatabase) > 0 {
 							subCtx.defaultDatabase = cteRef.defaultDatabase
 						}
@@ -4089,6 +4094,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				break
+			} else {
+				fmt.Printf("no such cte %s\n", table)
 			}
 			schema = ctx.defaultDatabase
 		}
@@ -4488,7 +4495,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "11111 table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
-		table = subCtx.cteName
+		table = subCtx.cteName.name
 		if len(alias.Alias) > 0 {
 			table = string(alias.Alias)
 		}

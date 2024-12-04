@@ -143,6 +143,13 @@ type Schema struct {
 	clusterby *ClusterByDef
 	outcnt    float64
 	tblId     int64
+	isView    bool
+	viewCfg   ViewCfg
+}
+
+type ViewCfg struct {
+	sql string
+	db  string
 }
 
 const SF float64 = 1
@@ -733,6 +740,17 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks: []int{0},
 	}
 
+	cteTestSchema["c"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, false, 50, 0},
+		},
+		isView: true,
+		viewCfg: ViewCfg{
+			sql: "create view c as\nwith \n\tc as (\n\t\tselect a from t1 \n\t), \n\td as (\n\t\tselect a from c \n\t\tunion all \n\t\tselect a+1 from c where a < 2\n\t) \nselect distinct \n\ttt.* \nfrom ( \n\tSELECT * FROM c \n\tUNION ALL \n\tSELECT * FROM d\n) tt \norder by tt.a",
+			db:  "cte_test",
+		},
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
@@ -870,6 +888,30 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				viewData, _ := json.Marshal(ViewData{
 					Stmt:            "select n_name from nation where n_nationkey > ?",
 					DefaultDatabase: "tpch",
+				})
+				tableDef.ViewSql = &plan.ViewDef{
+					View: string(viewData),
+				}
+				properties := []*plan.Property{
+					{
+						Key:   catalog.SystemRelAttr_Kind,
+						Value: catalog.SystemViewRel,
+					},
+				}
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
+					},
+				})
+			}
+
+			if table.isView {
+				tableDef.TableType = catalog.SystemViewRel
+				viewData, _ := json.Marshal(ViewData{
+					Stmt:            table.viewCfg.sql,
+					DefaultDatabase: table.viewCfg.db,
 				})
 				tableDef.ViewSql = &plan.ViewDef{
 					View: string(viewData),

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -86,19 +87,57 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		return cte
 	}
 
+	//if name == bc.cteName.name {
+	//	panic("cte recursive")
+	//}
+
+	oldbc := bc
+	cur := bc
 	parent := bc.parent
-	for parent != nil && name != parent.cteName {
+	//
+	for parent != nil && parent != bc.cteName.ctx {
 		if cte, ok := parent.cteByName[name]; ok {
-			if !bc.maskedCTEs[name] {
+			if !cur.maskedCTEs[name] {
 				return cte
 			}
 		}
 
-		bc = parent
-		parent = bc.parent
+		cur = parent
+		parent = cur.parent
 	}
 
-	return nil
+	var cte *CTERef
+	//
+	if parent != nil && parent == bc.cteName.ctx {
+		if name == bc.cteName.name {
+			//recursive
+			panic("panic: cte recursive")
+		}
+		if cte2, ok := parent.cteByName[name]; ok {
+			if !cur.maskedCTEs[name] {
+				cte = cte2
+			}
+		}
+	}
+
+	{
+		fmt.Println()
+		x := oldbc
+		cnt := 0
+		fmt.Println(fmt.Sprintf("%p ctename: %v", bc, bc.cteName), "find", name)
+		for x != nil {
+			fmt.Println("====>ctes:", cnt, fmt.Sprintf("%p ctename: %v", x, x.cteName))
+			for s, ref := range x.cteByName {
+				fmt.Println("cte: ", s, "{", ref.defaultDatabase, "} {", ref.isRecursive, "} {", ref.maskedCTEs, "}")
+			}
+			fmt.Println("====>masked:", cnt, x.maskedCTEs)
+
+			x = x.parent
+			cnt++
+		}
+	}
+
+	return cte
 }
 
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
