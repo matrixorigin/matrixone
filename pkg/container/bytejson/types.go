@@ -108,6 +108,11 @@ var (
 	Null = ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 )
 
+type field struct {
+	key string
+	val any
+}
+
 var (
 	escapedChars = map[byte]byte{
 		'"': '"',

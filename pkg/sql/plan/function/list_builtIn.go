@@ -817,7 +817,7 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `json_set`
+	//function `json_set`
 	{
 		functionId: JSON_SET,
 		class:      plan.Function_STRICT,
@@ -831,7 +831,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return JsonSet
+					return newOpBuiltInJsonSet().buildJsonSet
 				},
 			},
 		},

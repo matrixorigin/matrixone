@@ -61,6 +61,8 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
+type computeJsonSetFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
+
 func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Query(paths), nil
@@ -85,6 +87,19 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func computeJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifySet)
+}
+
+func computeStringJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifySet)
 }
 
 func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) error {
@@ -394,11 +409,6 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 }
 
 type opBuiltInJsonSet struct {
-	allConst bool
-	npath    int
-	pathStrs []string
-	paths    []*bytejson.Path
-	simple   bool
 }
 
 func newOpBuiltInJsonSet() *opBuiltInJsonSet {
@@ -430,18 +440,85 @@ func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-// func (op *opBuiltInJsonSet) bu
+func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// implement json_set function
+	// the first parameter is the json object
+	// the rest of the parameters are the path-value pairs
+	// the path is a string, the value is a json object
+	var err error
+	var fn computeJsonSetFn
 
-// func (op *opBuiltInJsonSet) buildPath(params []*vector.Vector, length int) error {
-// 	op.npath = (len(params) - 1) / 2
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[types.Varlena](result)
 
-// 	if op.npath == 0 {
-// 		return nil
-// 	}
-// 	for i := 0; i < op.npath; i++ {
-// 		if !params[i*2+1].IsConst() {
+	if jsonVec.GetType().Oid == types.T_json {
+		fn = computeJsonSet
+	} else {
+		fn = computeStringJsonSet
+	}
 
-// 		op.paths = append(op.paths, p)
-// 	}
-// 	return nil
-// }
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// build all paths
+		pathExprs := make([]*bytejson.Path, 0, (len(parameters)-1)/2+1)
+		for j := 1; j < len(parameters); j += 2 {
+			pathBytes, pIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
+			if pIsNull {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			pathStr := string(pathBytes)
+			p, err := types.ParseStringToPath(pathStr)
+			if err != nil {
+				return err
+			}
+
+			pathExprs = append(pathExprs, &p)
+		}
+
+		// build all values
+		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
+		for j := 2; j < len(parameters); j += 2 {
+			valBytes, vIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
+			if vIsNull {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			val, err := bytejson.CreateByteJSON(valBytes)
+			if err != nil {
+				return err
+			}
+
+			valExprs = append(valExprs, val)
+		}
+
+		out, err := fn(jsonBytes, pathExprs, valExprs)
+		if err != nil {
+			return err
+		}
+		if out.IsNull() {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.AppendByteJson(out, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

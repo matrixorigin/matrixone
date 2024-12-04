@@ -14,7 +14,12 @@
 
 package bytejson
 
-import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+import (
+	"bytes"
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 type bytejsonModifier struct {
 	bj        ByteJson
@@ -23,14 +28,17 @@ type bytejsonModifier struct {
 }
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
-	result := bm.bj.querySimple(path)
-	if CompareByteJson(result, Null) != 0 {
+	result := bm.bj.query(nil, path)
+	if len(result) > 0 {
 		// set
-		bm.modifyPtr = &result.Data[0]
+		bm.modifyPtr = &result[0].Data[0]
 		bm.modifyVal = newBj
 		return bm.rebuild(), nil
 	}
 	// insert
+	if err := bm.doInsert(path, newBj); err == nil {
+		return bm.rebuild(), nil
+	}
 	// return bm.rebuild()
 	return Null, moerr.NewInvalidArgNoCtx("invalid path", path.String())
 }
@@ -96,6 +104,39 @@ func (bm *bytejsonModifier) rebuildTo(buf []byte) ([]byte, TpCode) {
 	return buf, bj.Type
 }
 
-func (bm *bytejsonModifier) doInsert(path *Path, newBj ByteJson) {
+func (bm *bytejsonModifier) doInsert(path *Path, newBj ByteJson) (err error) {
+	parentPath, lastSub := path.popOneSubPath()
+	result := bm.bj.query(nil, &parentPath)
+	if len(result) == 0 {
+		return
+	}
 
+	parent := result[0]
+
+	if parent.Type != TpCodeObject {
+		return
+	}
+	bm.modifyPtr = &parent.Data[0]
+	elementCount := parent.GetElemCnt()
+	insertKey := lastSub.key
+	inserIndx := sort.Search(elementCount, func(i int) bool {
+		k := parent.getObjectKey(i)
+		return bytes.Compare(k, []byte(insertKey)) >= 0
+	})
+	keys := make([][]byte, 0, elementCount+1)
+	elems := make([]ByteJson, 0, elementCount+1)
+	for i := 0; i < elementCount; i++ {
+		for i == inserIndx {
+			keys = append(keys, []byte(insertKey))
+			elems = append(elems, newBj)
+		}
+		keys = append(keys, parent.getObjectKey(i))
+		elems = append(elems, parent.getObjectVal(i))
+	}
+	if inserIndx == elementCount {
+		keys = append(keys, []byte(insertKey))
+		elems = append(elems, newBj)
+	}
+	bm.modifyVal, err = buildJsonObject(keys, elems)
+	return
 }
