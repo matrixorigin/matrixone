@@ -296,7 +296,9 @@ func (mgr *TxnManager) storeTxn(
 	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
 		return moerr.NewTxnControlErrorNoCtx(
-			fmt.Sprintf("%s Skip %s", skipFlags.String(), flag.String()),
+			"%s Skip %s",
+			skipFlags.String(),
+			flag.String(),
 		)
 	}
 
@@ -314,7 +316,9 @@ func (mgr *TxnManager) loadOrStoreTxn(
 	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
 		return nil, false, moerr.NewTxnControlErrorNoCtx(
-			fmt.Sprintf("%s Skip %s", skipFlags.String(), flag.String()),
+			"%s Skip %s",
+			skipFlags.String(),
+			flag.String(),
 		)
 	}
 
