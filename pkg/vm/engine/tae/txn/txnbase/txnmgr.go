@@ -68,6 +68,12 @@ func WithReplayMode(mgr *TxnManager) {
 	WithTxnSkipFlag(TxnFlag_Normal | TxnFlag_Heartbeat)(mgr)
 }
 
+// Here define the readonly mode:
+// TxnFlag_Normal|TxnFlag_Heartbeat|TxnFlag_Replay: skip all txn
+func WithReadonlyMode(mgr *TxnManager) {
+	WithTxnSkipFlag(TxnFlag_Normal | TxnFlag_Heartbeat | TxnFlag_Replay)(mgr)
+}
+
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
@@ -204,16 +210,39 @@ func (mgr *TxnManager) ToWriteMode() {
 	WithWriteMode(mgr)
 }
 
-func (mgr *TxnManager) ToReplayMode(waitFlushed bool) {
+// it is only safe to call this function in the readonly mode
+func (mgr *TxnManager) ToReplayMode() {
 	WithReplayMode(mgr)
-	if waitFlushed {
-		now := time.Now()
-		mgr.WaitEmpty()
+}
+
+func (mgr *TxnManager) ToReadOnlyMode(ctx context.Context) (err error) {
+	now := time.Now()
+	defer func() {
 		logutil.Info(
 			"Wait-TxnManager-To-ReplayMode",
 			zap.Duration("duration", time.Since(now)),
 		)
-	}
+	}()
+
+	// 1. do not accept new txn
+	WithReadonlyMode(mgr)
+
+	// 2. try to abort slow txn: big-tombstone-txn and merge-txn
+	mgr.txns.store.Range(func(key, value any) bool {
+		// TODO
+		return true
+	})
+
+	// 3. wait all txn to be done.
+	// Note:
+	// the heartbeats may be still running. The controller
+	// should wait all logtail to be flushed
+	err = mgr.WaitEmpty(ctx)
+	return
+}
+
+func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
+	return TxnSkipFlag(mgr.txns.skipFlags.Load())
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
@@ -263,8 +292,18 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	return
 }
 
-func (mgr *TxnManager) WaitEmpty() {
-	mgr.txns.wg.Wait()
+func (mgr *TxnManager) WaitEmpty(ctx context.Context) (err error) {
+	c := make(chan struct{})
+	go func() {
+		mgr.txns.wg.Wait()
+		close(c)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c:
+		return
+	}
 }
 
 func (mgr *TxnManager) loadTxn(
