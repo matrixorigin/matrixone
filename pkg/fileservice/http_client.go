@@ -50,7 +50,7 @@ var dnsResolver = dns.NewCachingResolver(
 
 func init() {
 	net.DefaultResolver = dnsResolver
-	http.DefaultTransport = httpTransport
+	http.DefaultTransport = httpRoundTripper
 }
 
 var httpDialer = &net.Dialer{
@@ -58,7 +58,7 @@ var httpDialer = &net.Dialer{
 	Resolver: dnsResolver,
 }
 
-var httpTransport = wrapRoundTripper(&http.Transport{
+var httpTransport = &http.Transport{
 	DialContext:           wrapDialContext(httpDialer.DialContext),
 	MaxIdleConns:          maxIdleConns,
 	IdleConnTimeout:       idleConnTimeout,
@@ -71,7 +71,19 @@ var httpTransport = wrapRoundTripper(&http.Transport{
 		RootCAs:            caPool,
 	},
 	Proxy: http.ProxyFromEnvironment,
-})
+}
+
+func init() {
+	// don't know why there is a large number of connections even though MaxConnsPerHost is set.
+	// close idle connections periodically.
+	go func() {
+		for range time.NewTicker(time.Second).C {
+			httpTransport.CloseIdleConnections()
+		}
+	}()
+}
+
+var httpRoundTripper = wrapRoundTripper(httpTransport)
 
 var caPool = func() *x509.CertPool {
 	pool, err := x509.SystemCertPool()
@@ -104,7 +116,7 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 
 	// client
 	client := &http.Client{
-		Transport: httpTransport,
+		Transport: httpRoundTripper,
 	}
 
 	return client
