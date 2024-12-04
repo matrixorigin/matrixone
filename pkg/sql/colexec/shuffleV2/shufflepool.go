@@ -220,13 +220,13 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.batchLocks[i].Lock()
+			sp.waitIfTooLarge(proc, int32(i))
 			err = sp.initBatch(srcBatch, proc, int32(i))
 			if err != nil {
 				sp.batchLocks[i].Unlock()
 				return err
 			}
 			bat := sp.batches[i]
-			sp.waitIfTooLarge(proc, int32(i))
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
 				v.SetSorted(false)
