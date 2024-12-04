@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -467,7 +465,6 @@ func (ctr *container) initHashMap(proc *process.Process, config *Group) (err err
 			return err
 		}
 		if config.PreAllocSize > 0 {
-			logutil.Infof("!!!!!!!!!!!!!!!!!!!!inthashmap prealloc %v", config.PreAllocSize)
 			if err = ctr.intHashMap.PreAlloc(config.PreAllocSize); err != nil {
 				return err
 			}
