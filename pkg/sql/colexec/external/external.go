@@ -854,16 +854,6 @@ func checkLineStrict(param *ExternalParam) bool {
 	return true
 }
 
-// Data interpretation is nonrestrictive if the SQL mode is nonrestrictive or the IGNORE or LOCAL modifier is specified
-// todo IGNORE
-func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
-	if checkLineStrict(param) {
-		return checkLineValidRestrictive(param, proc, line, rowIdx)
-	}
-
-	return nil
-}
-
 // getMOCSVReader get file reader from external file
 func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHandler, error) {
 	var err error

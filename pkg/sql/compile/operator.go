@@ -836,10 +836,10 @@ func constructProjection(n *plan.Node) *projection.Projection {
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
 	var attrs []plan.ExternAttr
 
-	for _, col := range n.TableDef.Cols {
+	for i, col := range n.TableDef.Cols {
 		if !col.Hidden {
 			attr := plan.ExternAttr{ColName: col.Name,
-				ColIndex:      n.TableDef.Name2ColIndex[col.Name],
+				ColIndex:      int32(i),
 				ColFieldIndex: n.ExternScan.TbColToDataCol[col.Name]}
 			attrs = append(attrs, attr)
 		}
