@@ -34,6 +34,7 @@ type ShufflePoolV2 struct {
 	batches       []*batch.Batch
 	holderLock    sync.Mutex
 	batchLocks    []sync.Mutex
+	writeWaiters  []chan bool
 	endingWaiters []chan bool
 	batchWaiters  []chan bool
 }
@@ -47,6 +48,10 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp.batchLocks = make([]sync.Mutex, bucketNum)
 	sp.endingWaiters = make([]chan bool, bucketNum)
 	sp.batchWaiters = make([]chan bool, bucketNum)
+	sp.writeWaiters = make([]chan bool, bucketNum)
+	for i := range sp.writeWaiters {
+		sp.writeWaiters[i] = make(chan bool, 1)
+	}
 	for i := range sp.batchWaiters {
 		sp.batchWaiters[i] = make(chan bool, 1)
 	}
@@ -96,6 +101,9 @@ func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
 	sp.holders = 0
 	sp.finished = 0
 	sp.stoppers = 0
+	sp.endingWaiters = nil
+	sp.writeWaiters = nil
+	sp.batchWaiters = nil
 }
 
 func (sp *ShufflePoolV2) Print() { // only for debug
@@ -141,7 +149,7 @@ func (sp *ShufflePoolV2) GetFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
 	bat := sp.batches[shuffleIDX]
-	if bat == nil || bat.RowCount() < colexec.DefaultBatchSize-512 { // not full
+	if bat == nil || bat.RowCount() < colexec.DefaultBatchSize { // not full
 		return nil
 	}
 	//find a full batch, put buf in place
@@ -150,6 +158,9 @@ func (sp *ShufflePoolV2) GetFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 		buf.ShuffleIDX = bat.ShuffleIDX
 	}
 	sp.batches[shuffleIDX] = buf
+	if len(sp.writeWaiters[shuffleIDX]) == 0 {
+		sp.writeWaiters[shuffleIDX] <- true
+	}
 	return bat
 }
 
@@ -167,15 +178,37 @@ func (sp *ShufflePoolV2) initBatch(srcBatch *batch.Batch, proc *process.Process,
 	return nil
 }
 
+func (sp *ShufflePoolV2) waitIfTooLarge(proc *process.Process, shuffleIDX int32) bool {
+	for {
+		if sp.batches[shuffleIDX] != nil && sp.batches[shuffleIDX].RowCount() > colexec.DefaultBatchSize*4 {
+			// batch too large, need to wait
+			sp.batchLocks[shuffleIDX].Unlock()
+			select {
+			case <-sp.writeWaiters[shuffleIDX]:
+				sp.batchLocks[shuffleIDX].Lock()
+			case <-proc.Ctx.Done():
+				return true
+			}
+		} else {
+			break
+		}
+	}
+	if len(sp.writeWaiters[shuffleIDX]) == 0 {
+		sp.writeWaiters[shuffleIDX] <- true
+	}
+	return false
+}
+
 func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
 	var err error
+	sp.waitIfTooLarge(proc, shuffleIDX)
 	sp.batches[shuffleIDX], err = sp.batches[shuffleIDX].AppendWithCopy(proc.Ctx, proc.Mp(), srcBatch)
 	if err != nil {
 		return err
 	}
-	if sp.batches[shuffleIDX].RowCount() > colexec.DefaultBatchSize-512 && len(sp.batchWaiters[shuffleIDX]) == 0 {
+	if sp.batches[shuffleIDX].RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[shuffleIDX]) == 0 {
 		sp.batchWaiters[shuffleIDX] <- true
 	}
 	return nil
@@ -193,6 +226,7 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 				return err
 			}
 			bat := sp.batches[i]
+			sp.waitIfTooLarge(proc, int32(i))
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
 				v.SetSorted(false)
@@ -203,9 +237,10 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 				}
 			}
 			bat.AddRowCount(len(currentSels))
-			if bat.RowCount() > colexec.DefaultBatchSize-512 && len(sp.batchWaiters[i]) == 0 {
+			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
 				sp.batchWaiters[i] <- true
 			}
+
 			sp.batchLocks[i].Unlock()
 		}
 	}

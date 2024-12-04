@@ -104,7 +104,6 @@ SENDLAST:
 	}
 	// send the batch
 	result.Batch = shuffle.ctr.buf
-	logutil.Infof("shuffle op with idx %v send a full batch rowcnt %v", shuffle.CurrentShuffleIdx, shuffle.ctr.buf.RowCount())
 	return result, nil
 }
 
