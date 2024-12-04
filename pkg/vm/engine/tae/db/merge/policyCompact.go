@@ -31,17 +31,13 @@ type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
 	fs       fileservice.FileService
 
-	segObjects map[objectio.Segmentid][]*catalog.ObjectEntry
+	objects []*catalog.ObjectEntry
 
 	tombstones []objectio.ObjectDataMeta
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
-	return &objCompactPolicy{
-		fs: fs,
-
-		segObjects: make(map[objectio.Segmentid][]*catalog.ObjectEntry),
-	}
+	return &objCompactPolicy{fs: fs}
 }
 
 func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
@@ -62,7 +58,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 		if !checkTombstoneMeta(meta, entry.ID()) {
 			continue
 		}
-		o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
+		o.objects = append(o.objects, entry)
 	}
 	return false
 }
@@ -71,13 +67,11 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 	if o.tblEntry == nil {
 		return nil
 	}
-	results := make([]reviseResult, 0, len(o.segObjects))
-	for _, objs := range o.segObjects {
-		if rc.resourceAvailable(objs) {
-			rc.reserveResources(objs)
-			for _, obj := range objs {
-				results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
-			}
+	results := make([]reviseResult, 0, len(o.objects))
+	for _, obj := range o.objects {
+		if rc.resourceAvailable([]*catalog.ObjectEntry{obj}) {
+			rc.reserveResources([]*catalog.ObjectEntry{obj})
+			results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
 		}
 	}
 	return results
@@ -86,7 +80,7 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
 	o.tombstones = o.tombstones[:0]
-	clear(o.segObjects)
+	o.objects = o.objects[:0]
 
 	tIter := entry.MakeTombstoneObjectIt()
 	for tIter.Next() {
