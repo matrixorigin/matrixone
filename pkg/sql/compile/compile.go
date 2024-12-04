@@ -4557,22 +4557,6 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, relData engine.RelData, forceSingle bool) engine.Nodes {
-	var nodes engine.Nodes
-	// add current CN
-	mcpu := c.generateCPUNumber(c.ncpu, relData.DataCnt())
-	if forceSingle {
-		mcpu = 1
-	}
-	nodes = append(nodes, engine.Node{
-		Addr:  c.addr,
-		Mcpu:  mcpu,
-		CNCNT: 1,
-	})
-	nodes[0].Data = relData
-	return nodes
-}
-
 func dupType(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
