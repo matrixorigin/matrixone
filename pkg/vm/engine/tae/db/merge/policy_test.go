@@ -373,7 +373,7 @@ func TestCheckTombstone(t *testing.T) {
 
 		ss := writer.GetObjectStats()
 		require.Equal(t, rowCnt, int(ss.Rows()))
-		meta, err := loadTombstoneMeta(context.TODO(), &ss, fs)
+		meta, err := loadTombstoneMeta(&ss, fs)
 		require.NoError(t, err)
 		metas[i] = meta
 	}
