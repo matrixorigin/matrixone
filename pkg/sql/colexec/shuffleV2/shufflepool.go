@@ -72,16 +72,11 @@ func (sp *ShufflePoolV2) Ending() {
 	}
 }
 
-func (sp *ShufflePoolV2) Reset(m *mpool.MPool, force bool) {
+func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
-	if force {
-		logutil.Warnf("shuffle pool force reset, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
-		return
-	}
 	if sp.maxHolders != sp.holders || sp.maxHolders != sp.finished {
-		logutil.Errorf("shuffle pool reset with invalid state! maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
-		panic("shuffle pool reset with invalid state! ")
+		return // still some other shuffle operators working
 	}
 	for i := range sp.batches {
 		if sp.batches[i] != nil {
@@ -136,22 +131,46 @@ func (sp *ShufflePoolV2) GetFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 	return bat
 }
 
+func (sp *ShufflePoolV2) initBatch(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
+	bat := sp.batches[shuffleIDX]
+	if bat == nil {
+		var err error
+		bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
+		if err != nil {
+			return err
+		}
+		bat.ShuffleIDX = shuffleIDX
+		sp.batches[shuffleIDX] = bat
+	}
+	return nil
+}
+
+func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
+	sp.batchLocks[shuffleIDX].Lock()
+	defer sp.batchLocks[shuffleIDX].Unlock()
+	var err error
+	sp.batches[shuffleIDX], err = sp.batches[shuffleIDX].AppendWithCopy(proc.Ctx, proc.Mp(), srcBatch)
+	if err != nil {
+		return err
+	}
+	if sp.batches[shuffleIDX].RowCount() > colexec.DefaultBatchSize-512 && len(sp.waiters[shuffleIDX]) == 0 {
+		sp.waiters[shuffleIDX] <- true
+	}
+	return nil
+}
+
 func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
 	var err error
 	for i := range sp.batches {
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.batchLocks[i].Lock()
-			bat := sp.batches[i]
-			if bat == nil {
-				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
-				if err != nil {
-					sp.batchLocks[i].Unlock()
-					return err
-				}
-				bat.ShuffleIDX = int32(i)
-				sp.batches[i] = bat
+			err = sp.initBatch(srcBatch, proc, int32(i))
+			if err != nil {
+				sp.batchLocks[i].Unlock()
+				return err
 			}
+			bat := sp.batches[i]
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
 				v.SetSorted(false)

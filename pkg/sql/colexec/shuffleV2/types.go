@@ -17,9 +17,7 @@ package shuffle
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,8 +33,6 @@ type ShuffleV2 struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
-	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-	msgReceiver        *message.MessageReceiver
 	vm.OperatorBase
 }
 
@@ -72,11 +68,10 @@ func (shuffle *ShuffleV2) Release() {
 }
 
 type container struct {
-	ending               bool
-	sels                 [][]int32
-	buf                  *batch.Batch
-	shufflePool          *ShufflePoolV2
-	runtimeFilterHandled bool
+	ending      bool
+	sels        [][]int32
+	buf         *batch.Batch
+	shufflePool *ShufflePoolV2
 }
 
 func (shuffle *ShuffleV2) SetShufflePool(sp *ShufflePoolV2) {
@@ -88,21 +83,12 @@ func (shuffle *ShuffleV2) GetShufflePool() *ShufflePoolV2 {
 }
 
 func (shuffle *ShuffleV2) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
 	}
 	if shuffle.ctr.shufflePool != nil {
-		//shuffle.ctr.shufflePool.Print()
-		if pipelineFailed || err != nil {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), true)
-		} else if shuffle.ctr.lastForShufflePool {
-			shuffle.ctr.shufflePool.Reset(proc.Mp(), false)
-		}
+		shuffle.ctr.shufflePool.Reset(proc.Mp())
 	}
-	shuffle.ctr.lastForShufflePool = false
 	shuffle.ctr.sels = nil
 	shuffle.ctr.ending = false
 }
