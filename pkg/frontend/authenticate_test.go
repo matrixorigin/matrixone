@@ -7565,6 +7565,9 @@ func (bt *backgroundExecTest) Service() string {
 	return ""
 }
 
+func (bt *backgroundExecTest) SetRestore(b bool) {
+}
+
 var _ BackgroundExec = &backgroundExecTest{}
 
 func newMrsForSqlForShowDatabases(rows [][]interface{}) *MysqlResultSet {
