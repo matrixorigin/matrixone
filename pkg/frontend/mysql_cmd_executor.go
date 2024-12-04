@@ -147,8 +147,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		statement = cw.GetAst()
 
 		ses.ast = statement
-
-		execSql := makeExecuteSql(ctx, ses, statement)
+		binExec, prepareName := cw.BinaryExecute()
+		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
 		if len(execSql) != 0 {
 			bb := strings.Builder{}
 			bb.WriteString(envStmt)
@@ -2115,6 +2115,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
+		tcw.prepareName = execCtx.input.stmtName
 		cws = append(cws, tcw)
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
