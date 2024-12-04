@@ -52,7 +52,7 @@ func (shuffle *ShuffleV2) Prepare(proc *process.Process) error {
 	if shuffle.GetShufflePool() == nil {
 		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
 	}
-	shuffle.ctr.shufflePool.Hold()
+	shuffle.ctr.shufflePool.hold()
 	shuffle.ctr.ending = false
 	return nil
 }
@@ -63,7 +63,7 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 SENDLAST:
 	if shuffle.ctr.ending { //send last batch in shuffle pool
-		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc)
+		result.Batch = shuffle.ctr.shufflePool.getEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc)
 		shuffle.ctr.buf = result.Batch
 		if result.Batch != nil {
 			logutil.Infof("shuffle op with idx %v send a ending batch rowcnt %v", shuffle.CurrentShuffleIdx, shuffle.ctr.buf.RowCount())
@@ -73,7 +73,7 @@ SENDLAST:
 
 	var err error
 	for {
-		shuffle.ctr.buf = shuffle.ctr.shufflePool.GetFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
+		shuffle.ctr.buf = shuffle.ctr.shufflePool.getFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
 		if shuffle.ctr.buf != nil && shuffle.ctr.buf.RowCount() > 0 { // find a full batch
 			break
 		}
@@ -98,6 +98,7 @@ SENDLAST:
 			}
 			if bat != nil {
 				// can directly send this batch
+				shuffle.ctr.shufflePool.statsDirectlySentBatch(bat)
 				return result, nil
 			}
 		}
