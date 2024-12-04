@@ -254,24 +254,22 @@ func (reader *tableReader) readTableWithTxn(
 
 	hasBegin := false
 	defer func() {
-		if hasBegin {
-			if err == nil {
-				// error may can't be caught immediately, but must be caught when next call
+		if err == nil { // execute successfully before
+			if hasBegin {
+				// error may not be caught immediately
 				reader.sinker.SendCommit()
 				// so send a dummy sql to guarantee previous commit is sent successfully
 				reader.sinker.SendDummy()
-				if reader.sinker.Error() == nil {
-					reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
-				}
-			} else {
+				err = reader.sinker.Error()
+			}
+
+			if err == nil {
+				reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
+			}
+		} else { // has error already
+			if hasBegin {
 				reader.sinker.SendRollback()
 			}
-			return
-		}
-
-		reader.sinker.SendDummy()
-		if err == nil && reader.sinker.Error() == nil {
-			reader.wMarkUpdater.UpdateMem(reader.info.SourceTblIdStr, toTs)
 		}
 	}()
 
@@ -307,6 +305,8 @@ func (reader *tableReader) readTableWithTxn(
 				fromTs:     fromTs,
 				toTs:       toTs,
 			})
+			// send a dummy to guarantee last piece of snapshot/tail send successfully
+			reader.sinker.SendDummy()
 			err = reader.sinker.Error()
 			return
 		}
@@ -330,9 +330,6 @@ func (reader *tableReader) readTableWithTxn(
 			})
 			addSnapshotEndMetrics()
 			insertData.Clean(reader.mp)
-			if err = reader.sinker.Error(); err != nil {
-				return
-			}
 		case engine.ChangesHandle_Tail_wip:
 			insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 			deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
@@ -368,10 +365,6 @@ func (reader *tableReader) readTableWithTxn(
 			addTailEndMetrics(deleteAtmBatch)
 			insertAtmBatch.Close()
 			deleteAtmBatch.Close()
-			if err = reader.sinker.Error(); err != nil {
-				return
-			}
-
 			// reset, allocate new when next wip/done
 			insertAtmBatch = nil
 			deleteAtmBatch = nil
