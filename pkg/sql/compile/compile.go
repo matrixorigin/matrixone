@@ -3062,7 +3062,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		for i := range inputSS {
-			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
+			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, true)
 			inputSS[i].setRootOperator(op)
 		}
@@ -3084,7 +3084,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
 
-	groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
+	groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, true)
 	inputSS[0].setRootOperator(groupOp)
 
