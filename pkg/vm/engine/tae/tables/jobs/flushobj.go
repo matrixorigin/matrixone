@@ -46,7 +46,8 @@ type flushObjTask struct {
 	createAt    time.Time
 	partentTask string
 
-	Stats objectio.ObjectStats
+	stats objectio.ObjectStats
+	done  bool
 }
 
 func NewFlushObjTask(
@@ -149,7 +150,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("data-rows", task.data.Length()),
 		)
 	}
-	task.Stats = writer.GetObjectStats()
+	task.stats = writer.GetObjectStats()
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)
@@ -162,14 +163,15 @@ func (task *flushObjTask) release() {
 	if task == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		10*time.Second,
-		moerr.CauseReleaseFlushObjTasks,
-	)
-	defer cancel()
-	task.WaitDone(ctx)
-
+	if !task.done {
+		ctx, cancel := context.WithTimeoutCause(
+			context.Background(),
+			10*time.Second,
+			moerr.CauseReleaseFlushObjTasks,
+		)
+		defer cancel()
+		task.WaitDone(ctx)
+	}
 	if task.data != nil {
 		task.data.Close()
 	}
