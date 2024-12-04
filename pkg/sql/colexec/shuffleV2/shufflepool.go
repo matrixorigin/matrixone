@@ -119,7 +119,7 @@ func (sp *ShufflePoolV2) GetFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
 	bat := sp.batches[shuffleIDX]
-	if bat.RowCount() < colexec.DefaultBatchSize-512 { // not full
+	if bat == nil || bat.RowCount() < colexec.DefaultBatchSize-512 { // not full
 		return nil
 	}
 	//find a full batch, put buf in place
