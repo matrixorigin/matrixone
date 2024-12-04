@@ -15,12 +15,16 @@
 package fileservice
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSubPathFS(t *testing.T) {
+
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, 0, func(name string) FileService {
 			upstream, err := NewMemoryFS(name, DisabledCacheConfig, nil)
@@ -28,4 +32,41 @@ func TestSubPathFS(t *testing.T) {
 			return SubPath(upstream, "foo")
 		})
 	})
+
+	t.Run("mutable file service", func(t *testing.T) {
+		testMutableFileService(t, func() MutableFileService {
+			upstream, err := NewLocalFS(context.Background(), "test", t.TempDir(), DisabledCacheConfig, nil)
+			assert.Nil(t, err)
+			return SubPath(upstream, "foo").(MutableFileService)
+		})
+	})
+
+	t.Run("bad path", func(t *testing.T) {
+		ctx := context.Background()
+		fs, err := NewLocalFS(ctx, "test", t.TempDir(), DisabledCacheConfig, nil)
+		assert.Nil(t, err)
+		subFS := SubPath(fs, "foo").(MutableFileService)
+		_, err = subFS.NewMutator(ctx, "~~")
+		assert.NotNil(t, err)
+	})
+
+	t.Run("not mutable", func(t *testing.T) {
+		fs, err := NewMemoryFS("test", DisabledCacheConfig, nil)
+		assert.Nil(t, err)
+		subFS := SubPath(fs, "foo").(MutableFileService)
+		func() {
+			defer func() {
+				p := recover()
+				if p == nil {
+					t.Fatal("should panic")
+				}
+				msg := fmt.Sprintf("%v", p)
+				if !strings.Contains(msg, "does not implement MutableFileService") {
+					t.Fatalf("got %v", msg)
+				}
+			}()
+			subFS.NewMutator(context.Background(), "foo")
+		}()
+	})
+
 }

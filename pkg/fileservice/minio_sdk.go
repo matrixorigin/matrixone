@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"iter"
@@ -315,15 +316,35 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	_, err = a.putObject(
-		ctx,
-		key,
-		r,
-		sizeHint,
-		expire,
-	)
-	if err != nil {
-		return err
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+			return a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		_, err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	if sizeHint != nil && n.Load() != *sizeHint {
