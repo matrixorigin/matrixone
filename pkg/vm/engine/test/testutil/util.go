@@ -458,7 +458,7 @@ func MakeTxnHeartbeatMonkeyJob(
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case <-ticker.C:
 				if v := rand.Intn(100); v > 50 {
 					taeDB.StopTxnHeartbeat()
 				} else {
