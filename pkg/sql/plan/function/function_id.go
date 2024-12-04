@@ -606,7 +606,7 @@ var functionIdRegister = map[string]int32{
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
-	"josn_set":                       JSON_SET,
+	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
 	"jq":                             JQ,
