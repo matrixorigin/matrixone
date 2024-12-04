@@ -1464,16 +1464,6 @@ func appendPrimaryConstraintPlan(
 		}
 
 		if needCheck && useFuzzyFilter {
-			rfTag := builder.genNewMsgTag()
-			probeExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name:   tableDef.Pkey.PkeyColName,
-						ColPos: int32(pkPos),
-					},
-				},
-			}
 			// sink_scan
 			sinkScanNode := &Node{
 				NodeType:   plan.Node_SINK_SCAN,
@@ -1514,6 +1504,17 @@ func appendPrimaryConstraintPlan(
 
 			if scanTableDef.Partition != nil && partitionExpr != nil {
 				scanTableDef.Partition.PartitionExpression = partitionExpr
+			}
+
+			rfTag := builder.genNewMsgTag()
+			probeExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						Name:   tableDef.Pkey.PkeyColName,
+						ColPos: int32(len(scanTableDef.Cols) - 1),
+					},
+				},
 			}
 
 			scanNode := &plan.Node{
