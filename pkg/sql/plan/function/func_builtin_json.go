@@ -15,6 +15,8 @@
 package function
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -498,11 +500,22 @@ func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vec
 				continue
 			}
 
-			val, err := bytejson.CreateByteJSON(valBytes)
-			if err != nil {
-				return err
-			}
+			valString := string(valBytes)
 
+			_, parserErr := strconv.ParseInt(valString, 10, 64)
+			var val bytejson.ByteJson
+			if len(valString) > 0 && (valString[0] == '{' || valString[0] == '[' || parserErr == nil) {
+				val, err = types.ParseStringToByteJson(valString)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				val, err = bytejson.CreateByteJSON(valString)
+				if err != nil {
+					return err
+				}
+			}
 			valExprs = append(valExprs, val)
 		}
 

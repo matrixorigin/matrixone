@@ -55,6 +55,15 @@ func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	return
 }
 
+func ParseFromByteSliceWithoutCheck(s []byte) (bj ByteJson, err error) {
+	if len(s) == 0 {
+		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
+		return
+	}
+	err = bj.UnmarshalJSON(s)
+	return
+}
+
 func toString(buf, data []byte) ([]byte, error) {
 	return appendString(buf, util.UnsafeBytesToString(data))
 }
@@ -174,6 +183,33 @@ func buildJsonObject(keys [][]byte, elems []ByteJson) (ByteJson, error) {
 	entryStart := headerSize + len(elems)*keyEntrySize
 	buf = addByteElem(buf, entryStart, elems)
 	return ByteJson{Type: TpCodeObject, Data: buf}, nil
+}
+
+func buildBinaryJSONArray(elems []ByteJson) ByteJson {
+	totalSize := headerSize + len(elems)*valEntrySize
+	for _, elem := range elems {
+		if elem.Type != TpCodeLiteral {
+			totalSize += len(elem.Data)
+		}
+	}
+	buf := make([]byte, headerSize+len(elems)*valEntrySize, totalSize)
+	endian.PutUint32(buf, uint32(len(elems)))
+	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
+	buf = buildBinaryJSONElements(buf, headerSize, elems)
+	return ByteJson{Type: TpCodeArray, Data: buf}
+}
+
+func buildBinaryJSONElements(buf []byte, entryStart int, elems []ByteJson) []byte {
+	for i, elem := range elems {
+		buf[entryStart+i*valEntrySize] = elem.Type
+		if elem.Type == TpCodeLiteral {
+			buf[entryStart+i*valEntrySize+valTypeSize] = elem.Data[0]
+		} else {
+			endian.PutUint32(buf[entryStart+i*valEntrySize+valTypeSize:], uint32(len(buf)))
+			buf = append(buf, elem.Data...)
+		}
+	}
+	return buf
 }
 
 func mergeToArray(origin []ByteJson) ByteJson {
@@ -538,13 +574,6 @@ func appendBinaryUint64(buf []byte, v uint64) []byte {
 	off := len(buf)
 	buf = appendZero(buf, 8)
 	endian.PutUint64(buf[off:], v)
-	return buf
-}
-
-func appendBinaryUint32(buf []byte, v uint32) []byte {
-	off := len(buf)
-	buf = appendZero(buf, 4)
-	endian.PutUint32(buf[off:], v)
 	return buf
 }
 
