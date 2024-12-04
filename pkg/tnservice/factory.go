@@ -171,11 +171,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	}
 
 	mergeCfg := &options.MergeConfig{
-		CNMergeMemControlHint: uint64(s.cfg.Merge.CNMergeMemHint),
-		CNTakeOverAll:         s.cfg.Merge.CNTakeOverAll,
-		CNTakeOverExceed:      uint64(s.cfg.Merge.CNTakeOverExceed),
-		CNStandaloneTake:      s.cfg.Merge.CNStandaloneTake,
-		DisableZMBasedMerge:   s.cfg.Merge.DisableZMBasedMerge,
+		DisableZMBasedMerge: s.cfg.Merge.DisableZMBasedMerge,
 	}
 
 	logtailServerAddr := s.logtailServiceListenAddr()

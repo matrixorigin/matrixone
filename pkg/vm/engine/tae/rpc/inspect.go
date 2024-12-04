@@ -768,7 +768,6 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
 	policyCmd.Flags().Int32P("minOsizeQualified", "m", common.DefaultMinOsizeQualifiedMB, "objects whose osize are less than minOsizeQualified(MB) will be picked up to merge")
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
-	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
 	return policyCmd
@@ -794,10 +793,6 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) error {
 		return err
 	}
 	c.minOsizeQualified, err = cmd.Flags().GetInt32("minOsizeQualified")
-	if err != nil {
-		return err
-	}
-	c.cnMinMergeSize, err = cmd.Flags().GetInt32("minCNMergeSize")
 	if err != nil {
 		return err
 	}
@@ -827,21 +822,19 @@ func (c *mergePolicyArg) String() string {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
 	}
 	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, offloadToCnSize: %vMB, hints: %v",
-		t, c.maxMergeObjN, c.maxOsizeObject, c.minOsizeQualified, c.cnMinMergeSize, c.hints,
+		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, hints: %v",
+		t, c.maxMergeObjN, c.maxOsizeObject, c.minOsizeQualified, c.hints,
 	)
 }
 
 func (c *mergePolicyArg) Run() error {
 	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
 	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
-	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
 
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeOsizeRowsQualified.Store(minosize)
 		common.RuntimeMaxObjOsize.Store(maxosize)
-		common.RuntimeMinCNMergeSize.Store(cnsize)
 		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
 			merge.StopMerge.Store(true)
 			c.ctx.resp.Payload = []byte("auto merge is disabled")
@@ -858,7 +851,6 @@ func (c *mergePolicyArg) Run() error {
 			MergeMaxOneRun:    int(c.maxMergeObjN),
 			ObjectMinOsize:    minosize,
 			MaxOsizeMergedObj: maxosize,
-			MinCNMergeSize:    cnsize,
 			MergeHints:        c.hints,
 		}); err != nil {
 			return err

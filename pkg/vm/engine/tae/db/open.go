@@ -53,15 +53,9 @@ const (
 )
 
 func fillRuntimeOptions(opts *options.Options) {
-	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
-	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
-	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
 	common.RuntimeOverallFlushMemCap.Store(opts.CheckpointCfg.OverallFlushMemControl)
 	if opts.IsStandalone {
 		common.IsStandaloneBoost.Store(true)
-	}
-	if opts.MergeCfg.CNStandaloneTake {
-		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
 	if opts.MergeCfg.DisableZMBasedMerge {
 		common.RuntimeDisableZMBasedMerge.Store(true)

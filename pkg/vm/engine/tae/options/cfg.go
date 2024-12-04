@@ -84,11 +84,7 @@ type LogtailCfg struct {
 }
 
 type MergeConfig struct {
-	CNMergeMemControlHint uint64
-	CNTakeOverAll         bool
-	CNTakeOverExceed      uint64
-	CNStandaloneTake      bool
-	DisableZMBasedMerge   bool
+	DisableZMBasedMerge bool
 }
 
 type LogtailServerCfg struct {
