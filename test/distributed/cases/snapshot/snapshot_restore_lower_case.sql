@@ -75,7 +75,7 @@ drop database test;
 
 
 
--- @bvt:issue#20522
+-- @bvt:issue#20544
 -- view
 -- @session:id=2&user=acc01:test_account&password=111
 select @@lower_case_table_names;
@@ -128,6 +128,7 @@ drop snapshot if exists sp02_restore_lower;
 create snapshot sp02_restore_lower for account acc01;
 
 -- @session:id=2&user=acc01:test_account&password=111
+select @@lower_case_table_names;
 drop database test02;
 -- @session
 

@@ -172,11 +172,19 @@ inner join
 Departments d ON e.DepartmentID = d.DepartmentID;
 
 select * from EmployeeDepartmentView;
-SQL parser error: table "employees" does not exist
+firstname    lastname    departmentname
+John    Doe    Human Resources
+Jane    Smith    Engineering
+Alice    Johnson    Marketing
+Mark    Patterson    Sales
+David    Finley    Finance
 drop snapshot if exists sp02_restore_lower;
 
 create snapshot sp02_restore_lower for account acc01;
 
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
 drop database test02;
 
 restore account acc01 from snapshot sp02_restore_lower;
