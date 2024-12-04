@@ -560,7 +560,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) error {
-	var appendNotPkFilter []*plan.Expr
+	appendNotPkFilter := make([]*plan.Expr, 0, len(runtimeInExprList))
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
 		col := fn.Args[0].GetCol()
