@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -61,14 +63,11 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 SENDLAST:
 	if shuffle.ctr.ending { //send last batch in shuffle pool
-		var end bool // all shuffle operators are finished
-		result.Batch, end = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
-		if end {
-			result.Status = vm.ExecStop
-		} else {
-			result.Status = vm.ExecHasMore
-		}
+		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc)
 		shuffle.ctr.buf = result.Batch
+		if result.Batch != nil {
+			logutil.Infof("shuffle op with idx %v send a ending batch rowcnt %v", shuffle.CurrentShuffleIdx, shuffle.ctr.buf.RowCount())
+		}
 		return result, nil
 	}
 
@@ -86,7 +85,7 @@ SENDLAST:
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.shufflePool.Ending()
+			shuffle.ctr.shufflePool.stopWriting()
 			goto SENDLAST
 		} else if !bat.IsEmpty() {
 			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
@@ -105,6 +104,7 @@ SENDLAST:
 	}
 	// send the batch
 	result.Batch = shuffle.ctr.buf
+	logutil.Infof("shuffle op with idx %v send a full batch rowcnt %v", shuffle.CurrentShuffleIdx, shuffle.ctr.buf.RowCount())
 	return result, nil
 }
 
