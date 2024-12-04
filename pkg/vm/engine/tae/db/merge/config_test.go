@@ -29,20 +29,18 @@ func newTestSchema(colCnt, pkIdx int, config *BasicPolicyConfig) *catalog.Schema
 		MaxObjOnerun:      uint32(config.MergeMaxOneRun),
 		MaxOsizeMergedObj: config.MaxOsizeMergedObj,
 		Hints:             config.MergeHints,
-		MinCnMergeSize:    config.MinCNMergeSize,
 	}
 	return schema
 }
 
 func TestString(t *testing.T) {
-	require.Equal(t, "minOsizeObj:90MiB, maxOneRun:16, maxOsizeMergedObj: 128MiB, offloadToCNSize:78.12GiB, hints: []", defaultBasicConfig.String())
+	require.Equal(t, "minOsizeObj:90MiB, maxOneRun:16, maxOsizeMergedObj: 90MiB, hints: []", defaultBasicConfig.String())
 }
 
 func TestConfigForTable(t *testing.T) {
 	tbl := catalog.MockStaloneTableEntry(0, newTestSchema(1, 0, defaultBasicConfig))
 	configProvider := newCustomConfigProvider()
 	defaultConfig := configProvider.getConfig(tbl)
-	require.Equal(t, defaultBasicConfig.MinCNMergeSize, defaultConfig.MinCNMergeSize)
 	require.Equal(t, defaultBasicConfig.MaxOsizeMergedObj, defaultConfig.MaxOsizeMergedObj)
 	require.Equal(t, defaultBasicConfig.MergeMaxOneRun, defaultConfig.MergeMaxOneRun)
 	require.Equal(t, defaultBasicConfig.ObjectMinOsize, defaultConfig.ObjectMinOsize)
@@ -51,7 +49,6 @@ func TestConfigForTable(t *testing.T) {
 	tbl2 := catalog.MockStaloneTableEntry(0, newTestSchema(1, 0, &BasicPolicyConfig{}))
 	configProvider = newCustomConfigProvider()
 	config := configProvider.getConfig(tbl2)
-	require.Equal(t, defaultBasicConfig.MinCNMergeSize, config.MinCNMergeSize)
 	require.Equal(t, defaultBasicConfig.MaxOsizeMergedObj, config.MaxOsizeMergedObj)
 	require.Equal(t, defaultBasicConfig.MergeMaxOneRun, config.MergeMaxOneRun)
 	require.Equal(t, defaultBasicConfig.ObjectMinOsize, config.ObjectMinOsize)
@@ -63,7 +60,6 @@ func TestConfigForTable(t *testing.T) {
 	}))
 	configProvider = newCustomConfigProvider()
 	config = configProvider.getConfig(tbl3)
-	require.Equal(t, defaultBasicConfig.MinCNMergeSize, config.MinCNMergeSize)
 	require.Equal(t, uint32(500*8192), config.MaxOsizeMergedObj)
 	require.Equal(t, 2, config.MergeMaxOneRun)
 	require.Equal(t, defaultBasicConfig.ObjectMinOsize, config.ObjectMinOsize)
