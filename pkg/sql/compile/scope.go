@@ -567,10 +567,10 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
-		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
-		}
+		//pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		//if pkPos != col.ColPos {
+		appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		//}
 	}
 
 	// reset filter
