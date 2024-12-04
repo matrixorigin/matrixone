@@ -497,9 +497,15 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 				return Null, err
 			}
 		case JsonModifyInsert:
-			// to do
+			bj, err = modifier.insert(path, val)
+			if err != nil {
+				return Null, err
+			}
 		case JsonModifyReplace:
-			// to do
+			bj, err = modifier.replace(path, val)
+			if err != nil {
+				return Null, err
+			}
 		default:
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
 		}

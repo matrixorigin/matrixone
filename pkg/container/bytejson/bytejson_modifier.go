@@ -27,6 +27,32 @@ type bytejsonModifier struct {
 	modifyVal ByteJson
 }
 
+func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error) {
+	result := bm.bj.querySimple(path)
+	if CompareByteJson(result, Null) > 0 {
+		// if path exists, return
+		return bm.bj, nil
+	}
+	// insert
+	if err := bm.doInsert(path, newBj); err == nil {
+		return bm.rebuild(), nil
+	}
+
+	return Null, moerr.NewInvalidArgNoCtx("invalid json insert", path.String())
+}
+
+func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error) {
+	result := bm.bj.querySimple(path)
+	if CompareByteJson(result, Null) == 0 {
+		// if path not exists, return
+		return bm.bj, nil
+	}
+	// replace
+	bm.modifyPtr = &result.Data[0]
+	bm.modifyVal = newBj
+	return bm.rebuild(), nil
+}
+
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
 	result := bm.bj.querySimple(path)
 	if CompareByteJson(result, Null) > 0 {
