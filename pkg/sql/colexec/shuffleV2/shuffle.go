@@ -70,9 +70,10 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 SENDLAST:
 	if shuffle.ctr.ending {
+		var end bool // all shuffle operators are finished
 		//send last batch in shuffle pool
-		result.Batch = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, proc)
-		if result.Batch == nil {
+		result.Batch, end = shuffle.ctr.shufflePool.GetEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
+		if end {
 			result.Status = vm.ExecStop
 		} else {
 			result.Status = vm.ExecHasMore

@@ -26,7 +26,6 @@ import (
 )
 
 type ShufflePoolV2 struct {
-	isEnding      bool
 	bucketNum     int32
 	maxHolders    int32
 	holders       int32
@@ -35,7 +34,7 @@ type ShufflePoolV2 struct {
 	holderLock    sync.Mutex
 	batchLocks    []sync.Mutex
 	allHoldersEnd chan bool
-	hasMore       chan bool
+	waiters       []chan bool
 }
 
 func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
@@ -44,9 +43,11 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp.finished = 0
 	sp.batches = make([]*batch.Batch, sp.bucketNum)
 	sp.batchLocks = make([]sync.Mutex, bucketNum)
-	sp.isEnding = false
 	sp.allHoldersEnd = make(chan bool, 1)
-	sp.hasMore = make(chan bool, 1)
+	sp.waiters = make([]chan bool, bucketNum)
+	for i := range sp.waiters {
+		sp.waiters[i] = make(chan bool, 1)
+	}
 	return sp
 }
 
@@ -106,15 +107,16 @@ func (sp *ShufflePoolV2) Print() { // only for debug
 }
 
 // shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePoolV2) GetEndingBatch(buf *batch.Batch, proc *process.Process, shuffleIDX int32) (*batch.Batch, bool) {
+func (sp *ShufflePoolV2) GetEndingBatch(buf *batch.Batch, shuffleIDX int32) (*batch.Batch, bool) {
 	switch {
-	case <-sp.hasMore:
-		return nil, false
+	case <-sp.waiters[shuffleIDX]:
+		bat := sp.GetFullBatch(buf, shuffleIDX)
+		return bat, false
 	case <-sp.allHoldersEnd:
 		sp.allHoldersEnd <- true
 		return sp.batches[shuffleIDX], true
 	}
-	panic("never r")
+	panic("error get ending batch!")
 }
 
 // if there is full batch  in pool, return it and put buf in the place to continue writing into pool
@@ -160,6 +162,9 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 				}
 			}
 			bat.AddRowCount(len(currentSels))
+			if bat.RowCount() > colexec.DefaultBatchSize-512 && len(sp.waiters[i]) == 0 {
+				sp.waiters[i] <- true
+			}
 			sp.batchLocks[i].Unlock()
 		}
 	}
