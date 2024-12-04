@@ -474,8 +474,7 @@ func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
 
 func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
 	var (
-		newBj = bj
-		err   error
+		err error
 	)
 
 	if len(pathList) != len(valList) {
@@ -493,7 +492,7 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 
 		switch modifyType {
 		case JsonModifySet:
-			newBj, err = modifier.set(path, val)
+			bj, err = modifier.set(path, val)
 			if err != nil {
 				return Null, err
 			}
@@ -505,7 +504,7 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
 		}
 	}
-	return newBj, nil
+	return bj, nil
 }
 
 func (bj ByteJson) canUnnest() bool {

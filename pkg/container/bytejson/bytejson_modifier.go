@@ -28,10 +28,10 @@ type bytejsonModifier struct {
 }
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
-	result := bm.bj.query(nil, path)
-	if len(result) > 0 {
+	result := bm.bj.querySimple(path)
+	if CompareByteJson(result, Null) > 0 {
 		// set
-		bm.modifyPtr = &result[0].Data[0]
+		bm.modifyPtr = &result.Data[0]
 		bm.modifyVal = newBj
 		return bm.rebuild(), nil
 	}
@@ -106,16 +106,33 @@ func (bm *bytejsonModifier) rebuildTo(buf []byte) ([]byte, TpCode) {
 
 func (bm *bytejsonModifier) doInsert(path *Path, newBj ByteJson) (err error) {
 	parentPath, lastSub := path.popOneSubPath()
-	result := bm.bj.query(nil, &parentPath)
-	if len(result) == 0 {
+	result := bm.bj.querySimple(&parentPath)
+	if CompareByteJson(result, Null) == 0 {
 		return
 	}
 
-	parent := result[0]
+	parent := result
+
+	if lastSub.tp == subPathIdx {
+		bm.modifyPtr = &parent.Data[0]
+		if parent.Type != TpCodeArray {
+			bm.modifyVal = buildBinaryJSONArray([]ByteJson{parent, newBj})
+			return
+		}
+		elemCnt := parent.GetElemCnt()
+		elems := make([]ByteJson, 0, elemCnt+1)
+		for i := 0; i < elemCnt; i++ {
+			elems = append(elems, parent.getArrayElem(i))
+		}
+		elems = append(elems, newBj)
+		bm.modifyVal = buildBinaryJSONArray(elems)
+		return
+	}
 
 	if parent.Type != TpCodeObject {
 		return
 	}
+
 	bm.modifyPtr = &parent.Data[0]
 	elementCount := parent.GetElemCnt()
 	insertKey := lastSub.key
@@ -126,7 +143,7 @@ func (bm *bytejsonModifier) doInsert(path *Path, newBj ByteJson) (err error) {
 	keys := make([][]byte, 0, elementCount+1)
 	elems := make([]ByteJson, 0, elementCount+1)
 	for i := 0; i < elementCount; i++ {
-		for i == inserIndx {
+		if i == inserIndx {
 			keys = append(keys, []byte(insertKey))
 			elems = append(elems, newBj)
 		}
