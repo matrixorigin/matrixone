@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -195,7 +197,7 @@ const (
 
 const (
 	defaultAlphaCycleDur     = time.Minute
-	defaultGamaCycleDur      = time.Minute * 60
+	defaultGamaCycleDur      = time.Minute * 10
 	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
 	logHeader = "MO-TABLE-STATS-TASK"
@@ -262,12 +264,6 @@ func initMoTableStatsConfig(
 			return
 		}
 
-		if dynamicCtx.gamaTaskPool, err = ants.NewPool(
-			runtime.NumCPU(),
-			ants.WithNonblocking(false)); err != nil {
-			return
-		}
-
 		dynamicCtx.conf = eng.config.statsConf
 
 		function.MoTableRowsSizeUseOldImpl.Store(dynamicCtx.conf.DisableStatsTask)
@@ -325,54 +321,82 @@ func initMoTableStatsConfig(
 
 		dynamicCtx.tableStock.tbls = make([]tablePair, 0, 1)
 
-		// start beta task
 		{
-			if dynamicCtx.beta.betaTaskPool, err = ants.NewPool(
+			dynamicCtx.beta.executor = betaTask
+			dynamicCtx.gama.executor = gamaTask
+
+			if dynamicCtx.beta.taskPool, err = ants.NewPool(
 				runtime.NumCPU(),
-				ants.WithNonblocking(false)); err != nil {
+				ants.WithNonblocking(false),
+				ants.WithPanicHandler(func(e interface{}) {
+					logutil.Error(logHeader,
+						zap.String("source", "beta task panic"),
+						zap.Any("error", e))
+				})); err != nil {
 				return
 			}
 
-			dynamicCtx.beta.launchBeta = func() {
-				dynamicCtx.Lock()
-				defer dynamicCtx.Unlock()
-
-				if dynamicCtx.beta.betaRunning {
-					return
-				}
-
-				dynamicCtx.beta.launchTimes++
-				dynamicCtx.beta.betaRunning = true
-
-				logutil.Info(logHeader,
-					zap.String("source", "launch beta task"),
-					zap.Int("times", dynamicCtx.beta.launchTimes))
-
-				go func() {
-					defer func() {
-						dynamicCtx.Lock()
-						defer dynamicCtx.Unlock()
-
-						dynamicCtx.beta.betaRunning = false
-					}()
-
-					// there should not have a deadline
-					betaCtx := turn2SysCtx(context.Background())
-					_ = betaTask(betaCtx, eng.service, eng)
-				}()
+			if dynamicCtx.gama.taskPool, err = ants.NewPool(
+				runtime.NumCPU(),
+				ants.WithNonblocking(false),
+				ants.WithPanicHandler(func(e interface{}) {
+					logutil.Error(logHeader,
+						zap.String("source", "gama task panic"),
+						zap.Any("error", e))
+				})); err != nil {
+				return
 			}
 		}
 
-		{
+		launch := func(hint string, task *taskState) {
+			if task.running {
+				return
+			}
+
+			task.launchTimes++
+			task.running = true
+
+			logutil.Info(logHeader,
+				zap.String("source", fmt.Sprintf("launch %s", hint)),
+				zap.Int("times", task.launchTimes))
+
 			go func() {
+				defer func() {
+					if e := recover(); e != nil {
+						logutil.Error(logHeader,
+							zap.String("source", fmt.Sprintf("%s panic", hint)),
+							zap.Any("error", e))
+					}
+
+					dynamicCtx.Lock()
+					task.running = false
+					dynamicCtx.Unlock()
+
+				}()
+
 				// there should not have a deadline
-				gamaCtx := turn2SysCtx(context.Background())
-				gamaTask(gamaCtx, eng.service, eng)
+				taskCtx := turn2SysCtx(context.Background())
+				task.executor(taskCtx, eng.service, eng)
 			}()
+		}
+
+		dynamicCtx.launchTask = func() {
+			dynamicCtx.Lock()
+			defer dynamicCtx.Unlock()
+
+			launch("beta task", &dynamicCtx.beta)
+			launch("gama task", &dynamicCtx.gama)
 		}
 	})
 
 	return err
+}
+
+type taskState struct {
+	taskPool    *ants.Pool
+	running     bool
+	executor    func(context.Context, string, engine.Engine)
+	launchTimes int
 }
 
 var dynamicCtx struct {
@@ -398,15 +422,10 @@ var dynamicCtx struct {
 
 	lastCheckNewTables types.TS
 
-	beta struct {
-		betaTaskPool *ants.Pool
-		betaRunning  bool
-		launchBeta   func()
-		launchTimes  int
-	}
+	beta, gama taskState
+	launchTask func()
 
 	alphaTaskPool *ants.Pool
-	gamaTaskPool  *ants.Pool
 
 	executorPool sync.Pool
 
@@ -918,6 +937,7 @@ func (tp *tablePair) String() string {
 func (tp *tablePair) Done(err error) {
 	if tp.errChan != nil {
 		tp.errChan <- err
+		tp.errChan = nil
 	}
 }
 
@@ -1209,7 +1229,7 @@ func alphaTask(
 	}
 
 	// maybe the task exited, need to launch a new one
-	dynamicCtx.beta.launchBeta()
+	dynamicCtx.launchTask()
 
 	var (
 		errWaitToReceive = len(tbls)
@@ -1225,6 +1245,12 @@ func alphaTask(
 
 	now := time.Now()
 	defer func() {
+		if e := recover(); e != nil {
+			logutil.Error(logHeader,
+				zap.String("source", "alpha task panic"),
+				zap.Any("error", e))
+		}
+
 		dur := time.Since(now)
 
 		logutil.Info(logHeader,
@@ -1351,8 +1377,8 @@ func betaTask(
 	ctx context.Context,
 	service string,
 	eng engine.Engine,
-) (err error) {
-
+) {
+	var err error
 	defer func() {
 		logutil.Info(logHeader,
 			zap.String("source", "beta task exit"),
@@ -1396,7 +1422,7 @@ func betaTask(
 			}
 
 			bulkWait.Add(1)
-			if err = dynamicCtx.beta.betaTaskPool.Submit(func() {
+			if err = dynamicCtx.beta.taskPool.Submit(func() {
 				defer bulkWait.Done()
 
 				sl, err2 := statsCalculateOp(ctx, service, de.fs, tbl.snapshot, tbl.pState)
@@ -1429,8 +1455,15 @@ func gamaTask(
 ) {
 
 	var (
-		de = eng.(*Engine)
+		cnCnt int
+		de    = eng.(*Engine)
 	)
+
+	clusterservice.GetMOCluster(de.service).GetCNService(clusterservice.Selector{}, func(service metadata.CNService) bool {
+		cnCnt++
+		return true
+	})
+	cnCnt = max(cnCnt, 1)
 
 	dynamicCtx.Lock()
 	gamaDur := dynamicCtx.conf.CorrectionDuration
@@ -1490,11 +1523,6 @@ func gamaTask(
 		}
 
 		var tbls []tablePair
-		defer func() {
-			for i := range tbls {
-				tbls[i].Done(nil)
-			}
-		}()
 
 		for i := range tblIds {
 			tbl, ok := buildTablePairFromCache(de, accIds[i], dbIds[i], tblIds[i], to, false)
@@ -1602,9 +1630,9 @@ func gamaTask(
 		deleteByStep(2) // clean tables
 	}
 
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	randDuration := func() time.Duration {
-		return gamaDur + time.Duration(rnd.Intn(10))*time.Minute
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		return gamaDur + time.Duration(rnd.Intn(60*cnCnt))*time.Minute
 	}
 
 	tickerA := time.NewTicker(randDuration())
@@ -1619,20 +1647,20 @@ func gamaTask(
 			return
 
 		case <-tickerA.C:
-			dynamicCtx.gamaTaskPool.Submit(opA)
+			dynamicCtx.gama.taskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
 		case <-dynamicCtx.updateForgottenQueue:
-			dynamicCtx.gamaTaskPool.Submit(opA)
+			dynamicCtx.gama.taskPool.Submit(opA)
 			tickerA.Reset(randDuration())
 
 		case <-tickerB.C:
-			dynamicCtx.gamaTaskPool.Submit(opB)
+			dynamicCtx.gama.taskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 
 		case <-dynamicCtx.cleanDeletesQueue:
 			// emergence, do clean now
-			dynamicCtx.gamaTaskPool.Submit(opB)
+			dynamicCtx.gama.taskPool.Submit(opB)
 			tickerB.Reset(randDuration())
 		}
 	}
