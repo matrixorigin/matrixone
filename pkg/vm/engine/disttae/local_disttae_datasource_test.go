@@ -200,6 +200,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 			},
 			tableId: 23,
 		},
+		memPKFilter: &engine_util.MemPKFilter{},
 	}
 
 	outBatch := batch.NewWithSize(1)

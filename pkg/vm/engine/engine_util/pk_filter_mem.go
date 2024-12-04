@@ -17,8 +17,10 @@ package engine_util
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -299,4 +301,88 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
 		}
 	}
 
+}
+
+func (f *MemPKFilter) FilterVector(vec *vector.Vector, packer *types.Packer, skipMask *objectio.Bitmap) {
+	keys := logtailreplay.EncodePrimaryKeyVector(vec, packer)
+
+	equalFunc := func(idx int, pk []byte) bool {
+		if bytes.Equal(keys[idx], pk) {
+			return true
+		}
+		skipMask.Add(uint64(idx))
+		return false
+	}
+
+	prefixFunc := func(idx int, pk []byte) bool {
+		if bytes.HasPrefix(keys[idx], pk) {
+			return true
+		}
+		skipMask.Add(uint64(idx))
+		return false
+	}
+
+	for i := 0; i < len(keys); i++ {
+		switch f.op {
+		case function.EQUAL:
+			equalFunc(i, f.packed[0])
+		case function.PREFIX_EQ:
+			prefixFunc(i, f.packed[0])
+		case function.IN:
+			for _, k := range f.packed {
+				if equalFunc(i, k) {
+					break
+				}
+			}
+		case function.PREFIX_IN:
+			for _, k := range f.packed {
+				if prefixFunc(i, k) {
+					break
+				}
+			}
+		case function.BETWEEN:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeRightOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeLeftOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case RangeBothOpen:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.GREAT_EQUAL:
+			if !(bytes.Compare(keys[i], f.packed[0]) >= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.GREAT_THAN:
+			if !(bytes.Compare(keys[i], f.packed[0]) > 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.LESS_EQUAL:
+			if !(bytes.Compare(keys[i], f.packed[0]) <= 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		case function.LESS_THAN:
+			if !(bytes.Compare(keys[i], f.packed[0]) < 0) {
+				skipMask.Add(uint64(i))
+			}
+
+		default:
+		}
+	}
+
+	return
 }

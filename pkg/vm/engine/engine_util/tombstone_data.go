@@ -313,11 +313,14 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 	)
 }
 
-func RowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
+func RowIdsToOffset(rowIds []types.Rowid, wantedType any, skipMask objectio.Bitmap) any {
 	switch wantedType.(type) {
 	case int32:
 		var ret []int32
-		for _, rowId := range rowIds {
+		for i, rowId := range rowIds {
+			if skipMask.Contains(uint64(i)) {
+				continue
+			}
 			offset := rowId.GetRowOffset()
 			ret = append(ret, int32(offset))
 		}
@@ -325,7 +328,10 @@ func RowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 
 	case uint32:
 		var ret []uint32
-		for _, rowId := range rowIds {
+		for i, rowId := range rowIds {
+			if skipMask.Contains(uint64(i)) {
+				continue
+			}
 			offset := rowId.GetRowOffset()
 			ret = append(ret, uint32(offset))
 		}
@@ -333,7 +339,10 @@ func RowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 
 	case uint64:
 		var ret []uint64
-		for _, rowId := range rowIds {
+		for i, rowId := range rowIds {
+			if skipMask.Contains(uint64(i)) {
+				continue
+			}
 			offset := rowId.GetRowOffset()
 			ret = append(ret, uint64(offset))
 		}
@@ -341,7 +350,10 @@ func RowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 
 	case int64:
 		var ret []int64
-		for _, rowId := range rowIds {
+		for i, rowId := range rowIds {
+			if skipMask.Contains(uint64(i)) {
+				continue
+			}
 			offset := rowId.GetRowOffset()
 			ret = append(ret, int64(offset))
 		}
