@@ -83,6 +83,21 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 	return m.recorder
 }
 
+// BinaryExecute mocks base method.
+func (m *MockComputationWrapper) BinaryExecute() (bool, string) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BinaryExecute")
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(string)
+	return ret0, ret1
+}
+
+// BinaryExecute indicates an expected call of BinaryExecute.
+func (mr *MockComputationWrapperMockRecorder) BinaryExecute() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BinaryExecute", reflect.TypeOf((*MockComputationWrapper)(nil).BinaryExecute))
+}
+
 // Clear mocks base method.
 func (m *MockComputationWrapper) Clear() {
 	m.ctrl.T.Helper()
@@ -263,18 +278,6 @@ func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx, phyPlan interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx, phyPlan)
 }
 
-// SetExplainBuffer mocks base method.
-func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetExplainBuffer", buf)
-}
-
-// SetExplainBuffer indicates an expected call of SetExplainBuffer.
-func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
-}
-
 // ResetPlanAndStmt mocks base method.
 func (m *MockComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	m.ctrl.T.Helper()
@@ -300,6 +303,18 @@ func (m *MockComputationWrapper) Run(ts uint64) (*util.RunResult, error) {
 func (mr *MockComputationWrapperMockRecorder) Run(ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationWrapper)(nil).Run), ts)
+}
+
+// SetExplainBuffer mocks base method.
+func (m *MockComputationWrapper) SetExplainBuffer(buf *bytes.Buffer) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetExplainBuffer", buf)
+}
+
+// SetExplainBuffer indicates an expected call of SetExplainBuffer.
+func (mr *MockComputationWrapperMockRecorder) SetExplainBuffer(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExplainBuffer", reflect.TypeOf((*MockComputationWrapper)(nil).SetExplainBuffer), buf)
 }
 
 // StatsCompositeSubStmtResource mocks base method.
@@ -534,16 +549,6 @@ func (mr *MockBackgroundExecMockRecorder) Clear() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clear", reflect.TypeOf((*MockBackgroundExec)(nil).Clear))
 }
 
-func (m *MockBackgroundExec) SetRestore(bool) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetRestore")
-}
-
-func (mr *MockBackgroundExecMockRecorder) SetRestore() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestore", reflect.TypeOf((*MockBackgroundExec)(nil).SetRestore))
-}
-
 // ClearExecResultBatches mocks base method.
 func (m *MockBackgroundExec) ClearExecResultBatches() {
 	m.ctrl.T.Helper()
@@ -676,4 +681,16 @@ func (m *MockBackgroundExec) Service() string {
 func (mr *MockBackgroundExecMockRecorder) Service() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Service", reflect.TypeOf((*MockBackgroundExec)(nil).Service))
+}
+
+// SetRestore mocks base method.
+func (m *MockBackgroundExec) SetRestore(b bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetRestore", b)
+}
+
+// SetRestore indicates an expected call of SetRestore.
+func (mr *MockBackgroundExecMockRecorder) SetRestore(b interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRestore", reflect.TypeOf((*MockBackgroundExec)(nil).SetRestore), b)
 }
