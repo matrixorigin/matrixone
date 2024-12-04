@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+var _ policy = (*objCompactPolicy)(nil)
+
 type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
 	fs       fileservice.FileService
@@ -72,7 +74,7 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	return false
 }
 
-func (o *objCompactPolicy) revise(rc *resourceController, config *BasicPolicyConfig) []reviseResult {
+func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 	if o.tblEntry == nil {
 		return nil
 	}

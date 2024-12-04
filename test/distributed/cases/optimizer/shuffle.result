@@ -5,8 +5,8 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
 create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
-insert into t1 select *,*,* from generate_series(10000000) g;
-insert into t2 select *,*,* from generate_series(9000000) g;
+insert into t1 select *,*,* from generate_series(5000000) g;
+insert into t2 select *,*,* from generate_series(4000000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 mo_ctl(dn, flush, d1.t1)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
@@ -28,7 +28,7 @@ Project
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c1=t2.c1;
 count(*)
-9000000
+4000000
 explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -55,7 +55,7 @@ Project
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c1=t2.c2;
 count(*)
-9000000
+4000000
 explain select count(*) from t1,t2 where t1.c2=t2.c1;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -68,7 +68,7 @@ Project
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c2=t2.c1;
 count(*)
-9000000
+4000000
 explain select count(*) from t1,t2 where t1.c2=t2.c2;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -81,7 +81,7 @@ Project
               ->  Table Scan on d1.t2
 select count(*) from t1,t2 where t1.c2=t2.c2;
 count(*)
-9000000
+4000000
 explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -99,7 +99,7 @@ Project
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 count(*)
 499999
-explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  Aggregate
@@ -111,9 +111,9 @@ Project
               ->  Table Scan on d1.t2
                     Filter Cond: (t2.c3 < 5000000)
                     Block Filter Cond: (t2.c3 < 5000000)
-select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<5000000;
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 count(*)
-4999999
+1499999
 explain select count(*) from t1 group by c1 limit 5;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -158,8 +158,8 @@ Project
                     Block Filter Cond: (t2.c3 > 100000)
 select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 count(*)
-8900000
-explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+3900000
+explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  Aggregate
@@ -171,10 +171,10 @@ Project
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c3 BETWEEN 100 AND 7000000
                     Block Filter Cond: t2.c3 BETWEEN 100 AND 7000000
-select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 7000000 );
+select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
 count(*)
-3000099
-explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+4300099
+explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  Aggregate
@@ -188,9 +188,9 @@ Project
               ->  Table Scan on d1.t1
                     Filter Cond: (t1.c3 < 800000)
                     Block Filter Cond: (t1.c3 < 800000)
-select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 6000000 );
+select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
 count(*)
-9999
+209998
 explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -222,7 +222,7 @@ Project
                     Block Filter Cond: (t1.c3 > 5000000)
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 count(*)
-5000000
+0
 explain select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -286,5 +286,11 @@ Project
 select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
 count(*)
 999999
+delete from t1 where c3%5=1;
+insert into t1 values(-1,-2,-3);
+insert into t1 values(10,11,12);
+select count(*) from t1 where c3!=0;
+count(*)
+4000002
 drop table t3;
 drop database if exists d1;

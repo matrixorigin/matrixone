@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"golang.org/x/exp/rand"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -343,7 +345,13 @@ func TxnRanges(
 	relation engine.Relation,
 	exprs []*plan.Expr,
 ) (engine.RelData, error) {
-	return relation.Ranges(ctx, exprs, 2, txn.GetWorkspace().GetSnapshotWriteOffset(), engine.Policy_CollectAllData)
+	rangesParam := engine.RangesParam{
+		BlockFilters:   exprs,
+		PreAllocBlocks: 2,
+		TxnOffset:      txn.GetWorkspace().GetSnapshotWriteOffset(),
+		Policy:         engine.Policy_CollectAllData,
+	}
+	return relation.Ranges(ctx, rangesParam)
 }
 
 func GetRelationReader(
@@ -436,4 +444,27 @@ func EndThisStatement(
 	txn.GetWorkspace().UpdateSnapshotWriteOffset()
 
 	return
+}
+
+func MakeTxnHeartbeatMonkeyJob(
+	e *TestTxnStorage,
+	opInterval time.Duration,
+) *tasks.CancelableJob {
+	taeDB := e.GetDB()
+	return tasks.NewCancelableJob(func(ctx context.Context) {
+		ticker := time.NewTicker(opInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if v := rand.Intn(100); v > 50 {
+					taeDB.StopTxnHeartbeat()
+				} else {
+					taeDB.ResetTxnHeartbeat()
+				}
+			}
+		}
+	})
 }

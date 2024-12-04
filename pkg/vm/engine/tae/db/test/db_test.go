@@ -2308,7 +2308,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 4
 	err = rel1.UpdateByFilter(context.Background(), filter, 3, int64(1111), false)
 	t.Log(err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 	_ = txn1.Rollback(context.Background())
 
 	// Step 5
@@ -3467,10 +3467,10 @@ func TestImmutableIndexInAblk(t *testing.T) {
 		rowIDs.Append(nil, true)
 	}
 	err = meta.GetObjectData().GetDuplicatedRows(
-		context.Background(), txn, bat.Vecs[1], nil, false, true, false, rowIDs, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, types.TS{}, types.MaxTs(), rowIDs, common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
-	err = meta.GetObjectData().Contains(context.Background(), txn, false, rowIDs, nil, common.DebugAllocator)
+	err = meta.GetObjectData().Contains(context.Background(), txn, rowIDs, nil, common.DebugAllocator)
 	assert.NoError(t, err)
 	duplicate := false
 	rowIDs.Foreach(func(v any, isNull bool, row int) error {
@@ -6682,7 +6682,6 @@ func TestSnapshotGC(t *testing.T) {
 	}
 	snapWG.Wait()
 	wg.Wait()
-	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -6691,6 +6690,7 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
+	db.DiskCleaner.GetCleaner().EnableGC()
 	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
@@ -7983,8 +7983,6 @@ func TestSnapshotLag1(t *testing.T) {
 	bats := data.Split(4)
 	tae.CreateRelAndAppend(bats[0], true)
 
-	txn1, rel1 := tae.GetRelation()
-	assert.NoError(t, rel1.Append(context.Background(), bats[1]))
 	txn2, rel2 := tae.GetRelation()
 	assert.NoError(t, rel2.Append(context.Background(), bats[1]))
 
@@ -7994,9 +7992,11 @@ func TestSnapshotLag1(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
-	txn1.MockStartTS(tae.TxnMgr.Now())
-	err := txn1.Commit(context.Background())
+	txn1, rel1 := tae.GetRelation()
+	err := rel1.Append(context.Background(), bats[1])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	err = txn1.Commit(context.Background())
+	assert.NoError(t, err)
 	err = txn2.Commit(context.Background())
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 }

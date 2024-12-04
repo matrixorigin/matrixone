@@ -571,10 +571,8 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  string payload = 4;
-  bool need_expand_ranges = 5;
-  int32 cn_cnt = 6;
-  int32 cn_idx = 7;
+  int32 cn_cnt = 4;
+  int32 cn_idx = 5;
 }
 
 message ProcessLimitation {
