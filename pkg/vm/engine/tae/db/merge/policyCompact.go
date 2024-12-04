@@ -33,7 +33,7 @@ type objCompactPolicy struct {
 
 	segObjects map[objectio.Segmentid][]*catalog.ObjectEntry
 
-	tombstoneMetas []objectio.ObjectDataMeta
+	tombstones []objectio.ObjectDataMeta
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
@@ -54,11 +54,11 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	if entry.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-	if len(o.tombstoneMetas) == 0 {
+	if len(o.tombstones) == 0 {
 		return false
 	}
 
-	for _, meta := range o.tombstoneMetas {
+	for _, meta := range o.tombstones {
 		if !checkTombstoneMeta(meta, entry.ID()) {
 			continue
 		}
@@ -85,7 +85,7 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
-	o.tombstoneMetas = o.tombstoneMetas[:0]
+	o.tombstones = o.tombstones[:0]
 	clear(o.segObjects)
 
 	tIter := entry.MakeTombstoneObjectIt()
@@ -104,7 +104,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 				continue
 			}
 
-			o.tombstoneMetas = append(o.tombstoneMetas, meta)
+			o.tombstones = append(o.tombstones, meta)
 		}
 	}
 }
