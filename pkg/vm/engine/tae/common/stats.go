@@ -25,7 +25,7 @@ import (
 
 const (
 	DefaultMinOsizeQualifiedMB   = 90    // MB
-	DefaultMaxOsizeObjMB         = 128   // MB
+	DefaultMaxOsizeObjMB         = 90    // MB
 	DefaultMinCNMergeSize        = 80000 // MB
 	DefaultCNMergeMemControlHint = 8192  // MB
 	DefaultMaxMergeObjN          = 16
