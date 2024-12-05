@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -157,7 +158,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 				}
 			}
 		}
-		if len(objs) < overlaps {
+		if len(objs) < overlaps || estimateMergeSize(objs) < common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			return res
 		}
 		res = append(res, objs)
