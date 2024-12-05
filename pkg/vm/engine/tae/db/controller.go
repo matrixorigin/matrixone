@@ -111,7 +111,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	case DBTxnMode_Write:
 	default:
 		cmd.setError(
-			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to replay", c.db.GetTxnMode()),
+			moerr.NewTxnControlErrorNoCtxf("bad db txn mode %d to replay", c.db.GetTxnMode()),
 		)
 	}
 	// write mode -> replay mode switch steps:
@@ -191,7 +191,7 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	case DBTxnMode_Replay:
 	default:
 		cmd.setError(
-			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to write", c.db.GetTxnMode()),
+			moerr.NewTxnControlErrorNoCtxf("bad db txn mode %d to write", c.db.GetTxnMode()),
 		)
 	}
 	var (
@@ -259,7 +259,7 @@ func (c *Controller) SwitchTxnMode(
 	case 2:
 		typ = ControlCmd_ToWriteMode
 	default:
-		return moerr.NewTxnControlErrorNoCtx("unknown txn mode switch iarg %d", iarg)
+		return moerr.NewTxnControlErrorNoCtxf("unknown txn mode switch iarg %d", iarg)
 	}
 	cmd := newControlCmd(ctx, typ, sarg)
 	if _, err := c.queue.Enqueue(cmd); err != nil {

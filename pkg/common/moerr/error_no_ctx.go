@@ -334,8 +334,8 @@ func NewCantDelGCCheckerNoCtx() *Error {
 	return newError(Context(), ErrCantDelGCChecker)
 }
 
-func NewTxnControlErrorNoCtx(vals ...any) *Error {
-	return newError(Context(), ErrTxnControl, vals...)
+func NewTxnControlErrorNoCtxf(format string, args ...any) *Error {
+	return newError(Context(), ErrTxnControl, fmt.Sprintf(format, args...))
 }
 
 func NewNotFoundNoCtx() *Error {

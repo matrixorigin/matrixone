@@ -348,7 +348,7 @@ func (mgr *TxnManager) storeTxn(
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
-		return moerr.NewTxnControlErrorNoCtx(
+		return moerr.NewTxnControlErrorNoCtxf(
 			"%s Skip %s",
 			skipFlags.String(),
 			flag.String(),
@@ -368,7 +368,7 @@ func (mgr *TxnManager) loadOrStoreTxn(
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if !skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
-		return nil, false, moerr.NewTxnControlErrorNoCtx(
+		return nil, false, moerr.NewTxnControlErrorNoCtxf(
 			"%s Skip %s",
 			skipFlags.String(),
 			flag.String(),
@@ -428,7 +428,7 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 	if !ok || res == nil {
 		return nil
 	}
-	return res.(txnif.AsyncTxn)
+	return res
 }
 
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {

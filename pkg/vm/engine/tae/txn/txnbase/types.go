@@ -41,7 +41,7 @@ const (
 
 func (m TxnFlag) String() string {
 	var (
-		first bool
+		first bool = true
 		w     bytes.Buffer
 	)
 
