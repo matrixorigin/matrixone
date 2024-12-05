@@ -346,7 +346,7 @@ func (mgr *TxnManager) storeTxn(
 	mgr.txns.wg.Add(1)
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
-	if !skipFlags.Skip(flag) {
+	if skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
 		return moerr.NewTxnControlErrorNoCtxf(
 			"%s Skip %s",
@@ -366,7 +366,7 @@ func (mgr *TxnManager) loadOrStoreTxn(
 	mgr.txns.wg.Add(1)
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
-	if !skipFlags.Skip(flag) {
+	if skipFlags.Skip(flag) {
 		mgr.txns.wg.Done()
 		return nil, false, moerr.NewTxnControlErrorNoCtxf(
 			"%s Skip %s",

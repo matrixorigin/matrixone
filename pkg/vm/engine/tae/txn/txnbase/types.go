@@ -41,7 +41,7 @@ const (
 
 func (m TxnFlag) String() string {
 	var (
-		first bool = true
+		first = true
 		w     bytes.Buffer
 	)
 
@@ -59,7 +59,6 @@ func (m TxnFlag) String() string {
 	}
 	if m&TxnFlag_Heartbeat == TxnFlag_Heartbeat {
 		if first {
-			first = false
 			w.WriteByte('|')
 		}
 		w.WriteByte('H')
