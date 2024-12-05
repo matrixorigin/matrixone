@@ -981,12 +981,12 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList []*plan.Expr
-	var shouldDrop bool
-	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	var emptyScan bool
+	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return
 	}
-	if !shouldDrop {
+	if !emptyScan {
 		err = s.handleBlockList(c, runtimeFilterList)
 		if err != nil {
 			return
