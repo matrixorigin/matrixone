@@ -615,6 +615,9 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	if err != nil {
 		return err
 	}
+	if s.DataSource.Rel == nil {
+		s.DataSource.Rel = rel
+	}
 
 	if s.NodeInfo.CNCNT == 1 {
 		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
