@@ -1002,18 +1002,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-
-		readers, err = c.e.BuildBlockReaders(
+		readers, err = s.DataSource.Rel.BuildReaders(
 			ctx,
 			c.proc,
-			s.DataSource.Timestamp,
 			s.DataSource.FilterExpr,
-			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu)
+			s.NodeInfo.Mcpu,
+			s.TxnOffset,
+			len(s.DataSource.OrderBy) > 0,
+			engine.Policy_CheckCommittedOnly, //remote cn only scan commited objs by shuffle
+			engine.FilterHint{},
+		)
 		if err != nil {
 			return
 		}
+
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
 		ctx := c.proc.Ctx
