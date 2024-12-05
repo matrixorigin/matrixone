@@ -63,3 +63,47 @@ WHERE id = 1;
 SELECT * FROM users;
 
 drop table users;
+
+drop table if exists employees;
+CREATE TABLE employees (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    info JSON
+);
+
+drop table if exists projects;
+CREATE TABLE projects (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    members JSON
+);
+
+INSERT INTO employees (info) VALUES
+('{"name": "John Doe", "age": 30, "department": "Engineering", "skills": ["Java", "Python", "SQL"]}'),
+('{"name": "Jane Smith", "age": 25, "department": "Marketing", "skills": ["Social Media", "SEO", "Content Writing"]}');
+
+INSERT INTO projects (name, members) VALUES
+('Project A', '[1, 2]'),
+('Project B', '[1]');
+
+
+SELECT * FROM employees;
+SELECT * FROM projects;
+
+UPDATE employees
+SET info = JSON_SET(info, '$.skills[3]', 'JavaScript')
+WHERE id = 1;
+SELECT * FROM employees;
+
+UPDATE projects
+SET members = JSON_SET(members, '$[2]', 3)
+WHERE id = 1;
+SELECT * FROM projects;
+
+UPDATE employees
+SET info = JSON_SET(info, '$.department.manager', 'Alice Johnson')
+WHERE id = 2;
+SELECT * FROM employees;
+
+drop table employees;
+drop table projects;
+

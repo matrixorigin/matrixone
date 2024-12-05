@@ -84,3 +84,51 @@ id    info
 3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["JavaScript", "Python", "SQL"]}
 1    {"address": {"city": "San Francisco", "state": "NY", "zip": "10001"}, "age": 32, "email": "alice@example.com", "name": "Alice"}
 drop table users;
+drop table if exists employees;
+CREATE TABLE employees (
+id INT AUTO_INCREMENT PRIMARY KEY,
+info JSON
+);
+drop table if exists projects;
+CREATE TABLE projects (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(255),
+members JSON
+);
+INSERT INTO employees (info) VALUES
+('{"name": "John Doe", "age": 30, "department": "Engineering", "skills": ["Java", "Python", "SQL"]}'),
+('{"name": "Jane Smith", "age": 25, "department": "Marketing", "skills": ["Social Media", "SEO", "Content Writing"]}');
+INSERT INTO projects (name, members) VALUES
+('Project A', '[1, 2]'),
+('Project B', '[1]');
+SELECT * FROM employees;
+id    info
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL"]}
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+SELECT * FROM projects;
+id    name    members
+1    Project A    [1, 2]
+2    Project B    [1]
+UPDATE employees
+SET info = JSON_SET(info, '$.skills[3]', 'JavaScript')
+WHERE id = 1;
+SELECT * FROM employees;
+id    info
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL", "JavaScript"]}
+UPDATE projects
+SET members = JSON_SET(members, '$[2]', 3)
+WHERE id = 1;
+SELECT * FROM projects;
+id    name    members
+2    Project B    [1]
+1    Project A    [1, 2, 3]
+UPDATE employees
+SET info = JSON_SET(info, '$.department.manager', 'Alice Johnson')
+WHERE id = 2;
+SELECT * FROM employees;
+id    info
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL", "JavaScript"]}
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+drop table employees;
+drop table projects;
