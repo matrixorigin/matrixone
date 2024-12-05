@@ -113,7 +113,9 @@ show table_values from t1;
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+set mo_table_stats.use_old_impl = no;
 
 -- test primary key table
 drop table if exists t11;
@@ -139,7 +141,9 @@ show table_values from t11;
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+set mo_table_stats.use_old_impl = no;
 
 -- test external table
 create external table external_table(
@@ -186,7 +190,9 @@ INSERT INTO partition_table VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',125
 INSERT INTO partition_table VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
 show table_values from partition_table;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
+set mo_table_stats.use_old_impl = no;
 
 create table t2(
     col1 json
@@ -306,7 +312,9 @@ show table_values from t1;
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
+set mo_table_stats.use_old_impl = no;
 
 -- test primary key table
 drop table if exists t11;
@@ -332,7 +340,9 @@ show table_values from t11;
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
 
+set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
+set mo_table_stats.use_old_impl = no;
 
 -- test external table
 create external table external_table(

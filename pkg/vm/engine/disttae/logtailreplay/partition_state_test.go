@@ -15,13 +15,15 @@
 package logtailreplay
 
 import (
+	"math/rand"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
@@ -124,4 +126,33 @@ func TestHasTombstoneChanged(t *testing.T) {
 	require.True(t, state.HasTombstoneChanged(types.BuildTS(9, 0), types.BuildTS(15, 0)))
 	require.False(t, state.HasTombstoneChanged(types.BuildTS(25, 0), types.BuildTS(30, 0)))
 
+}
+
+func TestScanRows(t *testing.T) {
+	packer := types.NewPacker()
+	state := NewPartitionState("", true, 42)
+	for i := uint32(0); i < 10; i++ {
+		rid := types.BuildTestRowid(rand.Int63(), rand.Int63())
+		state.rows.Set(RowEntry{
+			BlockID:           rid.CloneBlockID(),
+			RowID:             rid,
+			Offset:            int64(i),
+			Time:              types.BuildTS(time.Now().UnixNano(), uint32(i)),
+			ID:                int64(i),
+			Deleted:           i%2 == 0,
+			PrimaryIndexBytes: EncodePrimaryKey(i, packer),
+		})
+	}
+
+	logutil.Info(state.LogAllRowEntry())
+
+	_ = state.ScanRows(false, func(entry RowEntry) (bool, error) {
+		logutil.Info(entry.String())
+		return true, nil
+	})
+
+	_ = state.ScanRows(true, func(entry RowEntry) (bool, error) {
+		logutil.Info(entry.String())
+		return true, nil
+	})
 }
