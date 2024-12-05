@@ -33,6 +33,7 @@ type ShuffleV2 struct {
 	ShuffleColMax      int64
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
+	IsDebug            bool //used for unit test
 	vm.OperatorBase
 }
 

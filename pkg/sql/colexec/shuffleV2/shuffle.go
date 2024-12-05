@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,7 +48,7 @@ func (shuffle *ShuffleV2) Prepare(proc *process.Process) error {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
 	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1))
+		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, shuffle.BucketNum))
 	}
 	shuffle.ctr.shufflePool.hold()
 	shuffle.ctr.ending = false
@@ -63,18 +61,16 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 SENDLAST:
 	if shuffle.ctr.ending { //send last batch in shuffle pool
-		result.Batch = shuffle.ctr.shufflePool.getEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc)
+		result.Batch = shuffle.ctr.shufflePool.getEndingBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx, proc, shuffle.IsDebug)
 		shuffle.ctr.buf = result.Batch
-		if result.Batch != nil {
-			logutil.Infof("shuffle op with idx %v send a ending batch rowcnt %v", shuffle.CurrentShuffleIdx, shuffle.ctr.buf.RowCount())
-		}
 		return result, nil
 	}
 
 	var err error
 	for {
-		shuffle.ctr.buf = shuffle.ctr.shufflePool.getFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
-		if shuffle.ctr.buf != nil && shuffle.ctr.buf.RowCount() > 0 { // find a full batch
+		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.ctr.buf, shuffle.CurrentShuffleIdx)
+		if tmpBat != nil && tmpBat.RowCount() > 0 { // find a full batch
+			shuffle.ctr.buf = tmpBat
 			break
 		}
 		// do input

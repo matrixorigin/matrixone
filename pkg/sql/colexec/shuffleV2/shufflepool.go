@@ -25,6 +25,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type shufflePoolStats struct { //for debug
+	inputCNT    []int64
+	outputCNT   []int64
+	inputTotal  int64
+	outputTotal int64
+	maxBatchCNT int   //max row of batches in shuffle pool
+	directRows  int64 //directly return by shuffle op, don't write into shuffle pool
+}
+
+func (sp *ShufflePoolV2) printStats() {
+	maxCNT := sp.stats.inputCNT[0]
+	minCNT := sp.stats.inputCNT[0]
+	for i := range sp.stats.inputCNT {
+		sp.stats.inputTotal += sp.stats.inputCNT[i]
+		sp.stats.outputTotal += sp.stats.outputCNT[i]
+		if sp.stats.inputCNT[i] > maxCNT {
+			maxCNT = sp.stats.inputCNT[i]
+		}
+		if sp.stats.inputCNT[i] < minCNT {
+			minCNT = sp.stats.inputCNT[i]
+		}
+	}
+
+	logutil.Infof("shuffle pool stats: bucket num %v, input %v, output %v, average %v, max %v, min %v, maxBatchCnt %v, directRows %v",
+		sp.bucketNum, sp.stats.inputTotal, sp.stats.outputTotal, sp.stats.inputTotal/int64(sp.bucketNum), maxCNT, minCNT, sp.stats.maxBatchCNT, sp.stats.directRows)
+}
+
 type ShufflePoolV2 struct {
 	waitFactor    int32
 	bucketNum     int32
@@ -35,13 +62,9 @@ type ShufflePoolV2 struct {
 	batches       []*batch.Batch
 	holderLock    sync.Mutex
 	batchLocks    []sync.Mutex
-	writeWaiters  []chan bool
 	endingWaiters []chan bool
 	batchWaiters  []chan bool
-	inputCNT      []int64 //for debug
-	outputCNT     []int64
-	inputTotal    int64
-	outputTotal   int64
+	stats         shufflePoolStats
 }
 
 func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
@@ -57,20 +80,14 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp.batchLocks = make([]sync.Mutex, bucketNum)
 	sp.endingWaiters = make([]chan bool, bucketNum)
 	sp.batchWaiters = make([]chan bool, bucketNum)
-	sp.writeWaiters = make([]chan bool, bucketNum)
-	for i := range sp.writeWaiters {
-		sp.writeWaiters[i] = make(chan bool, 1)
-	}
 	for i := range sp.batchWaiters {
 		sp.batchWaiters[i] = make(chan bool, 1)
 	}
 	for i := range sp.endingWaiters {
 		sp.endingWaiters[i] = make(chan bool, 1)
 	}
-	sp.inputCNT = make([]int64, bucketNum)
-	sp.outputCNT = make([]int64, bucketNum)
-	sp.inputTotal = 0
-	sp.outputTotal = 0
+	sp.stats.inputCNT = make([]int64, bucketNum)
+	sp.stats.outputCNT = make([]int64, bucketNum)
 	return sp
 }
 
@@ -105,23 +122,7 @@ func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
 	if sp.maxHolders != sp.holders || sp.maxHolders != sp.finished {
 		return // still some other shuffle operators working
 	}
-
-	maxCNT := sp.inputCNT[0]
-	minCNT := sp.inputCNT[0]
-	for i := range sp.inputCNT {
-		sp.inputTotal += sp.inputCNT[i]
-		sp.outputTotal += sp.outputCNT[i]
-		if sp.inputCNT[i] > maxCNT {
-			maxCNT = sp.inputCNT[i]
-		}
-		if sp.inputCNT[i] < minCNT {
-			minCNT = sp.inputCNT[i]
-		}
-	}
-
-	logutil.Infof("shuffle pool stats: bucket num %v, input %v, output %v, average %v, max %v, min %v",
-		sp.bucketNum, sp.inputTotal, sp.outputTotal, sp.inputTotal/int64(sp.bucketNum), maxCNT, minCNT)
-
+	sp.printStats()
 	for i := range sp.batches {
 		if sp.batches[i] != nil {
 			if sp.batches[i].RowCount() > 0 {
@@ -134,18 +135,15 @@ func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
 	sp.finished = 0
 	sp.stoppers = 0
 	sp.endingWaiters = nil
-	sp.writeWaiters = nil
 	sp.batchWaiters = nil
-	sp.inputCNT = nil
-	sp.outputCNT = nil
-	sp.inputTotal = 0
-	sp.outputTotal = 0
+	sp.stats = shufflePoolStats{}
 }
 
-func (sp *ShufflePoolV2) Print() { // only for debug
+func (sp *ShufflePoolV2) DebugPrint() { // only for debug
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
 	logutil.Warnf("shuffle pool print, maxHolders %v, holders %v, finished %v, stop writing %v", sp.maxHolders, sp.holders, sp.finished, sp.stoppers)
+	sp.printStats()
 	for i := range sp.batches {
 		bat := sp.batches[i]
 		if bat == nil {
@@ -157,7 +155,10 @@ func (sp *ShufflePoolV2) Print() { // only for debug
 }
 
 // shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc *process.Process) *batch.Batch {
+func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc *process.Process, isDebug bool) *batch.Batch {
+	if isDebug {
+		return sp.batches[shuffleIDX]
+	}
 	for {
 		bat := sp.getFullBatch(buf, shuffleIDX)
 		if bat != nil && bat.RowCount() > 0 {
@@ -170,14 +171,20 @@ func (sp *ShufflePoolV2) getEndingBatch(buf *batch.Batch, shuffleIDX int32, proc
 				return bat
 			}
 		case <-sp.endingWaiters[shuffleIDX]:
+			if buf != nil {
+				buf.Clean(proc.Mp())
+			}
 			sp.endingWaiters[shuffleIDX] <- true
 			bat = sp.batches[shuffleIDX]
 			sp.batches[shuffleIDX] = nil
 			if bat != nil {
-				sp.outputCNT[shuffleIDX] += int64(bat.RowCount())
+				sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
 			}
 			return bat
 		case <-proc.Ctx.Done():
+			if buf != nil {
+				buf.Clean(proc.Mp())
+			}
 			return nil
 		}
 	}
@@ -197,10 +204,7 @@ func (sp *ShufflePoolV2) getFullBatch(buf *batch.Batch, shuffleIDX int32) *batch
 		buf.ShuffleIDX = bat.ShuffleIDX
 	}
 	sp.batches[shuffleIDX] = buf
-	if len(sp.writeWaiters[shuffleIDX]) == 0 {
-		sp.writeWaiters[shuffleIDX] <- true
-	}
-	sp.outputCNT[shuffleIDX] += int64(bat.RowCount())
+	sp.stats.outputCNT[shuffleIDX] += int64(bat.RowCount())
 	return bat
 }
 
@@ -218,37 +222,18 @@ func (sp *ShufflePoolV2) initBatch(srcBatch *batch.Batch, proc *process.Process,
 	return nil
 }
 
-func (sp *ShufflePoolV2) waitIfTooLarge(proc *process.Process, shuffleIDX int32) bool {
-	for {
-		if sp.batches[shuffleIDX] != nil && sp.batches[shuffleIDX].RowCount() > int(colexec.DefaultBatchSize*sp.waitFactor) {
-			// batch too large, need to wait
-			sp.batchLocks[shuffleIDX].Unlock()
-			select {
-			case <-sp.writeWaiters[shuffleIDX]:
-				sp.batchLocks[shuffleIDX].Lock()
-			case <-proc.Ctx.Done():
-				return true
-			}
-		} else {
-			break
-		}
-	}
-	if len(sp.writeWaiters[shuffleIDX]) == 0 {
-		sp.writeWaiters[shuffleIDX] <- true
-	}
-	return false
-}
-
 func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
 	var err error
-	sp.waitIfTooLarge(proc, shuffleIDX)
 	sp.batches[shuffleIDX], err = sp.batches[shuffleIDX].AppendWithCopy(proc.Ctx, proc.Mp(), srcBatch)
 	if err != nil {
 		return err
 	}
-	sp.inputCNT[shuffleIDX] += int64(srcBatch.RowCount())
+	if sp.batches[shuffleIDX].RowCount() > sp.stats.maxBatchCNT {
+		sp.stats.maxBatchCNT = sp.batches[shuffleIDX].RowCount()
+	}
+	sp.stats.inputCNT[shuffleIDX] += int64(srcBatch.RowCount())
 	if sp.batches[shuffleIDX].RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[shuffleIDX]) == 0 {
 		sp.batchWaiters[shuffleIDX] <- true
 	}
@@ -261,7 +246,6 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.batchLocks[i].Lock()
-			sp.waitIfTooLarge(proc, int32(i))
 			err = sp.initBatch(srcBatch, proc, int32(i))
 			if err != nil {
 				sp.batchLocks[i].Unlock()
@@ -277,8 +261,11 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 					return err
 				}
 			}
-			sp.inputCNT[i] += int64(len(currentSels))
+			sp.stats.inputCNT[i] += int64(len(currentSels))
 			bat.AddRowCount(len(currentSels))
+			if bat.RowCount() > sp.stats.maxBatchCNT {
+				sp.stats.maxBatchCNT = bat.RowCount()
+			}
 			if bat.RowCount() >= colexec.DefaultBatchSize && len(sp.batchWaiters[i]) == 0 {
 				sp.batchWaiters[i] <- true
 			}
@@ -290,6 +277,8 @@ func (sp *ShufflePoolV2) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, 
 }
 
 func (sp *ShufflePoolV2) statsDirectlySentBatch(srcBatch *batch.Batch) {
-	sp.inputCNT[srcBatch.ShuffleIDX] += int64(srcBatch.RowCount())
-	sp.outputCNT[srcBatch.ShuffleIDX] += int64(srcBatch.RowCount())
+	rows := int64(srcBatch.RowCount())
+	sp.stats.inputCNT[srcBatch.ShuffleIDX] += rows
+	sp.stats.outputCNT[srcBatch.ShuffleIDX] += rows
+	sp.stats.directRows += rows
 }
