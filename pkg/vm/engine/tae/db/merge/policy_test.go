@@ -75,7 +75,7 @@ func newSortedTombstoneEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry
 	return entry
 }
 
-func newSortedTestObjectEntry(t *testing.T, v1, v2 int32, size uint32) *catalog.ObjectEntry {
+func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.ObjectEntry {
 	zm := index.NewZM(types.T_int32, 0)
 	index.UpdateZM(zm, types.EncodeInt32(&v1))
 	index.UpdateZM(zm, types.EncodeInt32(&v2))
@@ -435,4 +435,24 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 	require.Equal(t, 2, len(res8))
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4, o5}, res8[0])
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o6}, res8[1])
+}
+
+func TestRemoveOversize(t *testing.T) {
+	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
+	o2 := newSortedTestObjectEntry(t, 51, 100, 1)
+	o3 := newSortedTestObjectEntry(t, 49, 52, 2)
+
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o3}, removeOversize([]*catalog.ObjectEntry{o1, o2, o3}))
+
+}
+
+func BenchmarkRemoveOversize(b *testing.B) {
+	o1 := newSortedTestObjectEntry(b, 0, 50, math.MaxInt32)
+	o2 := newSortedTestObjectEntry(b, 51, 100, 1)
+	o3 := newSortedTestObjectEntry(b, 49, 52, 2)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		removeOversize([]*catalog.ObjectEntry{o1, o2, o3})
+	}
 }

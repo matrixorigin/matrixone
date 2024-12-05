@@ -15,9 +15,11 @@
 package merge
 
 import (
+	"cmp"
 	"context"
 	"math"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -45,12 +47,38 @@ const (
 	estimateMemUsagePerRow = 30
 )
 
-func originalSize(objs []*catalog.ObjectEntry) int {
-	size := 0
-	for _, o := range objs {
-		size += int(o.OriginSize())
+func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	if len(objs) < 2 {
+		return objs
 	}
-	return size
+	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.OriginSize(), b.OriginSize())
+	})
+
+	if len(objs) == 2 {
+		if objs[1].OriginSize() < 3*objs[0].OriginSize() {
+			return objs[:2]
+		}
+		return nil
+	}
+
+	accSize := int(objs[0].OriginSize()) + int(objs[1].OriginSize())
+	i := 2
+	for i < len(objs) {
+		size := int(objs[i].OriginSize())
+		if size > accSize {
+			break
+		}
+		accSize += size
+		i++
+	}
+	if i == 2 {
+		if objs[1].OriginSize() < 3*objs[0].OriginSize() {
+			return objs[:2]
+		}
+		return nil
+	}
+	return objs[:i+1]
 }
 
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {

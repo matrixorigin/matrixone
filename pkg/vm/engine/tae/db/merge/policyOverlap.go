@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -74,6 +73,9 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 		m.overlappingObjsSet = m.overlappingObjsSet[:0]
 		objs := objectsWithGivenOverlaps(m.leveledObjects[i], 5)
 		for _, obj := range objs {
+			if len(obj) < 2 {
+				continue
+			}
 			result := reviseResult{objs: obj, kind: taskHostDN}
 			if result.kind == taskHostDN {
 				if rc.cpuPercent > 80 {
@@ -144,6 +146,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 	tmp := make(map[*catalog.ObjectEntry]struct{})
 	for {
 		objs := make([]*catalog.ObjectEntry, 0, len(points)/2)
+		clear(tmp)
 		for _, p := range points {
 			if p.s == 1 {
 				tmp[p.obj] = struct{}{}
@@ -158,10 +161,14 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 				}
 			}
 		}
-		if len(objs) < overlaps || originalSize(objs) < 10*common.Const1MBytes {
+		if len(objs) < overlaps {
 			return res
 		}
+		objs = removeOversize(objs)
 		res = append(res, objs)
+		if len(objs) < overlaps {
+			return res
+		}
 		points = slices.DeleteFunc(points, func(point endPoint) bool {
 			return slices.Contains(objs, point.obj)
 		})
