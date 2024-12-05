@@ -15,6 +15,7 @@
 package cmsMergeGroup
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -23,6 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
+
+func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
+	buf.WriteString(thisOperatorName)
+}
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
