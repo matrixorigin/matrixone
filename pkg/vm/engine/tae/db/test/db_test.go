@@ -10404,3 +10404,21 @@ func TestDedup5(t *testing.T) {
 	assert.Error(t, err)
 	assert.NoError(t, insertTxn.Commit(ctx))
 }
+
+func Test_BasicTxnModeSwitch(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	assert.Equal(t, db.DBTxnMode_Write, tae.GetTxnMode())
+	err := tae.SwitchTxnMode(ctx, 1, "todo")
+	assert.NoError(t, err)
+	assert.Equal(t, db.DBTxnMode_Replay, tae.GetTxnMode())
+	assert.True(t, tae.TxnMgr.IsRelayMode())
+
+	err = tae.SwitchTxnMode(ctx, 2, "todo")
+	assert.NoError(t, err)
+	assert.Equal(t, db.DBTxnMode_Write, tae.GetTxnMode())
+	assert.True(t, tae.TxnMgr.IsWriteMode())
+}
