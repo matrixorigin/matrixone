@@ -250,6 +250,7 @@ mo_stages
 mo_stored_procedure
 mo_subs
 mo_table_partitions
+mo_table_stats_alpha
 mo_tables
 mo_transactions
 mo_upgrade
@@ -261,7 +262,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-35
+36
 show column_number from mo_database;
 Number of columns in mo_database
 9

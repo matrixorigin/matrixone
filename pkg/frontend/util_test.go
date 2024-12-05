@@ -1035,7 +1035,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
+			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, ""); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
 				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
 			}
 		})

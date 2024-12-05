@@ -1001,15 +1001,6 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
-	BuildBlockReaders(
-		ctx context.Context,
-		proc any,
-		ts timestamp.Timestamp,
-		expr *plan.Expr,
-		def *plan.TableDef,
-		relData RelData,
-		num int) ([]Reader, error)
-
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
 
