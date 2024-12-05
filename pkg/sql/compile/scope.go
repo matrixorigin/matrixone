@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -615,9 +616,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	if err != nil {
 		return err
 	}
-	if s.DataSource.Rel == nil {
-		s.DataSource.Rel = rel
-	}
+	s.DataSource.Rel = rel
 
 	if s.NodeInfo.CNCNT == 1 {
 		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
@@ -1022,13 +1021,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
-		ctx := c.proc.Ctx
-		stats := statistic.StatsInfoFromContext(ctx)
+		stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 		crs := new(perfcounter.CounterSet)
-		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
-			newCtx,
+			perfcounter.AttachS3RequestKey(c.proc.Ctx, crs),
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
