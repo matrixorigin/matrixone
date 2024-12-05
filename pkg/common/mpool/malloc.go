@@ -17,6 +17,8 @@ package mpool
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -37,9 +39,12 @@ var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator]
 })
 
 func MakeBytes(size int) ([]byte, error) {
-	return allocator().Allocate(uint64(size), malloc.NoHints)
+	ret, err := allocator().Allocate(uint64(size), malloc.NoHints)
+	logutil.Infof("!!!!!!!!!!!!!!allocate slice addr %p size %v", ret[0], size)
+	return ret, err
 }
 
 func FreeBytes(bs []byte) {
+	logutil.Infof("!!!!!!!!!!!!!!!!!!!!deallocate slice addr %p size %v", bs[0], len(bs))
 	allocator().Deallocate(bs, malloc.NoHints)
 }
