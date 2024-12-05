@@ -392,7 +392,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE CHECKING NOCHECKING
 
 // MODump
 %token <str> MODUMP
@@ -1891,6 +1891,14 @@ field_terminator:
 duplicate_opt:
     {
         $$ = &tree.DuplicateKeyError{}
+    }
+|   CHECKING
+    {
+        $$ = &tree.DuplicateKeyError{}
+    }
+|   NOCHECKING
+    {
+        $$ = &tree.DuplicateKeyNoChecking{}
     }
 |   IGNORE
     {
@@ -12363,6 +12371,7 @@ non_reserved_keyword:
 |   BOOL
 |   CANCEL
 |   CHAIN
+|   CHECKING
 |   CHECKSUM
 |   CLUSTER
 |   COMPRESSION
@@ -12456,6 +12465,7 @@ non_reserved_keyword:
 |   NUMERIC
 |   NEVER
 |   NO
+|   NOCHECKING
 |   OFFSET
 |   ONLY
 |   OPTIMIZE
