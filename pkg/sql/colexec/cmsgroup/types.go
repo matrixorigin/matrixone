@@ -15,6 +15,7 @@
 package cmsgroup
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +30,10 @@ const (
 	H0 = iota
 	H8
 	HStr
+)
+
+const (
+	thisOperatorName = "group"
 )
 
 type ExprEvalVector struct {
@@ -53,6 +58,8 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 	}
 	return
 }
+
+var _ vm.Operator = &Group{}
 
 // Group
 // the group operator using new implement.
@@ -128,6 +135,10 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 	group.ctr.freeGroupEvaluate()
 }
 
+func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	group.Free(proc, pipelineFailed, err)
+}
+
 func (ctr *container) freeAggEvaluate() {
 	for i := range ctr.aggregateEvaluate {
 		for j := range ctr.aggregateEvaluate[i].Executor {
@@ -142,4 +153,39 @@ func (ctr *container) freeGroupEvaluate() {
 		ctr.groupByEvaluate.Executor[i].Free()
 	}
 	ctr.groupByEvaluate = ExprEvalVector{}
+}
+
+func (group *Group) OpType() vm.OpType {
+	return vm.Group
+}
+
+func (group Group) TypeName() string {
+	return thisOperatorName
+}
+
+func (group *Group) GetOperatorBase() *vm.OperatorBase {
+	return &group.OperatorBase
+}
+
+func init() {
+	reuse.CreatePool[Group](
+		func() *Group {
+			return &Group{}
+		},
+		func(a *Group) {
+			*a = Group{}
+		},
+		reuse.DefaultOptions[Group]().
+			WithEnableChecker(),
+	)
+}
+
+func NewArgument() *Group {
+	return reuse.Alloc[Group](nil)
+}
+
+func (group *Group) Release() {
+	if group != nil {
+		reuse.Free[Group](group, nil)
+	}
 }

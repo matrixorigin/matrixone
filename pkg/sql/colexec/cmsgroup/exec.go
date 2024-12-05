@@ -15,15 +15,37 @@
 package cmsgroup
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var makeAggExec = aggexec.MakeAgg
+
+func (group *Group) String(buf *bytes.Buffer) {
+	buf.WriteString(thisOperatorName + ": group([")
+	for i, expr := range group.Exprs {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(fmt.Sprintf("%v", expr))
+	}
+	buf.WriteString("], [")
+
+	for i, ag := range group.Aggs {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.GetAggID()), ag.GetArgExpressions()))
+	}
+	buf.WriteString("])")
+}
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
