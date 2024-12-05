@@ -395,20 +395,29 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 	}
 }
 
-func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32, projectionSize int32) {
+func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32, projectionSize int32, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if exprImpl.Col.RelPos == windowTag {
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
 			exprImpl.Col.RelPos = -1
 			exprImpl.Col.ColPos += projectionSize
+		} else {
+			err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
+			if err != nil {
+				return err
+			}
 		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			builder.remapWindowClause(arg, windowTag, projectionSize)
+			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance

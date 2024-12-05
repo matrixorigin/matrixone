@@ -102,12 +102,6 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 		if err != nil {
 			return err
 		}
-		//for _, arg := range ne.W.PartitionBy {
-		//	err = builder.remapColRefForExpr(arg, colMap)
-		//	if err != nil {
-		//		return err
-		//	}
-		//}
 		for _, order := range ne.W.OrderBy {
 			err = builder.remapColRefForExpr(order.Expr, colMap, remapInfo)
 			if err != nil {
@@ -850,7 +844,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		groupTag := node.BindingTags[1]
 
 		for i, expr := range node.FilterList {
-			builder.remapWindowClause(expr, timeTag, int32(i))
+			err = builder.remapWindowClause(expr, timeTag, int32(i), childRemapping.globalToLocal, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// order by
@@ -1000,7 +997,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		l := len(childProjList)
 
 		for _, expr := range node.FilterList {
-			builder.remapWindowClause(expr, windowTag, int32(l))
+			err = builder.remapWindowClause(expr, windowTag, int32(l), childRemapping.globalToLocal, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		remapInfo.tip = "WinSpecList"
@@ -1012,7 +1012,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
-			globalRef := [2]int32{windowTag, int32(node.GetWindowIdx())}
+			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
