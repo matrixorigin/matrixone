@@ -35,6 +35,21 @@ const (
 	ControlCmd_ToWriteMode
 )
 
+func newControlCmd(
+	ctx context.Context,
+	typ ControlCmdType,
+	sarg string,
+) *controlCmd {
+	cmd := &controlCmd{
+		id:   uuid.Must(uuid.NewV7()),
+		typ:  typ,
+		ctx:  ctx,
+		sarg: sarg,
+	}
+	cmd.wg.Add(1)
+	return cmd
+}
+
 type controlCmd struct {
 	id   uuid.UUID
 	typ  ControlCmdType
@@ -92,7 +107,9 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	switch c.db.GetTxnMode() {
 	case DBTxnMode_Replay:
 		cmd.setError(nil)
-	case DBTxnMode_ReplayToWrite, DBTxnMode_WriteToReplay:
+		return
+	case DBTxnMode_Write:
+	default:
 		cmd.setError(
 			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to replay", c.db.GetTxnMode()),
 		)
@@ -170,7 +187,9 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	switch c.db.GetTxnMode() {
 	case DBTxnMode_Write:
 		cmd.setError(nil)
-	case DBTxnMode_ReplayToWrite, DBTxnMode_WriteToReplay:
+		return
+	case DBTxnMode_Replay:
+	default:
 		cmd.setError(
 			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to write", c.db.GetTxnMode()),
 		)
@@ -232,18 +251,16 @@ func (c *Controller) SwitchTxnMode(
 	iarg int,
 	sarg string,
 ) error {
-	cmd := &controlCmd{
-		ctx:  ctx,
-		sarg: sarg,
-	}
+	var typ ControlCmdType
 	switch iarg {
 	case 1:
-		cmd.typ = ControlCmd_ToReplayMode
+		typ = ControlCmd_ToReplayMode
 	case 2:
-		cmd.typ = ControlCmd_ToWriteMode
+		typ = ControlCmd_ToWriteMode
 	default:
 		return moerr.NewTxnControlErrorNoCtx("unknown txn mode switch iarg %d", iarg)
 	}
+	cmd := newControlCmd(ctx, typ, sarg)
 	if _, err := c.queue.Enqueue(cmd); err != nil {
 		return err
 	}

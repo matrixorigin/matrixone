@@ -51,9 +51,7 @@ type DBTxnMode uint32
 
 const (
 	DBTxnMode_Write DBTxnMode = iota
-	DBTxnMode_WriteToReplay
 	DBTxnMode_Replay
-	DBTxnMode_ReplayToWrite
 )
 
 type DBOption func(*DB)
@@ -97,6 +95,14 @@ type DB struct {
 
 func (db *DB) GetTxnMode() DBTxnMode {
 	return DBTxnMode(db.TxnMode.Load())
+}
+
+func (db *DB) SwitchTxnMode(
+	ctx context.Context,
+	iarg int,
+	sarg string,
+) error {
+	return db.Controller.SwitchTxnMode(ctx, iarg, sarg)
 }
 
 func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {
