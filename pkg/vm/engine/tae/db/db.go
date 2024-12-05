@@ -65,8 +65,9 @@ func WithTxnMode(mode DBTxnMode) DBOption {
 }
 
 type DB struct {
-	Dir     string
-	TxnMode atomic.Uint32
+	Dir        string
+	TxnMode    atomic.Uint32
+	Controller *Controller
 
 	Opts *options.Options
 
@@ -262,6 +263,7 @@ func (db *DB) Close() error {
 		panic(err)
 	}
 	db.Closed.Store(ErrClosed)
+	db.Controller.Stop()
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()

@@ -127,6 +127,7 @@ func Open(
 	for _, opt := range dbOpts {
 		opt(db)
 	}
+
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
@@ -361,6 +362,9 @@ func Open(
 	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
+
+	db.Controller = NewController(db)
+	db.Controller.Start()
 
 	go TaeMetricsTask(ctx)
 
