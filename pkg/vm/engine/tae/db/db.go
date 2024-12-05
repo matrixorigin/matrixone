@@ -226,6 +226,14 @@ func (db *DB) AddFaultPoint(ctx context.Context, name string, freq string, actio
 	return fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg)
 }
 
+func (db *DB) ResetTxnHeartbeat() {
+	db.TxnMgr.ResetHeartbeat()
+}
+
+func (db *DB) StopTxnHeartbeat() {
+	db.TxnMgr.StopHeartbeat()
+}
+
 func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
