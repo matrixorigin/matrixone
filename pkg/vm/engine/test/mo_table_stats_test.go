@@ -199,6 +199,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 		require.Equal(t, "invalid command", ret)
 	}
 
+	fmt.Println(disttae.LogDynamicCtx())
 }
 
 func TestHandleGetChangedList(t *testing.T) {
