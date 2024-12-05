@@ -88,7 +88,7 @@ func init() {
 		true,
 		1,
 	)
-
+	streamHandler.gcJob.Start()
 }
 
 // HandleShardingReadRows handles sharding read rows

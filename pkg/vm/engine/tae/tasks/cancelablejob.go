@@ -42,7 +42,7 @@ func NewCancelableJobs() *CancelableJobs {
 func (jobs *CancelableJobs) AddJob(
 	name string,
 	interval time.Duration,
-	fn func(context.Context),
+	fn CancelableFunc,
 	logLevel int,
 ) (err error) {
 	job := NewCancelableCronJob(
