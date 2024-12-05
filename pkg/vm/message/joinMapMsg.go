@@ -19,6 +19,7 @@ import (
 	"context"
 	"strconv"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +32,8 @@ const selsDivideLength = 256
 const selsPreAlloc = 4
 
 type JoinSels struct {
-	sels [][][]int32
+	bytes [][]byte
+	sels  [][][]int32
 }
 
 func (js *JoinSels) InitSel(len int) {
@@ -39,6 +41,9 @@ func (js *JoinSels) InitSel(len int) {
 }
 
 func (js *JoinSels) Free() {
+	for i := range js.bytes {
+		mpool.FreeBytes(js.bytes[i])
+	}
 	js.sels = nil
 }
 
@@ -48,9 +53,11 @@ func (js *JoinSels) InsertSel(k, v int32) {
 	if len(js.sels) <= int(i) {
 		s := make([][]int32, selsDivideLength)
 		js.sels = append(js.sels, s)
-		var internalArray [selsDivideLength * selsPreAlloc]int32
+		newBytes, _ := mpool.MakeBytes(selsDivideLength * selsPreAlloc * 4)
+		js.bytes = append(js.bytes, newBytes)
+		intSlice := unsafe.Slice((*int32)(unsafe.Pointer(&newBytes[0])), selsDivideLength*selsPreAlloc)
 		for p := 0; p < selsDivideLength; p++ {
-			js.sels[i][p] = internalArray[p*selsPreAlloc : p*selsPreAlloc : (p+1)*selsPreAlloc]
+			js.sels[i][p] = intSlice[p*selsPreAlloc : p*selsPreAlloc : (p+1)*selsPreAlloc]
 		}
 	}
 	js.sels[i][j] = append(js.sels[i][j], v)
