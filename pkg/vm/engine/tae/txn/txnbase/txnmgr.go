@@ -215,7 +215,7 @@ func (mgr *TxnManager) ToReplayMode() {
 	WithReplayMode(mgr)
 }
 
-func (mgr *TxnManager) ToReadOnlyMode(ctx context.Context) (err error) {
+func (mgr *TxnManager) SwitchToReadonly(ctx context.Context) (err error) {
 	now := time.Now()
 	defer func() {
 		logutil.Info(

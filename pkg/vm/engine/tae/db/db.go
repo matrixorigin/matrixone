@@ -47,7 +47,7 @@ var (
 	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
 
-type DBTxnMode uint8
+type DBTxnMode uint32
 
 const (
 	DBTxnMode_Write DBTxnMode = iota
@@ -60,13 +60,13 @@ type DBOption func(*DB)
 
 func WithTxnMode(mode DBTxnMode) DBOption {
 	return func(db *DB) {
-		db.TxnMode = mode
+		db.TxnMode.Store(uint32(mode))
 	}
 }
 
 type DB struct {
 	Dir     string
-	TxnMode DBTxnMode
+	TxnMode atomic.Uint32
 
 	Opts *options.Options
 
@@ -92,6 +92,10 @@ type DB struct {
 	DBLocker io.Closer
 
 	Closed *atomic.Value
+}
+
+func (db *DB) GetTxnMode() DBTxnMode {
+	return DBTxnMode(db.TxnMode.Load())
 }
 
 func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {

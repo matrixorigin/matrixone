@@ -16,10 +16,15 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"go.uber.org/zap"
 )
 
 type ControlCmdType uint32
@@ -31,11 +36,16 @@ const (
 )
 
 type controlCmd struct {
-	typ     ControlCmdType
-	err     error
-	ctx     context.Context
-	wg      sync.WaitGroup
-	payload []byte
+	id   uuid.UUID
+	typ  ControlCmdType
+	err  error
+	ctx  context.Context
+	wg   sync.WaitGroup
+	sarg string
+}
+
+func (c *controlCmd) String() string {
+	return fmt.Sprintf("ControlCmd{id:%s, typ:%d, sarg:%s}", c.id, c.typ, c.sarg)
 }
 
 func (c *controlCmd) setError(err error) {
@@ -79,47 +89,134 @@ func (c *Controller) onCmd(cmds ...any) {
 }
 
 func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
-	switch c.db.TxnMode {
+	switch c.db.GetTxnMode() {
 	case DBTxnMode_Replay:
 		cmd.setError(nil)
 	case DBTxnMode_ReplayToWrite, DBTxnMode_WriteToReplay:
 		cmd.setError(
-			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to replay", c.db.TxnMode),
+			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to replay", c.db.GetTxnMode()),
 		)
 	}
 	// write mode -> replay mode switch steps:
-	// 1. stop the merge scheduler
-	// 2. switch the checkpoint|diskcleaner to replay mode
-	// 3. build forward write request tunnel to the new write candidate
-	// 4. build logtail tunnel to the new write candidate
-	// 5. freeze the write requests consumer
-	// 6. switch the txn mode to replay mode
-	// 7. wait the logtail push queue to be flushed
-	// 8. send change-writer-config txn to the logservice
-	// 9. change the logtail push queue sourcer to the write candidate tunnel
-	// 10. forward the write requests to the new write candidate
-	// 11. replay the log entries from the logservice
-
 	// TODO: error handling
+
+	var (
+		err   error
+		start time.Time = time.Now()
+	)
+
+	logger := logutil.Info
+	logger(
+		"DB-SwitchToReplay-Start",
+		zap.String("cmd", cmd.String()),
+	)
+
+	defer func() {
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"DB-SwitchToReplay-Done",
+			zap.String("cmd", cmd.String()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
+		)
+		cmd.setError(err)
+	}()
+
+	// 1. stop the merge scheduler
+	// TODO
+
+	// 2. switch the checkpoint|diskcleaner to replay mode
+	// TODO
+
+	// 3. build forward write request tunnel to the new write candidate
+	// TODO
+
+	// 4. build logtail tunnel to the new write candidate
+	// TODO
+
+	// 5. freeze the write requests consumer
+	// TODO
+
+	// 6. switch the txn mode to readonly mode
+	if err = c.db.TxnMgr.SwitchToReadonly(cmd.ctx); err != nil {
+		c.db.TxnMgr.ToWriteMode()
+		// TODO: recover the previous state
+		return
+	}
+
+	// 7. wait the logtail push queue to be flushed
+	// TODO
+
+	// 8. send change-writer-config txn to the logservice
+	// TODO
+
+	// 9. change the logtail push queue sourcer to the write candidate tunnel
+	// TODO
+
+	// 10. forward the write requests to the new write candidate
+	// TODO
+
+	// 11. replay the log entries from the logservice
+	// 11.1 switch the txn mode to replay mode
+	c.db.TxnMgr.ToReplayMode()
+	// 11.2 TODO: replay the log entries
+
+	WithTxnMode(DBTxnMode_Replay)(c.db)
 }
 
 func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
-	switch c.db.TxnMode {
+	switch c.db.GetTxnMode() {
 	case DBTxnMode_Write:
 		cmd.setError(nil)
 	case DBTxnMode_ReplayToWrite, DBTxnMode_WriteToReplay:
 		cmd.setError(
-			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to write", c.db.TxnMode),
+			moerr.NewTxnControlErrorNoCtx("bad db txn mode %d to write", c.db.GetTxnMode()),
 		)
 	}
-	// replay mode -> write mode switch steps:
-	// 1. it can only be changed after it receives the change-writer-config txn from the logservice
-	// 2. stop replaying the log entries
-	// 3. switch the txnmgr to write mode
-	// 4. unfreeze the write requests
-	// 5. start merge scheduler|checkpoint|diskcleaner
+	var (
+		err   error
+		start time.Time = time.Now()
+	)
+
+	logger := logutil.Info
+	logger(
+		"DB-SwitchToWrite-Start",
+		zap.String("cmd", cmd.String()),
+	)
+
+	defer func() {
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"DB-SwitchToWrite-Done",
+			zap.String("cmd", cmd.String()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
+		)
+		cmd.setError(err)
+	}()
 
 	// TODO: error handling
+	// replay mode -> write mode switch steps:
+
+	// 1. it can only be changed after it receives the change-writer-config txn from the logservice
+	// TODO
+
+	// 2. stop replaying the log entries
+	// TODO
+
+	// 3. switch the txnmgr to write mode
+
+	// 4. unfreeze the write requests
+	// TODO
+
+	// 5. start merge scheduler|checkpoint|diskcleaner
+	// TODO
+
+	WithTxnMode(DBTxnMode_Write)(c.db)
 }
 
 func (c *Controller) Start() {
@@ -130,7 +227,26 @@ func (c *Controller) Stop() {
 	c.queue.Stop()
 }
 
-func (c *Controller) ToReplayMode(ctx context.Context) error {
-	c.onCmd(ControlCmd_ToReplayMode)
-	return nil
+func (c *Controller) SwitchTxnMode(
+	ctx context.Context,
+	iarg int,
+	sarg string,
+) error {
+	cmd := &controlCmd{
+		ctx:  ctx,
+		sarg: sarg,
+	}
+	switch iarg {
+	case 1:
+		cmd.typ = ControlCmd_ToReplayMode
+	case 2:
+		cmd.typ = ControlCmd_ToWriteMode
+	default:
+		return moerr.NewTxnControlErrorNoCtx("unknown txn mode switch iarg %d", iarg)
+	}
+	if _, err := c.queue.Enqueue(cmd); err != nil {
+		return err
+	}
+	cmd.waitDone()
+	return cmd.err
 }
