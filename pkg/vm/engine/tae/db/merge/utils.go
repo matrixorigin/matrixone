@@ -61,11 +61,6 @@ func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	return size
 }
 
-func entryOutdated(entry *catalog.ObjectEntry, lifetime time.Duration) bool {
-	createdAt := entry.CreatedAt.Physical()
-	return time.Unix(0, createdAt).Add(lifetime).Before(time.Now())
-}
-
 type resourceController struct {
 	proc *process.Process
 
