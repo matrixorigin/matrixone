@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -316,6 +318,7 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 		}
 		count += result.Batch.RowCount()
 	}
+	tc.arg.ctr.shufflePool.DebugPrint()
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.arg.Reset(tc.proc, false, nil)
 }
@@ -359,6 +362,11 @@ func TestPrint(t *testing.T) {
 	sp.DebugPrint()
 }
 
+func TestTypeName(t *testing.T) {
+	s := NewArgument()
+	logutil.Infof("%v", s.TypeName())
+}
+
 func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {
 	return []*batch.Batch{
 		newBatch(tc.types, tc.proc, Rows, hasnull),
@@ -377,6 +385,22 @@ func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {
 		newBatch(tc.types, tc.proc, Rows, hasnull),
 		newBatch(tc.types, tc.proc, Rows, hasnull),
 		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
+		newBatchSorted(tc.types, tc.proc, Rows, hasnull),
 		batch.EmptyBatch,
 	}
 }
@@ -387,6 +411,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64, hasNull bool) 
 		return testutil.NewBatchWithNulls(ts, true, int(rows), proc.Mp())
 	}
 	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
+}
+
+func newBatchSorted(ts []types.Type, proc *process.Process, rows int64, hasNull bool) *batch.Batch {
+	if hasNull {
+		return testutil.NewBatchWithNulls(ts, false, int(rows), proc.Mp())
+	}
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
 func resetChildren(arg *ShuffleV2, bats []*batch.Batch) {
