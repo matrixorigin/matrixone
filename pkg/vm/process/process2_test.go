@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,4 +54,38 @@ func TestBuildPipelineContext(t *testing.T) {
 	// Cancel the context and check if it is canceled
 	proc.Cancel(nil)
 	assert.Error(t, proc.Ctx.Err())
+}
+
+func TestGetSpillFileService(t *testing.T) {
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	proc := &Process{
+		Base: &BaseProcess{
+			FileService: localFS,
+		},
+	}
+	_, err = proc.GetSpillFileService()
+	assert.Nil(t, err)
+}
+
+func TestGetSpillFileServiceError(t *testing.T) {
+	fs, err := fileservice.NewMemoryFS(
+		"foo",
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	assert.Nil(t, err)
+	proc := &Process{
+		Base: &BaseProcess{
+			FileService: fs,
+		},
+	}
+	_, err = proc.GetSpillFileService()
+	assert.NotNil(t, err)
 }
