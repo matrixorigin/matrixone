@@ -1348,22 +1348,21 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
-	if strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-		//always tp
-		if stats.Outcnt > 1000 {
-			stats.Outcnt = 1000
-		}
-		if stats.Cost > 1000 {
-			stats.Cost = 1000
-		}
-		if stats.BlockNum > 16 {
-			stats.BlockNum = 16
-		}
-		stats.Selectivity = stats.Outcnt / stats.TableCnt
-	}
-
 	return stats
+}
+
+func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats.Outcnt > 1000 {
+		stats.Outcnt = 1000
+	}
+	if stats.Cost > 1000 {
+		stats.Cost = 1000
+	}
+	if stats.BlockNum > 16 {
+		stats.BlockNum = 16
+	}
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
