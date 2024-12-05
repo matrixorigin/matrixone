@@ -3,7 +3,11 @@ SELECT JSON_SET('{"fruits": ["apple", "banana"]}', '$.fruits[2]', 'cherry') AS r
 SELECT JSON_SET('{"fruits": [{"name": "apple"}, {"name": "banana"}]}', '$.fruits[1].color', 'yellow') AS result;
 SELECT JSON_SET('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city', 'New York') AS result;
 SELECT JSON_SET('{"company": {"name": "Moonshot AI", "employees": [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]}}', '$.company.employees[0].name', 'John Doe', '$.company.employees[1].department', 'HR') AS result;
-
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}') AS result;
+SELECT JSON_SET('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city') AS result;
+SELECT JSON_SET(null, '$.fruits[1]', 'orange') AS result;
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', null, 'orange') AS result;
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', '$.fruits[1]', null) AS result;
 
 drop table if exists users;
 CREATE TABLE users (

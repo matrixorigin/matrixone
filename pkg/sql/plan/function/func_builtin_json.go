@@ -521,7 +521,7 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			continue
+			return err
 		}
 
 		// build all paths
@@ -532,7 +532,7 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				continue
+				return err
 			}
 
 			pathStr := string(pathBytes)
@@ -549,12 +549,14 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		for j := 2; j < len(parameters); j += 2 {
 			valBytes, vIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
 			if vIsNull {
-				if err = rs.AppendBytes(nil, true); err != nil {
+				var expr bytejson.ByteJson
+				expr, err = bytejson.CreateByteJSON(nil)
+				if err != nil {
 					return err
 				}
+				valExprs = append(valExprs, expr)
 				continue
 			}
-
 			valString := string(valBytes)
 
 			_, parserErr := strconv.ParseInt(valString, 10, 64)
