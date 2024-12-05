@@ -3063,9 +3063,10 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 
 func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
 			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, true)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			inputSS[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
@@ -3087,7 +3088,7 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 	inputSS[0].setRootOperator(shuffleArg)
 
 	groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
-	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, true)
+	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(groupOp)
 
 	return inputSS
@@ -3104,9 +3105,10 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
 			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, false)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			inputSS[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
