@@ -45,10 +45,18 @@ const (
 	estimateMemUsagePerRow = 30
 )
 
+func originalSize(objs []*catalog.ObjectEntry) int {
+	size := 0
+	for _, o := range objs {
+		size += int(o.OriginSize())
+	}
+	return size
+}
+
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
-		size += int(o.Rows() * estimateMemUsagePerRow)
+		size += int(o.Rows()) * estimateMemUsagePerRow
 	}
 	return size
 }

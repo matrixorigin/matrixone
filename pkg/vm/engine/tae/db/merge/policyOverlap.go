@@ -158,7 +158,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 				}
 			}
 		}
-		if len(objs) < overlaps || estimateMergeSize(objs) < common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
+		if len(objs) < overlaps || originalSize(objs) < common.DefaultMinOsizeQualifiedMB*common.Const1MBytes {
 			return res
 		}
 		res = append(res, objs)

@@ -16,6 +16,7 @@ package merge
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"testing"
 
@@ -391,12 +392,12 @@ func TestCheckTombstone(t *testing.T) {
 }
 
 func TestObjectsWithMaximumOverlaps(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 50, 0)
-	o2 := newSortedTestObjectEntry(t, 51, 100, 0)
-	o3 := newSortedTestObjectEntry(t, 49, 52, 0)
-	o4 := newSortedTestObjectEntry(t, 1, 52, 0)
-	o5 := newSortedTestObjectEntry(t, 50, 51, 0)
-	o6 := newSortedTestObjectEntry(t, 55, 60, 0)
+	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
+	o2 := newSortedTestObjectEntry(t, 51, 100, math.MaxInt32)
+	o3 := newSortedTestObjectEntry(t, 49, 52, math.MaxInt32)
+	o4 := newSortedTestObjectEntry(t, 1, 52, math.MaxInt32)
+	o5 := newSortedTestObjectEntry(t, 50, 51, math.MaxInt32)
+	o6 := newSortedTestObjectEntry(t, 55, 60, math.MaxInt32)
 
 	res1 := objectsWithGivenOverlaps([]*catalog.ObjectEntry{o1, o2}, 2)
 	require.Equal(t, 0, len(res1))
