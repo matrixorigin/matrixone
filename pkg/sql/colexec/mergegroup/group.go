@@ -80,7 +80,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			ctr.state = Eval
 
 		case Eval:
-			if ctr.res.IsEmpty() {
+			if ctr.res.GroupResultBuffer.IsEmpty() {
 				ctr.state = End
 				continue
 			}

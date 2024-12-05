@@ -36,11 +36,8 @@ type container struct {
 	state vm.CtrState
 
 	// hash.
-	hr          cmsgroup.ResHashRelated
-	mtyp        int
-	keyWidth    int
-	keyNullable bool
-
+	hr cmsgroup.ResHashRelated
+	// res.
 	result cmsgroup.GroupResultBuffer
 }
 

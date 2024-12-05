@@ -151,7 +151,7 @@ func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 // To avoid a single batch being too large,
 // we split the result as many part of vector, and send them in order.
 func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result1.cleanLastPopped(proc.Mp())
+	group.ctr.result1.CleanLastPopped(proc.Mp())
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}

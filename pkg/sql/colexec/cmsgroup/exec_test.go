@@ -186,7 +186,7 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
-
+		require.Equal(t, true, exec.isFree)
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 
@@ -220,9 +220,14 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 			require.Equal(t, 1, exec.groupNumber)
 		}
 
+		// next call get the nil
+		r, err = g.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, r.Batch)
+
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
-
+		require.Equal(t, true, exec.isFree)
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 }
@@ -298,6 +303,7 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
 
+		require.Equal(t, true, exec.isFree)
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 
@@ -325,6 +331,7 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 		exec.Free()
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
+		require.Equal(t, true, exec.isFree)
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 }
@@ -375,6 +382,8 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
+		require.Equal(t, true, exec.isFree)
+		require.Equal(t, true, exec2.isFree)
 
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
@@ -418,6 +427,7 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
+		require.Equal(t, true, exec.isFree)
 
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
@@ -488,6 +498,8 @@ func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
+		require.Equal(t, true, exec.isFree)
+		require.Equal(t, true, exec2.isFree)
 
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
@@ -523,6 +535,8 @@ func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 
 		g.Free(proc, false, nil)
 		src.Free(proc, false, nil)
+		exec.Free()
+		require.Equal(t, true, exec.isFree)
 
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}

@@ -29,6 +29,10 @@ type ResHashRelated struct {
 	inserted []uint8
 }
 
+func (hr *ResHashRelated) IsEmpty() bool {
+	return hr.Hash == nil || hr.Itr == nil
+}
+
 func (hr *ResHashRelated) BuildHashTable(
 	rebuild bool,
 	isStrHash bool, keyNullable bool, preAllocated uint64) error {
@@ -196,7 +200,7 @@ func (buf *GroupResultBuffer) DealPartialResult(partials []any) error {
 }
 
 func (buf *GroupResultBuffer) PopResult(m *mpool.MPool) (*batch.Batch, error) {
-	buf.cleanLastPopped(m)
+	buf.CleanLastPopped(m)
 
 	if len(buf.ToPopped) == 0 {
 		return nil, nil
@@ -225,7 +229,7 @@ func (buf *GroupResultBuffer) PopResult(m *mpool.MPool) (*batch.Batch, error) {
 	return buf.Popped, nil
 }
 
-func (buf *GroupResultBuffer) cleanLastPopped(m *mpool.MPool) {
+func (buf *GroupResultBuffer) CleanLastPopped(m *mpool.MPool) {
 	if buf.Popped != nil {
 		buf.Popped.Clean(m)
 		buf.Popped = nil
@@ -323,9 +327,18 @@ func getInitialBatchWithSameTypeVecs(src []*vector.Vector) *batch.Batch {
 	return b
 }
 
-func countNonZeroAndFindKth(values []uint8, k int) (int, int) {
-	count := 0
-	kth := -1
+func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
+	count = 0
+	kth = -1
+	if len(values) < k {
+		for _, v := range values {
+			if v == 0 {
+				continue
+			}
+			count++
+		}
+		return count, kth
+	}
 
 	for i, v := range values {
 		if v == 0 {
