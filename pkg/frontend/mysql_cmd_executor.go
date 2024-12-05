@@ -3148,9 +3148,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
 			} else {
+				err = errors.Join(err, moe)
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
 			// log the query's statement and error info.
