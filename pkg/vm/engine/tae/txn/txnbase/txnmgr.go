@@ -208,6 +208,20 @@ func (mgr *TxnManager) Now() types.TS {
 
 func (mgr *TxnManager) ToWriteMode() {
 	WithWriteMode(mgr)
+	mgr.ResetHeartbeat()
+}
+
+func (mgr *TxnManager) IsRelayMode() bool {
+	skipFlags := mgr.GetTxnSkipFlags()
+	if skipFlags&TxnFlag_Replay == 0 && skipFlags&TxnFlag_Normal != 0 && skipFlags&TxnFlag_Heartbeat != 0 {
+		return true
+	}
+	return false
+}
+
+func (mgr *TxnManager) IsWriteMode() bool {
+	skipFlags := mgr.GetTxnSkipFlags()
+	return skipFlags == TxnSkipFlag_None
 }
 
 // it is only safe to call this function in the readonly mode

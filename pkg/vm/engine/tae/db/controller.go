@@ -228,6 +228,7 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// TODO
 
 	// 3. switch the txnmgr to write mode
+	c.db.TxnMgr.ToWriteMode()
 
 	// 4. unfreeze the write requests
 	// TODO
