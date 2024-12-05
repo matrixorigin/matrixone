@@ -148,6 +148,7 @@ type remoteBackend struct {
 	codec        Codec
 	conn         goetty.IOSession
 	writeC       chan *Future
+	waitWriteC   chan struct{}
 	stopWriteC   chan struct{}
 	resetConnC   chan error
 	stopper      *stopper.Stopper
@@ -236,6 +237,7 @@ func NewRemoteBackend(
 				rb.active)
 		},
 	}
+	rb.waitWriteC = make(chan struct{}, 1)
 	rb.writeC = make(chan *Future, rb.options.bufferSize)
 	rb.mu.futures = make(map[uint64]*Future, rb.options.bufferSize)
 	rb.mu.activeStreams = make(map[uint64]*stream, rb.options.bufferSize)
@@ -369,6 +371,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 			return f.send.Ctx.Err()
 		default:
 			rb.stateMu.RUnlock()
+			rb.waitWrite(f.send.Ctx)
 		}
 	}
 }
@@ -448,6 +451,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		rb.closeConn(false)
 		rb.readStopper.Stop()
 		rb.closeConn(true)
+		close(rb.waitWriteC)
 		rb.logger.Debug("write loop stopped")
 	}()
 
@@ -638,6 +642,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.pingTimer.C:
 		doHeartbeat()
 	case f := <-rb.writeC:
+		rb.notifyWaitWrite()
 		handleHeartbeat()
 		messages = append(messages, f)
 	case err := <-rb.resetConnC:
@@ -982,6 +987,20 @@ func (rb *remoteBackend) getPingTimeout() time.Duration {
 		return rb.options.readTimeout / 5
 	}
 	return time.Duration(math.MaxInt64)
+}
+
+func (rb *remoteBackend) notifyWaitWrite() {
+	select {
+	case rb.waitWriteC <- struct{}{}:
+	default:
+	}
+}
+
+func (rb *remoteBackend) waitWrite(ctx context.Context) {
+	select {
+	case <-rb.waitWriteC:
+	case <-ctx.Done():
+	}
 }
 
 type goettyBasedBackendFactory struct {

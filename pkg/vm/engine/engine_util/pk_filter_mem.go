@@ -34,6 +34,10 @@ type MemPKFilter struct {
 	isValid bool
 	TS      types.TS
 
+	exact struct {
+		hit bool
+	}
+
 	filterHint  engine.FilterHint
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
@@ -209,6 +213,20 @@ func NewMemPKFilter(
 
 func (f *MemPKFilter) InKind() (int, bool) {
 	return len(f.packed), f.op == function.IN || f.op == function.PREFIX_IN
+}
+
+func (f *MemPKFilter) Exact() (bool, bool) {
+	return f.op == function.EQUAL && len(f.packed) == 1, f.exact.hit
+}
+
+func (f *MemPKFilter) RecordExactHit() bool {
+	if ok, _ := f.Exact(); !ok {
+		return false
+	}
+
+	f.exact.hit = true
+
+	return true
 }
 
 func (f *MemPKFilter) Must() bool {
