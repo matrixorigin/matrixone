@@ -362,16 +362,9 @@ func initMoTableStatsConfig(
 
 			go func() {
 				defer func() {
-					if e := recover(); e != nil {
-						logutil.Error(logHeader,
-							zap.String("source", fmt.Sprintf("%s panic", hint)),
-							zap.Any("error", e))
-					}
-
 					dynamicCtx.Lock()
 					task.running = false
 					dynamicCtx.Unlock()
-
 				}()
 
 				// there should not have a deadline
@@ -387,6 +380,8 @@ func initMoTableStatsConfig(
 			launch("beta task", &dynamicCtx.beta)
 			launch("gama task", &dynamicCtx.gama)
 		}
+
+		dynamicCtx.launchTask()
 	})
 
 	return err
@@ -1245,12 +1240,6 @@ func alphaTask(
 
 	now := time.Now()
 	defer func() {
-		if e := recover(); e != nil {
-			logutil.Error(logHeader,
-				zap.String("source", "alpha task panic"),
-				zap.Any("error", e))
-		}
-
 		dur := time.Since(now)
 
 		logutil.Info(logHeader,
