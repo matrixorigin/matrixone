@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -425,6 +426,38 @@ var dynamicCtx struct {
 	executorPool sync.Pool
 
 	sqlOpts ie.SessionOverrideOptions
+}
+
+func LogDynamicCtx() string {
+	dynamicCtx.Lock()
+	defer dynamicCtx.Unlock()
+
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("cur-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+		dynamicCtx.conf.UpdateDuration,
+		dynamicCtx.conf.CorrectionDuration,
+		dynamicCtx.conf.GetTableListLimit,
+		dynamicCtx.conf.ForceUpdate,
+		dynamicCtx.conf.StatsUsingOldImpl,
+		dynamicCtx.conf.DisableStatsTask))
+
+	buf.WriteString(fmt.Sprintf("default-conf:[alpha-dur: %v; gama-dur: %v; limit: %v; force-update: %v; use-old-impl: %v; disable-task: %v]\n",
+		dynamicCtx.defaultConf.UpdateDuration,
+		dynamicCtx.defaultConf.CorrectionDuration,
+		dynamicCtx.defaultConf.GetTableListLimit,
+		dynamicCtx.defaultConf.ForceUpdate,
+		dynamicCtx.defaultConf.StatsUsingOldImpl,
+		dynamicCtx.defaultConf.DisableStatsTask))
+
+	buf.WriteString(fmt.Sprintf("beta: [running: %v; launched-time: %v]\n",
+		dynamicCtx.beta.running,
+		dynamicCtx.beta.launchTimes))
+
+	buf.WriteString(fmt.Sprintf("gama: [running: %v; launched-time: %v]\n",
+		dynamicCtx.gama.running,
+		dynamicCtx.gama.launchTimes))
+
+	return buf.String()
 }
 
 ////////////////// MoTableStats Interface //////////////////
