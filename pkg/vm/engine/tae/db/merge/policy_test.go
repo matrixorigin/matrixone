@@ -269,8 +269,13 @@ func TestPolicyCompact(t *testing.T) {
 	tbl, err := db.CreateTableEntry(catalog.MockSchema(1, 0), txn1, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn1.Commit(context.Background()))
-
-	p.resetForTable(tbl, nil)
+	obj := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, false)
+	tombstone := catalog.MockObjEntryWithTbl(tbl, math.MaxUint32, true)
+	require.NoError(t, objectio.SetObjectStatsOriginSize(tombstone.GetObjectStats(), math.MaxUint32))
+	tbl.AddEntryLocked(obj)
+	tbl.AddEntryLocked(tombstone)
+	p.resetForTable(tbl, &BasicPolicyConfig{})
+	p.onObject(obj, &BasicPolicyConfig{})
 
 	objs := p.revise(rc)
 	require.Equal(t, 0, len(objs))

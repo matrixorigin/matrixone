@@ -90,14 +90,11 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 			continue
 		}
 
-		if (entryOutdated(tEntry, config.TombstoneLifetime) && tEntry.OriginSize() > 10*common.Const1MBytes) ||
-			tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-
+		if tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 			meta, err := loadTombstoneMeta(tEntry.GetObjectStats(), o.fs)
 			if err != nil {
 				continue
 			}
-
 			o.tombstoneMetas = append(o.tombstoneMetas, meta)
 		}
 	}
