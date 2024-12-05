@@ -82,6 +82,47 @@ const (
 	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
 
+func TestCancelableJob(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	var v1 atomic.Int32
+	jobName := "job"
+	job := tasks.NewCancelableJob(
+		jobName,
+		func(ctx context.Context) {
+			time.Sleep(time.Millisecond * 2)
+			v1.Store(int32(10))
+		},
+		1,
+	)
+	assert.True(t, strings.Contains(job.Name(), jobName))
+	job.Start()
+	job.Stop()
+	assert.Equal(t, int32(10), v1.Load())
+
+	v1.Store(0)
+
+	job = tasks.NewCancelableCronJob(
+		jobName,
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-test")
+			}
+		},
+		true,
+		1,
+	)
+	job.Start()
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5
+	})
+	assert.Truef(t, v1.Load() > 5, "v1=%d", v1.Load())
+	job.Stop()
+}
+
 func TestPrintVector(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
