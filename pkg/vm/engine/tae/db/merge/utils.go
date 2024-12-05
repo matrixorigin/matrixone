@@ -56,7 +56,7 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	})
 
 	if len(objs) == 2 {
-		if objs[1].OriginSize() < 3*objs[0].OriginSize() {
+		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
 			return objs[:2]
 		}
 		return nil
@@ -73,12 +73,12 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 		i++
 	}
 	if i == 2 {
-		if objs[1].OriginSize() < 3*objs[0].OriginSize() {
+		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
 			return objs[:2]
 		}
 		return nil
 	}
-	return objs[:i+1]
+	return objs[:i]
 }
 
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
