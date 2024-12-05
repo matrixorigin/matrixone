@@ -927,6 +927,7 @@ var (
 		"mo_snapshots":                0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -967,6 +968,7 @@ var (
 		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1004,6 +1006,7 @@ var (
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
 		MoCatalogMoDataKeyDDL,
+		MoCatalogMoTableStatsDDL,
 	}
 
 	//drop tables for the tenant
@@ -3612,7 +3615,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	dropAccountFunc := func() (rtnErr error) {
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
-		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
+		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, true)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7504,6 +7507,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
 			return true
 		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+			return true
+		}
 		return false
 	}
 
@@ -7669,7 +7675,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 // createSubscription insert records into mo_subs of To-All-Publications
 func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
 	// get all accounts
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}
