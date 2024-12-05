@@ -1,3 +1,8 @@
+SELECT JSON_REPLACE('{"fruits": ["apple", "banana", "cherry"]}', '$.fruits[1]', 'orange') AS result;
+SELECT JSON_REPLACE('{"fruits": ["apple", "banana"]}', '$.fruits[2]', 'cherry') AS result;
+SELECT JSON_REPLACE('{"fruits": [{"name": "apple"}, {"name": "banana"}]}', '$.fruits[1].color', 'yellow') AS result;
+SELECT JSON_REPLACE('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city', 'New York') AS result;
+SELECT JSON_REPLACE('{"company": {"name": "Moonshot AI", "employees": [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]}}', '$.company.employees[0].name', 'John Doe', '$.company.employees[1].department', 'HR') AS result;
 CREATE TABLE users (
     id INT PRIMARY KEY,
     info JSON
