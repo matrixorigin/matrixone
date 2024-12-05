@@ -649,5 +649,7 @@ func init() {
 		"apply":                      APPLY,
 		"dedup":                      DEDUP,
 		"savepoint":                  SAVEPOINT,
+		"checking":                   CHECKING,
+		"nochecking":                 NOCHECKING,
 	}
 }
