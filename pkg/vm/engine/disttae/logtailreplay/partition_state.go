@@ -967,6 +967,5 @@ func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) 
 	if !item.Deleted {
 		return false
 	}
-
 	return item.RowID.EQ(&rowId)
 }
