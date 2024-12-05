@@ -225,6 +225,7 @@ const (
 	ErrPrevCheckpointNotFinished  uint16 = 20635
 	ErrCantDelGCChecker           uint16 = 20636
 	ErrTxnUnknown                 uint16 = 20637
+	ErrTxnControl                 uint16 = 20638
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -468,6 +469,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantCompileForPrepare:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not compile for prepare"},
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
+	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
