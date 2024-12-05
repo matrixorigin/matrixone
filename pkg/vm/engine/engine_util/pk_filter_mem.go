@@ -321,7 +321,16 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
 
 }
 
-func (f *MemPKFilter) FilterVector(vec *vector.Vector, packer *types.Packer, skipMask *objectio.Bitmap) {
+func (f *MemPKFilter) FilterVector(
+	vec *vector.Vector,
+	packer *types.Packer,
+	skipMask *objectio.Bitmap,
+) {
+
+	if (f.op == function.IN || f.op == function.PREFIX_IN) && len(f.packed) > 4 {
+		return
+	}
+
 	keys := logtailreplay.EncodePrimaryKeyVector(vec, packer)
 
 	for i := 0; i < len(keys); i++ {
