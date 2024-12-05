@@ -31,14 +31,12 @@ var levels = [6]int{
 type objOverlapPolicy struct {
 	leveledObjects [len(levels)][]*catalog.ObjectEntry
 
-	segments           map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
-	overlappingObjsSet [][]*catalog.ObjectEntry
+	segments map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}
 }
 
 func newObjOverlapPolicy() *objOverlapPolicy {
 	return &objOverlapPolicy{
-		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
-		segments:           make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
+		segments: make(map[objectio.Segmentid]map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
@@ -70,23 +68,20 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 			continue
 		}
 
-		m.overlappingObjsSet = m.overlappingObjsSet[:0]
-		objs := objectsWithGivenOverlaps(m.leveledObjects[i], 5)
-		for _, obj := range objs {
-			if len(obj) < 2 {
+		for _, objs := range objectsWithGivenOverlaps(m.leveledObjects[i], 5) {
+			objs = removeOversize(objs)
+			if len(objs) < 2 {
 				continue
 			}
-			result := reviseResult{objs: obj, kind: taskHostDN}
-			if result.kind == taskHostDN {
-				if rc.cpuPercent > 80 {
-					continue
-				}
+			result := reviseResult{objs: objs, kind: taskHostDN}
+			if rc.cpuPercent > 80 {
+				continue
+			}
 
-				if rc.resourceAvailable(result.objs) {
-					rc.reserveResources(result.objs)
-				} else {
-					result.kind = taskHostCN
-				}
+			if rc.resourceAvailable(result.objs) {
+				rc.reserveResources(result.objs)
+			} else {
+				result.kind = taskHostCN
 			}
 			reviseResults = append(reviseResults, result)
 		}
@@ -95,7 +90,6 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 }
 
 func (m *objOverlapPolicy) resetForTable(*catalog.TableEntry, *BasicPolicyConfig) {
-	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 	for i := range m.leveledObjects {
 		m.leveledObjects[i] = m.leveledObjects[i][:0]
 	}
@@ -164,11 +158,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 		if len(objs) < overlaps {
 			return res
 		}
-		objs = removeOversize(objs)
 		res = append(res, objs)
-		if len(objs) < overlaps {
-			return res
-		}
 		points = slices.DeleteFunc(points, func(point endPoint) bool {
 			return slices.Contains(objs, point.obj)
 		})

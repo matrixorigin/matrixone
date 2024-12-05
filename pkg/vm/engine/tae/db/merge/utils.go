@@ -72,6 +72,9 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 		accSize += size
 		i++
 	}
+	for j := i; j < len(objs); j++ {
+		objs[j] = nil
+	}
 	if i == 2 {
 		if uint(objs[1].OriginSize()) < 3*uint(objs[0].OriginSize()) {
 			return objs[:2]
