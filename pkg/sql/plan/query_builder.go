@@ -2413,6 +2413,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
+				subCtx.recordCteInBinding(table, cteRef)
 
 				oldSnapshot := builder.compCtx.GetSnapshot()
 				builder.compCtx.SetSnapshot(subCtx.snapshot)
