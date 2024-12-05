@@ -202,13 +202,10 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 }
 
 func TestHandleGetChangedList(t *testing.T) {
-
-	opt, err := testutil.GetS3SharedFileServiceOption(
-		context.Background(), testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	var opts testutil.TestOptions
-	opts.TaeEngineOptions = opt
+
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
@@ -261,7 +258,7 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.From[len(tblNames)-1] = &ts
 
-	_, err = p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
+	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
 
 	require.Equal(t, tblIds[:len(tblIds)-1], resp.TableIds)
