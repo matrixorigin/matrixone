@@ -254,6 +254,8 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ignore")
 	case *DuplicateKeyReplace:
 		ctx.WriteString(" replace")
+	case *DuplicateKeyNoChecking:
+		ctx.WriteString(" noChecking")
 	}
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
@@ -366,6 +368,10 @@ func NewDuplicateKeyReplace() *DuplicateKeyReplace {
 }
 
 type DuplicateKeyIgnore struct {
+	duplicateKeyImpl
+}
+
+type DuplicateKeyNoChecking struct {
 	duplicateKeyImpl
 }
 
