@@ -43,13 +43,14 @@ func (jobs *CancelableJobs) AddJob(
 	name string,
 	interval time.Duration,
 	fn func(context.Context),
+	logLevel int,
 ) (err error) {
 	job := NewCancelableCronJob(
 		name,
 		interval,
 		fn,
 		true,
-		1,
+		logLevel,
 	)
 	jobs.Lock()
 	defer jobs.Unlock()

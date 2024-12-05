@@ -121,6 +121,54 @@ func TestCancelableJob(t *testing.T) {
 	})
 	assert.Truef(t, v1.Load() > 5, "v1=%d", v1.Load())
 	job.Stop()
+
+	jobs := tasks.NewCancelableJobs()
+
+	err := jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+		},
+		1,
+	)
+	assert.NoError(t, err)
+
+	v1.Store(0)
+	var v2 atomic.Int32
+	err = jobs.AddJob(
+		"job1",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v1.Add(1); v == 3 {
+				panic("panic-job1-test")
+			}
+		},
+		1,
+	)
+	assert.Equal(t, tasks.DuplicateJobErr, err)
+	err = jobs.AddJob(
+		"job2",
+		time.Millisecond*1,
+		func(ctx context.Context) {
+			if v := v2.Add(1); v == 3 {
+				panic("panic-job2-test")
+			}
+		},
+		1,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, jobs.JobCount())
+
+	testutils.WaitExpect(5000, func() bool {
+		return v1.Load() > 5 && v2.Load() > 5
+	})
+
+	jobs.Reset()
+	assert.Equal(t, 0, jobs.JobCount())
+	vv1, vv2 := v1.Load(), v2.Load()
+	time.Sleep(time.Millisecond * 5)
+	assert.Equal(t, vv1, v1.Load())
+	assert.Equal(t, vv2, v2.Load())
 }
 
 func TestPrintVector(t *testing.T) {
