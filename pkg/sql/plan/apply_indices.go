@@ -617,7 +617,6 @@ func (builder *QueryBuilder) replaceNonEqualCondition(filter *plan.Expr, idxTag 
 		for i := range expr.GetF().Args {
 			expr.GetF().Args[i] = builder.replaceNonEqualCondition(expr.GetF().Args[i], idxTag, idxTableDef, numParts)
 		}
-		expr.Selectivity = 0.001 //make it small to go tp
 		return expr
 	}
 
