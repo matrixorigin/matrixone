@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -981,12 +980,12 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList []*plan.Expr
-	var shouldDrop bool
-	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	var emptyScan bool
+	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return
 	}
-	if !shouldDrop {
+	if !emptyScan {
 		err = s.handleBlockList(c, runtimeFilterList)
 		if err != nil {
 			return
@@ -1055,54 +1054,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// This cannot modify the c.proc.Ctx here, but I don't know why.
 		// Maybe there are some account related things stores in the context (using the context.WithValue),
 		// and modify action will change the account.
-		ctx := c.proc.Ctx
-
-		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-
 		var db engine.Database
 		var rel engine.Relation
-		// todo:
-		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
-		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		{
-			n := s.DataSource.node
-			txnOp := s.Proc.GetTxnOperator()
-			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() != nil {
-						txnOp = c.proc.GetCloneTxnOperator()
-					} else {
-						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-						c.proc.SetCloneTxnOperator(txnOp)
-					}
-
-					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-					}
-				}
-			}
-
-			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
-			if err != nil {
-				return
-			}
-			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
-			if err != nil {
-				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
-				if e != nil {
-					err = e
-					return
-				}
-				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
-				if e != nil {
-					err = e
-					return
-				}
-			}
+		var ctx context.Context
+		rel, db, ctx, err = c.handleDbRelContext(s.DataSource.node, s.IsRemote)
+		if err != nil {
+			return
 		}
 
 		var mainRds []engine.Reader
