@@ -324,39 +324,39 @@ func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(
 func (f *MemPKFilter) FilterVector(vec *vector.Vector, packer *types.Packer, skipMask *objectio.Bitmap) {
 	keys := logtailreplay.EncodePrimaryKeyVector(vec, packer)
 
-	equalFunc := func(idx int, pk []byte) bool {
-		if bytes.Equal(keys[idx], pk) {
-			return true
-		}
-		skipMask.Add(uint64(idx))
-		return false
-	}
-
-	prefixFunc := func(idx int, pk []byte) bool {
-		if bytes.HasPrefix(keys[idx], pk) {
-			return true
-		}
-		skipMask.Add(uint64(idx))
-		return false
-	}
-
 	for i := 0; i < len(keys); i++ {
 		switch f.op {
 		case function.EQUAL:
-			equalFunc(i, f.packed[0])
+			if !bytes.Equal(keys[i], f.packed[0]) {
+				skipMask.Add(uint64(i))
+			}
+
 		case function.PREFIX_EQ:
-			prefixFunc(i, f.packed[0])
+			if !bytes.HasPrefix(keys[i], f.packed[0]) {
+				skipMask.Add(uint64(i))
+			}
+
 		case function.IN:
+			in := false
 			for _, k := range f.packed {
-				if equalFunc(i, k) {
+				if bytes.Equal(keys[i], k) {
+					in = true
 					break
 				}
 			}
+			if !in {
+				skipMask.Add(uint64(i))
+			}
 		case function.PREFIX_IN:
+			in := false
 			for _, k := range f.packed {
-				if prefixFunc(i, k) {
+				if bytes.HasPrefix(keys[i], k) {
+					in = true
 					break
 				}
+			}
+			if !in {
+				skipMask.Add(uint64(i))
 			}
 		case function.BETWEEN:
 			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
@@ -399,6 +399,7 @@ func (f *MemPKFilter) FilterVector(vec *vector.Vector, packer *types.Packer, ski
 			}
 
 		default:
+			// skip nothing
 		}
 	}
 
