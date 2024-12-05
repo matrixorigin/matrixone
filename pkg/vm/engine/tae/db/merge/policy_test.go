@@ -438,12 +438,14 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 }
 
 func TestRemoveOversize(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
-	o2 := newSortedTestObjectEntry(t, 51, 100, 1)
-	o3 := newSortedTestObjectEntry(t, 49, 52, 2)
+	o1 := newSortedTestObjectEntry(t, 0, 0, 1)
+	o2 := newSortedTestObjectEntry(t, 0, 0, 2)
+	o3 := newSortedTestObjectEntry(t, 0, 0, 4)
+	o5 := newSortedTestObjectEntry(t, 0, 0, math.MaxInt32)
 
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o3}, removeOversize([]*catalog.ObjectEntry{o1, o2, o3}))
-
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
+	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
+	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
 }
 
 func BenchmarkRemoveOversize(b *testing.B) {
