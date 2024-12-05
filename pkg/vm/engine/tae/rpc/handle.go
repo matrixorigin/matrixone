@@ -669,6 +669,7 @@ func (h *Handle) HandleCreateRelation(
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
+		txn.BindAccessInfo(c.AccountId, c.Creator, c.Owner)
 		dbH, err := txn.GetDatabaseByID(c.DatabaseId)
 		if err != nil {
 			return err
