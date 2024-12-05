@@ -241,7 +241,6 @@ func (c *LogtailClient) sendWorker() error {
 		case request := <-c.requestC:
 			if err := sendFn(request); err != nil {
 				logutil.Error("logtail client: fail to send sub/unsub request via morpc stream", zap.Error(err))
-				return err
 			}
 		}
 	}
