@@ -2534,9 +2534,13 @@ func executeStmtWithWorkspace(ses FeSession,
 			} else {
 				err = errors.Join(err, moe)
 			}
+
+			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
 		err = finishTxnFunc(ses, err, execCtx)
 	}()
+
+	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
 
 	//1. start txn
 	//special BEGIN,COMMIT,ROLLBACK
