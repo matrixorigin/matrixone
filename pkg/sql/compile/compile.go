@@ -1067,7 +1067,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileShuffleGroup(n, ss, ns))))
 			return ss, nil
 		} else if c.IsSingleScope(ss) {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
@@ -3061,17 +3061,57 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-		currentIsFirst := c.anal.isFirst
+		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
-			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
+			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			inputSS[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
+		return inputSS
+	}
 
-		inputSS = c.compileProjection(n, c.compileRestrict(n, inputSS))
+	child := nodes[n.Children[0]]
+	dop := plan2.GetShuffleDop(c.ncpu, len(c.cnList), n.Stats.HashmapStats.HashmapSize)
+	if dop != inputSS[0].NodeInfo.Mcpu {
+		if child.NodeType == plan.Node_TABLE_SCAN {
+			inputSS[0].NodeInfo.Mcpu = dop
+		} else {
+			dop = inputSS[0].NodeInfo.Mcpu
+		}
+	}
+
+	shuffleArg := constructShuffleArgForGroupV2(n, int32(dop))
+	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	inputSS[0].setRootOperator(shuffleArg)
+
+	groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
+	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	inputSS[0].setRootOperator(groupOp)
+
+	return inputSS
+}
+
+func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+	if len(c.cnList) == 1 && len(inputSS) == 1 {
+		child := nodes[n.Children[0]]
+		if child.NodeType == plan.Node_JOIN && child.Stats.HashmapStats.Shuffle {
+			logutil.Infof("not support shuffle v2 for now")
+		} else {
+			return c.compileShuffleGroupV2(n, inputSS, nodes)
+		}
+	}
+
+	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+		currentFirstFlag := c.anal.isFirst
+		for i := range inputSS {
+			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			inputSS[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
 		return inputSS
 	}
 
@@ -3119,7 +3159,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 		shuffleGroups[i].setRootOperator(groupOp)
 	}
 	c.anal.isFirst = false
-	shuffleGroups = c.compileProjection(n, c.compileRestrict(n, shuffleGroups))
 
 	//append prescopes
 	c.appendPrescopes(shuffleGroups, inputSS)
