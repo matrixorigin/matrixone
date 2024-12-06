@@ -55,6 +55,120 @@ type SplitResult interface {
 	modifyChunkSize(int2 int)
 }
 
+func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
+	mg AggMemoryManager,
+	resultType types.Type,
+	setEmptyGroupToNull bool, initialValue T) aggResultWithFixedType[T] {
+
+	res := aggResultWithFixedType[T]{}
+	res.init(mg, resultType, setEmptyGroupToNull)
+	res.InitialValue = initialValue
+	res.values = make([][]T, 1)
+
+	return res
+}
+
+func initAggResultWithBytesTypeResult(
+	mg AggMemoryManager,
+	resultType types.Type,
+	setEmptyGroupToNull bool, initialValue string) aggResultWithBytesType {
+
+	res := aggResultWithBytesType{}
+	res.init(mg, resultType, setEmptyGroupToNull)
+	res.InitialValue = []byte(initialValue)
+
+	return res
+}
+
+type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
+	optSplitResult
+
+	// the initial value for a new result row.
+	InitialValue T
+
+	// for easy get from / set to resultList.
+	values [][]T
+}
+
+func (r *aggResultWithFixedType[T]) grows(more int) error {
+	x1, y1, x2, y2, err := r.resExtend(more)
+	if err != nil {
+		return err
+	}
+
+	r.values[x1] = vector.MustFixedColNoTypeCheck[T](r.resultList[x1])
+	for i := x1 + 1; i <= x2; i++ {
+		r.values = append(r.values, vector.MustFixedColNoTypeCheck[T](r.resultList[i]))
+	}
+	setValueFromX1Y1ToX2Y2(r.values, x1, y1, x2, y2, r.InitialValue)
+	return nil
+}
+
+func (r *aggResultWithFixedType[T]) get() T {
+	return r.values[r.accessIdx1][r.accessIdx2]
+}
+
+func (r *aggResultWithFixedType[T]) set(value T) {
+	r.values[r.accessIdx1][r.accessIdx2] = value
+}
+
+type aggResultWithBytesType struct {
+	optSplitResult
+
+	// the initial value for a new result row.
+	InitialValue []byte
+}
+
+func (r *aggResultWithBytesType) grows(more int) error {
+	x1, y1, x2, y2, err := r.resExtend(more)
+	if err != nil {
+		return err
+	}
+
+	// copy from function setValueFromX1Y1ToX2Y2.
+	if x1 == x2 {
+		for y1 < y2 {
+			if err = vector.SetBytesAt(r.resultList[x1], y1, r.InitialValue, r.mp); err != nil {
+				return err
+			}
+			y1++
+		}
+		return nil
+	}
+
+	for i := y1; i < r.optInformation.chunkSize; i++ {
+		if err = vector.SetBytesAt(r.resultList[x1], i, r.InitialValue, r.mp); err != nil {
+			return err
+		}
+	}
+	for x := x1 + 1; x < x2; x++ {
+		for i := 0; i < r.optInformation.chunkSize; i++ {
+			if err = vector.SetBytesAt(r.resultList[x], i, r.InitialValue, r.mp); err != nil {
+				return err
+			}
+		}
+	}
+	for i := 0; i < y2; i++ {
+		if err = vector.SetBytesAt(r.resultList[x2], i, r.InitialValue, r.mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *aggResultWithBytesType) get() []byte {
+	// never return the source pointer directly.
+	//
+	// if not so, the append action outside like `r = append(r, "more")` will cause memory contamination to other data row.
+	newr := r.resultList[r.accessIdx1].GetBytesAt(r.accessIdx2)
+	newr = newr[:len(newr):len(newr)]
+	return newr
+}
+
+func (r *aggResultWithBytesType) set(value []byte) error {
+	return vector.SetBytesAt(r.resultList[r.accessIdx1], r.accessIdx2, value, r.mp)
+}
+
 // optSplitResult is a more stable version for aggregation basic result.
 //
 // this structure will split the aggregation result as many part of `vector`,
@@ -191,12 +305,6 @@ func getNspFromBoolVector(v *vector.Vector) *nulls.Nulls {
 		}
 	}
 	return nsp
-}
-
-// isOnlyOneBlock return true if only one block to save the result.
-// this can help we reduce to call getResultRealIndex, because the x is always 0.
-func (r *optSplitResult) isOnlyOneBlock() bool {
-	return len(r.resultList) == 1
 }
 
 func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
@@ -449,5 +557,4 @@ func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
 	for i := 0; i < y2; i++ {
 		src[x2][i] = value
 	}
-	return
 }

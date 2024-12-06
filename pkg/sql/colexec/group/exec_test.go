@@ -35,7 +35,6 @@ type hackAggExecToTest struct {
 	aggexec.AggFuncExec
 	preAllocated   int
 	groupNumber    int
-	doInitTime     int
 	doFillRow      int
 	doBulkFillRow  int
 	doBatchFillRow int
