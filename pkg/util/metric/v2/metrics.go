@@ -86,6 +86,9 @@ func initTaskMetrics() {
 	registry.MustRegister(transferShortDurationHistogram)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
+
+	registry.MustRegister(moTableStatsDurHistogram)
+	registry.MustRegister(moTableStatsCountingHistogram)
 }
 
 func initFileServiceMetrics() {

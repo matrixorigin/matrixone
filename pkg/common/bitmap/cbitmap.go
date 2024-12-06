@@ -15,13 +15,13 @@
 package bitmap
 
 /*
-#include "mo.h"
-
-#cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo -lm
+#include "../../../cgo/mo.h"
 */
 import "C"
-import "unsafe"
+import (
+	_ "github.com/matrixorigin/matrixone/cgo"
+	"unsafe"
+)
 
 func (n *Bitmap) cPtr() *C.uint64_t {
 	return (*C.uint64_t)(unsafe.Pointer(&n.data[0]))
