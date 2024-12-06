@@ -457,20 +457,17 @@ func MakeTxnHeartbeatMonkeyJob(
 	opInterval time.Duration,
 ) *tasks.CancelableJob {
 	taeDB := e.GetDB()
-	return tasks.NewCancelableJob(func(ctx context.Context) {
-		ticker := time.NewTicker(opInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if v := rand.Intn(100); v > 50 {
-					taeDB.StopTxnHeartbeat()
-				} else {
-					taeDB.ResetTxnHeartbeat()
-				}
+	return tasks.NewCancelableCronJob(
+		"txn-heartbeat-monkey",
+		opInterval,
+		func(ctx context.Context) {
+			if v := rand.Intn(100); v > 50 {
+				taeDB.StopTxnHeartbeat()
+			} else {
+				taeDB.ResetTxnHeartbeat()
 			}
-		}
-	})
+		},
+		false,
+		1,
+	)
 }
