@@ -259,24 +259,24 @@ a    b    c    d
 alter table t1 modify b VARCHAR(20);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table t1 modify b VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table t1 modify b VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    b_2    1    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    a    1    a    A    0    NULL    NULL                        YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    b_2    1    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -307,29 +307,29 @@ a    b    c    d
 alter table t1 modify b VARCHAR(20);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    1    a    1    a    A    0    NULL    NULL                        YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table t1 modify b VARCHAR(20) KEY;
 Multiple primary key defined
 alter table t1 modify b VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    a    1    a    A    0    NULL    NULL                        YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table t1 modify c VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    c_2    1    c    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t1    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    c_2    1    c    A    0    NULL    NULL    YES                    YES    c
+t1    1    a    1    a    A    0    NULL    NULL                        YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -951,14 +951,14 @@ Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`b`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    a
+index01    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
 alter table index01 modify b VARCHAR(20) UNIQUE KEY;
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
-index01    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-index01    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
+index01    0    a    1    a    A    0    NULL    NULL                        YES    a
+index01    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+index01    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
 show create table index01;
 Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`b`),\n  UNIQUE KEY `b` (`b`)\n)
@@ -987,10 +987,10 @@ a    b    c    d
 alter table index02 modify b VARCHAR(20);
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+index02    1    a    1    a    A    0    NULL    NULL                        YES    a
+index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table index02 modify b VARCHAR(20) KEY;
 Multiple primary key defined
 show create table index02;
@@ -999,20 +999,20 @@ index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `b` varchar(20) DEFA
 alter table index02 modify b VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+index02    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+index02    1    a    1    a    A    0    NULL    NULL                        YES    a
+index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 alter table index02 modify c VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    0    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    c_2    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
-index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+index02    0    b    1    b    A    0    NULL    NULL    YES                    YES    b
+index02    0    c_2    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    1    a    1    a    A    0    NULL    NULL                        YES    a
+index02    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table index02;
 Table    Create Table
 index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `b` varchar(20) DEFAULT NULL,\n  `c` varchar(20) DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `b` (`b`),\n  UNIQUE KEY `c_2` (`c`),\n  KEY `a` (`a`,`b`),\n  KEY `c` (`c`)\n)
