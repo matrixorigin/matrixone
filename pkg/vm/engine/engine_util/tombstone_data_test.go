@@ -235,7 +235,7 @@ func TestRowIdsToOffset(t *testing.T) {
 	objId := types.NewObjectid()
 	blkId := types.NewBlockidWithObjectID(objId, 1)
 
-	var rowIds []types.Rowid
+	rowIds := make([]types.Rowid, 0, 10)
 	for i := 0; i < 10; i++ {
 		row := types.NewRowid(blkId, uint32(i))
 		rowIds = append(rowIds, *row)

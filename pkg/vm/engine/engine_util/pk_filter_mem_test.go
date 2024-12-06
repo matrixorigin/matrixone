@@ -104,7 +104,7 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 
 	mp := mpool.MustNewZeroNoFixed()
 
-	var vecs []*vector.Vector
+	vecs := make([]*vector.Vector, 0, len(baseFilters))
 	for range baseFilters {
 		vec := vector.NewVec(types.T_int32.ToType())
 		vector.AppendFixed[int32](vec, int32(21), false, mp)
