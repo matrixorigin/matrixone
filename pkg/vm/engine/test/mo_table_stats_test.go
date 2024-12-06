@@ -130,6 +130,8 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
+	disttae.LaunchMTSTasksForUT()
+
 	disttae.NotifyCleanDeletes()
 	disttae.NotifyUpdateForgotten()
 
