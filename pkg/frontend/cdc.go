@@ -1331,15 +1331,24 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	// start watermark updater
 	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId, cdc.ie)
 
-	count, err := cdc.sunkWatermarkUpdater.GetCountFromDb()
+	mp, err := cdc.sunkWatermarkUpdater.GetAllFromDb()
 	if err != nil {
 		return err
-	} else if count == 0 {
-		for _, info = range dbTableInfos {
+	}
+	for _, info = range dbTableInfos {
+		// insert if not exists
+		if _, ok := mp[info.SourceTblIdStr]; !ok {
 			// use startTs as watermark
 			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info, cdc.startTs); err != nil {
-				return err
+				return
 			}
+		}
+		delete(mp, info.SourceTblIdStr)
+	}
+	// delete outdated watermark
+	for tableIdStr := range mp {
+		if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tableIdStr); err != nil {
+			return err
 		}
 	}
 	go cdc.sunkWatermarkUpdater.Run(ctx, cdc.activeRoutine)
