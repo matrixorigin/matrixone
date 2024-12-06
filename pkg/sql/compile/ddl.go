@@ -300,7 +300,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -386,7 +386,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -928,7 +928,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1495,7 +1495,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -1698,7 +1698,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if qry.GetDatabase() != "" {
 			dbName = qry.GetDatabase()
 		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 			return err
 		}
 		tblName := qry.GetTableDef().GetName()
@@ -1929,7 +1929,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
-	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
@@ -2179,7 +2179,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -2371,7 +2371,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -2420,7 +2420,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	var err error
 	var isTemp bool
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -2789,7 +2789,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -2864,7 +2864,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
