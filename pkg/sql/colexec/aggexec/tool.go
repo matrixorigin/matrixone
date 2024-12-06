@@ -95,6 +95,10 @@ func GetChunkSizeOfAggregator(a AggFuncExec) int {
 
 // SyncAggregatorsChunkSize sync all aggregator with their min chunk size.
 func SyncAggregatorsChunkSize(as []AggFuncExec) (syncLimit int) {
+	if len(as) == 0 {
+		return math.MaxInt64
+	}
+
 	m := GetChunkSizeOfAggregator(as[0])
 	if len(as) > 1 {
 		for i := 1; i < len(as); i++ {

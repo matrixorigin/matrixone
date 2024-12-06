@@ -214,7 +214,7 @@ func (buf *GroupResultBuffer) PopResult(m *mpool.MPool) (*batch.Batch, error) {
 			}
 
 			for j := range vec {
-				buf.ToPopped[j].Vecs = append(buf.ToPopped[i].Vecs, vec[j])
+				buf.ToPopped[j].Vecs = append(buf.ToPopped[j].Vecs, vec[j])
 			}
 		}
 

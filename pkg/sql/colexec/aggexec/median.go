@@ -508,6 +508,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 						vs[x][j] = vs[x][j].Right(1)
 					}
 				}
+				s++
 			}
 		}
 	} else {
@@ -549,6 +550,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 						vs[x][j] = vs[x][j].Right(1)
 					}
 				}
+				s++
 			}
 		}
 

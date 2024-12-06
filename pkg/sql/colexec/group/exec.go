@@ -131,6 +131,8 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 		if id == types.T_array_float64 {
 			width *= 8
 		}
+	} else {
+		width = id.TypeLen()
 	}
 
 	if nullable {
