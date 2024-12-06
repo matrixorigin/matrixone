@@ -15,6 +15,7 @@
 package group
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -153,15 +154,29 @@ func (ctr *container) isDataSourceEmpty() bool {
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
-	group.ctr.hr.Free0()
-	group.ctr.result1.Free0(proc.Mp())
-	group.ctr.result2.Free0(proc.Mp())
-	group.ctr.freeAggEvaluate()
-	group.ctr.freeGroupEvaluate()
+	group.freeCannotReuse(proc.Mp())
+
+	group.ctr.groupByEvaluate.Free()
+	for i := range group.ctr.aggregateEvaluate {
+		group.ctr.aggregateEvaluate[i].Free()
+	}
 }
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	group.Free(proc, pipelineFailed, err)
+	group.freeCannotReuse(proc.Mp())
+
+	group.ctr.groupByEvaluate.ResetForNextQuery()
+	for i := range group.ctr.aggregateEvaluate {
+		group.ctr.aggregateEvaluate[i].ResetForNextQuery()
+	}
+}
+
+func (group *Group) freeCannotReuse(mp *mpool.MPool) {
+	group.ctr.hr.Free0()
+	group.ctr.result1.Free0(mp)
+	group.ctr.result2.Free0(mp)
+	group.ctr.freeAggEvaluate()
+	group.ctr.freeGroupEvaluate()
 }
 
 func (ctr *container) freeAggEvaluate() {
