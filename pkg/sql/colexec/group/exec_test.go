@@ -213,6 +213,7 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, r.Batch)
 		if b := r.Batch; b != nil {
+			require.Equal(t, 1, b.RowCount())
 			require.Equal(t, 1, len(b.Vecs))
 			require.Equal(t, hackVecResult, b.Vecs[0])
 			require.Equal(t, 0, len(b.Aggs))
@@ -368,6 +369,7 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, r.Batch)
 		if b := r.Batch; b != nil {
+			require.Equal(t, 1, b.RowCount())
 			require.Equal(t, 1, len(b.Aggs))
 			require.Equal(t, exec, b.Aggs[0])
 			require.Equal(t, 0, len(b.Vecs))

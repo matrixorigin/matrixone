@@ -198,6 +198,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 				if err = group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 					return nil, err
 				}
+				group.ctr.result1.ToPopped[0].SetRowCount(1)
 			}
 			continue
 		}
