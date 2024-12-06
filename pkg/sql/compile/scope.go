@@ -21,8 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -32,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -616,7 +615,6 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	if err != nil {
 		return err
 	}
-	s.DataSource.Rel = rel
 
 	if s.NodeInfo.CNCNT == 1 {
 		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
@@ -981,12 +979,12 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList []*plan.Expr
-	var emptyScan bool
-	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
+	var shouldDrop bool
+	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return
 	}
-	if !emptyScan {
+	if !shouldDrop {
 		err = s.handleBlockList(c, runtimeFilterList)
 		if err != nil {
 			return
@@ -1004,28 +1002,27 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-		readers, err = s.DataSource.Rel.BuildReaders(
+
+		readers, err = c.e.BuildBlockReaders(
 			ctx,
 			c.proc,
+			s.DataSource.Timestamp,
 			s.DataSource.FilterExpr,
+			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
-			s.TxnOffset,
-			len(s.DataSource.OrderBy) > 0,
-			engine.Policy_CheckCommittedOnly, //remote cn only scan commited objs by shuffle
-			engine.FilterHint{},
-		)
+			s.NodeInfo.Mcpu)
 		if err != nil {
 			return
 		}
-
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
-		stats := statistic.StatsInfoFromContext(c.proc.Ctx)
+		ctx := c.proc.Ctx
+		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
-			perfcounter.AttachS3RequestKey(c.proc.Ctx, crs),
+			newCtx,
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
