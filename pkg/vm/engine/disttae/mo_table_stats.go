@@ -188,6 +188,14 @@ const (
 				    table_stats = "{}"
 				limit
 					%d;`
+
+	accumulateIdsByAccSQL = `
+ 				select 
+					account_id, reldatabase_id, rel_id
+				from 
+				    %s.%s
+				where
+				    account_id in (%s);`
 )
 
 const (
@@ -792,6 +800,57 @@ func normalQuery(
 	return statsVals, nil
 }
 
+func QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+
+	if len(accs) == 0 {
+		return
+	}
+
+	newCtx := turn2SysCtx(ctx)
+
+	sql := fmt.Sprintf(accumulateIdsByAccSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLES, intsJoin(accs, ","))
+
+	sqlRet := executeSQL(newCtx, sql, "query table stats by accounts")
+	if err = sqlRet.Error(); err != nil {
+		return
+	}
+
+	var (
+		val any
+
+		accs2, dbs, tbls []uint64
+	)
+
+	for i := range sqlRet.RowCount() {
+		if val, err = sqlRet.Value(newCtx, i, 0); err != nil {
+			return
+		}
+		accs2 = append(accs2, uint64(val.(uint32)))
+
+		if val, err = sqlRet.Value(newCtx, i, 1); err != nil {
+			return
+		}
+		dbs = append(dbs, val.(uint64))
+
+		if val, err = sqlRet.Value(newCtx, i, 2); err != nil {
+			return
+		}
+		tbls = append(tbls, val.(uint64))
+	}
+
+	statsVals, err, ok = QueryTableStats(
+		newCtx, wantedStatsIdxes, accs2, dbs, tbls, forceUpdate, resetUpdateTime, nil)
+
+	return statsVals, accs2, err, ok
+}
+
 func QueryTableStats(
 	ctx context.Context,
 	wantedStatsIdxes []int,
@@ -799,7 +858,7 @@ func QueryTableStats(
 	forceUpdate bool,
 	resetUpdateTime bool,
 	eng engine.Engine,
-) (statsVals [][]any, err error) {
+) (statsVals [][]any, err error, ok bool) {
 
 	dynamicCtx.Lock()
 	useOld := dynamicCtx.conf.StatsUsingOldImpl
@@ -844,14 +903,17 @@ func QueryTableStats(
 			de = eng.(*Engine)
 		}
 
-		return forceUpdateQuery(
+		statsVals, err = forceUpdateQuery(
 			newCtx, wantedStatsIdxes,
 			accs, dbs, tbls,
 			resetUpdateTime,
 			de)
+		return statsVals, err, true
 	}
 
-	return normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
+	statsVals, err = normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
+
+	return statsVals, err, true
 }
 
 func MTSTableSize(
@@ -862,7 +924,7 @@ func MTSTableSize(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := QueryTableStats(
+	statsVals, err, _ := QueryTableStats(
 		ctx, []int{TableStatsTableSize},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
@@ -889,7 +951,7 @@ func MTSTableRows(
 	resetUpdateTime bool,
 ) (sizes []uint64, err error) {
 
-	statsVals, err := QueryTableStats(
+	statsVals, err, _ := QueryTableStats(
 		ctx, []int{TableStatsTableRows},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime, eng)
