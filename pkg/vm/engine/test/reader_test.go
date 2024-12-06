@@ -89,7 +89,12 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	hbMonkeyJob := testutil.MakeTxnHeartbeatMonkeyJob(
+		taeEngine, time.Millisecond*10,
+	)
+	hbMonkeyJob.Start()
 	defer func() {
+		hbMonkeyJob.Stop()
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
 		rpcAgent.Close()
