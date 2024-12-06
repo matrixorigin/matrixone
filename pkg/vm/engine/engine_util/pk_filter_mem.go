@@ -411,6 +411,4 @@ func (f *MemPKFilter) FilterVector(
 			// skip nothing
 		}
 	}
-
-	return
 }
