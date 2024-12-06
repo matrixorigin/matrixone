@@ -266,3 +266,13 @@ func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 func (e *Engine) GetMessageCenter() any {
 	return nil
 }
+
+func (e *Engine) QueryTableStatsByAccounts(
+	ctx context.Context,
+	wantedStatsIdxes []int,
+	accs []uint64,
+	forceUpdate bool,
+	resetUpdateTime bool,
+) (statsVals [][]any, retAcc []uint64, err error, ok bool) {
+	return nil, nil, nil, false
+}
