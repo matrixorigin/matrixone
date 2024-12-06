@@ -77,6 +77,10 @@ func GetUseOldImplVariable(proc *process.Process) bool {
 		return false
 	}
 
+	if useOldImpl == nil {
+		return false
+	}
+
 	return strings.ToLower(useOldImpl.(string)) == "yes"
 }
 
