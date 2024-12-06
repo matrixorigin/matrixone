@@ -41,6 +41,8 @@ import (
 
 const (
 	IndexScaleZero        = 0
+	IndexScaleOne         = 1
+	IndexScaleTiny        = 10
 	MuchGreaterThanFactor = 100
 )
 
@@ -912,4 +914,58 @@ func (p *PartitionState) IsValid() bool {
 
 func (p *PartitionState) IsEmpty() bool {
 	return p.start == types.MaxTs()
+}
+
+func (p *PartitionState) LogAllRowEntry() string {
+	var buf bytes.Buffer
+	_ = p.ScanRows(false, func(entry RowEntry) (bool, error) {
+		buf.WriteString(entry.String())
+		buf.WriteString("\n")
+		return true, nil
+	})
+	return buf.String()
+}
+
+func (p *PartitionState) ScanRows(
+	reverse bool,
+	onItem func(entry RowEntry) (bool, error),
+) (err error) {
+	var ok bool
+
+	if !reverse {
+		p.rows.Scan(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	} else {
+		p.rows.Reverse(func(item RowEntry) bool {
+			if ok, err = onItem(item); err != nil || !ok {
+				return false
+			}
+			return true
+		})
+	}
+
+	return
+}
+
+func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) bool {
+	iter := p.rows.Copy().Iter()
+	defer iter.Release()
+
+	if !iter.Seek(RowEntry{
+		Time:    ts,
+		BlockID: rowId.CloneBlockID(),
+		RowID:   rowId,
+	}) {
+		return false
+	}
+
+	item := iter.Item()
+	if !item.Deleted {
+		return false
+	}
+	return item.RowID.EQ(&rowId)
 }

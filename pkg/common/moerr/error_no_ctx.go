@@ -318,10 +318,6 @@ func NewTxnStaleNoCtx(msg string) *Error {
 	return newError(Context(), ErrTxnStale, msg)
 }
 
-func NewWaiterPausedNoCtx() *Error {
-	return newError(Context(), ErrWaiterPaused)
-}
-
 func NewRetryForCNRollingRestart() *Error {
 	return newError(Context(), ErrRetryForCNRollingRestart)
 }
@@ -336,6 +332,10 @@ func NewPrevCheckpointNotFinished() *Error {
 
 func NewCantDelGCCheckerNoCtx() *Error {
 	return newError(Context(), ErrCantDelGCChecker)
+}
+
+func NewTxnControlErrorNoCtxf(format string, args ...any) *Error {
+	return newError(Context(), ErrTxnControl, fmt.Sprintf(format, args...))
 }
 
 func NewNotFoundNoCtx() *Error {

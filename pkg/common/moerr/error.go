@@ -220,11 +220,12 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
-	ErrWaiterPaused               uint16 = 20633
-	ErrRetryForCNRollingRestart   uint16 = 20634
-	ErrNewTxnInCNRollingRestart   uint16 = 20635
-	ErrPrevCheckpointNotFinished  uint16 = 20636
-	ErrCantDelGCChecker           uint16 = 20637
+	ErrRetryForCNRollingRestart   uint16 = 20633
+	ErrNewTxnInCNRollingRestart   uint16 = 20634
+	ErrPrevCheckpointNotFinished  uint16 = 20635
+	ErrCantDelGCChecker           uint16 = 20636
+	ErrTxnUnknown                 uint16 = 20637
+	ErrTxnControl                 uint16 = 20638
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -462,12 +463,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
 	ErrTxnStale:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn is stale: timestamp is too small"},
-	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 	ErrRetryForCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "retry for CN rolling restart"},
 	ErrNewTxnInCNRollingRestart:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "new txn in CN rolling restart"},
 	ErrPrevCheckpointNotFinished:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "prev checkpoint not finished"},
 	ErrCantCompileForPrepare:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not compile for prepare"},
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
+	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
+	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -1524,6 +1526,10 @@ func NewCantCompileForPrepare(ctx context.Context) *Error {
 
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
+}
+
+func NewTxnUnknown(ctx context.Context, txnID string) *Error {
+	return newError(ctx, ErrTxnUnknown, txnID)
 }
 
 var contextFunc atomic.Value
