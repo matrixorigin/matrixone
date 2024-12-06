@@ -135,6 +135,8 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	defer p.Close()
 
 	e := p.D.Engine
+	e.LaunchMTSTasksForUT()
+
 	e.NotifyCleanDeletes()
 	e.NotifyUpdateForgotten()
 
