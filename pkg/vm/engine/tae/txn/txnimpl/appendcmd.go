@@ -115,7 +115,7 @@ func (c *AppendCmd) String() string {
 	return s
 }
 func (c *AppendCmd) VerboseString() string {
-	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%v;Dests=", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=", c.ID, c.Ts)
 	for _, info := range c.Infos {
 		s = fmt.Sprintf("%s%s", s, info.String())
 	}

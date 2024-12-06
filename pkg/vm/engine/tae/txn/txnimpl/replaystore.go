@@ -115,9 +115,11 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
 		store.catalog.ReplayCmd(txncmd, store.dataFactory, store.Observer)
 	case *AppendCmd:
-		store.replayAppendData(cmd, store.Observer)
+		store.replayAppendData(
+			cmd, store.Observer)
 	case *updates.UpdateCmd:
-		store.replayDataCmds(cmd, store.Observer)
+		store.replayDataCmds(
+			cmd, store.Observer)
 	}
 }
 
