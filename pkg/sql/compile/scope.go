@@ -558,60 +558,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ms, nil
 }
 
-func (s *Scope) handleBlockFilterList(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
-	var appendNotPkFilter []*plan.Expr
-	for i := range runtimeInExprList {
-		fn := runtimeInExprList[i].GetF()
-		col := fn.Args[0].GetCol()
-		if col == nil {
-			panic("only support col in runtime filter's left child!")
-		}
-		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
-		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
-		}
-	}
-
-	// reset filter
-	if len(appendNotPkFilter) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
-		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// reset datasource
-	if len(runtimeInExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-		if s.DataSource.FilterExpr != nil {
-			newExprList = append(newExprList, s.DataSource.FilterExpr)
-		}
-		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-	}
-
-	for _, e := range s.DataSource.BlockFilterList {
-		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-	if len(s.DataSource.node.BlockFilterList) > 0 {
-		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-	}
-	return newExprList, nil
-}
-
 func (s *Scope) getBlockList(c *Compile, newExprList []*plan.Expr) (engine.RelData, error) {
 	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
@@ -670,6 +616,60 @@ func (s *Scope) getBlockList(c *Compile, newExprList []*plan.Expr) (engine.RelDa
 		reldata = commited
 	}
 	return reldata, nil
+}
+
+func (s *Scope) handleBlockFilterList(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+	var appendNotPkFilter []*plan.Expr
+	for i := range runtimeInExprList {
+		fn := runtimeInExprList[i].GetF()
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			panic("only support col in runtime filter's left child!")
+		}
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		}
+	}
+
+	// reset filter
+	if len(appendNotPkFilter) > 0 {
+		// put expr in filter instruction
+		op := vm.GetLeafOp(s.RootOp)
+		if _, ok := op.(*table_scan.TableScan); ok {
+			op = vm.GetLeafOpParent(nil, s.RootOp)
+		}
+		arg, ok := op.(*filter.Filter)
+		if !ok {
+			panic("missing instruction for runtime filter!")
+		}
+		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// reset datasource
+	if len(runtimeInExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+		if s.DataSource.FilterExpr != nil {
+			newExprList = append(newExprList, s.DataSource.FilterExpr)
+		}
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+	}
+
+	for _, e := range s.DataSource.BlockFilterList {
+		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(s.DataSource.node.BlockFilterList) > 0 {
+		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+	}
+	return newExprList, nil
 }
 
 func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
