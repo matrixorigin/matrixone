@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,7 @@ func Test_Closed(t *testing.T) {
 	registerConn(clientConn)
 	pu, _ := getParameterUnit("test/system_vars_config.toml", nil, nil)
 	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -218,4 +220,21 @@ func TestRoutineManager_killClients(t *testing.T) {
 			rm.killNetConns()
 		})
 	}
+}
+
+func Test_rm(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 1
+	setPu("", pu)
+	rm, err := NewRoutineManager(context.Background(), "")
+	assert.NoError(t, err)
+	rm.cleanKillQueue()
+	setPu("", nil)
+	time.Sleep(2 * time.Second)
+	rm.cancelCtx()
 }

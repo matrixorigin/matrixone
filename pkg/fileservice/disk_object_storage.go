@@ -230,7 +230,7 @@ func (d *diskObjectStorage) Stat(ctx context.Context, key string) (size int64, e
 	return
 }
 
-func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, size int64, expire *time.Time) (err error) {
+func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -244,12 +244,16 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		return err
 	}
 
-	_, err = io.Copy(
+	n, err := io.Copy(
 		tempFile,
 		r,
 	)
 	if err != nil {
 		return err
+	}
+
+	if sizeHint != nil && n != *sizeHint {
+		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
 	if err := tempFile.Close(); err != nil {

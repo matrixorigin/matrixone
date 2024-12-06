@@ -48,6 +48,13 @@ const (
 	ECHO
 )
 
+const (
+	// PANIC with non-moerr
+	PanicUseNonMoErr = 0
+	// PANIC with moerr.NewXXXErr
+	PanicUseMoErr = 1
+)
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int     // command
@@ -71,7 +78,6 @@ type faultMap struct {
 }
 
 var enabled atomic.Pointer[faultMap]
-var gfm *faultMap
 
 func (fm *faultMap) run() {
 	for {
@@ -143,59 +149,76 @@ func (e *faultEntry) do() (int64, string) {
 			ee.cond.Broadcast()
 		}
 	case PANIC:
-		panic(e.sarg)
+		switch e.iarg {
+		case PanicUseMoErr:
+			panic(moerr.NewInternalError(context.Background(), e.sarg))
+		default:
+			panic(e.sarg)
+		}
 	case ECHO:
 		return e.iarg, e.sarg
 	}
 	return 0, ""
 }
 
-func startFaultMap() {
-	gfm = new(faultMap)
-	gfm.faultPoints = make(map[string]*faultEntry)
-	gfm.chIn = make(chan *faultEntry)
-	gfm.chOut = make(chan *faultEntry)
-	go gfm.run()
+func startFaultMap() bool {
+	if enabled.Load() != nil {
+		return false
+	}
+	fm := new(faultMap)
+	fm.faultPoints = make(map[string]*faultEntry)
+	fm.chIn = make(chan *faultEntry)
+	fm.chOut = make(chan *faultEntry)
+	go fm.run()
+	if !enabled.CompareAndSwap(nil, fm) {
+		var msg faultEntry
+		msg.cmd = STOP
+		fm.chIn <- &msg
+		return false
+	}
+	return true
 }
 
-func stopFaultMap() {
+func stopFaultMap() bool {
+	fm := enabled.Load()
+	if fm == nil {
+		return false
+	}
+	if !enabled.CompareAndSwap(fm, nil) {
+		return false
+	}
+
 	var msg faultEntry
 	msg.cmd = STOP
-	gfm.chIn <- &msg
-	gfm = nil
+	fm.chIn <- &msg
+	return true
 }
 
 // Enable fault injection
-func Enable() {
-	if !IsEnabled() {
-		startFaultMap()
-		enabled.Store(gfm)
-	}
+func Enable() bool {
+	return startFaultMap()
 }
 
 // Disable fault injection
-func Disable() {
-	if IsEnabled() {
-		stopFaultMap()
-		enabled.Store(gfm)
-	}
+func Disable() bool {
+	return stopFaultMap()
 }
 
-func IsEnabled() bool {
-	ld := enabled.Load()
-	return ld != nil
+func Status() bool {
+	return enabled.Load() != nil
 }
 
 // Trigger a fault point.
 func TriggerFault(name string) (iret int64, sret string, exist bool) {
-	if !IsEnabled() {
+	fm := enabled.Load()
+	if fm == nil {
 		return
 	}
 	var msg faultEntry
 	msg.cmd = TRIGGER
 	msg.name = name
-	gfm.chIn <- &msg
-	out := <-gfm.chOut
+	fm.chIn <- &msg
+	out := <-fm.chOut
 
 	if out == nil {
 		return
@@ -206,7 +229,8 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 }
 
 func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
-	if !IsEnabled() {
+	fm := enabled.Load()
+	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault point not enabled")
 	}
 
@@ -287,8 +311,8 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 		msg.cond = sync.NewCond(&msg.mutex)
 	}
 
-	gfm.chIn <- &msg
-	out := <-gfm.chOut
+	fm.chIn <- &msg
+	out := <-fm.chOut
 	if out == nil {
 		return moerr.NewInternalError(ctx, "add fault injection point failed.")
 	}
@@ -296,15 +320,16 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 }
 
 func RemoveFaultPoint(ctx context.Context, name string) error {
-	if !IsEnabled() {
+	fm := enabled.Load()
+	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault injection point not enabled.")
 	}
 
 	var msg faultEntry
 	msg.cmd = REMOVE
 	msg.name = name
-	gfm.chIn <- &msg
-	out := <-gfm.chOut
+	fm.chIn <- &msg
+	out := <-fm.chOut
 	if out == nil {
 		return moerr.NewInvalidInputf(ctx, "invalid injection point %s", name)
 	}
@@ -312,14 +337,15 @@ func RemoveFaultPoint(ctx context.Context, name string) error {
 }
 
 func lookup(name string) *faultEntry {
-	if !IsEnabled() {
+	fm := enabled.Load()
+	if fm == nil {
 		return nil
 	}
 
 	var msg faultEntry
 	msg.cmd = LOOKUP
 	msg.sarg = name
-	gfm.chIn <- &msg
-	out := <-gfm.chOut
+	fm.chIn <- &msg
+	out := <-fm.chOut
 	return out
 }

@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -147,8 +148,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		statement = cw.GetAst()
 
 		ses.ast = statement
-
-		execSql := makeExecuteSql(ctx, ses, statement)
+		binExec, prepareName := cw.BinaryExecute()
+		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
 		if len(execSql) != 0 {
 			bb := strings.Builder{}
 			bb.WriteString(envStmt)
@@ -224,7 +225,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
-	stm.Statement = text
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
 	stm.SqlSourceType = sqlType
@@ -236,12 +236,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// fix original issue #8165
 		stm.User = ""
 	}
-	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
-		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
-	}
 	if ses.disableAgg {
 		stm.DisableAgg()
 	}
+	// RecordStatementSql need to be the last calling before Report
+	stm.RecordStatementSql(text, envStmt)
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
 
@@ -357,18 +356,14 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		return err
 	}
 
-	if subMeta == nil {
-		// get db info as current account
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, stmt.DbName, txnOp); err != nil {
-			return err
-		}
-	} else {
-		// as pub account
+	dbName := stmt.DbName
+	if subMeta != nil {
+		dbName = subMeta.DbName
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(subMeta.AccountId))
-		// get db info via subMeta
-		if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, subMeta.DbName, txnOp); err != nil {
-			return err
-		}
+	}
+
+	if db, err = ses.GetTxnHandler().GetStorage().Database(ctx, dbName, txnOp); err != nil {
+		return err
 	}
 
 	getRoleName := func(roleId uint32) (roleName string, err error) {
@@ -391,8 +386,57 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
+	getTableStats := func(tblNames []string) (rows, sizes map[string]int64, err error) {
+		if len(tblNames) == 0 {
+			return
+		}
+
+		// set session variable
+		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
+			return
+		}
+		defer func() {
+			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
+		}()
+
+		sqlBuilder := strings.Builder{}
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (")
+		for i, tblName := range tblNames {
+			if i > 0 {
+				sqlBuilder.WriteString(" union all ")
+			}
+			sqlBuilder.WriteString(fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName))
+		}
+		sqlBuilder.WriteString(") tmp")
+
+		var rets []ExecResult
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
+			return
+		}
+
+		var tblName string
+		rows = make(map[string]int64, len(tblNames))
+		sizes = make(map[string]int64, len(tblNames))
+		for _, result := range rets {
+			for i := uint64(0); i < result.GetRowCount(); i++ {
+				if tblName, err = result.GetString(ctx, i, 0); err != nil {
+					return
+				}
+				if rows[tblName], err = result.GetInt64(ctx, i, 1); err != nil {
+					return
+				}
+				if sizes[tblName], err = result.GetInt64(ctx, i, 2); err != nil {
+					return
+				}
+			}
+		}
+		return
+	}
+
+	var tblNames []string
+	var tblIdxes []int
 	mrs := ses.GetMysqlResultSet()
-	for _, row := range ses.data {
+	for i, row := range ses.data {
 		tableName := string(row[0].([]byte))
 		// check if the table is in the subscription meta
 		if subMeta != nil && !pubsub.InSubMetaTables(subMeta, tableName) {
@@ -405,12 +449,8 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		if slices.Contains(needRowsAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
-			if row[3], err = r.Rows(ctx); err != nil {
-				return err
-			}
-			if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
-				return err
-			}
+			tblNames = append(tblNames, tableName)
+			tblIdxes = append(tblIdxes, i)
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
 			for i := 0; i < 16; i++ {
 				// only remain name and created_time
@@ -432,6 +472,17 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			}
 		}
 		mrs.AddRow(row)
+	}
+
+	// calculate table row and size
+	rows, sizes, err := getTableStats(tblNames)
+	if err != nil {
+		return err
+	}
+	for i, tblName := range tblNames {
+		idx := tblIdxes[i]
+		ses.data[idx][3] = rows[tblName]
+		ses.data[idx][5] = sizes[tblName]
 	}
 	return nil
 }
@@ -2069,6 +2120,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
+		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
+		tcw.prepareName = execCtx.input.stmtName
 		cws = append(cws, tcw)
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
@@ -2300,14 +2353,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	//so we need to make sure the pipewriter.write returns.
 	//issue3976
 	quitC := make(chan int)
-	go func() {
+	go func(ctx context.Context, reader *io.PipeReader) {
 		select {
-		case <-execCtx.reqCtx.Done():
+		case <-ctx.Done():
 			//close reader
 			_ = reader.Close()
 		case <-quitC:
 		}
-	}()
+	}(execCtx.reqCtx, reader)
 	defer func() {
 		close(quitC)
 	}()
@@ -2478,8 +2531,20 @@ func executeStmtWithWorkspace(ses FeSession,
 	//7. pass or commit or rollback txn
 	// defer transaction state management.
 	defer func() {
+		if e := recover(); e != nil {
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
+			} else {
+				err = errors.Join(err, moe)
+			}
+
+			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
+		}
 		err = finishTxnFunc(ses, err, execCtx)
 	}()
+
+	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
 
 	//1. start txn
 	//special BEGIN,COMMIT,ROLLBACK
@@ -2495,6 +2560,10 @@ func executeStmtWithWorkspace(ses FeSession,
 	case *tree.RollbackTransaction:
 		execCtx.txnOpt.byRollback = true
 		return nil
+	case *tree.SavePoint, *tree.ReleaseSavePoint:
+		return nil
+	case *tree.RollbackToSavePoint:
+		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
 	//in session migration, the txn forced to be autocommit.
@@ -3096,15 +3165,18 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
 			} else {
+				err = errors.Join(err, moe)
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
 			// log the query's statement and error info.
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
+	_, _, _ = fault.TriggerFault("exec_request_panic")
+
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
 

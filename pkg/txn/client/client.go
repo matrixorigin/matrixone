@@ -15,8 +15,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	"runtime/debug"
 	"sync"
@@ -339,12 +341,12 @@ func (client *txnClient) doCreateTxn(
 	ts, err := client.determineTxnSnapshot(minTS)
 	if err != nil {
 		_ = op.Rollback(ctx)
-		return nil, err
+		return nil, errors.Join(err, moerr.NewTxnError(ctx, "determine txn snapshot"))
 	}
 	if !op.opts.skipWaitPushClient {
 		if err := op.UpdateSnapshot(ctx, ts); err != nil {
 			_ = op.Rollback(ctx)
-			return nil, err
+			return nil, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
 		}
 	}
 
@@ -356,7 +358,7 @@ func (client *txnClient) doCreateTxn(
 
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
-		return nil, err
+		return nil, errors.Join(err, moerr.NewTxnError(ctx, "wait active"))
 	}
 	return op, nil
 }
@@ -585,6 +587,8 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 				op.notifyActive()
 			}
 		}
+	} else if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
+		client.removeFromLeakCheck(txn.ID)
 	} else {
 		client.logger.Warn("txn closed",
 			zap.String("txn ID", hex.EncodeToString(txn.ID)),
@@ -751,4 +755,18 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			)
 		}
 	}
+}
+
+func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
+	var ok bool
+	values := client.mu.waitActiveTxns[:0]
+	for _, op := range client.mu.waitActiveTxns {
+		if bytes.Equal(op.reset.txnID, txnID) {
+			ok = true
+			continue
+		}
+		values = append(values, op)
+	}
+	client.mu.waitActiveTxns = values
+	return ok
 }

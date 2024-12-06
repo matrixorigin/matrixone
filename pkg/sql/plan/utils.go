@@ -2185,6 +2185,7 @@ func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *p
 	}
 	col := expr.GetCol()
 	col.ColPos = cpkeyIdx
+	expr.Typ = tableDef.Cols[cpkeyIdx].Typ
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
 		UpperLimit:  upperlimit,
@@ -2710,11 +2711,12 @@ func offsetToString(offset int) string {
 	return fmt.Sprintf("+%02d:%02d", hours, minutes)
 }
 
-func getLockTableAtTheEnd(tableDef *TableDef) bool {
-	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-		tableDef.Partition != nil || // unsupport partition table
-		len(tableDef.Pkey.Names) > 1 { // unsupport multi-column primary key
-		return false
-	}
-	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
-}
+// do not lock table if lock no rows now.
+// if need to lock table, uncomment these codes
+// func getLockTableAtTheEnd(tableDef *TableDef) bool {
+// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
+// 	tableDef.Partition != nil { // unsupport partition table
+// 	return false
+// }
+// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
+// }
