@@ -618,6 +618,42 @@ func (s *Scope) getBlockList(c *Compile, newExprList []*plan.Expr) (engine.RelDa
 	return reldata, nil
 }
 
+func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
+	var runtimeInExprList []*plan.Expr
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
+			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
+			if err != nil {
+				return nil, false, err
+			}
+			if ctxDone {
+				return nil, false, nil
+			}
+			for i := range msgs {
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case message.RuntimeFilter_PASS:
+					continue
+				case message.RuntimeFilter_DROP:
+					return nil, true, nil
+				case message.RuntimeFilter_IN:
+					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					runtimeInExprList = append(runtimeInExprList, inExpr)
+
+					// TODO: implement BETWEEN expression
+				}
+			}
+		}
+	}
+
+	return runtimeInExprList, false, nil
+}
+
 func (s *Scope) handleBlockFilterList(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
@@ -670,42 +706,6 @@ func (s *Scope) handleBlockFilterList(c *Compile, runtimeInExprList []*plan.Expr
 		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 	}
 	return newExprList, nil
-}
-
-func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
-	var runtimeInExprList []*plan.Expr
-
-	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
-		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
-			msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
-			if err != nil {
-				return nil, false, err
-			}
-			if ctxDone {
-				return nil, false, nil
-			}
-			for i := range msgs {
-				msg, ok := msgs[i].(message.RuntimeFilterMessage)
-				if !ok {
-					panic("expect runtime filter message, receive unknown message!")
-				}
-				switch msg.Typ {
-				case message.RuntimeFilter_PASS:
-					continue
-				case message.RuntimeFilter_DROP:
-					return nil, true, nil
-				case message.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
-
-					// TODO: implement BETWEEN expression
-				}
-			}
-		}
-	}
-
-	return runtimeInExprList, false, nil
 }
 
 func (s *Scope) isTableScan() bool {
