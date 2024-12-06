@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -198,17 +197,6 @@ func buildEntireEngineWithoutTempEngine() *testEntireEngine {
 
 func newtestEngine(name string, tee *testEntireEngine) *testEngine {
 	return &testEngine{name: name, parent: tee}
-}
-
-func (e *testEngine) BuildBlockReaders(
-	ctx context.Context,
-	p any,
-	ts timestamp.Timestamp,
-	expr *plan.Expr,
-	def *plan.TableDef,
-	relData RelData,
-	num int) ([]Reader, error) {
-	panic("unimplemented")
 }
 
 func (e *testEngine) New(_ context.Context, _ client.TxnOperator) error {
