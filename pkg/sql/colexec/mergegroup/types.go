@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,50 +18,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-)
-
-var _ vm.Operator = new(MergeGroup)
-
-const (
-	Build = iota
-	Eval
-	End
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
-	H0 = iota
-	H8
-	HStr
+	thisOperatorName = "merge_group"
 )
-
-type container struct {
-	state int
-
-	// mergeGroup operator result.
-	res GroupResult
-
-	// should use hash map or not and the hash map type.
-	typ int
-
-	// hash map related.
-	hashKeyWidth   int
-	groupByCol     int
-	keyNullability bool
-}
 
 type MergeGroup struct {
+	vm.OperatorBase
+	colexec.Projection
+
 	ctr container
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+}
 
-	vm.OperatorBase
-	colexec.Projection
+type container struct {
+	state vm.CtrState
+
+	// hash.
+	hr group.ResHashRelated
+	// res.
+	result group.GroupResultBuffer
+}
+
+func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
+	mergeGroup.Free(proc, false, nil)
+}
+
+func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
+	mergeGroup.ctr.result.Free0(proc.Mp())
+	mergeGroup.ctr.hr.Free0()
 }
 
 func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
 	return &mergeGroup.OperatorBase
+}
+
+func (mergeGroup *MergeGroup) OpType() vm.OpType {
+	return vm.MergeGroup
+}
+
+func (mergeGroup MergeGroup) TypeName() string {
+	return thisOperatorName
 }
 
 func init() {
@@ -77,6 +80,12 @@ func init() {
 	)
 }
 
-func (mergeGroup MergeGroup) TypeName() string {
-	return opName
+func NewArgument() *MergeGroup {
+	return reuse.Alloc[MergeGroup](nil)
+}
+
+func (mergeGroup *MergeGroup) Release() {
+	if mergeGroup != nil {
+		reuse.Free[MergeGroup](mergeGroup, nil)
+	}
 }

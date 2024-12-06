@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmsMergeGroup
+package mergegroup
 
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cmsgroup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
@@ -144,7 +144,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 		}
 		for _, vec := range b.Vecs {
 			typ := vec.GetType()
-			keyWidth += cmsgroup.GetKeyWidth(typ.Oid, typ.Width, keyNullable)
+			keyWidth += group.GetKeyWidth(typ.Oid, typ.Width, keyNullable)
 		}
 
 		if err := mergeGroup.ctr.hr.BuildHashTable(false, keyWidth > 8, keyNullable, 0); err != nil {
