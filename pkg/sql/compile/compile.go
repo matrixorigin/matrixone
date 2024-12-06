@@ -730,7 +730,7 @@ func (c *Compile) lockMetaTables() error {
 			return err
 		}
 	}
-	for dbName, _ := range lockDbs {
+	for dbName := range lockDbs {
 		err := lockMoDatabase(c, dbName, lock.LockMode_Shared)
 		if err != nil {
 			return err
