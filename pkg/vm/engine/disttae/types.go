@@ -240,6 +240,8 @@ type Engine struct {
 	moDatabaseCreatedTime *vector.Vector
 	moTablesCreatedTime   *vector.Vector
 	moColumnsCreatedTime  *vector.Vector
+
+	dynamicCtxCloseFn func()
 }
 
 func (e *Engine) SetService(svr string) {
