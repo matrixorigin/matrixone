@@ -78,7 +78,7 @@ const (
 	DedupPolicy_CheckIncremental = DedupPolicy_SkipWorkspace | DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipSourcePersisted
 
 	// Disable deduplication
-	DedupPolicy_SkipAll = DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipTargetNewCommitted | DedupPolicy_SkipWorkspace
+	DedupPolicy_SkipAll = DedupPolicy_SkipTargetOldCommitted | DedupPolicy_SkipTargetNewCommitted | DedupPolicy_SkipWorkspace | DedupPolicy_SkipSourcePersisted
 )
 
 func TxnStrState(state TxnState) string {
