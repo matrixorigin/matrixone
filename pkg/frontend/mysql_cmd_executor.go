@@ -2527,6 +2527,14 @@ func executeStmtWithWorkspace(ses FeSession,
 	//7. pass or commit or rollback txn
 	// defer transaction state management.
 	defer func() {
+		if e := recover(); e != nil {
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
+			} else {
+				err = errors.Join(err, moe)
+			}
+		}
 		err = finishTxnFunc(ses, err, execCtx)
 	}()
 
