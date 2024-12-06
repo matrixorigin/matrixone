@@ -55,15 +55,6 @@ func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	return
 }
 
-func ParseFromByteSliceWithoutCheck(s []byte) (bj ByteJson, err error) {
-	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
-		return
-	}
-	err = bj.UnmarshalJSON(s)
-	return
-}
-
 func toString(buf, data []byte) ([]byte, error) {
 	return appendString(buf, util.UnsafeBytesToString(data))
 }
