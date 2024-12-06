@@ -1579,9 +1579,9 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 		now = time.Now()
 
 		tbls   = make([]tablePair, 0, 1)
-		accIds = make([]uint64, 0, 1)
-		dbIds  = make([]uint64, 0, 1)
-		tblIds = make([]uint64, 0, 1)
+		accIds []uint64
+		dbIds  []uint64
+		tblIds []uint64
 	)
 
 	defer func() {
