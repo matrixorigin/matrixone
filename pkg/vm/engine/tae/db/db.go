@@ -27,13 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -77,7 +77,7 @@ type DB struct {
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
 
-	GCManager *gc.Manager
+	GCJobs *tasks.CancelableJobs
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
@@ -270,7 +270,7 @@ func (db *DB) Close() error {
 	}
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
-	db.GCManager.Stop()
+	db.GCJobs.Reset()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()
