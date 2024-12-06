@@ -66,6 +66,66 @@ type Info struct {
 func NewEmptyInfo() *Info {
 	return &Info{}
 }
+
+func (info *Info) WriteToV1(w io.Writer) (n int64, err error) {
+	if _, err = w.Write(types.EncodeUint32(&info.Group)); err != nil {
+		return
+	}
+	n += 4
+	if _, err = w.Write(types.EncodeUint64(&info.GroupLSN)); err != nil {
+		return
+	}
+	n += 8
+	if _, err = w.Write(types.EncodeUint64(&info.TargetLsn)); err != nil {
+		return
+	}
+	n += 8
+	length := uint64(len(info.Checkpoints))
+	if _, err = w.Write(types.EncodeUint64(&length)); err != nil {
+		return
+	}
+	n += 8
+	for _, ckps := range info.Checkpoints {
+		if _, err = w.Write(types.EncodeUint32(&ckps.Group)); err != nil {
+			return
+		}
+		n += 4
+		var n2 int64
+		n2, err = ckps.Ranges.WriteTo(w)
+		if err != nil {
+			return
+		}
+		n += n2
+		cmdLength := uint64(len(ckps.Command))
+		if _, err = w.Write(types.EncodeUint64(&cmdLength)); err != nil {
+			return
+		}
+		n += 8
+		for lsn, cmd := range ckps.Command {
+			if _, err = w.Write(types.EncodeUint64(&lsn)); err != nil {
+				return
+			}
+			n += 8
+			cmdIdxLength := uint32(len(cmd.CommandIds))
+			if _, err = w.Write(types.EncodeUint32(&cmdIdxLength)); err != nil {
+				return
+			}
+			n += 4
+			for _, id := range cmd.CommandIds {
+				if _, err = w.Write(types.EncodeUint32(&id)); err != nil {
+					return
+				}
+				n += 4
+			}
+			if _, err = w.Write(types.EncodeUint32(&cmd.Size)); err != nil {
+				return
+			}
+			n += 4
+		}
+	}
+	return
+}
+
 func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint32(&info.Group)); err != nil {
 		return
@@ -124,6 +184,16 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	return
 }
+
+func (info *Info) MarshalV1() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = info.WriteToV1(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
 func (info *Info) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = info.WriteTo(&bbuf); err != nil {
@@ -132,6 +202,75 @@ func (info *Info) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
+
+func (info *Info) ReadFromV1(r io.Reader) (n int64, err error) {
+	if _, err = r.Read(types.EncodeUint32(&info.Group)); err != nil {
+		return
+	}
+	n += 4
+	if _, err = r.Read(types.EncodeUint64(&info.GroupLSN)); err != nil {
+		return
+	}
+	n += 8
+	if _, err = r.Read(types.EncodeUint64(&info.TargetLsn)); err != nil {
+		return
+	}
+	n += 8
+	length := uint64(0)
+	if _, err = r.Read(types.EncodeUint64(&length)); err != nil {
+		return
+	}
+	n += 8
+	info.Checkpoints = make([]*CkpRanges, length)
+	for i := 0; i < int(length); i++ {
+		ckps := &CkpRanges{}
+		if _, err = r.Read(types.EncodeUint32(&ckps.Group)); err != nil {
+			return
+		}
+		n += 4
+		ckps.Ranges = common.NewClosedIntervals()
+		var n2 int64
+		n2, err = ckps.Ranges.ReadFrom(r)
+		if err != nil {
+			return
+		}
+		n += n2
+		cmdLength := uint64(0)
+		if _, err = r.Read(types.EncodeUint64(&cmdLength)); err != nil {
+			return
+		}
+		n += 8
+		ckps.Command = make(map[uint64]CommandInfo)
+		for i := 0; i < int(cmdLength); i++ {
+			lsn := uint64(0)
+			if _, err = r.Read(types.EncodeUint64(&lsn)); err != nil {
+				return
+			}
+			n += 8
+			cmd := &CommandInfo{}
+			cmdIdxLength := uint32(0)
+			if _, err = r.Read(types.EncodeUint32(&cmdIdxLength)); err != nil {
+				return
+			}
+			n += 4
+			cmd.CommandIds = make([]uint32, cmdIdxLength)
+			for i := 0; i < int(cmdIdxLength); i++ {
+				if _, err = r.Read(types.EncodeUint32(&cmd.CommandIds[i])); err != nil {
+					return
+				}
+				n += 4
+			}
+			if _, err = r.Read(types.EncodeUint32(&cmd.Size)); err != nil {
+				return
+			}
+			n += 4
+			ckps.Command[lsn] = *cmd
+		}
+		info.Checkpoints[i] = ckps
+	}
+	return
+}
+
 func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint32(&info.Group)); err != nil {
 		return
@@ -199,6 +338,13 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return
 }
+
+func (info *Info) UnmarshalV1(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := info.ReadFromV1(bbuf)
+	return err
+}
+
 func (info *Info) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := info.ReadFrom(bbuf)

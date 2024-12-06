@@ -34,7 +34,9 @@ const (
 )
 
 const (
-	IOET_WALEntry_V1              uint16 = 1
+	IOET_WALEntry_V1 uint16 = 1
+	IOET_WALEntry_V2 uint16 = 2
+
 	IOET_WALEntry_Invalid         uint16 = 2000
 	IOET_WALEntry_Checkpoint      uint16 = 2001
 	IOET_WALEntry_PostCommit      uint16 = 2002
@@ -43,7 +45,7 @@ const (
 	IOET_WALEntry_Test            uint16 = 2005
 	IOET_WALEntry_CustomizedStart uint16 = 2006
 
-	IOET_WALEntry_CurrVer = IOET_WALEntry_V1
+	IOET_WALEntry_CurrVer = IOET_WALEntry_V2
 )
 
 func init() {
@@ -51,32 +53,68 @@ func init() {
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_Checkpoint,
 			Version: IOET_WALEntry_V1,
-		}, nil, UnmarshalEntry,
+		}, nil, UnmarshalEntryV1,
 	)
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_PostCommit,
 			Version: IOET_WALEntry_V1,
-		}, nil, UnmarshalEntry,
+		}, nil, UnmarshalEntryV1,
 	)
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_Uncommitted,
 			Version: IOET_WALEntry_V1,
-		}, nil, UnmarshalEntry,
+		}, nil, UnmarshalEntryV1,
 	)
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_Test,
 			Version: IOET_WALEntry_V1,
-		}, nil, UnmarshalEntry,
+		}, nil, UnmarshalEntryV1,
 	)
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALEntry_Txn,
 			Version: IOET_WALEntry_V1,
+		}, nil, UnmarshalEntryV1,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Checkpoint,
+			Version: IOET_WALEntry_V2,
 		}, nil, UnmarshalEntry,
 	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_PostCommit,
+			Version: IOET_WALEntry_V2,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Uncommitted,
+			Version: IOET_WALEntry_V2,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Test,
+			Version: IOET_WALEntry_V2,
+		}, nil, UnmarshalEntry,
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALEntry_Txn,
+			Version: IOET_WALEntry_V2,
+		}, nil, UnmarshalEntry,
+	)
+}
+
+func UnmarshalEntryV1(b []byte) (any, error) {
+	info := NewEmptyInfo()
+	err := info.UnmarshalV1(b)
+	return info, err
 }
 
 func UnmarshalEntry(b []byte) (any, error) {
