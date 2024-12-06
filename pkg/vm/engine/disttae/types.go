@@ -255,6 +255,8 @@ type Engine struct {
 	moDatabaseCreatedTime *vector.Vector
 	moTablesCreatedTime   *vector.Vector
 	moColumnsCreatedTime  *vector.Vector
+
+	dynamicCtx
 }
 
 func (e *Engine) SetService(svr string) {
