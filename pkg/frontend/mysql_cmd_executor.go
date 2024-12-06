@@ -387,6 +387,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	needRowsAndSizeTableTypes := []string{catalog.SystemOrdinaryRel, catalog.SystemMaterializedRel}
 
 	getTableStats := func(tblNames []string) (rows, sizes map[string]int64, err error) {
+		if len(tblNames) == 0 {
+			return
+		}
+
 		// set session variable
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
 			return
