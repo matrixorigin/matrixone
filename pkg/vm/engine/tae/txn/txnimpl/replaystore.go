@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -27,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
+
+var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
 
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
@@ -120,15 +123,30 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 
 func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
 	hasActive := false
+	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
 		id := info.GetDest()
 		database, err := store.catalog.GetDatabaseByID(id.DbID)
+		if sarg != "" {
+			err = ErrDebugReplay
+		}
 		if err != nil {
-			panic(err)
+			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+			if err != ErrDebugReplay {
+				panic(err)
+			}
+			err = nil
 		}
 		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
+		if sarg != "" {
+			err = ErrDebugReplay
+		}
 		if err != nil {
-			panic(err)
+			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+			if err != ErrDebugReplay {
+				panic(err)
+			}
+			err = nil
 		}
 		if !blk.IsActive() {
 			continue
@@ -151,12 +169,26 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 	for _, info := range cmd.Infos {
 		id := info.GetDest()
 		database, err := store.catalog.GetDatabaseByID(id.DbID)
+		if sarg != "" {
+			err = ErrDebugReplay
+		}
 		if err != nil {
-			panic(err)
+			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+			if err != ErrDebugReplay {
+				panic(err)
+			}
+			err = nil
 		}
 		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
+		if sarg != "" {
+			err = ErrDebugReplay
+		}
 		if err != nil {
-			panic(err)
+			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+			if err != ErrDebugReplay {
+				panic(err)
+			}
+			err = nil
 		}
 		if !blk.IsActive() {
 			continue
@@ -169,7 +201,11 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		bat.Compact()
 		defer bat.Close()
 		if err = blk.GetObjectData().OnReplayAppendPayload(bat); err != nil {
-			panic(err)
+			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+			if err != ErrDebugReplay {
+				panic(err)
+			}
+			err = nil
 		}
 	}
 }
@@ -187,12 +223,27 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 	appendNode := cmd.GetAppendNode()
 	id := appendNode.GetID()
 	database, err := store.catalog.GetDatabaseByID(id.DbID)
+	_, sarg, _ := fault.TriggerFault("replay debug log")
+	if sarg != "" {
+		err = ErrDebugReplay
+	}
 	if err != nil {
-		panic(err)
+		logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+		if err != ErrDebugReplay {
+			panic(err)
+		}
+		err = nil
 	}
 	obj, err := database.GetObjectEntryByID(id, cmd.GetAppendNode().IsTombstone())
+	if sarg != "" {
+		err = ErrDebugReplay
+	}
 	if err != nil {
-		panic(err)
+		logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+		if err != ErrDebugReplay {
+			panic(err)
+		}
+		err = nil
 	}
 	if !obj.IsActive() {
 		return
@@ -200,7 +251,14 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 	if obj.ObjectPersisted() {
 		return
 	}
+	if sarg != "" {
+		err = ErrDebugReplay
+	}
 	if err = obj.GetObjectData().OnReplayAppend(appendNode); err != nil {
-		panic(err)
+		logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
+		if err != ErrDebugReplay {
+			panic(err)
+		}
+		err = nil
 	}
 }
