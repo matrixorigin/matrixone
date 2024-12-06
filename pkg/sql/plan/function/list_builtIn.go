@@ -6752,8 +6752,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function 'grouping'
+    // function 'grouping'
 	{
 		functionId: GROUPING,
 		class:      plan.Function_STRICT,
@@ -6796,6 +6795,80 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: fulltext_expand_overload(types.T_float32),
 	},
+  
+  // function `LLM_EXTRACT_TEXT`
+	{
+		functionId: LLM_EXTRACT_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_datalink, types.T_datalink, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LLMExtractText
+				},
+			},
+		},
+	},
+  
+  // function `LLM_CHUNK`
+	{
+		functionId: LLM_CHUNK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_datalink, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LLMChunk
+				},
+			},
+		},
+	},
+  
+    // function `LLM_EMBEDDING`
+	{
+		functionId: LLM_EMBEDDING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingOp
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return EmbeddingDatalinkOp
+				},
+			},
+		},
+	},
+  
 }
 
 // fulltext_match supports varchar, char and text.  Expand the function signature to all possible combination of input types
@@ -6880,6 +6953,7 @@ func fulltext_expand_overload(rettyp types.T) []overload {
 
 	return overloads
 }
+
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {
 	return ctl.MoCtl(ivecs, result, proc, length)

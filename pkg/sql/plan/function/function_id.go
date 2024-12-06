@@ -397,10 +397,15 @@ const (
 	BITMAP_COUNT
 	BITMAP_CONSTRUCT_AGG
 	BITMAP_OR_AGG
+	LLM_EXTRACT_TEXT
 
 	// fulltext function
 	FULLTEXT_MATCH
 	FULLTEXT_MATCH_SCORE
+
+	LLM_CHUNK
+
+	LLM_EMBEDDING
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -731,4 +736,7 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+  "llm_extract_text": LLM_EXTRACT_TEXT,
+  "llm_chunk":            LLM_CHUNK,
+  "llm_embedding":        LLM_EMBEDDING,
 }
