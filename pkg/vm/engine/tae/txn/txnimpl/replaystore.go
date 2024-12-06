@@ -135,7 +135,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			if err != ErrDebugReplay {
 				panic(err)
 			}
-			err = nil
 		}
 		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
 		if sarg != "" {
@@ -146,7 +145,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			if err != ErrDebugReplay {
 				panic(err)
 			}
-			err = nil
 		}
 		if !blk.IsActive() {
 			continue
