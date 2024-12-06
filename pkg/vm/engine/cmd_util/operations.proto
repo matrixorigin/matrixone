@@ -169,3 +169,21 @@ message CheckpointEntryResp {
     int32 EntryType                 = 5;
     uint32 Version                  = 6;
 }
+
+message GetChangedTableListReq {
+    option (gogoproto.typedecl)     = false;
+    repeated timestamp.Timestamp From = 2;
+    repeated uint64 AccIds = 3;
+    repeated uint64 DatabaseIds = 4;
+    repeated uint64 TableIds = 5;
+    bytes Extra = 6;
+}
+
+message GetChangedTableListResp {
+    option (gogoproto.typedecl)     = false;
+    timestamp.Timestamp Newest = 1;
+    repeated uint64 AccIds = 2;
+    repeated uint64 DatabaseIds = 3;
+    repeated uint64 TableIds = 4;
+    bytes Extra = 5;
+}

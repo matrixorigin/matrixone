@@ -103,6 +103,7 @@ const (
 	LockOp
 
 	Shuffle
+	ShuffleV2
 
 	Sample
 	ProductL2

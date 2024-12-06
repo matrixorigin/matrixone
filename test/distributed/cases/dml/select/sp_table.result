@@ -29,6 +29,7 @@ mo_stages    r
 mo_stored_procedure    r
 mo_subs    r
 mo_table_partitions    r
+mo_table_stats_alpha    r
 mo_tables    r
 mo_transactions    v
 mo_upgrade    r

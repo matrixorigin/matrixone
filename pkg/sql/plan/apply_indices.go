@@ -739,6 +739,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		ScanSnapshot: node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])
 
+	forceScanNodeStatsTP(idxTableNodeID, builder)
 	return idxTableNodeID
 }
 
@@ -792,6 +793,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		ScanSnapshot: node.ScanSnapshot,
 	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
+	forceScanNodeStatsTP(idxTableNodeID, builder)
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)

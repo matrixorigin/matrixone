@@ -56,6 +56,7 @@ var (
 	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
 	CtlReaderMethod          = strings.ToUpper("reader")
 	GetTableShards           = strings.ToUpper("get-table-shards")
+	MoTableStats             = strings.ToUpper("MoTableStats")
 )
 
 var (
@@ -96,6 +97,7 @@ var (
 		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
 		CtlReaderMethod:          handleCtlReader,
 		GetTableShards:           handleGetTableShards,
+		MoTableStats:             handleMoTableStats,
 	}
 )
 

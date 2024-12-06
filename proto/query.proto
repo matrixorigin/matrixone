@@ -98,6 +98,7 @@ enum CmdMethod {
   GOGCPercent = 31;
   // FaultInjection handle fault injection request
   FaultInjection = 32;
+  CtlMoTableStats = 33;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -235,6 +236,7 @@ message Request {
   MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
   GoGCPercentRequest GoGCPercentRequest = 34 [ (gogoproto.nullable) = false ];
   FaultInjectionRequest FaultInjectionRequest = 35;
+  CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -296,6 +298,7 @@ message Response {
   MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
   GoGCPercentResponse GoGCPercentResponse = 34 [ (gogoproto.nullable) = false ];
   FaultInjectionResponse FaultInjectionResponse = 35;
+  CtlMoTableStatsResponse CtlMoTableStatsResponse = 36 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -629,5 +632,13 @@ message FaultInjectionRequest {
 }
 
 message FaultInjectionResponse {
+  string Resp = 1;
+}
+
+message CtlMoTableStatsRequest  {
+  string Cmd = 1;
+}
+
+message CtlMoTableStatsResponse {
   string Resp = 1;
 }

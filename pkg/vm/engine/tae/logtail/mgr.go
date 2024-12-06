@@ -85,11 +85,14 @@ type Manager struct {
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 	eventOnce           sync.Once
-
-	nextCompactTS types.TS
+	nextCompactTS       types.TS
 }
 
-func NewManager(rt *dbutils.Runtime, blockSize int, nowClock func() types.TS) *Manager {
+func NewManager(
+	rt *dbutils.Runtime,
+	blockSize int,
+	nowClock func() types.TS) *Manager {
+
 	mgr := &Manager{
 		rt: rt,
 		table: NewTxnTable(
@@ -140,6 +143,7 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 		mgr.generateLogtailWithTxn(txn)
 	}
 }
+
 func (mgr *Manager) Stop() {
 	mgr.collectLogtailQueue.Stop()
 	mgr.waitCommitQueue.Stop()

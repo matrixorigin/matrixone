@@ -1,0 +1,214 @@
+drop account if exists acc01;
+create account acc01 ADMIN_NAME 'test_account' IDENTIFIED BY '111';
+drop account if exists acc02;
+create account acc02 admin_name 'test_account' identified by '111';
+drop account if exists acc04;
+create account acc04 admin_name 'test_account' identified by '111';
+select @@lower_case_table_names;
+@@lower_case_table_names
+1
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+create database test;
+use test;
+create table TT (c1 int);
+insert into TT values(1);
+create table tt(a1 int);
+insert into tt values(2);
+create table Tt(b1 int);
+insert into Tt values(3);
+create table tT(d1 int);
+insert into tT values(4);
+show create table TT;
+Table    Create Table
+TT    CREATE TABLE `TT` (\n  `c1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+Tt    CREATE TABLE `Tt` (\n  `b1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tT    CREATE TABLE `tT` (\n  `d1` int DEFAULT NULL\n)
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+select * from TT;
+c1
+1
+select * from tt;
+a1
+2
+select * from Tt;
+b1
+3
+select * from tT;
+d1
+4
+drop snapshot if exists sp01_restore_lower;
+create snapshot sp01_restore_lower for account acc01;
+drop database test;
+restore account acc01 from snapshot sp01_restore_lower;
+use test;
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+show create table TT;
+Table    Create Table
+TT    CREATE TABLE `TT` (\n  `c1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+Tt    CREATE TABLE `Tt` (\n  `b1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tT    CREATE TABLE `tT` (\n  `d1` int DEFAULT NULL\n)
+select * from TT;
+c1
+1
+select * from tt;
+a1
+2
+select * from Tt;
+b1
+3
+select * from tT;
+d1
+4
+restore account acc01 from snapshot sp01_restore_lower to account acc02;
+use test;
+show tables;
+Tables_in_test
+TT
+Tt
+tT
+tt
+show create table TT;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table Tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+show create table tT;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n  `a1` int DEFAULT NULL\n)
+select * from TT;
+a1
+2
+select * from tt;
+a1
+2
+select * from Tt;
+a1
+2
+select * from tT;
+a1
+2
+drop database test;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+drop database if exists test02;
+
+create database test02;
+
+use test02;
+
+drop table if exists Departments;
+
+drop table if exists Employees;
+
+create table Departments (
+DepartmentID INT PRIMARY KEY,
+DepartmentName VARCHAR(255) NOT NULL
+);
+
+create table Employees (
+EmployeeID INT PRIMARY KEY,
+FirstName VARCHAR(255) NOT NULL,
+LastName VARCHAR(255) NOT NULL,
+DepartmentID INT,
+foreign key (DepartmentID) REFERENCES Departments(DepartmentID)
+);
+
+insert into Departments (DepartmentID, DepartmentName) values
+(1, 'Human Resources'),
+(2, 'Engineering'),
+(3, 'Marketing'),
+(4, 'Sales'),
+(5, 'Finance');
+
+insert into Employees (EmployeeID, FirstName, LastName, DepartmentID) values
+(101, 'John', 'Doe', 1),
+(102, 'Jane', 'Smith', 2),
+(103, 'Alice', 'Johnson', 3),
+(104, 'Mark', 'Patterson', 4),
+(105, 'David', 'Finley', 5);
+
+drop view if exists EmployeeDepartmentView;
+
+create view EmployeeDepartmentView as
+select
+e.FirstName,
+e.LastName,
+d.DepartmentName
+from
+Employees e
+inner join
+Departments d ON e.DepartmentID = d.DepartmentID;
+
+select * from EmployeeDepartmentView;
+firstname    lastname    departmentname
+John    Doe    Human Resources
+Jane    Smith    Engineering
+Alice    Johnson    Marketing
+Mark    Patterson    Sales
+David    Finley    Finance
+drop snapshot if exists sp02_restore_lower;
+
+create snapshot sp02_restore_lower for account acc01;
+
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+drop database test02;
+
+restore account acc01 from snapshot sp02_restore_lower;
+SQL parser error: table "employees" does not exist
+use test02;
+Unknown database test02
+show tables;
+No database selected
+show create table Employees;
+No database selected
+show create table EmployeeDepartmentView;
+No database selected
+restore account acc01 from snapshot sp02_restore_lower to account acc04;
+SQL parser error: table "employees" does not exist
+use test02;
+Unknown database test02
+show tables;
+No database selected
+show create table Employees;
+No database selected
+show create table EmployeeDepartmentView;
+No database selected
+drop account if exists acc01;
+drop account if exists acc02;
+drop account if exists acc04;
+drop snapshot if exists sp01_restore_lower;
+drop snapshot if exists sp02_restore_lower;

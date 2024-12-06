@@ -1084,6 +1084,10 @@ func (ses *Session) SetConnectionID(v uint32) {
 }
 
 func (ses *Session) skipAuthForSpecialUser() bool {
+	if ses.isInternal {
+		return true
+	}
+
 	acc := ses.GetTenantInfo()
 	if acc != nil {
 		ok, _, _ := isSpecialUser(acc.GetUser())

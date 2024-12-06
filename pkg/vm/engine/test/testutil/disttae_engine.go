@@ -16,7 +16,10 @@ package testutil
 
 import (
 	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,6 +70,21 @@ type TestDisttaeEngine struct {
 	insertEntryMaxCount int
 }
 
+func setServerLevelParams(de *TestDisttaeEngine) {
+	frontend.SetPUForExternalUT("", &config.ParameterUnit{
+		SV: &config.FrontendParameters{
+			SessionTimeout: toml.Duration{
+				Duration: time.Hour,
+			},
+			CreateTxnOpTimeout: toml.Duration{
+				Duration: time.Minute * 5,
+			},
+		},
+		TxnClient:     de.txnClient,
+		StorageEngine: de.Engine,
+	})
+}
+
 func NewTestDisttaeEngine(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -109,8 +127,21 @@ func NewTestDisttaeEngine(
 		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
 	}
 
+	internalExecutorFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor("")
+	}
+	engineOpts = append(engineOpts, disttae.WithSQLExecFunc(internalExecutorFactory))
+
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", de.mp, fs, de.txnClient, hakeeper, nil, 1, engineOpts...)
+	de.Engine = disttae.New(ctx,
+		"",
+		de.mp,
+		fs,
+		de.txnClient,
+		hakeeper,
+		nil,
+		1, engineOpts...)
+
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -162,6 +193,8 @@ func NewTestDisttaeEngine(
 			nil,
 			de.Engine,
 		))
+
+	setServerLevelParams(de)
 
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
 	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)

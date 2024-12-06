@@ -44,6 +44,16 @@ func (m Timestamp) ToStdTime() time.Time {
 	return time.Unix(0, m.PhysicalTime).UTC()
 }
 
+func (m Timestamp) Compare(other Timestamp) int {
+	if m.Equal(other) {
+		return 0
+	} else if m.Less(other) {
+		return -1
+	} else {
+		return 1
+	}
+}
+
 // Equal returns a boolean value indicating whether the lhs timestamp equals
 // to the rhs timestamp.
 func (m Timestamp) Equal(rhs Timestamp) bool {

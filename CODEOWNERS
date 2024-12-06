@@ -168,6 +168,7 @@
 /pkg/sql/colexec/hashbuild @aunjgr @badboynt1
 /pkg/sql/colexec/left @aunjgr @badboynt1
 /pkg/sql/colexec/shuffle @badboynt1
+/pkg/sql/colexec/shuffleV2 @badboynt1
 /pkg/sql/colexec/shufflebuild @badboynt1
 /pkg/sql/colexec/multi_update @ouyuanning
 

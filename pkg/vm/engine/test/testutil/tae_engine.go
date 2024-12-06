@@ -131,6 +131,10 @@ func (ts *TestTxnStorage) Debug(ctx context.Context, request *txn.TxnRequest, re
 	return nil
 }
 
+func (ts *TestTxnStorage) GetRPCHandle() *rpc.Handle {
+	return ts.txnHandler
+}
+
 func NewTestTAEEngine(
 	ctx context.Context, moduleName string, t *testing.T,
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {

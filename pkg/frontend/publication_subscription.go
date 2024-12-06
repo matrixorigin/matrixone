@@ -198,7 +198,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		accountNamesStr string
 	)
 
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}
@@ -342,7 +342,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}
@@ -554,7 +554,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubName string) (err error) {
 	var sql string
 
-	accIdInfoMap, _, err := getAccounts(ctx, bh)
+	accIdInfoMap, _, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}
@@ -625,9 +625,12 @@ func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubN
 	return
 }
 
-func getAccounts(ctx context.Context, bh BackgroundExec) (idInfoMap map[int32]*pubsub.AccountInfo, nameInfoMap map[string]*pubsub.AccountInfo, err error) {
+func getAccounts(ctx context.Context, bh BackgroundExec, forUpdate bool) (idInfoMap map[int32]*pubsub.AccountInfo, nameInfoMap map[string]*pubsub.AccountInfo, err error) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := getAccountIdNamesSql
+	if forUpdate {
+		sql += " for update"
+	}
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
@@ -1037,7 +1040,7 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 		return
 	}
 
-	accIdInfoMap, _, err := getAccounts(ctx, bh)
+	accIdInfoMap, _, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}

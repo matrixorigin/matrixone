@@ -46,6 +46,7 @@ def    mo_catalog    mo_stages    BASE TABLE    Tae
 def    mo_catalog    mo_stored_procedure    BASE TABLE    Tae
 def    mo_catalog    mo_subs    BASE TABLE    Tae
 def    mo_catalog    mo_table_partitions    BASE TABLE    Tae
+def    mo_catalog    mo_table_stats_alpha    BASE TABLE    Tae
 def    mo_catalog    mo_tables    BASE TABLE    Tae
 def    mo_catalog    mo_upgrade    BASE TABLE    Tae
 def    mo_catalog    mo_upgrade_tenant    BASE TABLE    Tae

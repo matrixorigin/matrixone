@@ -678,8 +678,8 @@ func (e *Engine) LazyLoadLatestCkp(
 				tbl.tableName,
 				tbl.db.databaseId,
 				tbl.db.databaseName,
-				tbl.getTxn().engine.mp,
-				tbl.getTxn().engine.fs)
+				e.mp,
+				e.fs)
 			if err != nil {
 				return err
 			}

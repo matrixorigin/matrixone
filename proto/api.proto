@@ -45,6 +45,7 @@ enum OpCode {
     OpReader = 2013;
     OpGetLatestCheckpoint = 2014;
     OpSnapshotRead = 2015;
+    OpGetChangedTableList = 2016;
 }
 
 // TNPingRequest ping request

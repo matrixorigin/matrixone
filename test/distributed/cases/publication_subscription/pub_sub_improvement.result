@@ -52,7 +52,7 @@ update table01 set col1 = 100 where col2 = 2413242;
 internal error: cannot insert/update/delete from public table
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-table01    Tae    Dynamic    2    0    104    0    0    NULL    0    2024-07-23 21:42:41    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+table01    Tae    Dynamic    2    0    128    0    0    NULL    0    2024-12-02 16:06:32    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 drop table table01;
 internal error: can not drop subscription table table01
 show subscriptions;
@@ -161,7 +161,7 @@ col1    col2
 a    data warehouse
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-table03    Tae    Dynamic    2    0    160    0    0    NULL    0    2024-07-23 21:42:42    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+table03    Tae    Dynamic    2    0    184    0    0    NULL    0    2024-12-02 16:06:34    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 drop publication publication02;
 drop database if exists database03;
 create database database03;
@@ -194,7 +194,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-table01    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-07-23 21:42:42    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+table01    Tae    Dynamic    3    0    144    0    0    NULL    0    2024-12-02 16:06:34    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 publication02    sys    null    null    null    null    sub_database02    2024-08-09 15:53:33    2
