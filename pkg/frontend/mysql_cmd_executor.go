@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -3134,6 +3135,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
+	_, _, _ = fault.TriggerFault("exec_request_panic")
+
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
 
