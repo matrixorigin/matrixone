@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -3176,15 +3177,18 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)
 			if !ok {
-				err = moerr.ConvertPanicError(execCtx.reqCtx, e)
+				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
 			} else {
+				err = errors.Join(err, moe)
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
 			}
 			// log the query's statement and error info.
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
+	_, _, _ = fault.TriggerFault("exec_request_panic")
+
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
 
