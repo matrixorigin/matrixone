@@ -236,6 +236,7 @@ type ComputationWrapper interface {
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
 	ParamVals() []any
+	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
 type ColumnInfo interface {

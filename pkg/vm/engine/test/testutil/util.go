@@ -17,14 +17,17 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"golang.org/x/exp/rand"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -54,16 +58,6 @@ func MakeDefaultTestPath(module string, t *testing.T) string {
 	err := os.MkdirAll(path, os.FileMode(0755))
 	assert.Nil(t, err)
 	return path
-}
-
-func RemoveDefaultTestPath(module string, t *testing.T) {
-	path := GetDefaultTestPath(module, t)
-	os.RemoveAll(path)
-}
-
-func InitTestEnv(module string, t *testing.T) string {
-	RemoveDefaultTestPath(module, t)
-	return MakeDefaultTestPath(module, t)
 }
 
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
@@ -88,7 +82,7 @@ func CreateEngines(
 	ctx context.Context,
 	opts TestOptions,
 	t *testing.T,
-	options ...TestDisttaeEngineOptions,
+	funcOpts ...TestDisttaeEngineOptions,
 ) (
 	disttaeEngine *TestDisttaeEngine,
 	taeEngine *TestTxnStorage,
@@ -104,13 +98,27 @@ func CreateEngines(
 
 	rpcAgent = NewMockLogtailAgent()
 
-	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, opts.TaeEngineOptions)
+	rootDir := GetDefaultTestPath("engine_test", t)
+
+	s3Op, err := getS3SharedFileServiceOption(ctx, rootDir)
+	require.NoError(t, err)
+
+	if opts.TaeEngineOptions == nil {
+		opts.TaeEngineOptions = &options.Options{}
+	}
+
+	opts.TaeEngineOptions.Fs = s3Op.Fs
+
+	taeDir := path.Join(rootDir, "tae")
+
+	taeEngine, err = NewTestTAEEngine(ctx, taeDir, t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, options...)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, funcOpts...)
 	require.Nil(t, err)
 
 	mp = disttaeEngine.mp
+	disttaeEngine.rootDir = rootDir
 
 	return
 }
@@ -442,4 +450,27 @@ func EndThisStatement(
 	txn.GetWorkspace().UpdateSnapshotWriteOffset()
 
 	return
+}
+
+func MakeTxnHeartbeatMonkeyJob(
+	e *TestTxnStorage,
+	opInterval time.Duration,
+) *tasks.CancelableJob {
+	taeDB := e.GetDB()
+	return tasks.NewCancelableJob(func(ctx context.Context) {
+		ticker := time.NewTicker(opInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if v := rand.Intn(100); v > 50 {
+					taeDB.StopTxnHeartbeat()
+				} else {
+					taeDB.ResetTxnHeartbeat()
+				}
+			}
+		}
+	})
 }
