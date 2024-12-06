@@ -608,7 +608,7 @@ func TestGetExprValue(t *testing.T) {
 		relData := &memoryengine.MemRelationData{
 			Shards: ranges,
 		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -1035,7 +1035,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
+			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, ""); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
 				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1501,6 +1501,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))

@@ -935,14 +935,16 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 			rowValues = append(rowValues, dbId)
 			rowValues = append(rowValues, tableId)
 		} else if idx == mSqlIdx3 {
-			count := uint64(0)
+			tableIdStr := ""
+			watermark := ""
 			err = rows.Scan(
-				&count,
+				&tableIdStr,
+				&watermark,
 			)
 			if err != nil {
 				panic(err)
 			}
-			rowValues = append(rowValues, count)
+			rowValues = append(rowValues, tableIdStr, watermark)
 		} else if idx == mSqlIdx5 {
 			watermark := ""
 			err = rows.Scan(
@@ -1171,17 +1173,16 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	),
 	)
 
-	sql3 := "select count.*1.* from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000'"
-	mock.ExpectQuery(sql3).WillReturnRows(sqlmock.NewRows(
-		[]string{
-			"count",
-		},
-	).AddRow(
-		uint64(0),
-	))
+	sql3 := "select table_id, watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000'"
+	mock.ExpectQuery(sql3).WillReturnRows(
+		sqlmock.NewRows([]string{"table_id", "watermark"}).
+			AddRow("1001_1", "0-0"))
 
 	sql4 := "insert into mo_catalog.mo_cdc_watermark values .*0, '00000000-0000-0000-0000-000000000000', '1001_0', 'db1', 't1', '0-0'.*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	sql41 := "delete from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_1'"
+	mock.ExpectExec(sql41).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql5 := "select watermark from mo_catalog.mo_cdc_watermark where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000' and table_id = '1001_0'"
 	mock.ExpectQuery(sql5).WillReturnRows(sqlmock.NewRows(
@@ -1207,6 +1208,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		assert.NoError(t, err)
 		mSql4, err := regexp.MatchString(sql4, sql)
 		assert.NoError(t, err)
+		mSql41, err := regexp.MatchString(sql41, sql)
+		assert.NoError(t, err)
 		mSql5, err := regexp.MatchString(sql5, sql)
 		assert.NoError(t, err)
 		mSql6, err := regexp.MatchString(sql6, sql)
@@ -1220,6 +1223,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			return mSqlIdx3
 		} else if mSql4 {
 			return mSqlIdx4
+		} else if mSql41 {
+			return mSqlIdx41
 		} else if mSql5 {
 			return mSqlIdx5
 		} else if mSql6 {
@@ -2574,94 +2579,22 @@ func TestCdcTask_ResetWatermarkForTable(t *testing.T) {
 }
 
 func TestCdcTask_Resume(t *testing.T) {
-	type fields struct {
-		logger               *zap.Logger
-		ie                   ie.InternalExecutor
-		cnUUID               string
-		cnTxnClient          client.TxnClient
-		cnEngine             engine.Engine
-		fileService          fileservice.FileService
-		cdcTask              *task.CreateCdcDetails
-		mp                   *mpool.MPool
-		packerPool           *fileservice.Pool[*types.Packer]
-		sinkUri              cdc2.UriInfo
-		tables               cdc2.PatternTuples
-		filters              cdc2.PatternTuples
-		startTs              types.TS
-		noFull               string
-		activeRoutine        *cdc2.ActiveRoutine
-		sunkWatermarkUpdater *cdc2.WatermarkUpdater
-	}
-
-	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+	cdc := &CdcTask{
+		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
+		holdCh: make(chan int, 1),
+		startFunc: func(_ context.Context) error {
 			return nil
-		})
-	defer stub1.Reset()
-
-	tests := []struct {
-		name    string
-		fields  fields
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			name: "t1",
-			fields: fields{
-				activeRoutine: cdc2.NewCdcActiveRoutine(),
-				cdcTask: &task.CreateCdcDetails{
-					TaskName: "task1",
-				},
-			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cdc := &CdcTask{
-				logger:               tt.fields.logger,
-				ie:                   tt.fields.ie,
-				cnUUID:               tt.fields.cnUUID,
-				cnTxnClient:          tt.fields.cnTxnClient,
-				cnEngine:             tt.fields.cnEngine,
-				fileService:          tt.fields.fileService,
-				cdcTask:              tt.fields.cdcTask,
-				mp:                   tt.fields.mp,
-				packerPool:           tt.fields.packerPool,
-				sinkUri:              tt.fields.sinkUri,
-				tables:               tt.fields.tables,
-				filters:              tt.fields.filters,
-				startTs:              tt.fields.startTs,
-				noFull:               tt.fields.noFull,
-				activeRoutine:        tt.fields.activeRoutine,
-				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
-				holdCh:               make(chan int, 1),
-			}
 
-			err := cdc.Resume()
-			assert.NoErrorf(t, err, "Resume()")
-		})
-	}
+	err := cdc.Resume()
+	assert.NoErrorf(t, err, "Resume()")
 }
 
 func TestCdcTask_Restart(t *testing.T) {
-	type fields struct {
-		logger               *zap.Logger
-		ie                   ie.InternalExecutor
-		cnUUID               string
-		cnTxnClient          client.TxnClient
-		cnEngine             engine.Engine
-		fileService          fileservice.FileService
-		cdcTask              *task.CreateCdcDetails
-		mp                   *mpool.MPool
-		packerPool           *fileservice.Pool[*types.Packer]
-		sinkUri              cdc2.UriInfo
-		tables               cdc2.PatternTuples
-		filters              cdc2.PatternTuples
-		startTs              types.TS
-		noFull               string
-		activeRoutine        *cdc2.ActiveRoutine
-		sunkWatermarkUpdater *cdc2.WatermarkUpdater
-	}
-
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
@@ -2671,67 +2604,39 @@ func TestCdcTask_Restart(t *testing.T) {
 		db: db,
 	}
 
-	stub1 := gostub.Stub(&Start,
-		func(_ context.Context, _ *CdcTask, _ bool) error {
+	cdc := &CdcTask{
+		activeRoutine: cdc2.NewCdcActiveRoutine(),
+		sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
+			sysAccountID,
+			"taskID-0",
+			tie,
+		),
+		cdcTask: &task.CreateCdcDetails{
+			TaskName: "task1",
+		},
+		holdCh: make(chan int, 1),
+		startFunc: func(_ context.Context) error {
 			return nil
-		})
-	defer stub1.Reset()
-
-	tests := []struct {
-		name    string
-		fields  fields
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			name: "t1",
-			fields: fields{
-				activeRoutine: cdc2.NewCdcActiveRoutine(),
-				sunkWatermarkUpdater: cdc2.NewWatermarkUpdater(
-					sysAccountID,
-					"taskID-0",
-					tie,
-				),
-				cdcTask: &task.CreateCdcDetails{
-					TaskName: "task1",
-				},
-			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cdc := &CdcTask{
-				logger:               tt.fields.logger,
-				ie:                   tt.fields.ie,
-				cnUUID:               tt.fields.cnUUID,
-				cnTxnClient:          tt.fields.cnTxnClient,
-				cnEngine:             tt.fields.cnEngine,
-				fileService:          tt.fields.fileService,
-				cdcTask:              tt.fields.cdcTask,
-				mp:                   tt.fields.mp,
-				packerPool:           tt.fields.packerPool,
-				sinkUri:              tt.fields.sinkUri,
-				tables:               tt.fields.tables,
-				filters:              tt.fields.filters,
-				startTs:              tt.fields.startTs,
-				noFull:               tt.fields.noFull,
-				activeRoutine:        tt.fields.activeRoutine,
-				sunkWatermarkUpdater: tt.fields.sunkWatermarkUpdater,
-				holdCh:               make(chan int, 1),
-			}
 
-			err = cdc.Restart()
-			assert.NoErrorf(t, err, "Restart()")
-		})
-	}
+	err = cdc.Restart()
+	assert.NoErrorf(t, err, "Restart()")
 }
 
 func TestCdcTask_Pause(t *testing.T) {
+	holdCh := make(chan int, 1)
+	go func() {
+		<-holdCh
+	}()
+
 	cdc := &CdcTask{
 		activeRoutine: cdc2.NewCdcActiveRoutine(),
 		cdcTask: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		isRunning: true,
+		holdCh:    holdCh,
 	}
 	err := cdc.Pause()
 	assert.NoErrorf(t, err, "Pause()")

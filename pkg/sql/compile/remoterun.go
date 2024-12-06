@@ -83,7 +83,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -180,20 +179,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		// only encode the first one.
 		p.Qry = s.Plan
 	}
-	var data []byte
-	if s.NodeInfo.Data != nil {
-		if data, err = s.NodeInfo.Data.MarshalBinary(); err != nil {
-			return nil, -1, err
-		}
-	}
+
 	p.Node = &pipeline.NodeInfo{
-		Id:               s.NodeInfo.Id,
-		Addr:             s.NodeInfo.Addr,
-		Mcpu:             int32(s.NodeInfo.Mcpu),
-		Payload:          string(data),
-		NeedExpandRanges: s.NodeInfo.NeedExpandRanges,
-		CnCnt:            s.NodeInfo.CNCNT,
-		CnIdx:            s.NodeInfo.CNIDX,
+		Id:    s.NodeInfo.Id,
+		Addr:  s.NodeInfo.Addr,
+		Mcpu:  int32(s.NodeInfo.Mcpu),
+		CnCnt: s.NodeInfo.CNCNT,
+		CnIdx: s.NodeInfo.CNIDX,
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -338,20 +330,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.NeedExpandRanges = p.Node.NeedExpandRanges
 		s.NodeInfo.CNCNT = p.Node.CnCnt
 		s.NodeInfo.CNIDX = p.Node.CnIdx
-
-		bs := []byte(p.Node.Payload)
-		var relData engine.RelData
-		if len(bs) > 0 {
-			rd, err := engine_util.UnmarshalRelationData(bs)
-			if err != nil {
-				return nil, err
-			}
-			relData = rd
-		}
-		s.NodeInfo.Data = relData
 	}
 	s.Proc = proc.NewNoContextChildProcWithChannel(int(p.ChildrenCount), p.ChannelBufferSize, p.NilBatchCnt)
 	{
@@ -809,7 +789,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
 	case *dedupjoin.DedupJoin:
+		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
+			RelList:                relList,
+			ColList:                colList,
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
@@ -1341,6 +1324,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.DedupJoin:
 		arg := dedupjoin.NewArgument()
 		t := opr.GetDedupJoin()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
+		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.IsShuffle = t.IsShuffle
@@ -1349,8 +1335,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
-		arg.LeftTypes = convertToTypes(t.LeftTypes)
-		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
 		op = arg

@@ -24,7 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -133,4 +136,62 @@ func TestIeResult(t *testing.T) {
 	v, e := result.Value(context.TODO(), 0, 0)
 	require.NoError(t, e)
 	require.Equal(t, 42, v.(int))
+}
+
+func Test_internalProtocol_Write(t *testing.T) {
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	// Mock autoIncrCaches
+	setAicm("", &defines.AutoIncrCacheManager{})
+
+	executorVar := NewInternalExecutor("")
+	ip := executorVar.proto
+	assert.True(t, ip.IsEstablished())
+	ip.stashResult = true
+	ip.SetEstablished()
+	ip.Close()
+	ip.ResetStatistics()
+	_ = ip.ConnectionID()
+	ctx := context.TODO()
+	assert.Nil(t, ip.WriteColumnDef(ctx, nil, 1))
+	assert.Nil(t, ip.WriteLengthEncodedNumber(1))
+	assert.Nil(t, ip.WriteEOFIF(0, 1))
+	assert.Nil(t, ip.WriteOK(1, 1, 0, 0, ""))
+	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
+
+	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	col1 := &MysqlColumn{}
+	col1.SetName("col1")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+	ses.mrs = &MysqlResultSet{}
+	ses.mrs.AddColumn(col1)
+
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+	}
+
+	mockBatch := func(vals []int64) *batch.Batch {
+		bat := batch.New([]string{"col1"})
+		vecs := make([]*vector.Vector, 1)
+		vecs[0] = testutil.MakeInt64Vector(vals, nil)
+		bat.Vecs = vecs
+		bat.SetRowCount(len(vals))
+		return bat
+	}
+	batch1 := mockBatch([]int64{100})
+	batch2 := mockBatch([]int64{200, 201})
+
+	// ======================= main ===================
+	ip.Reset(ses)
+	err := ip.Write(execCtx, nil, batch1)
+	require.NoError(t, err)
+	require.Equal(t, 1, int(ip.result.affectedRows))
+	require.Equal(t, 1, len(ip.result.resultSet.Data))
+	require.Equal(t, [][]any{{int64(100)} /*colum1, rows: 1*/}, ip.result.resultSet.Data)
+
+	err = ip.Write(execCtx, nil, batch2)
+	require.NoError(t, err)
+	require.Equal(t, 3, int(ip.result.affectedRows))
+	require.Equal(t, 3, len(ip.result.resultSet.Data))
+	require.Equal(t, [][]any{{int64(100)}, {int64(200)}, {int64(201)} /*column1, rows: 3*/}, ip.result.resultSet.Data)
 }

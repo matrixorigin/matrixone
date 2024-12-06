@@ -131,12 +131,16 @@ func (ts *TestTxnStorage) Debug(ctx context.Context, request *txn.TxnRequest, re
 	return nil
 }
 
+func (ts *TestTxnStorage) GetRPCHandle() *rpc.Handle {
+	return ts.txnHandler
+}
+
 func NewTestTAEEngine(
-	ctx context.Context, moduleName string, t *testing.T,
+	ctx context.Context, taeDir string, t *testing.T,
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
 	blockio.Start("")
-	handle := InitTxnHandle(ctx, moduleName, t, opts)
+	handle := InitTxnHandle(ctx, taeDir, opts)
 	logtailServer, err := NewMockLogtailServer(
 		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
 	if err != nil {
@@ -160,9 +164,8 @@ func NewTestTAEEngine(
 	return tc, nil
 }
 
-func InitTxnHandle(ctx context.Context, moduleName string, t *testing.T, opts *options.Options) *rpc.Handle {
-	dir := InitTestEnv(moduleName, t)
-	handle := rpc.NewTAEHandle(ctx, dir, opts)
+func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) *rpc.Handle {
+	handle := rpc.NewTAEHandle(ctx, taeDir, opts)
 	handle.GetDB().DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			minTS := handle.GetDB().TxnMgr.MinTSForTest()

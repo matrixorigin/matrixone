@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -242,15 +243,35 @@ func (a *AliyunSDK) Write(
 ) {
 	defer wrapSizeMismatchErr(&err)
 
-	err = a.putObject(
-		ctx,
-		key,
-		r,
-		sizeHint,
-		expire,
-	)
-	if err != nil {
-		return err
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (int, error) {
+			return 0, a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return

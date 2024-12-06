@@ -29,6 +29,9 @@ const (
 	LocalFileServiceName   = "LOCAL"
 	ETLFileServiceName     = "ETL"
 	StandbyFileServiceName = "STANDBY"
+
+	// sub fileservices
+	SpillFileServiceName = "__spill"
 )
 
 const (

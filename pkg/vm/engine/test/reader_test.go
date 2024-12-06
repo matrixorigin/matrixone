@@ -85,11 +85,13 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 	defer rmFault()
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	hbMonkeyJob := testutil.MakeTxnHeartbeatMonkeyJob(
+		taeEngine, time.Millisecond*10,
+	)
+	hbMonkeyJob.Start()
 	defer func() {
+		hbMonkeyJob.Stop()
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
 		rpcAgent.Close()
@@ -196,10 +198,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
@@ -260,7 +259,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 
 func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -292,12 +291,10 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
 
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -418,7 +415,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 func Test_ShardingHandler(t *testing.T) {
 	var (
-		//err          error
+		err error
 		//mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -450,12 +447,10 @@ func Test_ShardingHandler(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
 
 		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -617,7 +612,7 @@ func Test_ShardingHandler(t *testing.T) {
 
 func Test_ShardingRemoteReader(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -649,12 +644,9 @@ func Test_ShardingRemoteReader(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -806,7 +798,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				TableName:    tableName,
 			},
 		}
-		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
+		relData, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 		require.NoError(t, err)
 		//TODO:: attach tombstones.
 		//tombstones, err := rel.CollectTombstones(
@@ -927,7 +919,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 
 func Test_ShardingTableDelegate(t *testing.T) {
 	var (
-		//err          error
+		err error
 		//mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -953,12 +945,9 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -1071,7 +1060,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	shardSvr := testutil.MockShardService()
 	delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 
-	relData, err := delegate.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
+	relData, err := delegate.Ranges(ctx, engine.DefaultRangesParam)
 	require.NoError(t, err)
 
 	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
@@ -1098,7 +1087,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 
 func Test_ShardingLocalReader(t *testing.T) {
 	var (
-		//err          error
+		err          error
 		mp           *mpool.MPool
 		accountId    = catalog.System_Account
 		tableName    = "test_reader_table"
@@ -1124,12 +1113,9 @@ func Test_ShardingLocalReader(t *testing.T) {
 	schema.Name = tableName
 
 	{
-		opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-		require.NoError(t, err)
-
 		disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
 			ctx,
-			testutil.TestOptions{TaeEngineOptions: opt},
+			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineWorkspaceThreshold(mpool.MB*2),
 			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
@@ -1239,7 +1225,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		relData, err := rel.Ranges(ctx, nil, 2, 0, engine.Policy_CollectAllData)
+		relData, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 		require.NoError(t, err)
 
 		shardSvr := testutil.MockShardService()

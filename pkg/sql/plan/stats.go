@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,20 +42,12 @@ import (
 
 const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
+const BlockThresholdForOneCN = 512
+const costThresholdForOneCN = 160000
 const costThresholdForTpQuery = 240000
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
-
-func BlockThresholdForOneCN(ncpu int) int {
-	if ncpu == 0 {
-		ncpu = system.GoMaxProcs()
-	}
-	return ncpu * blockThresholdForTpQuery
-}
-func costThresholdForOneCN() int {
-	return system.GoMaxProcs() * costThresholdForTpQuery
-}
 
 type ExecType int
 
@@ -880,50 +873,64 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_LEFT:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_RIGHT:
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_DEDUP:
 			node.Stats.Outcnt = rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_ANTI:
 			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_L2: //L2 join is very time-consuming, increase the cost to get more dop
+			node.Stats.Outcnt = leftStats.Outcnt
+			node.Stats.Cost = (leftStats.Cost + rightStats.Cost) * 8
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
+			node.Stats.BlockNum = leftStats.BlockNum * 8
 		}
-		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {
@@ -1341,8 +1348,21 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
 	return stats
+}
+
+func forceScanNodeStatsTP(nodeID int32, builder *QueryBuilder) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats.Outcnt > 1000 {
+		stats.Outcnt = 1000
+	}
+	if stats.Cost > 1000 {
+		stats.Cost = 1000
+	}
+	if stats.BlockNum > 16 {
+		stats.BlockNum = 16
+	}
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
@@ -1378,10 +1398,10 @@ func DefaultHugeStats() *plan.Stats {
 func DefaultBigStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 10000000
-	stats.Cost = float64(costThresholdForOneCN())
-	stats.Outcnt = float64(costThresholdForOneCN())
+	stats.Cost = float64(costThresholdForOneCN + 1)
+	stats.Outcnt = float64(costThresholdForOneCN + 1)
 	stats.Selectivity = 1
-	stats.BlockNum = int32(BlockThresholdForOneCN(0))
+	stats.BlockNum = int32(BlockThresholdForOneCN + 1)
 	stats.Rowsize = 1000
 	stats.HashmapStats = &plan.HashMapStats{}
 	return stats
@@ -1545,7 +1565,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool, ncpu int) Exe
 			ret = ExecTypeAP_ONECN
 		}
 		stats := node.Stats
-		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN(ncpu)) || stats.Cost > float64(costThresholdForOneCN()) {
+		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else {
@@ -1652,7 +1672,7 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr
 		return sel
 	}
 	overlap := getOverlap(s, colname)
-	if overlap < overlapThreshold/2 {
+	if overlap < overlapThreshold/3 {
 		//very good overlap
 		return sel
 	}

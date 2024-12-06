@@ -2709,7 +2709,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				PrimaryColTyp:      pkTyp,
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
-				LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 			}
 			if tableDef.Partition != nil {
 				partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
@@ -4190,7 +4189,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, ctx.lower)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()
