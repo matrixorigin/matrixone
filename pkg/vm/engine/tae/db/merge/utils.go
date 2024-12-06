@@ -210,7 +210,6 @@ func newUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
 				MinOsizeQuailifed: c.ObjectMinOsize,
 				MaxObjOnerun:      uint32(c.MergeMaxOneRun),
 				MaxOsizeMergedObj: c.MaxOsizeMergedObj,
-				MinCnMergeSize:    c.MinCNMergeSize,
 				Hints:             c.MergeHints,
 			},
 		},

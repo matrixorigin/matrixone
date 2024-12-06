@@ -32,7 +32,6 @@ var (
 		MergeMaxOneRun:    common.DefaultMaxMergeObjN,
 		MaxOsizeMergedObj: common.DefaultMaxOsizeObjMB * common.Const1MBytes,
 		ObjectMinOsize:    common.DefaultMinOsizeQualifiedMB * common.Const1MBytes,
-		MinCNMergeSize:    common.DefaultMinCNMergeSize * common.Const1MBytes,
 		TombstoneLifetime: 30 * time.Minute,
 	}
 )
@@ -44,7 +43,6 @@ type BasicPolicyConfig struct {
 	MergeMaxOneRun    int
 	ObjectMinOsize    uint32
 	MaxOsizeMergedObj uint32
-	MinCNMergeSize    uint64
 	FromUser          bool
 	MergeHints        []api.MergeHint
 
@@ -53,11 +51,10 @@ type BasicPolicyConfig struct {
 
 func (c *BasicPolicyConfig) String() string {
 	return fmt.Sprintf(
-		"minOsizeObj:%v, maxOneRun:%v, maxOsizeMergedObj: %v, offloadToCNSize:%v, hints: %v",
+		"minOsizeObj:%v, maxOneRun:%v, maxOsizeMergedObj: %v, hints: %v",
 		common.HumanReadableBytes(int(c.ObjectMinOsize)),
 		c.MergeMaxOneRun,
 		common.HumanReadableBytes(int(c.MaxOsizeMergedObj)),
-		common.HumanReadableBytes(int(c.MinCNMergeSize)),
 		c.MergeHints,
 	)
 }
@@ -84,11 +81,6 @@ func (o *customConfigProvider) getConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 			p = defaultBasicConfig
 			o.configs[tbl.ID] = p
 		} else {
-			// compatible with old version
-			cnSize := extra.MinCnMergeSize
-			if cnSize == 0 {
-				cnSize = common.DefaultMinCNMergeSize * common.Const1MBytes
-			}
 			// compatible codes: remap old rows -> default bytes size
 			minOsize := extra.MinOsizeQuailifed
 			if minOsize < 80*8192 {
@@ -102,7 +94,6 @@ func (o *customConfigProvider) getConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 				ObjectMinOsize:    minOsize,
 				MergeMaxOneRun:    int(extra.MaxObjOnerun),
 				MaxOsizeMergedObj: maxOsize,
-				MinCNMergeSize:    cnSize,
 				FromUser:          true,
 				MergeHints:        extra.Hints,
 				TombstoneLifetime: 30 * time.Minute,

@@ -133,7 +133,6 @@ func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg
 	cloned.Extra.MaxOsizeMergedObj = cfg.MaxOsizeMergedObj
 	cloned.Extra.MinOsizeQuailifed = cfg.ObjectMinOsize
 	cloned.Extra.MaxObjOnerun = uint32(cfg.MergeMaxOneRun)
-	cloned.Extra.MinCnMergeSize = cfg.MinCNMergeSize
 	cloned.Extra.Hints = cfg.MergeHints
 	err = moTables.UpdateByFilter(ctx, handle.NewEQFilter(pk), uint16(pkgcatalog.MO_TABLES_EXTRA_INFO_IDX), cloned.MustGetExtraBytes(), false)
 	if err != nil {
@@ -174,7 +173,6 @@ func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
 			MaxOsizeMergedObj: common.RuntimeMaxObjOsize.Load(),
 			MergeMaxOneRun:    int(common.RuntimeMaxMergeObjN.Load()),
-			MinCNMergeSize:    common.RuntimeMinCNMergeSize.Load(),
 		}
 	}
 	return r

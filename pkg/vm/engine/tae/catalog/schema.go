@@ -178,7 +178,6 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.MaxOsizeMergedObj = p.GetMaxOsizeMergedObj()
 		s.Extra.MinOsizeQuailifed = p.GetMinOsizeQuailifed()
 		s.Extra.MaxObjOnerun = p.GetMaxObjOnerun()
-		s.Extra.MinCnMergeSize = p.GetMinCnMergeSize()
 		s.Extra.Hints = p.GetHints()
 	case apipb.AlterKind_UpdateConstraint:
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
