@@ -35,7 +35,19 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 		return -1, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
+	var onDupAction plan.Node_OnDuplicateAction
+	switch stmt.DuplicateOpt {
+	case tree.LOAD_DUPLICATE_CHECKING:
+		onDupAction = plan.Node_FAIL
+	case tree.LOAD_DUPLICATE_NOCHECKING:
+		onDupAction = plan.Node_NOCHECKING
+	case tree.LOAD_DUPLICATE_IGNORE:
+		onDupAction = plan.Node_IGNORE
+	case tree.LOAD_DUPLICATE_REPLACE:
+		onDupAction = plan.Node_FAIL // todo, when support replace, modify here
+	}
+
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, onDupAction, nil)
 }
 
 func (builder *QueryBuilder) bindExternalScan(
