@@ -177,7 +177,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			if err != ErrDebugReplay {
 				panic(err)
 			}
-			err = nil
 		}
 		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
 		if sarg != "" {
@@ -188,7 +187,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			if err != ErrDebugReplay {
 				panic(err)
 			}
-			err = nil
 		}
 		if !blk.IsActive() {
 			continue
@@ -205,7 +203,6 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 			if err != ErrDebugReplay {
 				panic(err)
 			}
-			err = nil
 		}
 	}
 }
@@ -232,7 +229,6 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 		if err != ErrDebugReplay {
 			panic(err)
 		}
-		err = nil
 	}
 	obj, err := database.GetObjectEntryByID(id, cmd.GetAppendNode().IsTombstone())
 	if sarg != "" {
@@ -243,7 +239,6 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 		if err != ErrDebugReplay {
 			panic(err)
 		}
-		err = nil
 	}
 	if !obj.IsActive() {
 		return
@@ -259,6 +254,5 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 		if err != ErrDebugReplay {
 			panic(err)
 		}
-		err = nil
 	}
 }
