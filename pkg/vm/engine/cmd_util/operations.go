@@ -382,3 +382,29 @@ func (s *SnapshotReadResp) MarshalBinary() ([]byte, error) {
 func (s *SnapshotReadResp) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }
+
+type GetChangedTableListReq struct {
+	From        []*timestamp.Timestamp
+	AccIds      []uint64
+	DatabaseIds []uint64
+	TableIds    []uint64
+	Extra       []byte
+}
+
+type GetChangedTableListResp struct {
+	Newest      *timestamp.Timestamp
+	AccIds      []uint64
+	DatabaseIds []uint64
+	TableIds    []uint64
+	Extra       []byte
+}
+
+func (tlreq *GetChangedTableListReq) MarshalBinary() ([]byte, error) { return tlreq.Marshal() }
+func (tlreq *GetChangedTableListReq) UnmarshalBinary(data []byte) error {
+	return tlreq.Unmarshal(data)
+}
+
+func (tlresp *GetChangedTableListResp) MarshalBinary() ([]byte, error) { return tlresp.Marshal() }
+func (tlresp *GetChangedTableListResp) UnmarshalBinary(data []byte) error {
+	return tlresp.Unmarshal(data)
+}

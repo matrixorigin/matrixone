@@ -47,8 +47,26 @@ var (
 	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
 
+type DBTxnMode uint32
+
+const (
+	DBTxnMode_Write DBTxnMode = iota
+	DBTxnMode_Replay
+)
+
+type DBOption func(*DB)
+
+func WithTxnMode(mode DBTxnMode) DBOption {
+	return func(db *DB) {
+		db.TxnMode.Store(uint32(mode))
+	}
+}
+
 type DB struct {
-	Dir  string
+	Dir        string
+	TxnMode    atomic.Uint32
+	Controller *Controller
+
 	Opts *options.Options
 
 	usageMemo *logtail.TNUsageMemo
@@ -73,6 +91,18 @@ type DB struct {
 	DBLocker io.Closer
 
 	Closed *atomic.Value
+}
+
+func (db *DB) GetTxnMode() DBTxnMode {
+	return DBTxnMode(db.TxnMode.Load())
+}
+
+func (db *DB) SwitchTxnMode(
+	ctx context.Context,
+	iarg int,
+	sarg string,
+) error {
+	return db.Controller.SwitchTxnMode(ctx, iarg, sarg)
 }
 
 func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {
@@ -239,6 +269,7 @@ func (db *DB) Close() error {
 		panic(err)
 	}
 	db.Closed.Store(ErrClosed)
+	db.Controller.Stop()
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
