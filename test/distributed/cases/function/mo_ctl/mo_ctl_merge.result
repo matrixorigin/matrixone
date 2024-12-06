@@ -242,4 +242,4 @@ rows_cnt
 2
 select mo_ctl('dn', 'inspect', 'policy');
 mo_ctl(dn, inspect, policy)
-\nmsg: (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\ngeneral setting has been refreshed
+\nmsg: (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]\n\ngeneral setting has been refreshed

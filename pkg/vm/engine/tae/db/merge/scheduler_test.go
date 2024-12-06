@@ -16,9 +16,11 @@ package merge
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -28,10 +30,15 @@ import (
 )
 
 func TestStopStartMerge(t *testing.T) {
+	memStorage := taskservice.NewMemTaskStorage()
+	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
+	})
+
 	scheduler := Scheduler{
 		executor: newMergeExecutor(&dbutils.Runtime{
 			LockMergeService: dbutils.NewLockMergeService(),
-		}, nil),
+		}, cnScheduler),
 	}
 
 	lockService := scheduler.executor.rt.LockMergeService
@@ -75,6 +82,8 @@ func TestStopStartMerge(t *testing.T) {
 
 	require.Error(t, scheduler.onTable(tblEntry1))
 	require.Error(t, scheduler.onTable(tblEntry2))
+
+	require.Empty(t, scheduler.CNActiveObjectsString())
 
 	scheduler.StartMerge(tblEntry1.GetID(), false)
 	require.Equal(t, 1, len(lockService.LockedInfos()))
