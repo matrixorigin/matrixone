@@ -10494,6 +10494,27 @@ func TestDedup5(t *testing.T) {
 	assert.NoError(t, insertTxn.Commit(ctx))
 }
 
+func TestReplayDebugLog(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	tae.CreateRelAndAppend(bat, true)
+
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug")
+	defer fault.RemoveFaultPoint(ctx, "replay debug log")
+
+	tae.Restart(ctx)
+}
+
 func Test_BasicTxnModeSwitch(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
