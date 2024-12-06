@@ -279,7 +279,7 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 			}
 		} else {
 			if err := s.mysql.Send(ctx, ar, sqlBuf); err != nil {
-				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v", s.dbTblInfo, err)
+				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
 				// record error
 				s.err.Store(err)
 			}
@@ -683,7 +683,7 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) 
 		}
 
 		if err != nil {
-			logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[:min(len(sqlBuf), sqlPrintLen)])
+			logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
 		}
 		//logutil.Errorf("----cdc mysqlSink send sql----, success, sql: %s", sql)
 		return

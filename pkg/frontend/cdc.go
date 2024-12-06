@@ -981,7 +981,7 @@ func RegisterCdcExecutor(
 		if err = attachToTask(ctx, T.GetID(), cdc); err != nil {
 			return err
 		}
-		return cdc.Start(ctx, true)
+		return cdc.Start(ctx)
 	}
 }
 
@@ -1011,6 +1011,9 @@ type CdcTask struct {
 	sunkWatermarkUpdater *cdc2.WatermarkUpdater
 	isRunning            bool
 	holdCh               chan int
+
+	// start wrapper, for ut
+	startFunc func(ctx context.Context) error
 }
 
 func NewCdcTask(
@@ -1023,7 +1026,7 @@ func NewCdcTask(
 	cnEngine engine.Engine,
 	cdcMp *mpool.MPool,
 ) *CdcTask {
-	return &CdcTask{
+	task := &CdcTask{
 		logger:      logger,
 		ie:          ie,
 		cdcTask:     cdcTask,
@@ -1045,9 +1048,11 @@ func NewCdcTask(
 			},
 		),
 	}
+	task.startFunc = task.Start
+	return task
 }
 
-func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
+func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	logutil.Infof("cdc task %s start on cn %s", cdc.cdcTask.TaskName, cdc.cnUUID)
 
 	defer func() {
@@ -1110,21 +1115,15 @@ func (cdc *CdcTask) Start(rootCtx context.Context, firstTime bool) (err error) {
 		logutil.Errorf("cdc task %s update err msg failed, err: %v", cdc.cdcTask.TaskName, err)
 	}
 
-	if firstTime {
-		// hold
-		cdc.holdCh = make(chan int, 1)
-		select {
-		case <-ctx.Done():
-			break
-		case <-cdc.holdCh:
-			break
-		}
+	// hold
+	cdc.holdCh = make(chan int, 1)
+	select {
+	case <-ctx.Done():
+		break
+	case <-cdc.holdCh:
+		break
 	}
 	return
-}
-
-var Start = func(ctx context.Context, cdc *CdcTask, firstTime bool) error {
-	return cdc.Start(ctx, firstTime)
 }
 
 // Resume cdc task from last recorded watermark
@@ -1138,10 +1137,11 @@ func (cdc *CdcTask) Resume() (err error) {
 		}
 	}()
 
-	// closed in Pause, need renew
-	cdc.activeRoutine.Pause = make(chan struct{})
-	cdc.activeRoutine.Cancel = make(chan struct{})
-	err = Start(context.Background(), cdc, false)
+	go func() {
+		// closed in Pause, need renew
+		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
+		_ = cdc.startFunc(context.Background())
+	}()
 	return
 }
 
@@ -1160,10 +1160,11 @@ func (cdc *CdcTask) Restart() (err error) {
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return
 	}
-	// closed in Pause, need renew
-	cdc.activeRoutine.Pause = make(chan struct{})
-	cdc.activeRoutine.Cancel = make(chan struct{})
-	err = Start(context.Background(), cdc, false)
+	go func() {
+		// closed in Pause, need renew
+		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
+		_ = cdc.startFunc(context.Background())
+	}()
 	return
 }
 
@@ -1178,6 +1179,8 @@ func (cdc *CdcTask) Pause() error {
 		cdc.activeRoutine.ClosePause()
 		cdc.isRunning = false
 	}
+	// let Start() go
+	cdc.holdCh <- 1
 	return nil
 }
 
@@ -1199,7 +1202,6 @@ func (cdc *CdcTask) Cancel() (err error) {
 	if err = cdc.sunkWatermarkUpdater.DeleteAllFromDb(); err != nil {
 		return err
 	}
-
 	// let Start() go
 	cdc.holdCh <- 1
 	return
@@ -1329,15 +1331,24 @@ func (cdc *CdcTask) startWatermarkAndPipeline(ctx context.Context, dbTableInfos 
 	// start watermark updater
 	cdc.sunkWatermarkUpdater = cdc2.NewWatermarkUpdater(cdc.cdcTask.Accounts[0].GetId(), cdc.cdcTask.TaskId, cdc.ie)
 
-	count, err := cdc.sunkWatermarkUpdater.GetCountFromDb()
+	mp, err := cdc.sunkWatermarkUpdater.GetAllFromDb()
 	if err != nil {
 		return err
-	} else if count == 0 {
-		for _, info = range dbTableInfos {
+	}
+	for _, info = range dbTableInfos {
+		// insert if not exists
+		if _, ok := mp[info.SourceTblIdStr]; !ok {
 			// use startTs as watermark
 			if err = cdc.sunkWatermarkUpdater.InsertIntoDb(info, cdc.startTs); err != nil {
-				return err
+				return
 			}
+		}
+		delete(mp, info.SourceTblIdStr)
+	}
+	// delete outdated watermark
+	for tableIdStr := range mp {
+		if err = cdc.sunkWatermarkUpdater.DeleteFromDb(tableIdStr); err != nil {
+			return err
 		}
 	}
 	go cdc.sunkWatermarkUpdater.Run(ctx, cdc.activeRoutine)

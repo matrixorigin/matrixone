@@ -108,18 +108,25 @@ func GetTombstonesByBlockId(
 		skipObjectCnt      int
 		totalBlkCnt        int
 	)
+
 	if tombstoneObjectCnt, skipObjectCnt, totalBlkCnt, err = CheckTombstoneFile(
 		ctx, blockId[:], getTombstoneFileFn, onBlockSelectedFn, fs,
 	); err != nil {
 		return
 	}
 
-	v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
-	v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	if loadedBlkCnt > 0 {
+		v2.TxnReaderEachBLKLoadedTombstoneHistogram.Observe(float64(loadedBlkCnt))
+	}
+
 	if tombstoneObjectCnt > 0 {
+		v2.TxnReaderScannedTotalTombstoneHistogram.Observe(float64(tombstoneObjectCnt))
+	}
+
+	if tombstoneObjectCnt > 0 && skipObjectCnt > 0 {
 		v2.TxnReaderTombstoneZMSelectivityHistogram.Observe(float64(skipObjectCnt) / float64(tombstoneObjectCnt))
 	}
-	if totalBlkCnt > 0 {
+	if totalBlkCnt > 0 && loadedBlkCnt > 0 {
 		v2.TxnReaderTombstoneBLSelectivityHistogram.Observe(float64(loadedBlkCnt) / float64(totalBlkCnt))
 	}
 

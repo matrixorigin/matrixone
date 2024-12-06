@@ -62,6 +62,8 @@ type TxnComputationWrapper struct {
 	paramVals []any
 
 	explainBuffer *bytes.Buffer
+	binaryPrepare bool
+	prepareName   string
 }
 
 func InitTxnComputationWrapper(
@@ -76,6 +78,10 @@ func InitTxnComputationWrapper(
 		ses:  ses,
 		uuid: uuid,
 	}
+}
+
+func (cwft *TxnComputationWrapper) BinaryExecute() (bool, string) {
+	return cwft.binaryPrepare, cwft.prepareName
 }
 
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
@@ -113,6 +119,8 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.compile = nil
 	cwft.runResult = nil
 	cwft.paramVals = nil
+	cwft.prepareName = ""
+	cwft.binaryPrepare = false
 }
 
 func (cwft *TxnComputationWrapper) ParamVals() []any {

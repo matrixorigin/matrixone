@@ -15,27 +15,35 @@
 package merge
 
 import (
+	"context"
 	"math"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const estimateMemUsagePerRow = 30
+var StopMerge atomic.Bool
 
-func originalSize(objs []*catalog.ObjectEntry) int {
-	size := 0
-	for _, o := range objs {
-		size += int(o.OriginSize())
-	}
-	return size
-}
+type taskHostKind int
+
+const (
+	taskHostCN taskHostKind = iota
+	taskHostDN
+
+	constMaxMemCap         = 12 * common.Const1GBytes // max original memory for an object
+	estimateMemUsagePerRow = 30
+)
 
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
@@ -166,4 +174,45 @@ func objectValid(objectEntry *catalog.ObjectEntry) bool {
 		return false
 	}
 	return true
+}
+
+func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService) {
+	if entry == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CauseCleanUpUselessFiles)
+	defer cancel()
+	for _, filepath := range entry.BookingLoc {
+		_ = fs.Delete(ctx, filepath)
+	}
+	if len(entry.CreatedObjs) != 0 {
+		for _, obj := range entry.CreatedObjs {
+			if len(obj) == 0 {
+				continue
+			}
+			s := objectio.ObjectStats(obj)
+			_ = fs.Delete(ctx, s.ObjectName().String())
+		}
+	}
+}
+
+type policy interface {
+	onObject(*catalog.ObjectEntry, *BasicPolicyConfig) bool
+	revise(*resourceController) []reviseResult
+	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
+}
+
+func newUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
+	return &api.AlterTableReq{
+		Kind: api.AlterKind_UpdatePolicy,
+		Operation: &api.AlterTableReq_UpdatePolicy{
+			UpdatePolicy: &api.AlterTablePolicy{
+				MinOsizeQuailifed: c.ObjectMinOsize,
+				MaxObjOnerun:      uint32(c.MergeMaxOneRun),
+				MaxOsizeMergedObj: c.MaxOsizeMergedObj,
+				MinCnMergeSize:    c.MinCNMergeSize,
+				Hints:             c.MergeHints,
+			},
+		},
+	}
 }

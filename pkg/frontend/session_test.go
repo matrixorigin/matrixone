@@ -349,7 +349,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
@@ -602,6 +602,7 @@ func TestCheckPasswordExpired(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -673,6 +674,7 @@ func Test_CheckLockTimeExpired(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")
@@ -717,6 +719,7 @@ func Test_OperatorLock(t *testing.T) {
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	rm, _ := NewRoutineManager(ctx, "")

@@ -1174,29 +1174,51 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var err error
+
+	bitMap := new(nulls.Nulls)
 	for _, v := range parameters {
 		if v.AllNull() {
 			rs.SetNullResult(uint64(length))
 			return nil
 		}
+		bitMap.Merge(v.GetNulls())
 	}
 
-	op.tryExpand(length, proc.Mp())
-	bitMap := new(nulls.Nulls)
-	for _, v := range parameters {
-		SerialHelper(v, bitMap, op.ps, false)
-	}
-
-	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
-	// as length of packer array could be larger than length of input vectors
-	for i := uint64(0); i < uint64(length); i++ {
-		if bitMap.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
+	if len(op.funcs) == 0 {
+		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
+		for i, p := range parameters {
+			op.funcs[i], err = getPackFun(p)
+			if err != nil {
 				return err
 			}
-		} else {
-			if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
+		}
+	}
+
+	if bitMap.IsEmpty() {
+		for i := 0; i < length; i++ {
+			op.packer.Reset()
+			for j, p := range parameters {
+				op.funcs[j](p, i, op.packer)
+			}
+			if err = rs.AppendBytes(op.packer.GetBuf(), false); err != nil {
 				return err
+			}
+		}
+	} else {
+		for i := 0; i < length; i++ {
+			if bitMap.Contains(uint64(i)) {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				op.packer.Reset()
+				for j, p := range parameters {
+					op.funcs[j](p, i, op.packer)
+				}
+				if err = rs.AppendBytes(op.packer.GetBuf(), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1204,29 +1226,148 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 }
 
 func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	op.tryExpand(length, proc.Mp())
 
-	for _, v := range parameters {
-		if v.IsConstNull() {
-			for i := 0; i < v.Length(); i++ {
-				op.ps[i].EncodeNull()
+	var err error
+	if len(op.funcs) == 0 {
+		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
+		for i, p := range parameters {
+			if !p.IsConstNull() {
+				op.funcs[i], err = getPackFun(p)
+				if err != nil {
+					return err
+				}
 			}
-			continue
 		}
-
-		SerialHelper(v, nil, op.ps, true)
 	}
 
-	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
-	// as length of packer array could be larger than length of input vectors
-	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
+	for i := 0; i < length; i++ {
+		op.packer.Reset()
+		for j, p := range parameters {
+			if p.IsNull(uint64(i)) {
+				op.packer.EncodeNull()
+			} else {
+				op.funcs[j](p, i, op.packer)
+			}
+		}
+		if err = rs.AppendBytes(op.packer.GetBuf(), false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	switch v.GetType().Oid {
+	case types.T_bool:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[bool](v, idx)
+			ps.EncodeBool(val)
+		}, nil
+	case types.T_bit:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[uint64](v, idx)
+			ps.EncodeUint64(val)
+		}, nil
+	case types.T_int8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[int8](v, idx)
+			ps.EncodeInt8(val)
+		}, nil
+	case types.T_int16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[int16](v, idx)
+			ps.EncodeInt16(val)
+		}, nil
+	case types.T_int32:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[int32](v, idx)
+			ps.EncodeInt32(val)
+		}, nil
+	case types.T_int64:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[int64](v, idx)
+			ps.EncodeInt64(val)
+		}, nil
+	case types.T_uint8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[uint8](v, idx)
+			ps.EncodeUint8(val)
+		}, nil
+	case types.T_uint16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[uint16](v, idx)
+			ps.EncodeUint16(val)
+		}, nil
+	case types.T_uint32:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[uint32](v, idx)
+			ps.EncodeUint32(val)
+		}, nil
+	case types.T_uint64:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[uint64](v, idx)
+			ps.EncodeUint64(val)
+		}, nil
+	case types.T_float32:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[float32](v, idx)
+			ps.EncodeFloat32(val)
+		}, nil
+	case types.T_float64:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[float64](v, idx)
+			ps.EncodeFloat64(val)
+		}, nil
+	case types.T_date:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Date](v, idx)
+			ps.EncodeDate(val)
+		}, nil
+	case types.T_time:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Time](v, idx)
+			ps.EncodeTime(val)
+		}, nil
+	case types.T_datetime:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Datetime](v, idx)
+			ps.EncodeDatetime(val)
+		}, nil
+	case types.T_timestamp:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Timestamp](v, idx)
+			ps.EncodeTimestamp(val)
+		}, nil
+	case types.T_enum:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Enum](v, idx)
+			ps.EncodeEnum(val)
+		}, nil
+	case types.T_decimal64:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, idx)
+			ps.EncodeDecimal64(val)
+		}, nil
+	case types.T_decimal128:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx)
+			ps.EncodeDecimal128(val)
+		}, nil
+	case types.T_uuid:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Uuid](v, idx)
+			ps.EncodeUuid(val)
+		}, nil
+	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := v.GetBytesAt(idx)
+			ps.EncodeStringType(val)
+		}, nil
+	}
+
+	return nil, moerr.NewInternalErrorNoCtxf("not supported type %s", v.GetType().String())
 }
 
 // SerialHelper is unified function used in builtInSerial and BuiltInSerialFull
@@ -2454,10 +2595,10 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 		case "mem":
 			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg) +
+			cu = motrace.CalculateCUIOIn(stats.GetS3IOInputCount(), cfg) +
 				motrace.CalculateCUIODelete(stats.GetS3IODeleteCount(), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg) +
+			cu = motrace.CalculateCUIOOut(stats.GetS3IOOutputCount(), cfg) +
 				motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)
 		case "iolist":
 			cu = motrace.CalculateCUIOList(stats.GetS3IOListCount(), cfg)

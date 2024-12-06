@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,12 +33,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -201,6 +205,152 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	resp.Succeed = true
+
+	return nil, nil
+}
+
+func (h *Handle) HandleGetChangedTableList(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *cmd_util.GetChangedTableListReq,
+	resp *cmd_util.GetChangedTableListResp,
+) (func(), error) {
+
+	isTheTblIWant := func(tblId uint64, commit types.TS) bool {
+		if slices.Index(resp.TableIds, tblId) != -1 {
+			// already exist
+			return false
+		}
+
+		if idx := slices.Index(req.TableIds, tblId); idx == -1 {
+			// not the tbl I want to check
+			return false
+		} else {
+			ts := types.TimestampToTS(*req.From[idx])
+			if commit.LT(&ts) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	minFrom := slices.MinFunc(req.From, func(a, b *timestamp.Timestamp) int {
+		return a.Compare(*b)
+	})
+	from := types.TimestampToTS(*minFrom)
+	now := types.BuildTS(time.Now().UnixNano(), 0)
+
+	var (
+		err     error
+		dbEntry *catalog2.DBEntry
+		data    = &logtail.CheckpointData{}
+	)
+
+	logErr := func(e error, hint string) {
+		logutil.Info("handle get changed table list failed",
+			zap.Error(e),
+			zap.String("hint", hint))
+	}
+
+	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+	for i := 0; i < len(ckps); i++ {
+		if ckps[i] == nil {
+			continue
+		}
+
+		ckpEnd := ckps[i].GetEnd()
+		if ckpEnd.LT(&from) {
+			continue
+		}
+
+		if data, err = ckps[i].PrefetchMetaIdx(ctx, h.GetDB().Runtime.Fs); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].ReadMetaIdx(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].Prefetch(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		if err = ckps[i].Read(ctx, h.GetDB().Runtime.Fs, data); err != nil {
+			logErr(err, ckps[i].String())
+			return nil, err
+		}
+
+		dataObjBat := data.GetObjectBatchs()
+		tombstoneObjBat := data.GetTombstoneObjectBatchs()
+
+		bats := []*containers.Batch{dataObjBat, tombstoneObjBat}
+
+		for j := range bats {
+			for k := range bats[j].Length() {
+				dbIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_DBID)
+				tblIdVec := bats[j].GetVectorByName(logtail.SnapshotAttr_TID)
+				commitVec := bats[j].GetVectorByName(objectio.DefaultCommitTS_Attr)
+				if dbIdVec.Length() <= k || tblIdVec.Length() <= k || commitVec.Length() <= k {
+					logutil.Error("dbId/tblId/commit vector length not match",
+						zap.String("dbId vector", dbIdVec.String()),
+						zap.String("tblId vector", tblIdVec.String()),
+						zap.String("commit vector", commitVec.String()))
+
+					// some wrong, return quickly?
+					//resp.AccIds = req.AccIds
+					//resp.TableIds = req.TableIds
+					//resp.DatabaseIds = req.DatabaseIds
+					//tt := now.ToTimestamp()
+					//resp.Newest = &tt
+
+					return nil, nil
+				}
+
+				dbId := dbIdVec.Get(k).(uint64)
+				tblId := tblIdVec.Get(k).(uint64)
+				commit := commitVec.Get(k).(types.TS)
+
+				if !isTheTblIWant(tblId, commit) {
+					continue
+				}
+
+				dbEntry, err = h.GetDB().Catalog.GetDatabaseByID(dbId)
+				if err != nil {
+					logErr(err, fmt.Sprintf("get db entry failed: %d", dbId))
+					return nil, err
+				}
+
+				resp.TableIds = append(resp.TableIds, tblId)
+				resp.DatabaseIds = append(resp.DatabaseIds, dbId)
+				resp.AccIds = append(resp.AccIds, uint64(dbEntry.GetTenantID()))
+			}
+		}
+	}
+
+	rr := h.db.LogtailMgr.GetReader(from, now)
+
+	for i := range req.TableIds {
+		tree := rr.GetDirtyByTable(req.DatabaseIds[i], req.TableIds[i])
+		if tree.IsEmpty() {
+			continue
+		}
+
+		// prev() for ut
+		if !isTheTblIWant(req.TableIds[i], types.MaxTs().Prev()) {
+			continue
+		}
+
+		resp.TableIds = append(resp.TableIds, req.TableIds[i])
+		resp.DatabaseIds = append(resp.DatabaseIds, req.DatabaseIds[i])
+		resp.AccIds = append(resp.AccIds, req.AccIds[i])
+	}
+
+	tt := now.ToTimestamp()
+	resp.Newest = &tt
 
 	return nil, nil
 }
