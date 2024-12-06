@@ -359,8 +359,8 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                        YES    NULL
-show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                        YES    NULL
+show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                        YES    h1
+show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                        YES    u1
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -370,7 +370,7 @@ Table    Create Table
 show_03    CREATE TABLE `show_03` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `x` (`a`) COMMENT 'x'\n)
 show INDEX FROM show_03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    NULL
+show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    a
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -379,8 +379,8 @@ show_04    CREATE TABLE `show_04` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT 
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    NULL
-show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
+show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    a
+show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    b
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;
@@ -424,9 +424,9 @@ INDEX (col2,col3)
 );
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    col2    1    col2    A    0    NULL    NULL                        YES    NULL
-t1    1    col2    2    col3    A    0    NULL    NULL                        YES    NULL
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    1    col2    1    col2    A    0    NULL    NULL                        YES    col2
+t1    1    col2    2    col3    A    0    NULL    NULL                        YES    col3
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t1;
 drop table if exists t2;
 CREATE TABLE t2 (
@@ -437,8 +437,8 @@ col4 INT NOT NULL
 );
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t2    0    col2    1    col2    A    0    NULL    NULL                        YES    NULL
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    0    col2    1    col2    A    0    NULL    NULL                        YES    col2
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t2;
 drop table if exists t3;
 CREATE TABLE t3 (
@@ -451,10 +451,10 @@ UNIQUE KEY (col1, col3)
 );
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    col1    1    col1    A    0    NULL    NULL                        YES    NULL
-t3    0    col1_2    1    col1    A    0    NULL    NULL                        YES    NULL
-t3    0    col1_2    2    col3    A    0    NULL    NULL                        YES    NULL
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    col1    1    col1    A    0    NULL    NULL                        YES    col1
+t3    0    col1_2    1    col1    A    0    NULL    NULL                        YES    col1
+t3    0    col1_2    2    col3    A    0    NULL    NULL                        YES    col3
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
 drop table t3;
 drop database test;
 drop database if exists test;
