@@ -62,9 +62,9 @@ func Test_InsertRows(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -73,6 +73,8 @@ func Test_InsertRows(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.Nil(t, err)
 
@@ -876,9 +878,9 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 func TestObjectStats1(t *testing.T) {
 	catalog.SetupDefines("")
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -891,6 +893,8 @@ func TestObjectStats1(t *testing.T) {
 
 	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	appendableObjectID := testutil2.GetOneObject(rel).GetID()
@@ -963,9 +967,9 @@ func TestObjectStats1(t *testing.T) {
 func TestObjectStats2(t *testing.T) {
 	catalog.SetupDefines("")
 
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -978,6 +982,8 @@ func TestObjectStats2(t *testing.T) {
 
 	testutil2.CreateRelationAndAppend(t, catalog.System_Account, taeHandler.GetDB(), "db", schema, bat, true)
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, rel := testutil2.GetRelation(t, catalog.System_Account, taeHandler.GetDB(), "db", schema.Name)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	appendableObjectID := testutil2.GetOneObject(rel).GetID()
