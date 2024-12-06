@@ -153,7 +153,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	dbId := rel.GetDBID(p.Ctx)
 	tblId := rel.GetTableID(p.Ctx)
 
-	_, err := e.QueryTableStats(context.Background(),
+	_, err, _ := e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
@@ -162,7 +162,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = e.HandleMoTableStatsCtl("use_old_impl:true")
 	require.Equal(t, "use old impl: false to true", ret)
 
-	_, err = e.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
@@ -174,7 +174,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = e.HandleMoTableStatsCtl("force_update:true")
 	require.Equal(t, "force update: false to true", ret)
 
-	_, err = e.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		true, false, nil)
@@ -183,7 +183,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = e.HandleMoTableStatsCtl("move_on: false")
 	require.Equal(t, "move on: true to false", ret)
 
-	_, err = e.QueryTableStats(context.Background(),
+	_, err, _ = e.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, true, nil)
