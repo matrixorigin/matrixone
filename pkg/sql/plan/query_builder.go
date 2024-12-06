@@ -843,13 +843,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		timeTag := node.BindingTags[0]
 		groupTag := node.BindingTags[1]
 
-		for i, expr := range node.FilterList {
-			err = builder.remapWindowClause(expr, timeTag, int32(i), childRemapping.globalToLocal, &remapInfo)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 		// order by
 		idx := 0
 		increaseRefCnt(node.OrderBy[0].Expr, -1, colRefCnt)

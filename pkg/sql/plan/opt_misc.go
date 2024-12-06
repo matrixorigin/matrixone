@@ -376,6 +376,8 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 	}
 }
 
+// For window functions,
+// a specific weight is required mapping
 func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggregateTag int32, groupSize int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -403,6 +405,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 			exprImpl.Col.RelPos = -1
 			exprImpl.Col.ColPos += projectionSize
 		} else {
+			// normal remap for other columns
 			err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
 			if err != nil {
 				return err
@@ -410,6 +413,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 		}
 
 	case *plan.Expr_F:
+		// loop function parameters
 		for _, arg := range exprImpl.F.Args {
 			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
 			if err != nil {
