@@ -44,6 +44,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Filter:                  "filter",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",
+	vm.ShuffleV2:               "shuffleV2",
 	vm.Connector:               "connect",
 	vm.Projection:              "projection",
 	vm.Anti:                    "anti",
