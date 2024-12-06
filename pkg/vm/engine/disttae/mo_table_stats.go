@@ -636,10 +636,6 @@ func (d *dynamicCtx) forceUpdateQuery(
 
 	if !resetUpdateTime {
 
-		for i := range tbls {
-			oldTS[i] = &timestamp.Timestamp{}
-		}
-
 		sql := fmt.Sprintf(getUpdateTSSQL,
 			catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 			intsJoin(accs, ","),
@@ -670,10 +666,29 @@ func (d *dynamicCtx) forceUpdateQuery(
 			oldTS[idx] = &timestamp.Timestamp{PhysicalTime: stdTime.UnixNano()}
 		}
 
+		var notExist = make([]uint64, 0, 1)
+		for i := range oldTS {
+			if oldTS[i] == nil {
+				oldTS[i] = &timestamp.Timestamp{}
+				notExist = append(notExist, tbls[i])
+			}
+		}
+
 		if err = getChangedTableList(
 			ctx, eng.service, eng, accs, dbs, tbls, oldTS, &pairs, &to); err != nil {
 			return
 		}
+
+		// if a table not exist in mo table stats table, need update stats.
+		if len(notExist) != 0 {
+			for i := range pairs {
+				idx := slices.Index(notExist, uint64(pairs[i].tbl))
+				if idx != -1 {
+					pairs[i].onlyUpdateTS = false
+				}
+			}
+		}
+
 	} else {
 		to = types.BuildTS(time.Now().UnixNano(), 0)
 
