@@ -183,7 +183,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
-				s.NodeInfo.Data = engine.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
@@ -559,7 +558,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	return ms, nil
 }
 
-func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) error {
+func (s *Scope) handleBlockFilterList(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
 	var appendNotPkFilter []*plan.Expr
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
@@ -586,7 +585,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 		}
 		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -602,7 +601,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	for _, e := range s.DataSource.BlockFilterList {
 		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -610,22 +609,27 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 	if len(s.DataSource.node.BlockFilterList) > 0 {
 		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 	}
+	return newExprList, nil
+}
 
+func (s *Scope) getBlockList(c *Compile, newExprList []*plan.Expr) (engine.RelData, error) {
 	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	var reldata engine.RelData
+
 	if s.NodeInfo.CNCNT == 1 {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
+		reldata, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectAllData, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		err = s.aggOptimize(c, rel, ctx)
+		reldata, err = s.aggOptimize(reldata, c, rel, ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return nil
+		return reldata, nil
 	}
 
 	//need to shuffle blocks when cncnt>1
@@ -642,7 +646,7 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 
 	commited, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectCommittedData, rsp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
 	if commited.DataCnt() < int(average*0.8) || commited.DataCnt() > int(average*1.2) {
@@ -652,20 +656,20 @@ func (s *Scope) handleBlockList(c *Compile, runtimeInExprList []*plan.Expr) erro
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		s.NodeInfo.Data, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
+		reldata, err = c.expandRanges(s.DataSource.node, rel, db, ctx, newExprList, engine.Policy_CollectUncommittedData, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
+		reldata.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
 		tombstones, err := collectTombstones(c, s.DataSource.node, rel, engine.Policy_CollectCommittedTombstones)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		commited.AttachTombstones(tombstones)
-		s.NodeInfo.Data = commited
+		reldata = commited
 	}
-	return nil
+	return reldata, nil
 }
 
 func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
@@ -903,14 +907,15 @@ func removeStringBetween(s, start, end string) string {
 	return s
 }
 
-func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
+func (s *Scope) aggOptimize(reldata engine.RelData, c *Compile, rel engine.Relation, ctx context.Context) (engine.RelData, error) {
+	var newRelData engine.RelData
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
-		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+		if partialResults != nil && reldata.DataCnt() > 1 {
 			//append first empty block
-			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
-			blk := s.NodeInfo.Data.GetBlockInfo(0)
+			newRelData = reldata.BuildEmptyRelData(1)
+			blk := reldata.GetBlockInfo(0)
 			newRelData.AppendBlockInfo(&blk)
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
@@ -920,13 +925,13 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			)
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
+			if err = engine.ForRangeBlockInfo(1, reldata.DataCnt(), reldata, func(blk *objectio.BlockInfo) (bool, error) {
 				if hasTombstone, err2 = tombstones.HasBlockTombstone(
 					ctx, &blk.BlockID, fs,
 				); err2 != nil {
@@ -941,10 +946,9 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				}
 				return true, nil
 			}); err != nil {
-				return err
+				return nil, err
 			}
 			if partialResults != nil {
-				s.NodeInfo.Data = newRelData
 				//find the last mergegroup
 				mergeGroup := findMergeGroup(s.RootOp)
 				if mergeGroup != nil {
@@ -956,7 +960,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}
 		}
 	}
-	return nil
+	return newRelData, nil
 }
 
 // find scan->group->mergegroup
@@ -978,14 +982,21 @@ func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
-	var runtimeFilterList []*plan.Expr
-	var shouldDrop bool
-	runtimeFilterList, shouldDrop, err = s.handleRuntimeFilter(c)
+	var runtimeFilterList, blockFilterList []*plan.Expr
+	var emptyScan bool
+	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
 	if err != nil {
 		return
 	}
-	if !shouldDrop {
-		err = s.handleBlockList(c, runtimeFilterList)
+	var relData engine.RelData
+	if emptyScan {
+		//do nothing, just leave empty relData
+	} else {
+		blockFilterList, err = s.handleBlockFilterList(c, runtimeFilterList)
+		if err != nil {
+			return
+		}
+		relData, err = s.getBlockList(c, blockFilterList)
 		if err != nil {
 			return
 		}
@@ -1009,7 +1020,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.Timestamp,
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
-			s.NodeInfo.Data,
+			relData,
 			s.NodeInfo.Mcpu)
 		if err != nil {
 			return
@@ -1025,7 +1036,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			newCtx,
 			c.proc,
 			s.DataSource.FilterExpr,
-			s.NodeInfo.Data,
+			relData,
 			s.NodeInfo.Mcpu,
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
@@ -1114,7 +1125,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				newCtx,
 				c.proc,
 				s.DataSource.FilterExpr,
-				s.NodeInfo.Data,
+				relData,
 				s.NodeInfo.Mcpu,
 				s.TxnOffset,
 				len(s.DataSource.OrderBy) > 0,
@@ -1127,8 +1138,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			readers = append(readers, mainRds...)
 		} else {
 			var mp map[int16]engine.RelData
-			if s.NodeInfo.Data != nil && s.NodeInfo.Data.DataCnt() > 1 {
-				mp = s.NodeInfo.Data.GroupByPartitionNum()
+			if relData != nil && relData.DataCnt() > 1 {
+				mp = relData.GroupByPartitionNum()
 			}
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
@@ -1138,7 +1149,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				}
 
 				var subBlkList engine.RelData
-				if s.NodeInfo.Data == nil || s.NodeInfo.Data.DataCnt() <= 1 {
+				if relData == nil || relData.DataCnt() <= 1 {
 					//Even if subBlkList is nil,
 					//we still need to build reader for sub partition table to read data from memory.
 					subBlkList = nil
@@ -1175,7 +1186,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 	}
 	// just for quick GC.
-	s.NodeInfo.Data = nil
+	relData = nil
 
 	//for partition table.
 	if len(readers) != s.NodeInfo.Mcpu {
