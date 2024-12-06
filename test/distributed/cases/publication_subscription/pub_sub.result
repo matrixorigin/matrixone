@@ -37,7 +37,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-table01    Tae    Dynamic    2    0    72    0    0    NULL    0    2024-07-23 21:40:26    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+table01    Tae    Dynamic    2    0    96    0    0    NULL    0    2024-12-02 16:05:37    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 alter publication publication01 database republication01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
