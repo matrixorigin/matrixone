@@ -94,7 +94,7 @@ type TestOptions struct {
 	Timeout          time.Duration
 }
 
-func GetS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {
+func getS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {
 	config := fileservice.Config{
 		Name:    defines.SharedFileServiceName,
 		Backend: "DISK",
