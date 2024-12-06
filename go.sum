@@ -497,8 +497,8 @@ github.com/matrixorigin/dragonboat/v4 v4.0.0-20241019050137-1c6138e9cf8b h1:DQMm
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20241019050137-1c6138e9cf8b/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d h1:wSlkJlWXZ3if1sH8Bc/lUUOWhTw91lgYGSFOHqy1tcw=
 github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
-github.com/matrixorigin/gosigar v0.14.3-0.20240721074812-0d5bde0e9f91 h1:+P8GoCsNjqb3Vtrx0gPHxhoVPBXXLDwdy3wsvGhHemM=
-github.com/matrixorigin/gosigar v0.14.3-0.20240721074812-0d5bde0e9f91/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
+github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac h1:KRPOwOcSZRfWT7w8mr7BmFLoFB75ljgqjkg47xkN/Pc=
+github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=

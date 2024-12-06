@@ -62,7 +62,12 @@ func fillRuntimeOptions(opts *options.Options) {
 	}
 }
 
-func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
+func Open(
+	ctx context.Context,
+	dirname string,
+	opts *options.Options,
+	dbOpts ...DBOption,
+) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info(
@@ -113,6 +118,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		Closed:    new(atomic.Value),
 		usageMemo: logtail.NewTNUsageMemo(nil),
 	}
+	for _, opt := range dbOpts {
+		opt(db)
+	}
+
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
@@ -347,6 +356,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.GCManager = gc.NewManager(cronJobs...)
 
 	db.GCManager.Start()
+
+	db.Controller = NewController(db)
+	db.Controller.Start()
 
 	go TaeMetricsTask(ctx)
 

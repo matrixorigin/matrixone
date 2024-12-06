@@ -158,4 +158,11 @@ type Handler interface {
 		req *cmd_util.Checkpoint,
 		resp *apipb.CheckpointResp,
 	) (cb func(), err error)
+
+	HandleGetChangedTableList(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error)
 }
