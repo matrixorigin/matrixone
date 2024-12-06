@@ -90,6 +90,21 @@ func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.
 	}
 }
 
+func newTestVarcharObjectEntry(t testing.TB, v1, v2 string, size uint32) *catalog.ObjectEntry {
+	zm := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(zm, []byte(v1))
+	index.UpdateZM(zm, []byte(v2))
+	stats := objectio.NewObjectStats()
+	objName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objName))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
+	return &catalog.ObjectEntry{
+		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
+	}
+}
+
 func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.ObjectEntry {
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
@@ -435,26 +450,4 @@ func TestObjectsWithMaximumOverlaps(t *testing.T) {
 	require.Equal(t, 2, len(res8))
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4, o5}, res8[0])
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o6}, res8[1])
-}
-
-func TestRemoveOversize(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 0, 1)
-	o2 := newSortedTestObjectEntry(t, 0, 0, 2)
-	o3 := newSortedTestObjectEntry(t, 0, 0, 4)
-	o5 := newSortedTestObjectEntry(t, 0, 0, math.MaxInt32)
-
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
-	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
-}
-
-func BenchmarkRemoveOversize(b *testing.B) {
-	o1 := newSortedTestObjectEntry(b, 0, 50, math.MaxInt32)
-	o2 := newSortedTestObjectEntry(b, 51, 100, 1)
-	o3 := newSortedTestObjectEntry(b, 49, 52, 2)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		removeOversize([]*catalog.ObjectEntry{o1, o2, o3})
-	}
 }

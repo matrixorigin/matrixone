@@ -155,7 +155,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 				}
 			}
 		}
-		if len(objs) < overlaps {
+		if len(objs) < overlaps || score(objs) < 1.1 {
 			return res
 		}
 		res = append(res, objs)
