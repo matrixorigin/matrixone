@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,8 @@ type TestDisttaeEngine struct {
 	mp                  *mpool.MPool
 	workspaceThreshold  uint64
 	insertEntryMaxCount int
+
+	rootDir string
 }
 
 func setServerLevelParams(de *TestDisttaeEngine) {
@@ -430,6 +433,10 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
+
+	if err := os.RemoveAll(de.rootDir); err != nil {
+		logutil.Errorf("remove root dir failed (%s): %v", de.rootDir, err)
+	}
 }
 
 func (de *TestDisttaeEngine) GetTable(
