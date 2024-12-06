@@ -96,7 +96,6 @@ drop table if exists table01;
 create table table01 (col1 int primary key, col2 datalink);
 insert into table01 values (1, 'file://$resources/load_data/test_columnlist_01.csv?offset=5');
 insert into table01 values (2, 'file://$resources/load_data/test_columnlist_02.csv?offset=10');
-select * from table01;
 create fulltext index f06 on table01 (col2);
 drop table table01;
 
