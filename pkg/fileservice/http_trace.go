@@ -85,9 +85,11 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 }
 
 func (t *traceInfo) PutIdleConn(err error) {
-	logutil.Info("PutIdleConn error",
-		zap.Error(err),
-	)
+	if err != nil {
+		logutil.Info("PutIdleConn error",
+			zap.Error(err),
+		)
+	}
 }
 
 func (t *traceInfo) GotFirstResponseByte() {

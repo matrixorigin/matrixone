@@ -293,6 +293,36 @@ func (node *ParenSelect) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 }
 
+const (
+	QuerySpecOptionNone             uint64 = 0
+	QuerySpecOptionAll              uint64 = 1 << 1
+	QuerySpecOptionDistinct         uint64 = 1 << 2
+	QuerySpecOptionDistinctRow      uint64 = 1 << 3
+	QuerySpecOptionHighPriority     uint64 = 1 << 4
+	QuerySpecOptionStraightJoin     uint64 = 1 << 5
+	QuerySpecOptionSqlSmallResult   uint64 = 1 << 6
+	QuerySpecOptionSqlBigResult     uint64 = 1 << 7
+	QuerySpecOptionSqlBufferResult  uint64 = 1 << 8
+	QuerySpecOptionSqlNoCache       uint64 = 1 << 9
+	QuerySpecOptionSqlCalcFoundRows uint64 = 1 << 10
+)
+
+var (
+	QuerySpecOptionNames = map[uint64]string{
+		QuerySpecOptionNone:             "none",
+		QuerySpecOptionAll:              "all",
+		QuerySpecOptionDistinct:         "distinct",
+		QuerySpecOptionDistinctRow:      "distinctrow",
+		QuerySpecOptionHighPriority:     "high_priority",
+		QuerySpecOptionStraightJoin:     "straight_join",
+		QuerySpecOptionSqlSmallResult:   "sql_small_result",
+		QuerySpecOptionSqlBigResult:     "sql_big_result",
+		QuerySpecOptionSqlBufferResult:  "sql_buffer_result",
+		QuerySpecOptionSqlNoCache:       "sql_no_cache",
+		QuerySpecOptionSqlCalcFoundRows: "sql_calc_found_rows",
+	}
+)
+
 // SelectClause represents a SELECT statement.
 type SelectClause struct {
 	SelectStatement
@@ -302,7 +332,7 @@ type SelectClause struct {
 	Where    *Where
 	GroupBy  *GroupByClause
 	Having   *Where
-	Option   string
+	Option   uint64
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -310,9 +340,19 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	if node.Distinct {
 		ctx.WriteString("distinct ")
 	}
-	if node.Option != "" {
-		ctx.WriteString(node.Option)
-		ctx.WriteByte(' ')
+	if node.Option != 0 {
+		for i := uint64(1); i <= 10; i++ {
+			opt := uint64(1 << i)
+			//distinct printed already
+			if opt == QuerySpecOptionDistinct || opt == QuerySpecOptionDistinctRow {
+				continue
+			}
+
+			if node.Option&opt != 0 {
+				ctx.WriteString(QuerySpecOptionNames[opt])
+				ctx.WriteByte(' ')
+			}
+		}
 	}
 	node.Exprs.Format(ctx)
 	if len(node.From.Tables) > 0 {

@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+const smallObjectThreshold = 64 * (1 << 20)
+
 type ObjectStorage interface {
 	// List lists objects with specified prefix
 	List(
@@ -51,7 +53,7 @@ type ObjectStorage interface {
 		ctx context.Context,
 		key string,
 		r io.Reader,
-		size int64,
+		sizeHint *int64,
 		expire *time.Time,
 	) (
 		err error,

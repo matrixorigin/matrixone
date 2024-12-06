@@ -16,9 +16,12 @@ package fault
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestCount(t *testing.T) {
@@ -177,4 +180,85 @@ func TestWait(t *testing.T) {
 	require.Equal(t, int64(0), cnt)
 
 	Disable()
+}
+
+func TestFaultMapRace(t *testing.T) {
+	var ctx = context.TODO()
+
+	Enable()
+	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, ""))
+
+	go func() {
+		Disable()
+	}()
+
+	go func() {
+		TriggerFault("a")
+	}()
+
+	Disable()
+}
+
+func TestFaultMapRace2(t *testing.T) {
+	go func() {
+		Enable()
+	}()
+
+	go func() {
+		Enable()
+	}()
+
+	Disable()
+}
+
+func TestFaultMapRace3(t *testing.T) {
+	var ctx = context.TODO()
+
+	Enable()
+	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, ""))
+
+	go func() {
+		Disable()
+	}()
+
+	go func() {
+		TriggerFault("a")
+	}()
+
+	go func() {
+		Disable()
+	}()
+
+	Disable()
+}
+
+func Test_panic(t *testing.T) {
+	var ctx = context.TODO()
+
+	Enable()
+	defer Disable()
+	require.NoError(t, AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr"))
+	require.NoError(t, AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr"))
+
+	fun := func(useMoerr bool) {
+		defer func() {
+			if e := recover(); e != nil {
+				_, ok := e.(*moerr.Error)
+				if !ok {
+					fmt.Println("moerr recovered")
+				} else {
+					fmt.Println("non moerr recovered")
+				}
+			}
+		}()
+
+		if useMoerr {
+			TriggerFault("panic_moerr")
+		} else {
+			TriggerFault("panic_non_moerr")
+		}
+	}
+
+	fun(true)
+	fun(false)
 }

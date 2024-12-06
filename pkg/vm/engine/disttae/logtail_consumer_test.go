@@ -15,7 +15,13 @@
 package disttae
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -90,4 +96,92 @@ func TestDca(t *testing.T) {
 	require.Equal(t, 1, signalCnt)
 	require.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
 
+}
+
+type testHAKeeperClient struct {
+	sync.RWMutex
+	value log.ClusterDetails
+}
+
+func (c *testHAKeeperClient) addTN(state log.NodeState, serviceID, logtailAddr string) {
+	c.Lock()
+	defer c.Unlock()
+	c.value.TNStores = append(c.value.TNStores, log.TNStore{
+		UUID:                 serviceID,
+		State:                state,
+		LogtailServerAddress: logtailAddr,
+	})
+}
+
+func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (log.ClusterDetails, error) {
+	c.Lock()
+	defer c.Unlock()
+	return c.value, nil
+}
+
+func TestGetLogTailServiceAddr(t *testing.T) {
+	e := &Engine{}
+
+	t.Run("ok1", func(t *testing.T) {
+		clusterClient := &testHAKeeperClient{}
+		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		runtime.ServiceRuntime("").SetGlobalVariables(
+			runtime.ClusterService,
+			moc,
+		)
+		clusterClient.addTN(log.NormalState, "tn1", "a")
+		moc.ForceRefresh(true)
+		require.Equal(t, "a", e.getLogTailServiceAddr())
+	})
+
+	t.Run("ok2", func(t *testing.T) {
+		clusterClient := &testHAKeeperClient{}
+		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		runtime.ServiceRuntime("").SetGlobalVariables(
+			runtime.ClusterService,
+			moc,
+		)
+		go func() {
+			time.Sleep(time.Second)
+			clusterClient.addTN(log.NormalState, "tn1", "a")
+			moc.ForceRefresh(true)
+		}()
+		require.Equal(t, "a", e.getLogTailServiceAddr())
+	})
+
+	t.Run("fail, empty addr", func(t *testing.T) {
+		orig := defaultGetLogTailAddrTimeoutDuration
+		defaultGetLogTailAddrTimeoutDuration = time.Second
+		defer func() {
+			defaultGetLogTailAddrTimeoutDuration = orig
+		}()
+		clusterClient := &testHAKeeperClient{}
+		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		runtime.ServiceRuntime("").SetGlobalVariables(
+			runtime.ClusterService,
+			moc,
+		)
+		clusterClient.addTN(log.NormalState, "tn1", "")
+		moc.ForceRefresh(true)
+		require.Panics(t, func() {
+			e.getLogTailServiceAddr()
+		})
+	})
+
+	t.Run("fail, no tn", func(t *testing.T) {
+		orig := defaultGetLogTailAddrTimeoutDuration
+		defaultGetLogTailAddrTimeoutDuration = time.Second
+		defer func() {
+			defaultGetLogTailAddrTimeoutDuration = orig
+		}()
+		clusterClient := &testHAKeeperClient{}
+		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		runtime.ServiceRuntime("").SetGlobalVariables(
+			runtime.ClusterService,
+			moc,
+		)
+		require.Panics(t, func() {
+			e.getLogTailServiceAddr()
+		})
+	})
 }

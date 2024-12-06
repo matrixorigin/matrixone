@@ -946,7 +946,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 		skipUniqueIdx[i] = true
 		for _, part := range idxDef.Parts {
-			if !columnIsNull[part] {
+			if !columnIsNull[catalog.ResolveAlias(part)] {
 				skipUniqueIdx[i] = false
 				break
 			}

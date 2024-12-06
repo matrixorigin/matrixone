@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -87,7 +86,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	return rels, nil
 }
 
-func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Relation",
@@ -118,7 +117,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	// check the table is deleted or not
 	if !openSys && txn.tableOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
+		logutil.Info("[relation] deleted in txn", zap.String("table", name))
+		return nil, nil
 	}
 
 	// get relation from the txn created tables cache: created by this txn
@@ -144,10 +144,13 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if err != nil {
 		return nil, err
 	}
+	if item == nil {
+		return nil, nil
+	}
 
 	tbl, err := newTxnTable(
 		db,
-		item,
+		*item,
 		p,
 		shardservice.GetService(p.GetService()),
 		txn.engine,
@@ -158,6 +161,25 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	db.getTxn().tableCache.Store(key, tbl)
 	return tbl, nil
+}
+
+func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	rel, err := db.relation(ctx, name, proc)
+	if err != nil {
+		return nil, err
+	}
+	if rel == nil {
+		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
+	}
+	return rel, nil
+}
+
+func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any) (bool, error) {
+	rel, err := db.relation(ctx, name, proc)
+	if err != nil {
+		return false, err
+	}
+	return rel != nil, nil
 }
 
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
@@ -215,18 +237,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	// 1.1 table rowid
 	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
 
-	rmFault := func() {}
-
-	if objectio.Debug19524Injected() {
-		if rmFault, err = objectio.InjectRanges(
-			ctx,
-			catalog.MO_TABLES,
-		); err != nil {
-			return nil, err
-		}
-	}
 	res, err := execReadSql(ctx, db.op, sql, true)
-	rmFault()
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +607,7 @@ func (db *txnDatabase) getTableItem(
 	accountID uint32,
 	name string,
 	engine *Engine,
-) (cache.TableItem, error) {
+) (*cache.TableItem, error) {
 	item := cache.TableItem{
 		Name:       name,
 		DatabaseId: db.databaseId,
@@ -608,14 +619,15 @@ func (db *txnDatabase) getTableItem(
 	if ok := c.GetTable(&item); !ok {
 		var tableitem *cache.TableItem
 		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
+			logutil.Info("FIND_TABLE getTableItem cache cannot serve", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("timestamp", db.op.SnapshotTS().DebugString()))
 			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
-				return cache.TableItem{}, err
+				return nil, err
 			}
 		}
 		if tableitem == nil {
-			return cache.TableItem{}, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
+			return nil, nil
 		}
-		return *tableitem, nil
+		return tableitem, nil
 	}
-	return item, nil
+	return &item, nil
 }

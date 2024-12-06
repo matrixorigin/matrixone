@@ -43,7 +43,7 @@ func testObjectStorage[T ObjectStorage](
 			name := path.Join(prefix, "foo")
 
 			// write
-			err := storage.Write(ctx, name, bytes.NewReader([]byte("foo")), 3, nil)
+			err := storage.Write(ctx, name, bytes.NewReader([]byte("foo")), ptrTo[int64](3), nil)
 			assert.Nil(t, err)
 
 			// list
@@ -91,11 +91,11 @@ func testObjectStorage[T ObjectStorage](
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
 			// sub dirs
-			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), 1, nil)
+			err = storage.Write(ctx, "a/1/1", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
-			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), 1, nil)
+			err = storage.Write(ctx, "a/1/2", bytes.NewReader([]byte{'a'}), nil, nil)
 			assert.Nil(t, err)
-			err = storage.Write(ctx, "a/2", bytes.NewReader([]byte{'a'}), 1, nil)
+			err = storage.Write(ctx, "a/2", bytes.NewReader([]byte{'a'}), ptrTo[int64](1), nil)
 			assert.Nil(t, err)
 
 			// set list max entries
@@ -155,6 +155,48 @@ func testObjectStorage[T ObjectStorage](
 
 		})
 
+		t.Run("invalid write length", func(t *testing.T) {
+			storage := newStorage(t)
+			ctx := context.Background()
+			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+
+			name := path.Join(prefix, "foo")
+
+			err := storage.Write(ctx, name, bytes.NewReader([]byte("")), ptrTo[int64](1), nil)
+			if !moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch) {
+				t.Fatalf("got %v", err)
+			}
+
+			err = storage.Write(ctx, name, bytes.NewReader([]byte("a")), ptrTo[int64](2), nil)
+			if !moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch) {
+				t.Fatalf("got %v", err)
+			}
+
+			err = storage.Write(ctx, name, bytes.NewReader([]byte("ab")), ptrTo[int64](1), nil)
+			if !moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch) {
+				t.Fatalf("got %v", err)
+			}
+
+		})
+
+		t.Run("write empty", func(t *testing.T) {
+			storage := newStorage(t)
+			ctx := context.Background()
+			prefix := time.Now().Format("2006-01-02-15-04-05.000000")
+
+			name := path.Join(prefix, "foo")
+
+			reader := newIOEntriesReader(ctx, []IOEntry{
+				{
+					Data: []byte{},
+					Size: 0,
+				},
+			})
+			err := storage.Write(ctx, name, reader, ptrTo[int64](0), nil)
+			assert.Nil(t, err)
+
+		})
+
 	})
 }
 
@@ -184,20 +226,22 @@ func TestObjectStorages(t *testing.T) {
 					}
 					return storage
 				})
-				testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
-					storage, err := NewMinioSDK(context.Background(), args, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-					return storage
-				})
-				testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
-					storage, err := NewAwsSDKv2(context.Background(), args, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-					return storage
-				})
+				if args.RoleARN == "" {
+					testObjectStorage(t, "minio", func(t *testing.T) *MinioSDK {
+						storage, err := NewMinioSDK(context.Background(), args, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						return storage
+					})
+					testObjectStorage(t, "aws", func(t *testing.T) *AwsSDKv2 {
+						storage, err := NewAwsSDKv2(context.Background(), args, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						return storage
+					})
+				}
 
 			case strings.Contains(args.Endpoint, "qcloud"):
 				// qcloud
