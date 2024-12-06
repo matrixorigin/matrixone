@@ -162,11 +162,8 @@ func (ctl *CancelableJob) Start() {
 						}
 						return
 					case <-ticker.C:
-						run := func() {
-							ctl.fn(ctl.ctx)
-						}
-						if ctl.recoverPanic {
-							run = func() {
+						func() {
+							if ctl.recoverPanic {
 								defer func() {
 									if r := recover(); r != nil {
 										logutil.Error(
@@ -176,10 +173,9 @@ func (ctl *CancelableJob) Start() {
 										)
 									}
 								}()
-								ctl.fn(ctl.ctx)
 							}
-						}
-						run()
+							ctl.fn(ctl.ctx)
+						}()
 					}
 				}
 			}()
