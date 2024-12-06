@@ -480,6 +480,7 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 	if len(pathList) != len(valList) {
 		return Null, moerr.NewInvalidInputNoCtx("pathList and valList should have the same length")
 	}
+
 	if len(pathList) == 0 {
 		return bj, nil
 	}
@@ -493,21 +494,16 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 		switch modifyType {
 		case JsonModifySet:
 			bj, err = modifier.set(path, val)
-			if err != nil {
-				return Null, err
-			}
 		case JsonModifyInsert:
 			bj, err = modifier.insert(path, val)
-			if err != nil {
-				return Null, err
-			}
 		case JsonModifyReplace:
 			bj, err = modifier.replace(path, val)
-			if err != nil {
-				return Null, err
-			}
 		default:
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
+		}
+
+		if err != nil {
+			return Null, err
 		}
 	}
 	return bj, nil
