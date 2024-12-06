@@ -3725,12 +3725,13 @@ func lockMoDatabase(c *Compile, dbName string, lockMode lock.LockMode) error {
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName})
+	accountID := c.proc.GetSessionInfo().AccountId
+	vec, err := getLockVector(c.proc, accountID, []string{dbName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, accountID); err != nil {
 		return err
 	}
 	return nil
@@ -3745,13 +3746,14 @@ func lockMoTable(
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName, tblName})
+	accountID := c.proc.GetSessionInfo().AccountId
+	vec, err := getLockVector(c.proc, accountID, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, accountID); err != nil {
 		return err
 	}
 	return nil
