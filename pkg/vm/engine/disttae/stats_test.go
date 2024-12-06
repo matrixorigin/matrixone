@@ -47,7 +47,6 @@ func TestGetStats(t *testing.T) {
 		}),
 	)
 
-	rd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	tids := []uint64{2000, 2001, 2002}
 	go func() {
 		time.Sleep(time.Millisecond * 20)
@@ -60,6 +59,7 @@ func TestGetStats(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(j int) {
 			defer wg.Done()
+			rd := rand.New(rand.NewSource(time.Now().UnixNano()))
 			time.Sleep(time.Millisecond * time.Duration(10+rd.Intn(20)))
 			k := statsinfo.StatsInfoKey{
 				DatabaseID: 1000,
