@@ -398,27 +398,31 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 		return
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
+
 	if !ok {
-		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
-			col = child.GroupBy[col.ColPos].GetCol()
-			if col == nil {
-				return
-			}
-			_, ok = builder.tag2Table[col.RelPos]
-			if !ok {
-				return
-			}
-			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-			node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
-			node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
-			node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
-			node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
-			node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
-		}
+		//todo: disable shuffle reuse for now
+		/*
+			child := builder.qry.Nodes[node.Children[0]]
+			if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
+				col = child.GroupBy[col.ColPos].GetCol()
+				if col == nil {
+					return
+				}
+				_, ok = builder.tag2Table[col.RelPos]
+				if !ok {
+					return
+				}
+				node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+				node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
+				node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
+				node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
+				node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
+				node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
+			}*/
 		return
 	}
+
 	colName := tableDef.Cols[col.ColPos].Name
 
 	// for shuffle join, if left child is not sorted, the cost will be very high
