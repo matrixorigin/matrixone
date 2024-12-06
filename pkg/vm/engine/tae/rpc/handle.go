@@ -353,6 +353,11 @@ func (h *Handle) HandlePreCommitWrite(
 	for len(es) > 0 {
 		e, es, err = pkgcatalog.ParseEntryList(es)
 		if err != nil {
+			reqsStr := "emtpy"
+			if txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID())); ok {
+				reqsStr = pkgcatalog.ShowReqs(txnCtx.reqs)
+			}
+			logutil.Errorf("ParseEntryList failed. error:%v, cached reqs:%v", err, reqsStr)
 			return err
 		}
 		switch cmds := e.(type) {
@@ -664,7 +669,8 @@ func (h *Handle) HandleCreateRelation(
 			)
 		})
 		ctx = defines.AttachAccount(ctx, c.AccountId, c.Creator, c.Owner)
-		dbH, err := txn.GetDatabaseWithCtx(ctx, c.DatabaseName)
+		txn.BindAccessInfo(c.AccountId, c.Creator, c.Owner)
+		dbH, err := txn.GetDatabaseByID(c.DatabaseId)
 		if err != nil {
 			return err
 		}

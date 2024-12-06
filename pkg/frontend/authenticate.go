@@ -926,6 +926,7 @@ var (
 		"mo_snapshots":                0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -966,6 +967,7 @@ var (
 		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
+		catalog.MO_TABLE_STATS:        0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1003,6 +1005,7 @@ var (
 		MoCatalogMoCdcTaskDDL,
 		MoCatalogMoCdcWatermarkDDL,
 		MoCatalogMoDataKeyDDL,
+		MoCatalogMoTableStatsDDL,
 	}
 
 	//drop tables for the tenant
@@ -3621,7 +3624,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getAccountIdNamesSql)
-		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
+		_, nameInfoMap, rtnErr := getAccounts(ctx, bh, true)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -3655,6 +3658,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
+				}
 				return rtnErr
 			}
 		}
@@ -3668,6 +3674,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		for _, pubInfo := range pubInfos {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, pubInfo.PubName)
 			if rtnErr = dropPublication(deleteCtx, bh, true, pubInfo.PubName); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, pubInfo.PubName, rtnErr.Error())
+				}
 				return
 			}
 		}
@@ -3679,6 +3688,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, dbSql, rtnErr.Error())
+			}
 			return rtnErr
 		}
 
@@ -3716,6 +3728,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s, error: %s", da.Name, sql, rtnErr.Error())
+				}
 				return rtnErr
 			}
 		}
@@ -3734,6 +3749,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 
 			ses.Infof(ctx, "dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
 			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s %s", da.Name, updatePubInfoAccountListFormat, subInfo.PubName)
+				}
 				return rtnErr
 			}
 		}
@@ -3741,6 +3759,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
 		// delete records in mo_subs
 		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, deleteMoSubsRecordsBySubAccountIdFormat)
+			}
 			return rtnErr
 		}
 
@@ -3748,6 +3769,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop table mo_mysql_compatibility_mode
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
+			}
 			return rtnErr
 		}
 
@@ -3755,6 +3779,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
+			}
 			return rtnErr
 		}
 
@@ -3762,6 +3789,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop mo_catalog.mo_indexes under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoIndexes)
+			}
 			return rtnErr
 		}
 
@@ -3769,18 +3799,27 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
+			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
 		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoRetention)
+			}
 			return rtnErr
 		}
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
+			}
 			return rtnErr
 		}
 
@@ -3789,6 +3828,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3800,6 +3842,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3809,6 +3854,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 		rtnErr = bh.Exec(ctx, sql)
 		if rtnErr != nil {
+			if isDisallowedError(rtnErr) {
+				ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+			}
 			return rtnErr
 		}
 
@@ -3834,6 +3882,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
+				if isDisallowedError(rtnErr) {
+					ses.Infof(ctx, "[EOF] dropAccount %s sql: %s", da.Name, sql)
+				}
 				return rtnErr
 			}
 		}
@@ -5474,7 +5525,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt, *tree.ExplainPhyPlan:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.SetVar:
@@ -7524,6 +7575,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
 			return true
 		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+			return true
+		}
 		return false
 	}
 
@@ -7689,7 +7743,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 // createSubscription insert records into mo_subs of To-All-Publications
 func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
 	// get all accounts
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return
 	}

@@ -174,6 +174,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -225,6 +226,7 @@ func Test_checkDatabaseExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -254,6 +256,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -302,6 +305,7 @@ func Test_initFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -380,6 +384,7 @@ func Test_initUser(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		sql2result := make(map[string]ExecResult)
@@ -442,6 +447,7 @@ func Test_initRole(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -538,6 +544,9 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.PrepareString{}},
 		{stmt: &tree.Deallocate{}},
 		{stmt: &tree.ShowBackendServers{}},
+		{stmt: &tree.SavePoint{}},
+		{stmt: &tree.ReleaseSavePoint{}},
+		{stmt: &tree.RollbackToSavePoint{}},
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -5489,6 +5498,7 @@ func Test_doDropFunctionWithDB(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -5517,6 +5527,7 @@ func Test_doDropFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -5884,6 +5895,7 @@ func Test_doInterpretCall(t *testing.T) {
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
@@ -5923,6 +5935,7 @@ func Test_doInterpretCall(t *testing.T) {
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc, ses: ses}
 		rm, _ := NewRoutineManager(ctx, "")
@@ -5975,6 +5988,7 @@ func Test_doInterpretCall(t *testing.T) {
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: proc,
 			ses: ses}
@@ -6399,6 +6413,7 @@ func Test_doAlterUser(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6454,6 +6469,7 @@ func Test_doAlterUser(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6505,6 +6521,7 @@ func Test_doAlterUser(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
@@ -6579,6 +6596,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6633,6 +6651,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6687,6 +6706,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6737,6 +6757,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6788,6 +6809,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6835,6 +6857,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6889,6 +6912,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6933,6 +6957,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -6981,6 +7006,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -7029,6 +7055,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -7087,6 +7114,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccountId(ctx, 0)
 
@@ -7098,7 +7126,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		mrs := newMrsForGetAllAccounts([][]interface{}{
 			{uint64(0), "sys", "open", uint64(1), nil},
 			{uint64(1), "acc", "open", uint64(1), nil},
@@ -7148,6 +7176,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -7158,7 +7187,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
@@ -7194,6 +7223,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -7204,7 +7234,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getAccountIdNamesSql
+		sql := getAccountIdNamesSql + " for update"
 		bh.sql2result[sql] = newMrsForGetAllAccounts([][]interface{}{})
 
 		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
@@ -7393,6 +7423,7 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
 
@@ -7531,6 +7562,9 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 
 func (bt *backgroundExecTest) Service() string {
 	return ""
+}
+
+func (bt *backgroundExecTest) SetRestore(b bool) {
 }
 
 var _ BackgroundExec = &backgroundExecTest{}
@@ -8428,6 +8462,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8468,6 +8503,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8516,6 +8552,7 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8559,6 +8596,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8600,6 +8638,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8648,6 +8687,7 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8712,6 +8752,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8768,6 +8809,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8826,6 +8868,7 @@ func TestDoAlterAccountConfig(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8883,6 +8926,7 @@ func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8934,6 +8978,7 @@ func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -8985,6 +9030,7 @@ func TestGetVersionCompatibility(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9032,6 +9078,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9078,6 +9125,7 @@ func TestCheckStageExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9155,6 +9203,7 @@ func TestDoDropStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9209,6 +9258,7 @@ func TestDoDropStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9263,6 +9313,7 @@ func TestDoDropStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9315,6 +9366,7 @@ func TestDoDropStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9371,6 +9423,7 @@ func TestDoCreateStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9429,6 +9482,7 @@ func TestDoCreateStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9489,6 +9543,7 @@ func TestDoCreateStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9547,6 +9602,7 @@ func TestDoCreateStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9607,6 +9663,7 @@ func TestDoCreateStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9667,6 +9724,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9730,6 +9788,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9793,6 +9852,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9854,6 +9914,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9915,6 +9976,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -9977,6 +10039,7 @@ func TestDoAlterStage(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10120,6 +10183,7 @@ func TestUpload(t *testing.T) {
 		_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		pu.SV.SaveQueryResult = "on"
 		//file service
 		pu.FileService = fs
@@ -10171,6 +10235,7 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		setPu("", pu)
 
@@ -10218,6 +10283,7 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10264,6 +10330,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10318,6 +10385,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10372,6 +10440,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10424,6 +10493,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10480,6 +10550,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10541,6 +10612,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10602,6 +10674,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10667,6 +10740,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10732,6 +10806,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10798,6 +10873,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10864,6 +10940,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10930,6 +11007,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -10976,6 +11054,7 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -11020,6 +11099,7 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -11071,6 +11151,7 @@ func Test_checkPitrDup(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")
@@ -11114,6 +11195,7 @@ func Test_checkPitrDup(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx, "")

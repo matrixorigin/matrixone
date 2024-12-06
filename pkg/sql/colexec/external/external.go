@@ -269,7 +269,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
+		bat.Attrs[i] = node.TableDef.Cols[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
 			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
@@ -954,7 +954,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])])
+		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
 		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
@@ -969,7 +969,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return err
@@ -1079,6 +1079,7 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return err
 	}
 	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
@@ -1237,7 +1238,7 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.TbColToDataCol[strings.ToLower(colName)]]
+	return line[param.TbColToDataCol[colName]]
 }
 
 // when len(line) >= len(param.TbColToDataCol), call this function to get one row data

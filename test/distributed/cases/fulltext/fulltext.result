@@ -449,3 +449,28 @@ create fulltext index ftidx on t1 (b);
 select b from t1 where match(b) against ('test create' in natural language mode) limit 1;
 b
 test create big fulltext index
+drop table t1;
+CREATE TABLE IF NOT EXISTS nation (
+`n_nationkey`  INT,
+`n_name`       CHAR(25),
+`n_regionkey`  INT,
+`n_comment`    VARCHAR(152),
+`n_dummy`      VARCHAR(10),
+PRIMARY KEY (`n_nationkey`));
+insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea', 2, 'korea noodle', 'dummmy');
+create fulltext index ftidx on nation(n_comment);
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+0    china    1    china beijing    dummy
+delete from nation where n_nationkey = 0;
+select * from nation where match(n_comment) against('china');
+n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+drop table nation;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title, body);
+alter table articles drop column title;
+drop table if exists articles;
+create table articles (id int auto_increment not null primary key, title varchar, body text);
+create fulltext index ftidx on articles (title);
+alter table articles drop column title;

@@ -1,4 +1,8 @@
 set global enable_privilege_cache = off;
+select enable_fault_injection();
+select add_fault_point('fj/log/partitionstate', ':::', 'echo', 1, 'mo_catalog');
+select add_fault_point('fj/log/ranges', ':::', 'echo', 1, 'mo_catalog');
+select add_fault_point('fj/log/reader', ':::', 'echo', 1, 'mo_catalog');
 
 -- create udf, create snapshot, drop udf, restore
 drop database if exists udf_db;
@@ -486,4 +490,5 @@ select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 drop snapshot sp01;
 drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
+select disable_fault_injection();
 set global enable_privilege_cache = on;

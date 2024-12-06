@@ -1,5 +1,3 @@
-select enable_fault_injection();
-select add_fault_point('fj/debug/19787', ':::', 'echo', 0, '');
 
 -- drop, and then restore
 drop database if exists db1;
@@ -404,4 +402,3 @@ show databases like 'db%';
 -- @ignore:1
 show snapshots;
 
-select disable_fault_injection();

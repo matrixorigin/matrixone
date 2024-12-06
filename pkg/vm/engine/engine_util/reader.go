@@ -410,6 +410,41 @@ func (r *reader) Read(
 			r.Close()
 		}
 
+		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
+			if err != nil {
+				logutil.Error(
+					"LOGREADER-ERROR",
+					zap.String("name", r.name),
+					zap.Error(err),
+				)
+				return
+			}
+			if isEnd {
+				return
+			}
+			if logLevel == 0 {
+				logutil.Info(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
+					zap.Int("data-len", outBatch.RowCount()),
+					zap.Error(err),
+				)
+			} else {
+				maxLogCnt := 10
+				if logLevel > 1 {
+					maxLogCnt = outBatch.RowCount()
+				}
+				logutil.Info(
+					"LOGREADER-INJECTED-1",
+					zap.String("name", r.name),
+					zap.String("ts", r.ts.DebugString()),
+					zap.Error(err),
+					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+				)
+			}
+		}
+
 		if v := ctx.Value(defines.ReaderSummaryKey{}); v != nil {
 			buf := v.(*bytes.Buffer)
 			switch dataState {

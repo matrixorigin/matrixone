@@ -37,7 +37,7 @@ func Test_saveProfile(t *testing.T) {
 	defer fs.Close(ctx)
 	globalEtlFS = fs
 	saveCpuProfile(time.Second)
-	saveMallocProfile()
+	saveProfiles()
 }
 
 func Test_saveProfile2(t *testing.T) {

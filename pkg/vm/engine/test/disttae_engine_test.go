@@ -1117,6 +1117,73 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
 }
 
+func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(8189, 1)
+	schema.Name = "padding"
+	txnop := p.StartCNTxn()
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	schema2 := catalog2.MockSchemaAll(4, 1)
+	schema2.Name = "table2"
+	p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	p.DeleteTableInDB(txnop, "db", schema.Name)
+	p.DeleteTableInDB(txnop, "db", schema2.Name)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	rel := p.CreateTableInDB(txnop, "db", schema2)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, "db", "table2", rel.GetTableID(p.Ctx))
+
+	txn, _ := tae.StartTxn(nil)
+	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
+	utbl, _ := udb.GetRelationByID(catalog.MO_COLUMNS_ID)
+	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker.Start()
+	defer worker.Stop()
+	// flusht tombstone ahead of data insert
+	it := utbl.MakeObjectIt(true)
+	require.True(t, it.Next())
+	firstEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	require.True(t, it.Next())
+	secondEntry := it.GetObject().GetMeta().(*catalog2.ObjectEntry)
+	t.Log(firstEntry.ID().ShortStringEx())
+	task1, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, txn,
+		nil,
+		[]*catalog2.ObjectEntry{firstEntry, secondEntry},
+		tae.Runtime)
+	require.NoError(t, err)
+	worker.SendOp(task1)
+	err = task1.WaitDone(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(p.Ctx))
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", ""))
+	}
+	exec := v.(executor.SQLExecutor)
+	txnop = p.StartCNTxn()
+	buf := new(bytes.Buffer)
+	ctx := context.WithValue(p.Ctx, defines.ReaderSummaryKey{}, buf)
+	result, err := exec.Exec(ctx, querySql, executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	t.Log("readerSummary", buf.String())
+	require.Equal(t, 1, len(result.Batches))
+	require.Equal(t, 5, result.Batches[0].RowCount())
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
 func TestCache3Tables(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
@@ -1139,4 +1206,35 @@ func TestCache3Tables(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, dbname)
 	require.Equal(t, catalog.MO_COLUMNS, tname)
 	require.NotNil(t, rel)
+}
+
+func TestRelationExists(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	exist, err := db.RelationExists(p.Ctx, "test", nil)
+	require.NoError(t, err)
+	require.True(t, exist)
+
+	exist, err = db.RelationExists(p.Ctx, "testxx", nil)
+	require.NoError(t, err)
+	require.False(t, exist)
+
+	// craft no-account-id error
+	ctx := context.WithValue(p.Ctx, defines.TenantIDKey{}, nil)
+	exist, err = db.RelationExists(ctx, "testxx", nil)
+	require.Error(t, err)
+	require.False(t, exist)
+
+	rel, err := db.Relation(ctx, "test", nil)
+	require.Error(t, err)
+	require.Nil(t, rel)
 }

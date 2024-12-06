@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"iter"
@@ -22,6 +23,7 @@ import (
 	"net/url"
 	gotrace "runtime/trace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -299,21 +301,54 @@ func (a *MinioSDK) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (
 	err error,
 ) {
+	defer wrapSizeMismatchErr(&err)
 
-	_, err = a.putObject(
-		ctx,
-		key,
-		r,
-		size,
-		expire,
-	)
-	if err != nil {
-		return err
+	var n atomic.Int64
+	if sizeHint != nil {
+		r = &countingReader{
+			R: r,
+			C: &n,
+		}
+	}
+
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+			return a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		_, err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if sizeHint != nil && n.Load() != *sizeHint {
+		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
 	return
@@ -461,7 +496,7 @@ func (a *MinioSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
-	size int64,
+	sizeHint *int64,
 	expire *time.Time,
 ) (minio.UploadInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
@@ -471,6 +506,10 @@ func (a *MinioSDK) putObject(
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
+	size := int64(-1)
+	if sizeHint != nil {
+		size = *sizeHint
+	}
 	return a.client.PutObject(
 		ctx,
 		a.bucket,

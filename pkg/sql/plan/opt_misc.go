@@ -1155,9 +1155,6 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 		return
 	}
 	tableDef := baseNode.TableDef
-	if !getLockTableAtTheEnd(tableDef) {
-		return
-	}
 	objRef := baseNode.ObjRef
 	tableIDs := make(map[uint64]bool)
 	tableIDs[tableDef.TblId] = true
@@ -1229,7 +1226,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 		}
 
 		lockTarget.LockRows = lockRows
-		lockTarget.LockTableAtTheEnd = true
+		lockTarget.LockTableAtTheEnd = false
 	}
 
 	return
