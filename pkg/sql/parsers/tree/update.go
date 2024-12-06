@@ -200,13 +200,22 @@ type TailParameter struct {
 	Assignments UpdateExprs
 }
 
+type LoadDupMode int
+
+const (
+	LOAD_DUPLICATE_CHECKING LoadDupMode = iota
+	LOAD_DUPLICATE_NOCHECKING
+	LOAD_DUPLICATE_IGNORE
+	LOAD_DUPLICATE_REPLACE
+)
+
 // Load data statement
 type Load struct {
 	statementImpl
-	Local             bool
-	DuplicateHandling DuplicateKey
-	Table             *TableName
-	Accounts          IdentifierList
+	Local        bool
+	DuplicateOpt LoadDupMode
+	Table        *TableName
+	Accounts     IdentifierList
 	//Partition
 	Param *ExternParam
 }
@@ -247,15 +256,15 @@ func (node *Load) Format(ctx *FmtCtx) {
 		}
 	}
 
-	switch node.DuplicateHandling.(type) {
-	case *DuplicateKeyError:
-		break
-	case *DuplicateKeyIgnore:
-		ctx.WriteString(" ignore")
-	case *DuplicateKeyReplace:
-		ctx.WriteString(" replace")
-	case *DuplicateKeyNoChecking:
+	switch node.DuplicateOpt {
+	case LOAD_DUPLICATE_CHECKING:
+		ctx.WriteString(" checking")
+	case LOAD_DUPLICATE_NOCHECKING:
 		ctx.WriteString(" noChecking")
+	case LOAD_DUPLICATE_IGNORE:
+		ctx.WriteString(" ignore")
+	case LOAD_DUPLICATE_REPLACE:
+		ctx.WriteString(" replace")
 	}
 	ctx.WriteString(" into table ")
 	node.Table.Format(ctx)
@@ -344,40 +353,6 @@ func formatS3option(ctx *FmtCtx, option []string) {
 
 func (node *Load) GetStatementType() string { return "Load" }
 func (node *Load) GetQueryType() string     { return QueryTypeDML }
-
-type DuplicateKey interface{}
-
-type duplicateKeyImpl struct {
-	DuplicateKey
-}
-
-type DuplicateKeyError struct {
-	duplicateKeyImpl
-}
-
-func NewDuplicateKeyError() *DuplicateKeyError {
-	return &DuplicateKeyError{}
-}
-
-type DuplicateKeyReplace struct {
-	duplicateKeyImpl
-}
-
-func NewDuplicateKeyReplace() *DuplicateKeyReplace {
-	return &DuplicateKeyReplace{}
-}
-
-type DuplicateKeyIgnore struct {
-	duplicateKeyImpl
-}
-
-type DuplicateKeyNoChecking struct {
-	duplicateKeyImpl
-}
-
-func NewDuplicateKeyIgnore() *DuplicateKeyIgnore {
-	return &DuplicateKeyIgnore{}
-}
 
 type EscapedBy struct {
 	Value byte
