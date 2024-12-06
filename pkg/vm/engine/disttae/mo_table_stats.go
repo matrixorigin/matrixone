@@ -803,7 +803,9 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 	var (
 		val any
 
-		accs2, dbs, tbls []uint64
+		accs2 = make([]uint64, 0, sqlRet.RowCount())
+		dbs   = make([]uint64, 0, sqlRet.RowCount())
+		tbls  = make([]uint64, 0, sqlRet.RowCount())
 	)
 
 	for i := range sqlRet.RowCount() {
@@ -1424,13 +1426,27 @@ func (d *dynamicCtx) gamaInsertNewTables(
 	service string,
 	eng engine.Engine,
 ) {
+
 	var (
 		err    error
-		val    any
 		sql    string
 		sqlRet ie.InternalExecResult
+	)
 
-		values []string
+	sql = fmt.Sprintf(findNewTableSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLES,
+		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+	)
+
+	sqlRet = d.executeSQL(ctx, sql, "insert new table-0: get new tables")
+	if err = sqlRet.Error(); err != nil {
+		return
+	}
+
+	var (
+		val any
+
+		values = make([]string, 0, sqlRet.RowCount())
 
 		dbName, tblName    string
 		accId, dbId, tblId uint64
@@ -1443,19 +1459,8 @@ func (d *dynamicCtx) gamaInsertNewTables(
 			zap.Error(err))
 	}()
 
-	sql = fmt.Sprintf(findNewTableSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLES,
-		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
-	)
-
-	sqlRet = d.executeSQL(ctx, sql, "insert new table-0: get new tables")
-	if err = sqlRet.Error(); err != nil {
-		return
-	}
-
 	valFmt := "(%d,%d,%d,'%s','%s','{}','%s',0)"
 
-	values = make([]string, 0, sqlRet.RowCount())
 	for i := range sqlRet.RowCount() {
 		if val, err = sqlRet.Value(ctx, i, 5); err != nil {
 			return
@@ -1504,8 +1509,8 @@ func (d *dynamicCtx) gamaInsertNewTables(
 		catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
 		strings.Join(values, ","))
 
-	sqlRet = d.executeSQL(ctx, sql, "insert new table-1: insert new tables")
-	return
+	sqlRet = executeSQL(ctx, sql, "insert new table-1: insert new tables")
+	err = sqlRet.Error()
 }
 
 func decodeIdsFromMoTableStatsSqlRet(
@@ -1558,9 +1563,10 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 		err error
 		now = time.Now()
 
-		tbls []tablePair
-
-		accIds, dbIds, tblIds []uint64
+		tbls   = make([]tablePair, 0, 1)
+		accIds = make([]uint64, 0, 1)
+		dbIds  = make([]uint64, 0, 1)
+		tblIds = make([]uint64, 0, 1)
 	)
 
 	defer func() {
