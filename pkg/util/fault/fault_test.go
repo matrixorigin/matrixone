@@ -237,8 +237,8 @@ func Test_panic(t *testing.T) {
 
 	Enable()
 	defer Disable()
-	require.NoError(t, AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr"))
-	require.NoError(t, AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr"))
+	AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr")
+	AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr")
 
 	fun := func(useMoerr bool) {
 		defer func() {

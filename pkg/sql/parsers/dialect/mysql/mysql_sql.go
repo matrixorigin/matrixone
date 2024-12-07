@@ -13248,7 +13248,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:2817
 		{
-			var name *tree.CStr
+			name := yylex.(*Lexer).GetDbOrTblNameCStr("")
 			secondaryRole := false
 			var secondaryRoleType tree.SecondaryRoleType = 0
 			var role *tree.Role

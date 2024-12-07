@@ -1,0 +1,6 @@
+drop database if exists test_use;
+create database test_use;
+use ;show tables;
+Unknown database 
+use test_use;
+drop database if exists test_use;
