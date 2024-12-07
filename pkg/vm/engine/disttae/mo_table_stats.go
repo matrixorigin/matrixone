@@ -401,7 +401,7 @@ func initMoTableStatsConfig(
 		go func() {
 			ctx = turn2SysCtx(context.Background())
 			for {
-				if !eng.config.moServerStateChecker() {
+				if eng.config.moServerStateChecker == nil || !eng.config.moServerStateChecker() {
 					time.Sleep(time.Second * 5)
 					continue
 				}
