@@ -209,11 +209,9 @@ func TestPhyPlanJSON(t *testing.T) {
 	//------------------------------------------------------------------------------------------------------------------
 
 	phyPlan := &PhyPlan{
-		Version:         "1.0.0",
-		LocalScope:      []PhyScope{phyScope1},
-		RemoteScope:     []PhyScope{phyScope1},
-		S3IOInputCount:  5,
-		S3IOOutputCount: 0,
+		Version:     "1.0.0",
+		LocalScope:  []PhyScope{phyScope1},
+		RemoteScope: []PhyScope{phyScope1},
 	}
 
 	// Convert to JSON
