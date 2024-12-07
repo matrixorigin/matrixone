@@ -84,6 +84,7 @@ message FaultPoint {
     string Action               = 3;
     int64 Iarg                  = 4;
     string Sarg                 = 5;
+    bool Constant                = 6;
 }
 
 message TraceSpan {
@@ -186,4 +187,10 @@ message GetChangedTableListResp {
     repeated uint64 DatabaseIds = 3;
     repeated uint64 TableIds = 4;
     bytes Extra = 5;
+}
+
+message FaultInjectReq {
+    option (gogoproto.typedecl)     = false;
+    string method = 1;
+    string parameter = 2;
 }

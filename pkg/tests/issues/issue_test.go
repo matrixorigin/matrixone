@@ -872,3 +872,27 @@ func waitLogtailResume(cn cnservice.Service) {
 		time.Sleep(time.Second)
 	}
 }
+
+func TestFaultInjection(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+			defer cancel()
+
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+			require.NotNil(t, exec)
+
+			{
+				_, err := exec.Exec(
+					ctx,
+					"select fault_inject('all.','enable_fault_injection','');",
+					executor.Options{})
+				require.NoError(t, err)
+			}
+		})
+}
