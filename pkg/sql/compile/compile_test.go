@@ -209,7 +209,7 @@ func TestCompileWithFaults(t *testing.T) {
 		require.NoError(t, pc.Close())
 	}()
 
-	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
+	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "", false)
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	ctrl := gomock.NewController(t)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
