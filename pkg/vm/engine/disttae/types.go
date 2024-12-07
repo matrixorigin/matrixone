@@ -173,9 +173,15 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
-func WithMoTableStats(conf MoTableStatsConfig) EngineOptions {
+func WithMoTableStatsConf(conf MoTableStatsConfig) EngineOptions {
 	return func(e *Engine) {
 		e.config.statsConf = conf
+	}
+}
+
+func WithMoServerStateChecker(checker func() bool) EngineOptions {
+	return func(e *Engine) {
+		e.config.moServerStateChecker = checker
 	}
 }
 
@@ -204,8 +210,9 @@ type Engine struct {
 
 		cnTransferTxnLifespanThreshold time.Duration
 
-		ieFactory func() ie.InternalExecutor
-		statsConf MoTableStatsConfig
+		moServerStateChecker func() bool
+		ieFactory            func() ie.InternalExecutor
+		statsConf            MoTableStatsConfig
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
