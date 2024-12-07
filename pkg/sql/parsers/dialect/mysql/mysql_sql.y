@@ -186,7 +186,7 @@ import (
     int64Val int64
     strs []string
 
-    duplicateKey tree.DuplicateKey
+    loadDuplicateMode tree.LoadDupMode
     fields *tree.Fields
     fieldsList []*tree.Fields
     lines *tree.Lines
@@ -392,7 +392,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE CHECKING NOCHECKING
 
 // MODump
 %token <str> MODUMP
@@ -754,7 +754,7 @@ import (
 %type <exprs> data_values data_opt row_value
 
 %type <boolVal> local_opt
-%type <duplicateKey> duplicate_opt
+%type <loadDuplicateMode> duplicate_opt
 %type <fields> load_fields field_item export_fields
 %type <fieldsList> field_item_list
 %type <str> field_terminator starting_opt lines_terminated_opt starting lines_terminated
@@ -1510,7 +1510,7 @@ load_data_stmt:
         $$ = &tree.Load{
             Local: $3,
             Param: $4,
-            DuplicateHandling: $5,
+            DuplicateOpt: $5,
             Table: $8,
         }
         $$.(*tree.Load).Param.Tail = $9
@@ -1890,15 +1890,23 @@ field_terminator:
 
 duplicate_opt:
     {
-        $$ = &tree.DuplicateKeyError{}
+        $$ = tree.LOAD_DUPLICATE_CHECKING
+    }
+|   CHECKING
+    {
+        $$ = tree.LOAD_DUPLICATE_CHECKING
+    }
+|   NOCHECKING
+    {
+        $$ = tree.LOAD_DUPLICATE_NOCHECKING
     }
 |   IGNORE
     {
-        $$ = &tree.DuplicateKeyIgnore{}
+        $$ = tree.LOAD_DUPLICATE_IGNORE
     }
 |   REPLACE
     {
-        $$ = &tree.DuplicateKeyReplace{}
+        $$ = tree.LOAD_DUPLICATE_REPLACE
     }
 
 local_opt:
@@ -12363,6 +12371,7 @@ non_reserved_keyword:
 |   BOOL
 |   CANCEL
 |   CHAIN
+|   CHECKING
 |   CHECKSUM
 |   CLUSTER
 |   COMPRESSION
@@ -12456,6 +12465,7 @@ non_reserved_keyword:
 |   NUMERIC
 |   NEVER
 |   NO
+|   NOCHECKING
 |   OFFSET
 |   ONLY
 |   OPTIMIZE
