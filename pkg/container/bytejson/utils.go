@@ -16,16 +16,20 @@ package bytejson
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"encoding/json"
 	"math"
 	"math/bits"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/pingcap/errors"
 )
 
 func ParseFromString(s string) (ret ByteJson, err error) {
@@ -141,6 +145,54 @@ func ParseJsonPath(path string) (p Path, err error) {
 func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
 	for i, elem := range elems {
 		buf[entryStart+i*valEntrySize] = byte(elem.Type)
+		if elem.Type == TpCodeLiteral {
+			buf[entryStart+i*valEntrySize+valTypeSize] = elem.Data[0]
+		} else {
+			endian.PutUint32(buf[entryStart+i*valEntrySize+valTypeSize:], uint32(len(buf)))
+			buf = append(buf, elem.Data...)
+		}
+	}
+	return buf
+}
+
+func buildJsonObject(keys [][]byte, elems []ByteJson) (ByteJson, error) {
+	totalSize := headerSize + len(elems)*(keyEntrySize+valEntrySize)
+	for i, elem := range elems {
+		if elem.Type != TpCodeLiteral {
+			totalSize += len(elem.Data)
+		}
+		totalSize += len(keys[i])
+	}
+	buf := make([]byte, headerSize+len(elems)*(keyEntrySize+valEntrySize), totalSize)
+	endian.PutUint32(buf, uint32(len(elems)))
+	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
+	for i, key := range keys {
+		endian.PutUint32(buf[headerSize+i*keyEntrySize:], uint32(len(buf)))
+		endian.PutUint16(buf[headerSize+i*keyEntrySize+keyOriginOff:], uint16(len(key)))
+		buf = append(buf, key...)
+	}
+	entryStart := headerSize + len(elems)*keyEntrySize
+	buf = addByteElem(buf, entryStart, elems)
+	return ByteJson{Type: TpCodeObject, Data: buf}, nil
+}
+
+func buildBinaryJSONArray(elems []ByteJson) ByteJson {
+	totalSize := headerSize + len(elems)*valEntrySize
+	for _, elem := range elems {
+		if elem.Type != TpCodeLiteral {
+			totalSize += len(elem.Data)
+		}
+	}
+	buf := make([]byte, headerSize+len(elems)*valEntrySize, totalSize)
+	endian.PutUint32(buf, uint32(len(elems)))
+	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
+	buf = buildBinaryJSONElements(buf, headerSize, elems)
+	return ByteJson{Type: TpCodeArray, Data: buf}
+}
+
+func buildBinaryJSONElements(buf []byte, entryStart int, elems []ByteJson) []byte {
+	for i, elem := range elems {
+		buf[entryStart+i*valEntrySize] = elem.Type
 		if elem.Type == TpCodeLiteral {
 			buf[entryStart+i*valEntrySize+valTypeSize] = elem.Data[0]
 		} else {
@@ -443,4 +495,208 @@ func appendString(out []byte, in string) ([]byte, error) {
 	}
 	out = append(out, '"')
 	return out, nil
+}
+
+func CreateByteJSON(in any) (ByteJson, error) {
+	return CreateByteJSONWithCheck(in)
+}
+
+func CreateByteJSONWithCheck(in any) (ByteJson, error) {
+	typeCode, buf, err := appendBinaryJSON(nil, in)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: typeCode, Data: buf}, nil
+}
+
+func appendBinaryJSON(buf []byte, in any) (TpCode, []byte, error) {
+	var typeCode byte
+	var err error
+	switch x := in.(type) {
+	case nil:
+		typeCode = TpCodeLiteral
+		buf = append(buf, LiteralNull)
+	case bool:
+		typeCode = TpCodeLiteral
+		if x {
+			buf = append(buf, LiteralTrue)
+		} else {
+			buf = append(buf, LiteralFalse)
+		}
+	case int64:
+		typeCode = TpCodeInt64
+		buf = appendBinaryUint64(buf, uint64(x))
+	case uint64:
+		typeCode = TpCodeUint64
+		buf = appendBinaryUint64(buf, x)
+	case float64:
+		typeCode = TpCodeFloat64
+		buf = appendBinaryFloat64(buf, x)
+	case json.Number:
+		typeCode, buf, err = appendBinaryNumber(buf, x)
+		if err != nil {
+			return typeCode, nil, err
+		}
+	case string:
+		typeCode = TpCodeString
+		buf = appendBinaryString(buf, x)
+	case ByteJson:
+		typeCode = x.Type
+		buf = append(buf, x.Data...)
+	case []any:
+		typeCode = TpCodeArray
+		buf, err = appendBinaryArray(buf, x)
+		if err != nil {
+			return typeCode, nil, err
+		}
+	case map[string]any:
+		typeCode = TpCodeObject
+		buf, err = appendBinaryObject(buf, x)
+		if err != nil {
+			return typeCode, nil, err
+		}
+	default:
+		return typeCode, nil, moerr.NewInvalidArgNoCtx("invalid json type", reflect.TypeOf(in).String())
+	}
+	return typeCode, buf, err
+}
+
+func appendBinaryUint64(buf []byte, v uint64) []byte {
+	off := len(buf)
+	buf = appendZero(buf, 8)
+	endian.PutUint64(buf[off:], v)
+	return buf
+}
+
+func appendUint32(buf []byte, v uint32) []byte {
+	var tmp [4]byte
+	endian.PutUint32(tmp[:], v)
+	return append(buf, tmp[:]...)
+}
+
+func appendBinaryFloat64(buf []byte, v float64) []byte {
+	off := len(buf)
+	buf = appendZero(buf, 8)
+	endian.PutUint64(buf[off:], math.Float64bits(v))
+	return buf
+}
+
+func appendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
+	if strings.Contains(x.String(), "Ee.") {
+		f64, err := x.Float64()
+		if err != nil {
+			return TpCodeFloat64, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
+		}
+		return TpCodeFloat64, appendBinaryFloat64(buf, f64), nil
+	} else if val, err := x.Int64(); err == nil {
+		return TpCodeInt64, appendBinaryUint64(buf, uint64(val)), nil
+	} else if val, err := strconv.ParseUint(string(x), 10, 64); err == nil {
+		return TpCodeUint64, appendBinaryUint64(buf, val), nil
+	}
+	val, err := x.Float64()
+	if err == nil {
+		return TpCodeFloat64, appendBinaryFloat64(buf, val), nil
+	}
+	var typeCode TpCode
+	return typeCode, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
+}
+
+func appendBinaryString(buf []byte, v string) []byte {
+	begin := len(buf)
+	buf = appendZero(buf, binary.MaxVarintLen64)
+	lenLen := binary.PutUvarint(buf[begin:], uint64(len(v)))
+	buf = buf[:len(buf)-binary.MaxVarintLen64+lenLen]
+	buf = append(buf, v...)
+	return buf
+}
+
+func appendBinaryArray(buf []byte, array []any) ([]byte, error) {
+	docOff := len(buf)
+	buf = appendUint32(buf, uint32(len(array)))
+	buf = appendZero(buf, docSizeOff)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, len(array)*valEntrySize)
+	for i, val := range array {
+		var err error
+		buf, err = appendBinaryValElem(buf, docOff, valEntryBegin+i*valEntrySize, val)
+		if err != nil {
+			return nil, moerr.NewInvalidArgNoCtx("invalid json array", val)
+		}
+	}
+	docSize := len(buf) - docOff
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(docSize))
+	return buf, nil
+}
+
+func appendBinaryObject(buf []byte, x map[string]any) ([]byte, error) {
+	docOff := len(buf)
+	buf = appendUint32(buf, uint32(len(x)))
+	buf = appendZero(buf, docSizeOff)
+	keyEntryBegin := len(buf)
+	buf = appendZero(buf, len(x)*keyEntrySize)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, len(x)*valEntrySize)
+
+	fields := make([]field, 0, len(x))
+	for key, val := range x {
+		fields = append(fields, field{key: key, val: val})
+	}
+	slices.SortFunc(fields, func(i, j field) int {
+		return cmp.Compare(i.key, j.key)
+	})
+	for i, field := range fields {
+		keyEntryOff := keyEntryBegin + i*keyEntrySize
+		keyOff := len(buf) - docOff
+		keyLen := uint32(len(field.key))
+		if keyLen > math.MaxUint16 {
+			return nil, moerr.NewInvalidArgNoCtx("invalid json key", field.key)
+		}
+		endian.PutUint32(buf[keyEntryOff:], uint32(keyOff))
+		endian.PutUint16(buf[keyEntryOff+keyOriginOff:], uint16(keyLen))
+		buf = append(buf, field.key...)
+	}
+	for i, field := range fields {
+		var err error
+		buf, err = appendBinaryValElem(buf, docOff, valEntryBegin+i*valEntrySize, field.val)
+		if err != nil {
+			return nil, moerr.NewInvalidArgNoCtx("invalid json object", field.val)
+		}
+	}
+	docSize := len(buf) - docOff
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(docSize))
+	return buf, nil
+}
+
+func appendBinaryValElem(buf []byte, docOff, valEntryOff int, val any) ([]byte, error) {
+	var typeCode TpCode
+	var err error
+	elemDocOff := len(buf)
+	typeCode, buf, err = appendBinaryJSON(buf, val)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if typeCode == TpCodeLiteral {
+		litCode := buf[elemDocOff]
+		buf = buf[:elemDocOff]
+		buf[valEntryOff] = TpCodeLiteral
+		buf[valEntryOff+1] = litCode
+		return buf, nil
+	}
+	buf[valEntryOff] = typeCode
+	valOff := elemDocOff - docOff
+	endian.PutUint32(buf[valEntryOff+1:], uint32(valOff))
+	return buf, nil
+}
+
+func appendZero(buf []byte, length int) []byte {
+	var tmp [8]byte
+	rem := length % 8
+	loop := length / 8
+	for i := 0; i < loop; i++ {
+		buf = append(buf, tmp[:]...)
+	}
+	for i := 0; i < rem; i++ {
+		buf = append(buf, 0)
+	}
+	return buf
 }

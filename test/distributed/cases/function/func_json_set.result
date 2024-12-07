@@ -1,0 +1,162 @@
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', '$.fruits[1]', 'orange') AS result;
+result
+{"fruits": ["apple", "orange", "cherry"]}
+SELECT JSON_SET('{"fruits": ["apple", "banana"]}', '$.fruits[2]', 'cherry') AS result;
+result
+{"fruits": ["apple", "banana", "cherry"]}
+SELECT JSON_SET('{"fruits": [{"name": "apple"}, {"name": "banana"}]}', '$.fruits[1].color', 'yellow') AS result;
+result
+{"fruits": [{"name": "apple"}, {"color": "yellow", "name": "banana"}]}
+SELECT JSON_SET('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city', 'New York') AS result;
+result
+{"user": {"age": 31, "city": "New York", "name": "John"}}
+SELECT JSON_SET('{"company": {"name": "Moonshot AI", "employees": [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]}}', '$.company.employees[0].name', 'John Doe', '$.company.employees[1].department', 'HR') AS result;
+result
+{"company": {"employees": [{"id": 1, "name": "John Doe"}, {"department": "HR", "id": 2, "name": "Jane"}], "name": "Moonshot AI"}}
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}') AS result;
+invalid argument function json_set, bad value [VARCHAR]
+SELECT JSON_SET('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city') AS result;
+invalid input: pathList and valList should have the same length
+SELECT JSON_SET(null, '$.fruits[1]', 'orange') AS result;
+result
+null
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', null, 'orange') AS result;
+result
+null
+SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}', '$.fruits[1]', null) AS result;
+result
+{"fruits": ["apple", null, "cherry"]}
+drop table if exists users;
+CREATE TABLE users (
+id INT PRIMARY KEY,
+info JSON
+);
+INSERT INTO users (id, info) VALUES (1, '{"name": "Alice", "age": 30}');
+INSERT INTO users (id, info) VALUES (2, '{"name": "Bob", "age": 25}');
+SELECT * FROM users;
+id    info
+1    {"age": 30, "name": "Alice"}
+2    {"age": 25, "name": "Bob"}
+UPDATE users SET info = JSON_SET(info, '$.age', 31) WHERE id = 1;
+SELECT * FROM users;
+id    info
+2    {"age": 25, "name": "Bob"}
+1    {"age": 31, "name": "Alice"}
+UPDATE users
+SET info = JSON_SET(info, '$.phone', '123-456-7890')
+WHERE id = 2;
+SELECT * FROM users;
+id    info
+1    {"age": 31, "name": "Alice"}
+2    {"age": 25, "name": "Bob", "phone": "123-456-7890"}
+UPDATE users
+SET info = JSON_SET(info, '$.age', 32, '$.address', '123 Main St')
+WHERE id = 1;
+SELECT * FROM users;
+id    info
+2    {"age": 25, "name": "Bob", "phone": "123-456-7890"}
+1    {"address": "123 Main St", "age": 32, "name": "Alice"}
+drop table users;
+drop table if exists users;
+CREATE TABLE users (
+id INT PRIMARY KEY,
+info JSON
+);
+INSERT INTO users (id, info) VALUES
+(1, '{"name": "Alice", "age": 30, "email": "alice@example.com", "address": {"city": "New York", "zip": "10001"}}'),
+(2, '{"name": "Bob", "age": 25, "email": "bob@example.com", "address": {"city": "Los Angeles", "zip": "90001"}}'),
+(3, '{"name": "Charlie", "age": 28, "email": "charlie@example.com", "address": {"city": "Chicago", "zip": "60601"}, "skills": ["Java", "Python"]}');
+SELECT * FROM users;
+id    info
+1    {"address": {"city": "New York", "zip": "10001"}, "age": 30, "email": "alice@example.com", "name": "Alice"}
+2    {"address": {"city": "Los Angeles", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["Java", "Python"]}
+UPDATE users
+SET info = JSON_SET(info, '$.address.city', 'San Francisco')
+WHERE id = 1;
+SELECT * FROM users;
+id    info
+2    {"address": {"city": "Los Angeles", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["Java", "Python"]}
+1    {"address": {"city": "San Francisco", "zip": "10001"}, "age": 30, "email": "alice@example.com", "name": "Alice"}
+UPDATE users
+SET info = JSON_SET(info, '$.address.state', 'CA')
+WHERE id = 2;
+SELECT * FROM users;
+id    info
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["Java", "Python"]}
+1    {"address": {"city": "San Francisco", "zip": "10001"}, "age": 30, "email": "alice@example.com", "name": "Alice"}
+2    {"address": {"city": "Los Angeles", "state": "CA", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+UPDATE users
+SET info = JSON_SET(info, '$.skills[0]', 'JavaScript')
+WHERE id = 3;
+SELECT * FROM users;
+id    info
+1    {"address": {"city": "San Francisco", "zip": "10001"}, "age": 30, "email": "alice@example.com", "name": "Alice"}
+2    {"address": {"city": "Los Angeles", "state": "CA", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["JavaScript", "Python"]}
+UPDATE users
+SET info = JSON_SET(info, '$.skills[2]', 'SQL')
+WHERE id = 3;
+SELECT * FROM users;
+id    info
+1    {"address": {"city": "San Francisco", "zip": "10001"}, "age": 30, "email": "alice@example.com", "name": "Alice"}
+2    {"address": {"city": "Los Angeles", "state": "CA", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["JavaScript", "Python", "SQL"]}
+UPDATE users
+SET info = JSON_SET(info, '$.age', 32, '$.address.state', 'NY', '$.skills[3]', 'k8s')
+WHERE id = 1;
+SELECT * FROM users;
+id    info
+2    {"address": {"city": "Los Angeles", "state": "CA", "zip": "90001"}, "age": 25, "email": "bob@example.com", "name": "Bob"}
+3    {"address": {"city": "Chicago", "zip": "60601"}, "age": 28, "email": "charlie@example.com", "name": "Charlie", "skills": ["JavaScript", "Python", "SQL"]}
+1    {"address": {"city": "San Francisco", "state": "NY", "zip": "10001"}, "age": 32, "email": "alice@example.com", "name": "Alice"}
+drop table users;
+drop table if exists employees;
+CREATE TABLE employees (
+id INT AUTO_INCREMENT PRIMARY KEY,
+info JSON
+);
+drop table if exists projects;
+CREATE TABLE projects (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(255),
+members JSON
+);
+INSERT INTO employees (info) VALUES
+('{"name": "John Doe", "age": 30, "department": "Engineering", "skills": ["Java", "Python", "SQL"]}'),
+('{"name": "Jane Smith", "age": 25, "department": "Marketing", "skills": ["Social Media", "SEO", "Content Writing"]}');
+INSERT INTO projects (name, members) VALUES
+('Project A', '[1, 2]'),
+('Project B', '[1]');
+SELECT * FROM employees;
+id    info
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL"]}
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+SELECT * FROM projects;
+id    name    members
+1    Project A    [1, 2]
+2    Project B    [1]
+UPDATE employees
+SET info = JSON_SET(info, '$.skills[3]', 'JavaScript')
+WHERE id = 1;
+SELECT * FROM employees;
+id    info
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL", "JavaScript"]}
+UPDATE projects
+SET members = JSON_SET(members, '$[2]', 3)
+WHERE id = 1;
+SELECT * FROM projects;
+id    name    members
+2    Project B    [1]
+1    Project A    [1, 2, 3]
+UPDATE employees
+SET info = JSON_SET(info, '$.department.manager', 'Alice Johnson')
+WHERE id = 2;
+SELECT * FROM employees;
+id    info
+1    {"age": 30, "department": "Engineering", "name": "John Doe", "skills": ["Java", "Python", "SQL", "JavaScript"]}
+2    {"age": 25, "department": "Marketing", "name": "Jane Smith", "skills": ["Social Media", "SEO", "Content Writing"]}
+drop table employees;
+drop table projects;

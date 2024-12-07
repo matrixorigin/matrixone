@@ -69,6 +69,11 @@ func (p *Path) IsSimple() bool {
 	return true
 }
 
+func (p *Path) popOneSubPath() (Path, subPath) {
+	lastPathIdx := len(p.paths) - 1
+	return Path{paths: p.paths[:lastPathIdx]}, p.paths[lastPathIdx]
+}
+
 func (p *Path) String() string {
 	var s strings.Builder
 
