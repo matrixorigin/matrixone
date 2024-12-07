@@ -16,9 +16,12 @@ package fault
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestCount(t *testing.T) {
@@ -27,8 +30,8 @@ func TestCount(t *testing.T) {
 	var ctx = context.TODO()
 
 	Enable()
-	AddFaultPoint(ctx, "a", ":5::", "return", 0, "")
-	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
+	AddFaultPoint(ctx, "a", ":5::", "return", 0, "", false)
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a", false)
 	_, _, ok = TriggerFault("a")
 	require.Equal(t, true, ok)
 	_, _, ok = TriggerFault("a")
@@ -60,8 +63,8 @@ func TestCount(t *testing.T) {
 	RemoveFaultPoint(ctx, "a")
 	RemoveFaultPoint(ctx, "aa")
 
-	AddFaultPoint(ctx, "a", "3:8:2:", "return", 0, "")
-	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a")
+	AddFaultPoint(ctx, "a", "3:8:2:", "return", 0, "", false)
+	AddFaultPoint(ctx, "aa", ":::", "getcount", 0, "a", false)
 	_, _, ok = TriggerFault("a")
 	require.Equal(t, false, ok)
 	cnt, _, ok = TriggerFault("aa")
@@ -116,7 +119,7 @@ func wait(t *testing.T) {
 func TestEcho(t *testing.T) {
 	Enable()
 
-	AddFaultPoint(context.TODO(), "e", ":::", "echo", 21, "guns")
+	AddFaultPoint(context.TODO(), "e", ":::", "echo", 21, "guns", false)
 
 	i, s, ok := TriggerFault("e")
 	require.True(t, ok)
@@ -133,12 +136,12 @@ func TestWait(t *testing.T) {
 
 	Enable()
 
-	AddFaultPoint(ctx, "w", ":::", "wait", 0, "")
-	AddFaultPoint(ctx, "n1", ":::", "notify", 0, "w")
-	AddFaultPoint(ctx, "nall", ":::", "notifyall", 0, "w")
-	AddFaultPoint(ctx, "gc", ":::", "getcount", 0, "w")
-	AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w")
-	AddFaultPoint(ctx, "s", ":::", "sleep", 1, "w")
+	AddFaultPoint(ctx, "w", ":::", "wait", 0, "", false)
+	AddFaultPoint(ctx, "n1", ":::", "notify", 0, "w", false)
+	AddFaultPoint(ctx, "nall", ":::", "notifyall", 0, "w", false)
+	AddFaultPoint(ctx, "gc", ":::", "getcount", 0, "w", false)
+	AddFaultPoint(ctx, "gw", ":::", "getwaiters", 0, "w", false)
+	AddFaultPoint(ctx, "s", ":::", "sleep", 1, "w", false)
 
 	for i := 0; i < 10; i++ {
 		go wait(t)
@@ -183,7 +186,7 @@ func TestFaultMapRace(t *testing.T) {
 	var ctx = context.TODO()
 
 	Enable()
-	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, ""))
+	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, "", false))
 
 	go func() {
 		Disable()
@@ -212,7 +215,7 @@ func TestFaultMapRace3(t *testing.T) {
 	var ctx = context.TODO()
 
 	Enable()
-	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, ""))
+	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, "", false))
 
 	go func() {
 		Disable()
@@ -227,4 +230,35 @@ func TestFaultMapRace3(t *testing.T) {
 	}()
 
 	Disable()
+}
+
+func Test_panic(t *testing.T) {
+	var ctx = context.TODO()
+
+	Enable()
+	defer Disable()
+	require.NoError(t, AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr", false))
+	require.NoError(t, AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr", false))
+
+	fun := func(useMoerr bool) {
+		defer func() {
+			if e := recover(); e != nil {
+				_, ok := e.(*moerr.Error)
+				if !ok {
+					fmt.Println("moerr recovered")
+				} else {
+					fmt.Println("non moerr recovered")
+				}
+			}
+		}()
+
+		if useMoerr {
+			TriggerFault("panic_moerr")
+		} else {
+			TriggerFault("panic_non_moerr")
+		}
+	}
+
+	fun(true)
+	fun(false)
 }

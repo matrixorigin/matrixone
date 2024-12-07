@@ -780,11 +780,11 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
-	filter = replaceColRefWithNull(DeepCopyExpr(filter))
-
-	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" {
+	if filter.GetF() != nil && filter.GetF().Func.ObjName == "in" && filter.GetF().Args[0].GetCol() != nil {
 		return true // in is always null rejecting
 	}
+
+	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
 	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
@@ -2116,7 +2116,7 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 func HasMoCtrl(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "mo_ctl" {
+		if exprImpl.F.Func.ObjName == "mo_ctl" || exprImpl.F.Func.ObjName == "fault_inject" {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
