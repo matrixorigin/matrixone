@@ -260,10 +260,10 @@ tt    CREATE TABLE `tt` (\n  `a` int DEFAULT NULL\n)
 alter table tt add unique index id(a);
 /* cloud_user */show index from tt;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    a
 select * from result_scan(last_query_id()) as u;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+table    non_unique    key_name    seq_in_index    column_name    collation    cardinality    sub_part    packed    null    index_type    comment    index_comment    index_params    visible    expression
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    a
 /* cloud_user */show node list;
 
 select * from result_scan(last_query_id()) as u;
@@ -485,7 +485,7 @@ no configure: save query result
 alter table tt add unique index id(a);
 /* cloud_user */show index from tt;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    a
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* cloud_user */show node list;

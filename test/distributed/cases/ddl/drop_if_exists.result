@@ -21,8 +21,8 @@ unique index idx1(ename)
 );
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    idx1    1    ename    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    empno    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    1    ename    A    0    NULL    NULL    YES                    YES    ename
+t1    0    PRIMARY    1    empno    A    0    NULL    NULL                        YES    empno
 create view v1 as select * from t1;
 show tables;
 Tables_in_db1
@@ -38,7 +38,7 @@ use db1;
 drop index if exists idx1 on t1;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    empno    A    0    NULL    NULL                        YES    NULL
+t1    0    PRIMARY    1    empno    A    0    NULL    NULL                        YES    empno
 drop view if exists v1;
 drop table if exists t1;
 show tables;
