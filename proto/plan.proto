@@ -946,6 +946,12 @@ message ExternScan {
     map<string, int32> TbColToDataCol = 10;
 }
 
+message ExternAttr {
+	string col_name = 1;
+	int32  col_index = 2;
+	int32  col_field_index = 3; 
+}
+
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;

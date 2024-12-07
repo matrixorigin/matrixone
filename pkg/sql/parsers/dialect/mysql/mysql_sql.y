@@ -2815,7 +2815,7 @@ use_stmt:
     }
 |   USE
     {
-        var name *tree.CStr
+        name := yylex.(*Lexer).GetDbOrTblNameCStr("")
         secondaryRole := false
         var secondaryRoleType tree.SecondaryRoleType = 0
         var role *tree.Role
@@ -2828,7 +2828,7 @@ use_stmt:
     }
 |   USE ROLE role_spec
     {
-        var name *tree.CStr
+        name := yylex.(*Lexer).GetDbOrTblNameCStr("")
         secondaryRole := false
         var secondaryRoleType tree.SecondaryRoleType = 0
         role := $3
@@ -2841,7 +2841,7 @@ use_stmt:
     }
 |   USE SECONDARY ROLE ALL
     {
-        var name *tree.CStr
+        name := yylex.(*Lexer).GetDbOrTblNameCStr("")
         secondaryRole := true
         secondaryRoleType := tree.SecondaryRoleTypeAll
         var role *tree.Role
@@ -2854,7 +2854,7 @@ use_stmt:
     }
 |   USE SECONDARY ROLE NONE
     {
-        var name *tree.CStr
+        name := yylex.(*Lexer).GetDbOrTblNameCStr("")
         secondaryRole := true
         secondaryRoleType := tree.SecondaryRoleTypeNone
         var role *tree.Role
