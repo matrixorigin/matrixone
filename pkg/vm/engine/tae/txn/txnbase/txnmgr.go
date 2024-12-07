@@ -801,33 +801,22 @@ func (mgr *TxnManager) ResetHeartbeat() {
 	if old != nil {
 		old.Stop()
 	}
-	newJob := tasks.NewCancelableJob(func(ctx context.Context) {
-		prevReportTime := time.Now()
-		ticker := time.NewTicker(time.Millisecond * 2)
-		defer ticker.Stop()
-		logutil.Info(
-			"TxnManager-HB-Start",
-			zap.Duration("interval", time.Millisecond*2),
-		)
-		for {
-			select {
-			case <-ctx.Done():
-				logutil.Info("TxnManager-HB-Exit")
-				return
-			case <-ticker.C:
-				op := mgr.newHeartbeatOpTxn(ctx)
-				op.Txn.(*Txn).Add(1)
-				if err := mgr.OnOpTxn(op); err != nil {
-					if time.Since(prevReportTime) > time.Second*10 {
-						logutil.Warn(
-							"TxnManager-HB-Error",
-							zap.Error(err),
-						)
-					}
-				}
+	newJob := tasks.NewCancelableCronJob(
+		"TxnManager-HB",
+		time.Millisecond*2,
+		func(ctx context.Context) {
+			op := mgr.newHeartbeatOpTxn(ctx)
+			op.Txn.(*Txn).Add(1)
+			if err := mgr.OnOpTxn(op); err != nil {
+				logutil.Error(
+					"TxnManager-HB-Error",
+					zap.Error(err),
+				)
 			}
-		}
-	})
+		},
+		true,
+		1,
+	)
 	for swapped := mgr.heartbeatJob.CompareAndSwap(old, newJob); !swapped; {
 		if old = mgr.heartbeatJob.Load(); old != nil {
 			old.Stop()
