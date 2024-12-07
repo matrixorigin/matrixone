@@ -15,7 +15,11 @@
 package engine_util
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,5 +88,80 @@ func TestNewMemPKFilter(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, filter.isValid)
 		assert.Equal(t, function.BETWEEN, filter.op)
+	}
+}
+
+func TestMemPKFilter_FilterVector(t *testing.T) {
+	lb, ub := 10, 20
+
+	baseFilters := []BasePKFilter{
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: RangeBothOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: RangeLeftOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: RangeRightOpen, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
+		{Op: function.LESS_EQUAL, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(ub))},
+	}
+
+	mp := mpool.MustNewZeroNoFixed()
+
+	vecs := make([]*vector.Vector, 0, len(baseFilters))
+	for range baseFilters {
+		vec := vector.NewVec(types.T_int32.ToType())
+		vector.AppendFixed[int32](vec, int32(21), false, mp)
+		vecs = append(vecs, vec)
+	}
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"a"},
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name: "a",
+				Typ: plan.Type{
+					Id: int32(types.T_int64),
+				},
+			},
+		},
+	}
+
+	ts := types.MaxTs().ToTimestamp()
+	packerPool := fileservice.NewPool(
+		128,
+		func() *types.Packer {
+			return types.NewPacker()
+		},
+		func(packer *types.Packer) {
+			packer.Reset()
+		},
+		func(packer *types.Packer) {
+			packer.Close()
+		},
+	)
+
+	var packer *types.Packer
+	var skipMask objectio.Bitmap
+
+	for i := range baseFilters {
+		tableDef.Cols[0].Typ.Id = int32(baseFilters[i].Oid)
+		filter, err := NewMemPKFilter(
+			tableDef,
+			ts,
+			packerPool,
+			baseFilters[i],
+			engine.FilterHint{})
+		assert.Nil(t, err)
+		assert.True(t, filter.isValid)
+
+		skipMask = objectio.GetReusableBitmap()
+		put := packerPool.Get(&packer)
+
+		filter.FilterVector(vecs[i], packer, &skipMask)
+		put.Put()
+
+		require.Equal(t, 1, skipMask.Count(), filter.String())
+
+		skipMask.Release()
 	}
 }
