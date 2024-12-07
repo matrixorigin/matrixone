@@ -108,11 +108,12 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	first := true
 	for _, t := range cronTasks {
 		if len(codes) != 0 && slices.Index(codes, int32(t.Metadata.Executor)) == -1 {
-			// if specified task codes, only process them.
+			// if the task codes specified, only process them.
 			continue
 		}
 
 		if len(codes) == 0 && t.Metadata.Executor == task.TaskCode_MOTableStats {
+			// test code to test if the init mo_table_stats task meta code works.
 			continue
 		}
 

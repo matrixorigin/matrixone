@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"math"
 	"math/rand"
 	"runtime"
@@ -42,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -399,7 +399,6 @@ func initMoTableStatsConfig(
 		}
 
 		go func() {
-			time.Sleep(time.Minute * 1)
 			ctx = turn2SysCtx(context.Background())
 			for {
 				if !eng.config.moServerStateChecker() {
