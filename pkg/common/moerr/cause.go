@@ -289,6 +289,7 @@ var (
 	CauseInitEnginePack = NewInternalError(context.Background(), "InitEnginePack")
 	//pkg/vm/message
 	CauseReceiveMessage = NewInternalError(context.Background(), "ReceiveMessage")
+	CauseLogTailRequest = NewInternalError(context.Background(), "LogTailRequest")
 )
 
 func AttachCause(ctx context.Context, err error) error {

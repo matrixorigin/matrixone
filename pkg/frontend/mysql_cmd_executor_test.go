@@ -1586,3 +1586,27 @@ func Test_panic(t *testing.T) {
 	runPanic(fault.PanicUseMoErr)
 	runPanic(fault.PanicUseNonMoErr)
 }
+
+func Test_run_panic(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	runPanic := func(panicChoice int64) {
+		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic")
+		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
+
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{
+			ses: ses,
+		}
+
+		err := executeStmtWithWorkspace(ses, nil, execCtx)
+		assert.NotNil(t, err)
+	}
+
+	runPanic(fault.PanicUseMoErr)
+	runPanic(fault.PanicUseNonMoErr)
+}
