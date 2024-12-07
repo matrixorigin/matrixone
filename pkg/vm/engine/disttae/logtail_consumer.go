@@ -51,9 +51,7 @@ const (
 
 	// push client related constants.
 	// maxSubscribeRequestPerSecond : max number of subscribe request we allowed per second.
-	// defaultRequestDeadline : default deadline for every request (subscribe and unsubscribe).
 	maxSubscribeRequestPerSecond = 10000
-	defaultRequestDeadline       = 2 * time.Minute
 
 	// subscribe related constants.
 	// periodToCheckTableSubscribeSucceed : check table subscribe status period after push client send a subscribe request.
@@ -117,6 +115,7 @@ var (
 //		 1. if we want to lock both subscriber and subscribed, we should lock subscriber first.
 //		-----------------------------------------------------------------------------------------------------
 type PushClient struct {
+	ctx       context.Context
 	serviceID string
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
@@ -307,7 +306,12 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(e.GetService(), serviceAddr, c.LogtailRPCClientFactory)
+	return c.subscriber.init(
+		c.ctx,
+		e.GetService(),
+		serviceAddr,
+		c.LogtailRPCClientFactory,
+	)
 }
 
 func (c *PushClient) SetReconnectHandler(handler func()) {
@@ -1436,6 +1440,7 @@ func DefaultNewRpcStreamToTnLogTailService(
 }
 
 func (s *logTailSubscriber) init(
+	ctx context.Context,
 	sid string,
 	serviceAddr string,
 	rpcStreamFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
@@ -1465,7 +1470,11 @@ func (s *logTailSubscriber) init(
 	s.rpcStream = rpcStream
 
 	// new the log tail client.
-	s.logTailClient, err = service.NewLogtailClient(s.rpcStream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	s.logTailClient, err = service.NewLogtailClient(
+		ctx,
+		s.rpcStream,
+		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond),
+	)
 	if err != nil {
 		return err
 	}
@@ -1510,13 +1519,6 @@ func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 // can't call this method directly.
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseSubscribeTable)
-		_ = cancel
-		err := s.logTailClient.Subscribe(newCtx, tblId)
-		return moerr.AttachCause(ctx, err)
-	}
 	err := s.logTailClient.Subscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
@@ -1524,13 +1526,6 @@ func (s *logTailSubscriber) subscribeTable(
 // can't call this method directly.
 func (s *logTailSubscriber) unSubscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	// set a default deadline for ctx if it doesn't have.
-	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeoutCause(ctx, defaultRequestDeadline, moerr.CauseUnSubscribeTable)
-		_ = cancel
-		err := s.logTailClient.Unsubscribe(newCtx, tblId)
-		return moerr.AttachCause(ctx, err)
-	}
 	err := s.logTailClient.Unsubscribe(ctx, tblId)
 	return moerr.AttachCause(ctx, err)
 }
