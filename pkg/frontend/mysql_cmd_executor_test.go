@@ -1567,7 +1567,7 @@ func Test_panic(t *testing.T) {
 	defer ctrl.Finish()
 
 	runPanic := func(panicChoice int64) {
-		fault.AddFaultPoint(context.Background(), "exec_request_panic", ":::", "panic", panicChoice, "has panic")
+		fault.AddFaultPoint(context.Background(), "exec_request_panic", ":::", "panic", panicChoice, "has panic", false)
 		defer fault.RemoveFaultPoint(context.Background(), "exec_request_panic")
 
 		ses := newTestSession(t, ctrl)
@@ -1595,7 +1595,7 @@ func Test_run_panic(t *testing.T) {
 	defer ctrl.Finish()
 
 	runPanic := func(panicChoice int64) {
-		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic")
+		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
 		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
 
 		ses := newTestSession(t, ctrl)
