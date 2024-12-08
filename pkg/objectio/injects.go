@@ -32,6 +32,8 @@ const (
 	FJ_TransferSlow  = "fj/transfer/slow"
 	FJ_FlushTimeout  = "fj/flush/timeout"
 
+	FJ_PrefetchThreshold = "fj/prefetch/threshold"
+
 	FJ_LogRanges         = "fj/log/ranges"
 	FJ_LogPartitionState = "fj/log/partitionstate"
 
@@ -237,6 +239,33 @@ func RangesLogInjected(dbName, tableName string) (bool, int) {
 		return false, 0
 	}
 	return checkLoggingArgs(0, sarg, dbName, tableName)
+}
+
+func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_PrefetchThreshold,
+		":::",
+		"echo",
+		int64(threshold),
+		"",
+	); err != nil {
+		return
+	}
+	rmFault = func() {
+		fault.RemoveFaultPoint(context.Background(), FJ_PrefetchThreshold)
+	}
+	return
+}
+
+// bool: injected or not
+// int: threshold. 1 means 1 millisecond
+func PrefetchMetaThresholdInjected() (bool, int) {
+	iarg, _, injected := fault.TriggerFault(FJ_LogRanges)
+	if !injected {
+		return false, 0
+	}
+	return true, int(iarg)
 }
 
 func InjectLogRanges(

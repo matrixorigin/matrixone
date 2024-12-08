@@ -122,9 +122,18 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
-	var start time.Time
+	var (
+		start     time.Time
+		threshold time.Duration
+	)
 	if metaPrefetcher != nil {
 		start = time.Now()
+		ok, ms := objectio.PrefetchMetaThresholdInjected()
+		if ok {
+			threshold = time.Duration(ms) * time.Millisecond
+		} else {
+			threshold = time.Second * 10
+		}
 	}
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		var ok bool
@@ -137,7 +146,7 @@ func FilterObjects(
 			}
 		}
 
-		if metaPrefetcher != nil && time.Since(start) > time.Second*10 {
+		if metaPrefetcher != nil && time.Since(start) > threshold {
 			if err = metaPrefetcher(ctx); err != nil {
 				return
 			}

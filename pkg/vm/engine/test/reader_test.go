@@ -1092,6 +1092,10 @@ func Test_ShardingLocalReader(t *testing.T) {
 	require.NoError(t, err)
 	defer rmFault4()
 
+	rmFault5, err := objectio.InjectPrefetchThreshold(1)
+	require.NoError(t, err)
+	defer rmFault5()
+
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
 	// the mock function. Here we exepct the type of the primary key
