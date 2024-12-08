@@ -109,7 +109,7 @@ func FilterObjects(
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
 	highSelectivityHint bool,
-	metaPrefetcher func(context.Context) error,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 ) (
 	totalBlocks int,
@@ -147,10 +147,10 @@ func FilterObjects(
 		}
 
 		if metaPrefetcher != nil && time.Since(start) > threshold {
-			if err = metaPrefetcher(ctx); err != nil {
-				return
+			// stop sending new request to prefetch if it was received
+			if received := metaPrefetcher(ctx); received {
+				metaPrefetcher = nil
 			}
-			metaPrefetcher = nil
 		}
 
 		var (
@@ -244,7 +244,7 @@ func TryFastFilterBlocks(
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
-	metaPrefetcher func(context.Context) error,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 ) (ok bool, err error) {
 	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, tableDef, fs)
@@ -283,7 +283,7 @@ func FilterTxnObjects(
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
-	metaPrefetcher func(context.Context) error,
+	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 	highSelectivityHint bool,
 ) (err error) {

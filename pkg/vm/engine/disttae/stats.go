@@ -240,6 +240,18 @@ func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) boo
 	return true
 }
 
+func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	// We force to trigger the update, which will hang when the channel
+	// is full. Another goroutine will fetch items from the channel
+	// which hold the lock, so we need to unlock it first.
+	gs.mu.Unlock()
+	defer gs.mu.Lock()
+	// If the trigger condition is not satisfied, the stats will not be updated
+	// for long time. So we trigger the update here to get the stats info as soon
+	// as possible.
+	return gs.triggerUpdate(key, false)
+}
+
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
@@ -365,17 +377,19 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 	}
 }
 
-func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
+func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) bool {
 	if force {
 		gs.updateC <- key
 		v2.StatsTriggerForcedCounter.Add(1)
-		return
+		return true
 	}
 
 	select {
 	case gs.updateC <- key:
 		v2.StatsTriggerUnforcedCounter.Add(1)
+		return true
 	default:
+		return false
 	}
 }
 
