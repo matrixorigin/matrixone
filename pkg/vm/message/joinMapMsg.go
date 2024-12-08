@@ -78,13 +78,17 @@ type JoinMap struct {
 
 func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
+		valid:     true,
 		shm:       shm,
 		ihm:       ihm,
+		mpool:     m,
 		multiSels: sels,
 		batches:   batches,
-		mpool:     m,
-		valid:     true,
 	}
+}
+
+func (jm *JoinMap) IsPointQuery() bool {
+	return jm.runtimeFilter_In && jm.shm == nil && jm.ihm == nil
 }
 
 func (jm *JoinMap) GetBatches() []*batch.Batch {
@@ -115,8 +119,13 @@ func (jm *JoinMap) GetRowCount() int64 {
 func (jm *JoinMap) GetGroupCount() uint64 {
 	if jm.ihm != nil {
 		return jm.ihm.GroupCount()
+	} else if jm.shm != nil {
+		return jm.shm.GroupCount()
+	} else if jm.runtimeFilter_In {
+		return 1
 	}
-	return jm.shm.GroupCount()
+
+	return 0
 }
 
 func (jm *JoinMap) SetPushedRuntimeFilterIn(b bool) {
