@@ -54,7 +54,7 @@ func (s *CNMergeScheduler) sendMergeTask(ctx context.Context, task *api.MergeTas
 	if !ok {
 		return taskservice.ErrNotReady
 	}
-	taskIDPrefix := "Merge:" + task.TableName
+	taskIDPrefix := "Merge:" + strconv.Itoa(int(task.TblId))
 	asyncTask, err := ts.QueryAsyncTask(ctx,
 		taskservice.WithTaskMetadataId(taskservice.LIKE, taskIDPrefix+"%"),
 		taskservice.WithTaskStatusCond(taskpb.TaskStatus_Created, taskpb.TaskStatus_Running))

@@ -31,23 +31,13 @@ type objCompactPolicy struct {
 	tblEntry *catalog.TableEntry
 	fs       fileservice.FileService
 
-	segObjects map[objectio.Segmentid][]*catalog.ObjectEntry
+	objects []*catalog.ObjectEntry
 
-	tombstones     []*catalog.ObjectEntry
 	tombstoneMetas []objectio.ObjectDataMeta
-
-	validTombstones map[*catalog.ObjectEntry]struct{}
 }
 
 func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
-	return &objCompactPolicy{
-		fs: fs,
-
-		segObjects: make(map[objectio.Segmentid][]*catalog.ObjectEntry),
-
-		tombstones:      make([]*catalog.ObjectEntry, 0),
-		validTombstones: make(map[*catalog.ObjectEntry]struct{}),
-	}
+	return &objCompactPolicy{fs: fs}
 }
 
 func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPolicyConfig) bool {
@@ -60,16 +50,15 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry, config *BasicPol
 	if entry.OriginSize() < config.ObjectMinOsize {
 		return false
 	}
-	if len(o.tombstones) == 0 {
+	if len(o.tombstoneMetas) == 0 {
 		return false
 	}
 
-	for i, meta := range o.tombstoneMetas {
+	for _, meta := range o.tombstoneMetas {
 		if !checkTombstoneMeta(meta, entry.ID()) {
 			continue
 		}
-		o.validTombstones[o.tombstones[i]] = struct{}{}
-		o.segObjects[entry.ObjectName().SegmentId()] = append(o.segObjects[entry.ObjectName().SegmentId()], entry)
+		o.objects = append(o.objects, entry)
 	}
 	return false
 }
@@ -78,28 +67,20 @@ func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
 	if o.tblEntry == nil {
 		return nil
 	}
-	o.filterValidTombstones()
-	results := make([]reviseResult, 0, len(o.segObjects)+1)
-	for _, objs := range o.segObjects {
-		if rc.resourceAvailable(objs) {
-			rc.reserveResources(objs)
-			for _, obj := range objs {
-				results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
-			}
+	results := make([]reviseResult, 0, len(o.objects))
+	for _, obj := range o.objects {
+		if rc.resourceAvailable([]*catalog.ObjectEntry{obj}) {
+			rc.reserveResources([]*catalog.ObjectEntry{obj})
+			results = append(results, reviseResult{[]*catalog.ObjectEntry{obj}, taskHostDN})
 		}
-	}
-	if len(o.tombstones) > 0 {
-		results = append(results, reviseResult{o.tombstones, taskHostDN})
 	}
 	return results
 }
 
 func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
 	o.tblEntry = entry
-	o.tombstones = o.tombstones[:0]
 	o.tombstoneMetas = o.tombstoneMetas[:0]
-	clear(o.segObjects)
-	clear(o.validTombstones)
+	o.objects = o.objects[:0]
 
 	tIter := entry.MakeTombstoneObjectIt()
 	for tIter.Next() {
@@ -109,37 +90,19 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 			continue
 		}
 
-		if (entryOutdated(tEntry, config.TombstoneLifetime) && tEntry.OriginSize() > 10*common.Const1MBytes) ||
-			tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			meta, err := loadTombstoneMeta(ctx, tEntry.GetObjectStats(), o.fs)
-			cancel()
+		if tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+			meta, err := loadTombstoneMeta(tEntry.GetObjectStats(), o.fs)
 			if err != nil {
 				continue
 			}
-
 			o.tombstoneMetas = append(o.tombstoneMetas, meta)
-			o.tombstones = append(o.tombstones, tEntry)
 		}
 	}
 }
 
-func (o *objCompactPolicy) filterValidTombstones() {
-	i := 0
-	for _, x := range o.tombstones {
-		if _, ok := o.validTombstones[x]; !ok {
-			o.tombstones[i] = x
-			i++
-		}
-	}
-	for j := i; j < len(o.tombstones); j++ {
-		o.tombstones[j] = nil
-	}
-	o.tombstones = o.tombstones[:i]
-}
-
-func loadTombstoneMeta(ctx context.Context, tombstoneObject *objectio.ObjectStats, fs fileservice.FileService) (objectio.ObjectDataMeta, error) {
+func loadTombstoneMeta(tombstoneObject *objectio.ObjectStats, fs fileservice.FileService) (objectio.ObjectDataMeta, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
 	location := tombstoneObject.ObjectLocation()
 	objMeta, err := objectio.FastLoadObjectMeta(
 		ctx, &location, false, fs,
