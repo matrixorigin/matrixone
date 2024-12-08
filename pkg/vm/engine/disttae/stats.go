@@ -241,14 +241,6 @@ func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) boo
 }
 
 func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
-	// We force to trigger the update, which will hang when the channel
-	// is full. Another goroutine will fetch items from the channel
-	// which hold the lock, so we need to unlock it first.
-	gs.mu.Unlock()
-	defer gs.mu.Lock()
-	// If the trigger condition is not satisfied, the stats will not be updated
-	// for long time. So we trigger the update here to get the stats info as soon
-	// as possible.
 	return gs.triggerUpdate(key, false)
 }
 
