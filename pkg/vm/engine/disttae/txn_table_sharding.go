@@ -280,7 +280,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
-	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
+	if rangesParam.Policy&engine.Policy_CollectUncommittedData != 0 {
 		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
 	}
 	err = tbl.origin.rangesOnePart(
