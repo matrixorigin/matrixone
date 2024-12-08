@@ -3038,7 +3038,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(true)
+		arg := constructMergeGroup()
 		if ss[0].PartialResults != nil {
 			arg.PartialResults = ss[0].PartialResults
 			arg.PartialResultTypes = ss[0].PartialResultTypes
@@ -3063,7 +3063,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(true)
+		arg := constructMergeGroup()
 		if ss[0].PartialResults != nil {
 			arg.PartialResults = ss[0].PartialResults
 			arg.PartialResultTypes = ss[0].PartialResultTypes
