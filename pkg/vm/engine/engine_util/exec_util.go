@@ -16,6 +16,7 @@ package engine_util
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -108,6 +109,7 @@ func FilterObjects(
 	extraObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
 	highSelectivityHint bool,
+	metaPrefetcher func(context.Context) error,
 	fs fileservice.FileService,
 ) (
 	totalBlocks int,
@@ -120,6 +122,10 @@ func FilterObjects(
 	fastFilterHit int,
 	err error,
 ) {
+	var start time.Time
+	if metaPrefetcher != nil {
+		start = time.Now()
+	}
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		var ok bool
 		totalBlocks += int(objStats.BlkCnt())
@@ -129,6 +135,13 @@ func FilterObjects(
 				fastFilterHit++
 				return
 			}
+		}
+
+		if metaPrefetcher != nil && time.Since(start) > time.Second*10 {
+			if err = metaPrefetcher(ctx); err != nil {
+				return
+			}
+			metaPrefetcher = nil
 		}
 
 		var (
@@ -222,6 +235,7 @@ func TryFastFilterBlocks(
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
+	metaPrefetcher func(context.Context) error,
 	fs fileservice.FileService,
 ) (ok bool, err error) {
 	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, tableDef, fs)
@@ -241,6 +255,7 @@ func TryFastFilterBlocks(
 		extraCommittedObjects,
 		uncommittedObjects,
 		outBlocks,
+		metaPrefetcher,
 		fs,
 		highSelectivityHint,
 	)
@@ -259,6 +274,7 @@ func FilterTxnObjects(
 	extraCommittedObjects []objectio.ObjectStats,
 	uncommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
+	metaPrefetcher func(context.Context) error,
 	fs fileservice.FileService,
 	highSelectivityHint bool,
 ) (err error) {
@@ -307,6 +323,7 @@ func FilterTxnObjects(
 		extraCommittedObjects,
 		outBlocks,
 		highSelectivityHint,
+		metaPrefetcher,
 		fs,
 	)
 
