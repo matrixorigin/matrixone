@@ -70,7 +70,7 @@ func (m *objOverlapPolicy) revise(rc *resourceController) []reviseResult {
 
 		for _, objs := range objectsWithGivenOverlaps(m.leveledObjects[i], 5) {
 			objs = removeOversize(objs)
-			if len(objs) < 2 {
+			if len(objs) < 2 || score(objs) < 1.1 {
 				continue
 			}
 			result := reviseResult{objs: objs, kind: taskHostDN}
@@ -155,7 +155,7 @@ func objectsWithGivenOverlaps(objects []*catalog.ObjectEntry, overlaps int) [][]
 				}
 			}
 		}
-		if len(objs) < overlaps || score(objs) < 1.1 {
+		if len(objs) < overlaps {
 			return res
 		}
 		res = append(res, objs)
