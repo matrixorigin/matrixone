@@ -24,11 +24,13 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -394,9 +397,71 @@ func initMoTableStatsConfig(
 				launch("beta task", &dynamicCtx.beta)
 			}
 		}
+
+		go func() {
+			ctx = turn2SysCtx(context.Background())
+			for {
+				if eng.config.moServerStateChecker == nil || !eng.config.moServerStateChecker() {
+					time.Sleep(time.Second * 5)
+					continue
+				}
+
+				if initCronTask(ctx) {
+					break
+				}
+			}
+		}()
 	})
 
 	return err
+}
+
+func initCronTask(
+	ctx context.Context,
+) bool {
+	// insert mo table stats task meta into sys_cron_task table.
+	var (
+		err error
+		val any
+		sql string
+	)
+
+	insertTask := func() {
+		sql, err = predefine.GenInitCronTaskSQL(int32(task.TaskCode_MOTableStats))
+		if err != nil {
+			logutil.Error(logHeader,
+				zap.String("source", "init cron task"),
+				zap.Error(err))
+		}
+
+		executeSQL(ctx, sql, "init cron task")
+	}
+
+	checkTask := func() bool {
+		sqlRet := executeSQL(ctx,
+			fmt.Sprintf(`select count(*) from %s.%s where task_metadata_id = '%s';`,
+				catalog.MOTaskDB, "sys_cron_task", "mo_table_stats"), "check cron task")
+
+		if sqlRet.Error() != nil || sqlRet.RowCount() != 1 {
+			return false
+		}
+
+		val, err = sqlRet.Value(ctx, 0, 0)
+		if err != nil {
+			return false
+		}
+
+		return val.(int64) == 1
+	}
+
+	if checkTask() {
+		logutil.Info(logHeader, zap.String("source", "init cron task succeed"))
+		return true
+	}
+
+	insertTask()
+
+	return false
 }
 
 type taskState struct {
@@ -410,6 +475,8 @@ var dynamicCtx struct {
 	sync.RWMutex
 
 	once sync.Once
+
+	moServerStateChecker func() bool
 
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
@@ -626,14 +693,15 @@ func executeSQL(ctx context.Context, sql string, hint string) ie.InternalExecRes
 }
 
 func intsJoin(items []uint64, delimiter string) string {
-	str := ""
-	for i := range items {
-		str += fmt.Sprintf("%d", items[i])
+	var builder strings.Builder
+	builder.Grow(mpool.MB)
+	for i, item := range items {
+		builder.WriteString(strconv.FormatUint(item, 10))
 		if i < len(items)-1 {
-			str += delimiter
+			builder.WriteString(delimiter)
 		}
 	}
-	return str
+	return builder.String()
 }
 
 func forceUpdateQuery(
@@ -827,6 +895,8 @@ func QueryTableStatsByAccounts(
 		return
 	}
 
+	now := time.Now()
+
 	newCtx := turn2SysCtx(ctx)
 
 	sql := fmt.Sprintf(accumulateIdsByAccSQL,
@@ -864,6 +934,16 @@ func QueryTableStatsByAccounts(
 
 	statsVals, err, ok = QueryTableStats(
 		newCtx, wantedStatsIdxes, accs2, dbs, tbls, forceUpdate, resetUpdateTime, nil)
+
+	logutil.Info(logHeader,
+		zap.String("source", "QueryTableStatsByAccounts"),
+		zap.Int("acc cnt", len(accs)),
+		zap.Int("tbl cnt", len(tbls)),
+		zap.Bool("forceUpdate", forceUpdate),
+		zap.Bool("resetUpdateTime", resetUpdateTime),
+		zap.Duration("takes", time.Since(now)),
+		zap.Bool("ok", ok),
+		zap.Error(err))
 
 	return statsVals, accs2, err, ok
 }
