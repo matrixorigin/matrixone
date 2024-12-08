@@ -19,6 +19,7 @@ create view dis_view_01 as select * from dis_table_01;
 -- @session:id=1{
 use isolation_2;
 begin;
+-- @wait:0:commit
 insert into dis_table_01 values (22,'pear');
 select * from dis_table_01;
 update dis_table_01 set b='bens' where a=20;
@@ -120,6 +121,7 @@ create view  aaa as select * from dis_table_02;
 show create table aaa ;
 -- @session:id=1{
 use isolation_2;
+-- @wait:0:commit
 insert into  dis_table_02(b,c) values ('vvv','2000-09-08');
 -- @session}
 -- @session:id=2{
