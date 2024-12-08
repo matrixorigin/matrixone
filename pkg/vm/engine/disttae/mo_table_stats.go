@@ -243,7 +243,7 @@ var defaultStatsVals = []any{
 func initMoTableStatsConfig(
 	ctx context.Context,
 	eng *Engine,
-) (err error) {
+) (closeFn func(), err error) {
 
 	dynamicCtx.once.Do(func() {
 
@@ -368,7 +368,7 @@ func initMoTableStatsConfig(
 				}()
 
 				// there should not have a deadline
-				taskCtx := turn2SysCtx(context.Background())
+				taskCtx := turn2SysCtx(ctx)
 				task.executor(taskCtx, eng.service, eng)
 			}()
 		}
@@ -384,7 +384,11 @@ func initMoTableStatsConfig(
 		dynamicCtx.launchTask()
 	})
 
-	return err
+	return func() {
+		dynamicCtx.alphaTaskPool.Release()
+		dynamicCtx.beta.taskPool.Release()
+		dynamicCtx.gama.taskPool.Release()
+	}, err
 }
 
 type taskState struct {
@@ -1007,7 +1011,7 @@ func GetMOTableStatsExecutor(
 func turn2SysCtx(ctx context.Context) context.Context {
 	newCtx := ctx
 	if val := ctx.Value(defines.TenantIDKey{}); val == nil || val.(uint32) != catalog.System_Account {
-		newCtx = context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
 
 	return newCtx
