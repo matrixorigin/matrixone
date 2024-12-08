@@ -1092,7 +1092,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 	require.NoError(t, err)
 	defer rmFault4()
 
-	rmFault5, err := objectio.InjectPrefetchThreshold(1)
+	rmFault5, err := objectio.InjectPrefetchThreshold(0)
 	require.NoError(t, err)
 	defer rmFault5()
 

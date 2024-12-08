@@ -261,7 +261,7 @@ func InjectPrefetchThreshold(threshold int) (rmFault func(), err error) {
 // bool: injected or not
 // int: threshold. 1 means 1 millisecond
 func PrefetchMetaThresholdInjected() (bool, int) {
-	iarg, _, injected := fault.TriggerFault(FJ_LogRanges)
+	iarg, _, injected := fault.TriggerFault(FJ_PrefetchThreshold)
 	if !injected {
 		return false, 0
 	}
