@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"runtime/debug"
 	"strings"
 
@@ -95,7 +96,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FaultInjection, s.handleFaultInjection, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
 }
 
@@ -148,11 +149,9 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 }
 
 func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.FaultInjectionResponse.Resp = ctl.HandleCnFaultInjection(
-		ctx, req.FaultInjectionRequest.Name,
-		req.FaultInjectionRequest.Freq, req.FaultInjectionRequest.Action,
-		req.FaultInjectionRequest.Iarg, req.FaultInjectionRequest.Sarg,
+	resp.FaultInjectResponse = new(query.FaultInjectResponse)
+	resp.FaultInjectResponse.Resp = fault.HandleFaultInject(
+		ctx, req.FaultInjectRequest.Method, req.FaultInjectRequest.Parameters,
 	)
 	return nil
 }
