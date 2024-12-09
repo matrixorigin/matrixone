@@ -1689,6 +1689,12 @@ func restoreViewsWithPitr(
 	viewMap map[string]*tableInfo,
 	accountName string,
 	curAccount uint32) error {
+	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore views", pitrName))
+	var (
+		err         error
+		stmts       []tree.Statement
+		sortedViews []string
+	)
 	snapshot := &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: ts},
 		Tenant: &pbplan.SnapshotTenant{
@@ -1706,9 +1712,13 @@ func restoreViewsWithPitr(
 
 	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
 		if err != nil {
-			return err
+			// try to parse with 1
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
+			if err != nil {
+				return err
+			}
 		}
 
 		compCtx.SetDatabase(view.dbName)
@@ -1724,7 +1734,7 @@ func restoreViewsWithPitr(
 	}
 
 	// topsort
-	sortedViews, err := g.sort()
+	sortedViews, err = g.sort()
 	if err != nil {
 		return err
 	}
