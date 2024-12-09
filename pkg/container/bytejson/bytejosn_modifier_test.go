@@ -243,3 +243,33 @@ func TestAppendBinaryString(t *testing.T) {
 		})
 	}
 }
+
+func Test_appendBinaryValElem(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		wantType TpCode
+		wantErr  bool
+	}{
+		{
+			name:     "invalid type",
+			input:    struct{}{},
+			wantType: 0,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotBuf, err := appendBinaryValElem(make([]byte, 0), 0, 0, tt.input)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotEmpty(t, gotBuf)
+		})
+	}
+}
