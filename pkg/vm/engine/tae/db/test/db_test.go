@@ -10025,7 +10025,7 @@ func TestStartStopTableMerge(t *testing.T) {
 	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
 	defer db.Close()
 
-	scheduler := merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	scheduler := merge.NewScheduler(db.Runtime, nil)
 
 	schema := catalog.MockSchema(2, 0)
 	schema.Extra.BlockMaxRows = 1000
