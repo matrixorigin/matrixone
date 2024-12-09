@@ -3025,5 +3025,15 @@ func Test_restoreViewsWithPitr(t *testing.T) {
 		err = restoreViewsWithPitr(ctx, ses, bh, "sp01", 0, viewMap, "sys", 0)
 		assert.Error(t, err)
 
+		viewMap = map[string]*tableInfo{
+			"view01": {
+				dbName:    "db01",
+				tblName:   "tbl01",
+				typ:       "VIEW",
+				createSql: "create database db02",
+			},
+		}
+		err = restoreViewsWithPitr(ctx, ses, bh, "sp01", 0, viewMap, "sys", 0)
+		assert.NoError(t, err)
 	})
 }
