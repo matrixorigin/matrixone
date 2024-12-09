@@ -1110,7 +1110,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 	rmFault1, err := objectio.InjectLogPartitionState(catalog.MO_CATALOG, objectio.FJ_EmptyTBL, 0)
 	require.NoError(t, err)
 	defer rmFault1()
-	rmFault2, err := objectio.InjectLogRanges(ctx, catalog.MO_CATALOG, catalog.MO_TABLES)
+	rmFault2, err := objectio.InjectLogRanges(ctx, catalog.MO_TABLES)
 	require.NoError(t, err)
 	defer rmFault2()
 
