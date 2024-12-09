@@ -135,6 +135,7 @@ func New(
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
+	e.pClient.ctx = ctx
 
 	initMoTableStatsConfig(ctx, e)
 
@@ -748,6 +749,12 @@ func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error 
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+// return true if the prefetch is received
+// return false if the prefetch is not rejected
+func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return e.globalStats.PrefetchTableMeta(ctx, key)
 }
 
 func (e *Engine) GetMessageCenter() any {
