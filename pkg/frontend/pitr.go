@@ -1692,8 +1692,10 @@ func restoreViewsWithPitr(
 		err         error
 		stmts       []tree.Statement
 		sortedViews []string
+		snapshot    *pbplan.Snapshot
+		oldSnapshot *pbplan.Snapshot
 	)
-	snapshot := &pbplan.Snapshot{
+	snapshot = &pbplan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: ts},
 		Tenant: &pbplan.SnapshotTenant{
 			TenantName: accountName,
@@ -1702,7 +1704,7 @@ func restoreViewsWithPitr(
 	}
 
 	compCtx := ses.GetTxnCompileCtx()
-	oldSnapshot := compCtx.GetSnapshot()
+	oldSnapshot = compCtx.GetSnapshot()
 	compCtx.SetSnapshot(snapshot)
 	defer func() {
 		compCtx.SetSnapshot(oldSnapshot)
