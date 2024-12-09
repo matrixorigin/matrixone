@@ -41,7 +41,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return err
+		return moerr.NewBadDB(c.proc.Ctx, dbName)
 	}
 
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
