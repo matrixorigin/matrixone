@@ -392,11 +392,11 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		// set session variable
-		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
+		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
+			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
 		}()
 
 		sqlBuilder := strings.Builder{}
