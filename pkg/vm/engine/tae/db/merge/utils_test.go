@@ -16,6 +16,7 @@ package merge
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -101,6 +102,23 @@ func TestRemoveOversize(t *testing.T) {
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
 	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
+}
+
+func TestDiff(t *testing.T) {
+	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
+	require.Equal(t, uint64(10), diff(uint8(1), uint8(11), types.T_uint8))
+	require.Equal(t, uint64(10), diff(int16(1), int16(11), types.T_int16))
+	require.Equal(t, uint64(10), diff(uint16(1), uint16(11), types.T_uint16))
+	require.Equal(t, uint64(10), diff(int32(1), int32(11), types.T_int32))
+	require.Equal(t, uint64(10), diff(uint32(1), uint32(11), types.T_uint32))
+	require.Equal(t, uint64(10), diff(int64(1), int64(11), types.T_int64))
+	require.Equal(t, uint64(10), diff(uint64(1), uint64(11), types.T_uint64))
+	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
+	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
+	require.Equal(t, uint64(10), diff(float32(1), float32(11), types.T_float32))
+	require.Equal(t, uint64(10), diff(float64(1), float64(11), types.T_float64))
+	require.Equal(t, uint64(10), diff(types.Date(1), types.Date(11), types.T_date))
+	require.Equal(t, uint64(10), diff(types.Datetime(1), types.Datetime(11), types.T_datetime))
 }
 
 func BenchmarkRemoveOversize(b *testing.B) {
