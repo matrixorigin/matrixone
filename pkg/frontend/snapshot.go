@@ -985,7 +985,14 @@ func restoreViews(
 	snapshotName string,
 	viewMap map[string]*tableInfo,
 	toAccountId uint32) error {
-	snapshot, err := getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
+	getLogger(ses.GetService()).Info("start to restore views")
+	var (
+		err         error
+		snapshot    *plan.Snapshot
+		stmts       []tree.Statement
+		sortedViews []string
+	)
+	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -999,9 +1006,15 @@ func restoreViews(
 
 	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
+
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
 		if err != nil {
-			return err
+			// try to parse with statement
+			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] parse view create sql failed, try to parse with statement", snapshotName))
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
+			if err != nil {
+				return err
+			}
 		}
 
 		compCtx.SetDatabase(view.dbName)
@@ -1017,7 +1030,7 @@ func restoreViews(
 	}
 
 	// toposort
-	sortedViews, err := g.sort()
+	sortedViews, err = g.sort()
 	if err != nil {
 		return err
 	}
