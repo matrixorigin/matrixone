@@ -74,11 +74,11 @@ insert into tbl values(8, "[130,40,90]");
 create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show index from tbl where Key_name = 'idx1';
 table    non_unique    key_name    seq_in_index    column_name    collation    cardinality    sub_part    packed    null    index_type    comment    index_comment    index_params    visible    expression
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -90,8 +90,8 @@ idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"v
 alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
@@ -103,8 +103,8 @@ idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"v
 alter table tbl add c vecf32(3);
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    embedding
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `c` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
@@ -118,8 +118,8 @@ create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    b
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf64(5) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -162,8 +162,8 @@ insert into tbl values(8, "[130,40,90]");
 create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx8    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+tbl    1    idx8    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    b
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx8` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -180,8 +180,8 @@ insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    b
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx10` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
@@ -193,7 +193,7 @@ idx10    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l
 alter table tbl drop column b;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  PRIMARY KEY (`a`)\n)
@@ -205,8 +205,8 @@ insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    1    idx11    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx11    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    b
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx11` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
@@ -218,7 +218,7 @@ idx11    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l
 alter table tbl drop index idx11;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
@@ -237,8 +237,8 @@ insert into tbl values(8, "[130,40,90]");
 create index idx12 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx12    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    1    idx12    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx12` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -260,9 +260,9 @@ insert into tbl values(8, 80, "[130,40,90]");
 create index idx13 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    0    PRIMARY    2    age    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx13    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    0    PRIMARY    2    age    A    0    NULL    NULL                        YES    age
+tbl    1    idx13    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `age` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`,`age`),\n  KEY `idx13` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -284,7 +284,7 @@ insert into tbl values(8, "[130,40,90]");
 create index idx14 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    1    idx14    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    1    idx14    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int DEFAULT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  KEY `idx14` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
