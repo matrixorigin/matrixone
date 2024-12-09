@@ -28,7 +28,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type MockTxnExecutor struct{}
+type MockTxnExecutor struct {
+	flag bool
+}
 
 func (MockTxnExecutor) Use(db string) {
 	//TODO implement me
@@ -40,8 +42,8 @@ func (MockTxnExecutor) LockTable(table string) error {
 	panic("implement me")
 }
 
-func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	if strings.HasPrefix(sql, "delete from mo_catalog.mo_subs") {
+func (e MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	if strings.HasPrefix(sql, "delete from mo_catalog.mo_subs") && e.flag {
 		return executor.Result{}, assert.AnError
 	}
 
@@ -150,7 +152,7 @@ func Test_migrateMoPubs_deleteFailed(t *testing.T) {
 	)
 	defer getSubbedAccNamesStub.Reset()
 
-	txn := &MockTxnExecutor{}
+	txn := &MockTxnExecutor{flag: true}
 	err := migrateMoPubs(txn)
 	assert.Error(t, err)
 }
