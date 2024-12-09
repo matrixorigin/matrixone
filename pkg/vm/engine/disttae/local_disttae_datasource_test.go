@@ -200,11 +200,12 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 			},
 			tableId: 23,
 		},
+		memPKFilter: &engine_util.MemPKFilter{},
 	}
 
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, m, outBatch)
+	err := ls.filterInMemUnCommittedInserts(ctx, []uint16{0}, -1, m, outBatch)
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())

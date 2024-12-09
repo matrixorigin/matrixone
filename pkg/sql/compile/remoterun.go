@@ -709,22 +709,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 
 	case *external.External:
-		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
-		i := 0
-		for k, v := range t.Es.Name2ColIndex {
-			name2ColIndexSlice[i] = &pipeline.ExternalName2ColIndex{Name: k, Index: v}
-			i++
-		}
 		in.ExternalScan = &pipeline.ExternalScan{
 			Attrs:           t.Es.Attrs,
+			ColumnListLen:   t.Es.ColumnListLen,
 			Cols:            t.Es.Cols,
 			FileSize:        t.Es.FileSize,
 			FileOffsetTotal: t.Es.FileOffsetTotal,
-			Name2ColIndex:   name2ColIndexSlice,
 			CreateSql:       t.Es.CreateSql,
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
-			TbColToDataCol:  t.Es.TbColToDataCol,
 			StrictSqlMode:   t.Es.StrictSqlMode,
 		}
 		in.ProjectList = t.ProjectList
@@ -1237,21 +1230,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
-		name2ColIndex := make(map[string]int32)
-		for _, n2i := range t.Name2ColIndex {
-			name2ColIndex[n2i.Name] = n2i.Index
-		}
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
+					ColumnListLen:   t.ColumnListLen,
 					FileSize:        t.FileSize,
 					FileOffsetTotal: t.FileOffsetTotal,
 					Cols:            t.Cols,
 					CreateSql:       t.CreateSql,
-					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
-					TbColToDataCol:  t.TbColToDataCol,
 					StrictSqlMode:   t.StrictSqlMode,
 				},
 				ExParam: external.ExParam{

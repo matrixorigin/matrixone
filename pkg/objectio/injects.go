@@ -197,6 +197,7 @@ func InjectLogging(
 		"echo",
 		iarg,
 		sarg,
+		false,
 	); err != nil {
 		return
 	}
@@ -221,6 +222,7 @@ func InjectLog1(
 		"echo",
 		iarg,
 		tableName,
+		false,
 	); err != nil {
 		return
 	}
@@ -231,6 +233,7 @@ func InjectLog1(
 		"echo",
 		iarg,
 		tableName,
+		false,
 	); err != nil {
 		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
 		return
@@ -243,6 +246,7 @@ func InjectLog1(
 		"echo",
 		iarg,
 		tableName,
+		false,
 	); err != nil {
 		fault.RemoveFaultPoint(context.Background(), FJ_LogReader)
 		fault.RemoveFaultPoint(context.Background(), FJ_TracePartitionState)
@@ -282,6 +286,7 @@ func InjectRanges(
 		"echo",
 		int64(MakeInjectTableLoggingIntArg(0, true)),
 		tableName,
+		false,
 	); err != nil {
 		return
 	}
