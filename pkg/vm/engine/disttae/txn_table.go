@@ -650,6 +650,7 @@ func (tbl *txnTable) doRanges(
 				zap.Int("ranges-len", blocks.Len()),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.Duration("cost", cost),
 			)
 		}
 
@@ -664,6 +665,7 @@ func (tbl *txnTable) doRanges(
 				zap.Bool("is-snap", tbl.db.op.IsSnapOp()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Duration("cost", cost),
 				zap.Error(err),
 			)
 		}
