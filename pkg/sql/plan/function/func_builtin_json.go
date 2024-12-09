@@ -15,6 +15,8 @@
 package function
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,6 +63,8 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
+type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
+
 func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Query(paths), nil
@@ -85,6 +89,45 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func computeJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifySet)
+}
+
+func computeStringJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifySet)
+}
+
+func computeJsonInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyInsert)
+}
+
+func computeStringJsonInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyInsert)
+}
+
+func computeJsonReplace(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
+}
+
+func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
 func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) error {
@@ -387,6 +430,163 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 				if err = rs.Append(fv, false); err != nil {
 					return err
 				}
+			}
+		}
+	}
+	return nil
+}
+
+type opBuiltInJsonSet struct {
+}
+
+func newOpBuiltInJsonSet() *opBuiltInJsonSet {
+	return &opBuiltInJsonSet{}
+}
+
+// JSON_SET
+func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 2 {
+		ts := make([]types.Type, 0, len(inputs))
+		allMatch := true
+		for _, input := range inputs {
+			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
+				ts = append(ts, input)
+			} else {
+				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+					ts = append(ts, types.T_varchar.ToType())
+					allMatch = false
+				} else {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
+		}
+		if allMatch {
+			return newCheckResultWithSuccess(0)
+		}
+		return newCheckResultWithCast(0, ts)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifySet)
+}
+
+func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyInsert)
+}
+
+func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
+}
+
+func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
+	// implement json_set function
+	// the first parameter is the json object
+	// the rest of the parameters are the path-value pairs
+	// the path is a string, the value is a json object
+	var err error
+	var fn computeJsonFn
+
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	switch jsonFuncType {
+	case bytejson.JsonModifySet:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonSet
+		} else {
+			fn = computeStringJsonSet
+		}
+	case bytejson.JsonModifyInsert:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonInsert
+		} else {
+			fn = computeStringJsonInsert
+		}
+	case bytejson.JsonModifyReplace:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonReplace
+		} else {
+			fn = computeStringJsonReplace
+		}
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return err
+		}
+
+		// build all paths
+		pathExprs := make([]*bytejson.Path, 0, (len(parameters)-1)/2+1)
+		for j := 1; j < len(parameters); j += 2 {
+			pathBytes, pIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
+			if pIsNull {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return err
+			}
+
+			pathStr := string(pathBytes)
+			p, err := types.ParseStringToPath(pathStr)
+			if err != nil {
+				return err
+			}
+
+			pathExprs = append(pathExprs, &p)
+		}
+
+		// build all values
+		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
+		for j := 2; j < len(parameters); j += 2 {
+			valBytes, vIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
+			if vIsNull {
+				var expr bytejson.ByteJson
+				expr, err = bytejson.CreateByteJSON(nil)
+				if err != nil {
+					return err
+				}
+				valExprs = append(valExprs, expr)
+				continue
+			}
+			valString := string(valBytes)
+
+			_, parserErr := strconv.ParseInt(valString, 10, 64)
+			var val bytejson.ByteJson
+			if len(valString) > 0 && (valString[0] == '{' || valString[0] == '[' || parserErr == nil) {
+				val, err = types.ParseStringToByteJson(valString)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				val, err = bytejson.CreateByteJSON(valString)
+				if err != nil {
+					return err
+				}
+			}
+			valExprs = append(valExprs, val)
+		}
+
+		out, err := fn(jsonBytes, pathExprs, valExprs)
+		if err != nil {
+			return err
+		}
+		if out.IsNull() {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.AppendByteJson(out, false); err != nil {
+				return err
 			}
 		}
 	}
