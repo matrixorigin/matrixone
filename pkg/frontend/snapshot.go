@@ -998,6 +998,7 @@ func restoreViews(
 		snapshot    *plan.Snapshot
 		stmts       []tree.Statement
 		sortedViews []string
+		oldSnapshot *plan.Snapshot
 	)
 	snapshot, err = getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
 	if err != nil {
@@ -1005,7 +1006,7 @@ func restoreViews(
 	}
 
 	compCtx := ses.GetTxnCompileCtx()
-	oldSnapshot := compCtx.GetSnapshot()
+	oldSnapshot = compCtx.GetSnapshot()
 	compCtx.SetSnapshot(snapshot)
 	defer func() {
 		compCtx.SetSnapshot(oldSnapshot)
