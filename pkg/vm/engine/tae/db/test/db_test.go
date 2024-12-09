@@ -8003,10 +8003,10 @@ func TestForceCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	fault.Enable()
 	defer fault.Disable()
-	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout")
+	err := fault.AddFaultPoint(ctx, objectio.FJ_FlushTimeout, ":::", "echo", 0, "mock flush timeout", false)
 	assert.NoError(t, err)
 	defer func() {
-		err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
+		_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_FlushTimeout)
 		assert.NoError(t, err)
 	}()
 
@@ -9917,10 +9917,10 @@ func TestMergeBlocks4(t *testing.T) {
 		defer wg.Done()
 		fault.Enable()
 		defer fault.Disable()
-		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout")
+		err := fault.AddFaultPoint(ctx, objectio.FJ_TransferSlow, ":::", "echo", 0, "mock flush timeout", false)
 		assert.NoError(t, err)
 		defer func() {
-			err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
+			_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferSlow)
 			assert.NoError(t, err)
 		}()
 		tae.DeleteAll(true)
@@ -10509,7 +10509,7 @@ func TestReplayDebugLog(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug")
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug", false)
 	defer fault.RemoveFaultPoint(ctx, "replay debug log")
 
 	tae.Restart(ctx)
