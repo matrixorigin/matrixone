@@ -2379,92 +2379,92 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 
 		// Try to do binding for CTE at declaration
-		for _, cte := range stmt.With.CTEs {
-
-			table := string(cte.Name.Alias)
-			cteRef := ctx.cteByName[table]
-
-			var err error
-			var s *tree.Select
-			switch stmt := cte.Stmt.(type) {
-			case *tree.Select:
-				s = stmt
-
-			case *tree.ParenSelect:
-				s = stmt.Select
-
-			default:
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-			}
-
-			var left *tree.SelectStatement
-			var stmts []tree.SelectStatement
-			left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
-			if err != nil {
-				return 0, err
-			}
-			isR := len(stmts) > 0
-
-			if isR && !cteRef.isRecursive {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
-			} else if !isR {
-				subCtx := NewBindContext(builder, ctx)
-				subCtx.normalCTE = true
-				subCtx.cteName = table
-				subCtx.maskedCTEs = cteRef.maskedCTEs
-				cteRef.isRecursive = false
-				subCtx.recordCteInBinding(table, cteRef)
-
-				oldSnapshot := builder.compCtx.GetSnapshot()
-				builder.compCtx.SetSnapshot(subCtx.snapshot)
-				nodeID, err := builder.bindSelect(s, subCtx, false)
-				builder.compCtx.SetSnapshot(oldSnapshot)
-				if err != nil {
-					return 0, err
-				}
-				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
-					return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
-				}
-				ctx.views = append(ctx.views, subCtx.views...)
-			} else {
-				initCtx := NewBindContext(builder, ctx)
-				initCtx.initSelect = true
-				initCtx.sinkTag = builder.genNewTag()
-				initCtx.isTryBindingCTE = true
-				initLastNodeID, err := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
-				if err != nil {
-					return 0, err
-				}
-				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[initLastNodeID].ProjectList) {
-					return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[initLastNodeID].ProjectList), len(cteRef.ast.Name.Cols))
-				}
-				//ctx.views = append(ctx.views, initCtx.views...)
-
-				recursiveNodeId := initLastNodeID
-				for _, r := range stmts {
-					subCtx := NewBindContext(builder, ctx)
-					subCtx.maskedCTEs = cteRef.maskedCTEs
-					subCtx.recSelect = true
-					subCtx.sinkTag = builder.genNewTag()
-					subCtx.isTryBindingCTE = true
-					subCtx.cteByName = make(map[string]*CTERef)
-					subCtx.cteByName[table] = cteRef
-					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
-					if err != nil {
-						return 0, err
-					}
-					sourceStep := builder.appendStep(recursiveNodeId)
-					nodeID := appendRecursiveScanNode(builder, subCtx, sourceStep, subCtx.sinkTag)
-					subCtx.recRecursiveScanNodeId = nodeID
-					recursiveNodeId, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
-					if err != nil {
-						return 0, err
-					}
-					//ctx.views = append(ctx.views, subCtx.views...)
-				}
-				builder.qry.Steps = builder.qry.Steps[:0]
-			}
-		}
+		//for _, cte := range stmt.With.CTEs {
+		//
+		//	table := string(cte.Name.Alias)
+		//	cteRef := ctx.cteByName[table]
+		//
+		//	var err error
+		//	var s *tree.Select
+		//	switch stmt := cte.Stmt.(type) {
+		//	case *tree.Select:
+		//		s = stmt
+		//
+		//	case *tree.ParenSelect:
+		//		s = stmt.Select
+		//
+		//	default:
+		//		return 0, moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		//	}
+		//
+		//	var left *tree.SelectStatement
+		//	var stmts []tree.SelectStatement
+		//	left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+		//	if err != nil {
+		//		return 0, err
+		//	}
+		//	isR := len(stmts) > 0
+		//
+		//	if isR && !cteRef.isRecursive {
+		//		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+		//	} else if !isR {
+		//		subCtx := NewBindContext(builder, ctx)
+		//		subCtx.normalCTE = true
+		//		subCtx.cteName = table
+		//		subCtx.maskedCTEs = cteRef.maskedCTEs
+		//		cteRef.isRecursive = false
+		//		subCtx.recordCteInBinding(table, cteRef)
+		//
+		//		oldSnapshot := builder.compCtx.GetSnapshot()
+		//		builder.compCtx.SetSnapshot(subCtx.snapshot)
+		//		nodeID, err := builder.bindSelect(s, subCtx, false)
+		//		builder.compCtx.SetSnapshot(oldSnapshot)
+		//		if err != nil {
+		//			return 0, err
+		//		}
+		//		if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
+		//			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
+		//		}
+		//		ctx.views = append(ctx.views, subCtx.views...)
+		//	} else {
+		//		initCtx := NewBindContext(builder, ctx)
+		//		initCtx.initSelect = true
+		//		initCtx.sinkTag = builder.genNewTag()
+		//		initCtx.isTryBindingCTE = true
+		//		initLastNodeID, err := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
+		//		if err != nil {
+		//			return 0, err
+		//		}
+		//		if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[initLastNodeID].ProjectList) {
+		//			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[initLastNodeID].ProjectList), len(cteRef.ast.Name.Cols))
+		//		}
+		//		//ctx.views = append(ctx.views, initCtx.views...)
+		//
+		//		recursiveNodeId := initLastNodeID
+		//		for _, r := range stmts {
+		//			subCtx := NewBindContext(builder, ctx)
+		//			subCtx.maskedCTEs = cteRef.maskedCTEs
+		//			subCtx.recSelect = true
+		//			subCtx.sinkTag = builder.genNewTag()
+		//			subCtx.isTryBindingCTE = true
+		//			subCtx.cteByName = make(map[string]*CTERef)
+		//			subCtx.cteByName[table] = cteRef
+		//			err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
+		//			if err != nil {
+		//				return 0, err
+		//			}
+		//			sourceStep := builder.appendStep(recursiveNodeId)
+		//			nodeID := appendRecursiveScanNode(builder, subCtx, sourceStep, subCtx.sinkTag)
+		//			subCtx.recRecursiveScanNodeId = nodeID
+		//			recursiveNodeId, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
+		//			if err != nil {
+		//				return 0, err
+		//			}
+		//			//ctx.views = append(ctx.views, subCtx.views...)
+		//		}
+		//		builder.qry.Steps = builder.qry.Steps[:0]
+		//	}
+		//}
 	}
 
 	var clause *tree.SelectClause
