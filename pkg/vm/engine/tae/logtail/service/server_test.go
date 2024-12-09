@@ -64,7 +64,7 @@ func TestService(t *testing.T) {
 	rpcStream, err := rpcClient.NewStream(address, false)
 	require.NoError(t, err)
 
-	logtailClient, err := NewLogtailClient(rpcStream, WithClientRequestPerSecond(100))
+	logtailClient, err := NewLogtailClient(context.TODO(), rpcStream, WithClientRequestPerSecond(100))
 	require.NoError(t, err)
 	defer func() {
 		err := logtailClient.Close()

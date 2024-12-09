@@ -330,6 +330,10 @@ func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	return nil
 }
 
+func (e *testEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return true
+}
+
 func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return nil
 }

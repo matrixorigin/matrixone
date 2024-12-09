@@ -16,7 +16,6 @@ package test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -369,10 +368,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
@@ -477,10 +473,7 @@ func TestChangesHandle4(t *testing.T) {
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
@@ -886,12 +879,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	dir := testutil.GetDefaultTestPath("test", t)
-	os.RemoveAll(dir)
-	opt, err := testutil.GetS3SharedFileServiceOption(ctx, dir)
-	require.NoError(t, err)
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
