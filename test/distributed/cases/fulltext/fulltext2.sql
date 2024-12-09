@@ -200,4 +200,226 @@ select * from products where match(details) against('Dell' IN NATURAL LANGUAGE M
 select id, name from products where match(details) against('Apple' IN NATURAL LANGUAGE MODE);
 drop table products;
 
+
+
+-- create fulltext in prepare stmt
+drop table if exists prepare_fulltext;
+create table prepare_fulltext (a char primary key , b varchar(20));
+insert into prepare_fulltext values (1, 11), (2, 22), (3, 33);
+prepare stmt1 from 'create fulltext index f06 on prepare_fulltext (a)';
+execute stmt1;
+-- @bvt:issue#20613
+show create table prepare_fulltext;
+-- @bvt:issue
+select * from prepare_fulltext;
+drop table prepare_fulltext;
+
+
+
+-- alter table add fulltext index in prepare stmt
+drop table if exists pro;
+create table pro (
+    id int auto_increment primary key,
+    name varchar(255),
+    details json
+);
+prepare stmt2 from 'alter table pro add fulltext index pro1(details) with PARSER json';
+execute stmt2;
+prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
+execute stmt3;
+-- @bvt:issue#20613
+show create table pro;
+-- @bvt:issue
+insert into pro (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
+select * from pro;
+drop table pro;
+
+
+
+-- create fulltext index with parser default and load data
+drop table if exists test_table;
+create table test_table(
+col1 int auto_increment,
+col2 float,
+col3 bool,
+col4 Date,
+col5 varchar(255),
+col6 text,
+PRIMARY KEY (`col1`),
+fulltext(col5)
+);
+-- @bvt:issue#20613
+show create table test_table;
+-- @bvt:issue
+load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
+select * from test_table;
+drop table test_table;
+
+
+
+-- create fulltext index
+drop table if exists jsonline_t2;
+create table jsonline_t2(
+col1 char(225),
+col2 varchar(225) ,
+col3 text,
+col4 varchar(225) primary key
+);
+create fulltext index f05 on jsonline_t2(col3);
+load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
+select * from jsonline_t2;
+drop table jsonline_t2;
+
+
+
+-- create fulltext index with parser json
+drop table if exists t1;
+create table t1(
+    col1 bool,
+    col2 int primary key,
+    col3 varchar(100),
+    col4 date,
+    col5 datetime,
+    col6 timestamp,
+    col7 decimal,
+    col8 float,
+    col9 json,
+    col10 text,
+    col11 json,
+    col12 bool
+);
+create fulltext index f06 on t1(col9);
+load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'='jsonline','jsondata'='object'} into table t1;
+select * from t1;
+-- @bvt:issue#20613
+show create table t1;
+-- @bvt:issue
+drop table t1;
+
+
+
+-- create fulltext index on multi column
+drop table if exists articles;
+create table articles (
+    id int unsigned auto_increment not null primary key,
+    title varchar(200),
+    body text,
+    fulltext (title, body)
+);
+insert into articles (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+-- fulltext index query in natural language mode
+select * from articles
+where match (title, body)
+against ('database' in natural language mode);
+-- fulltext index query in natural language mode with alias
+select id, match (title, body)
+against ('Tutorial' in natural language mode) as score
+from articles;
+-- fulltext index query match multi and calculate score
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles;
+-- filter with where clause and select
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles
+where match (title, body)
+against ('Security implications of running MO as root' in natural language mode);
+drop table articles;
+
+
+
+-- fulltext index query single column in natural language mode
+drop table if exists article;
+create table article (
+    id int unsigned auto_increment not null primary key,
+    title varchar(200),
+    body text,
+    fulltext (body)
+);
+insert into article (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+-- fulltext index query match column in natural language mode
+select * from article
+where match (body)
+against ('database' in natural language mode);
+-- fulltext index query match single and calculate score
+select id, match (body)
+against ('DataBase' in natural language mode) as score
+from article;
+-- filter with where clause and select
+select id, body, match (body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from article
+where match (body)
+against ('Security implications of running MO as root' in natural language mode);
+drop table article;
+
+
+
+-- match with +/-/++/+-/*
+drop table if exists example1;
+create table example1 (
+    id INT auto_increment primary key,
+    content TEXT,
+    fulltext(content)
+);
+insert into example1 (content) values
+('MO is a database management system.'),
+('A database management system is a software that manages databases.'),
+('MO is a popular choice for development.'),
+('PHP is a popular server-side scripting language for web development.'),
+('Python is a high-level programming language used for various applications.');
+select * from example1
+where match (content)
+against ('+MO +database' in boolean mode);
+
+select * from example1
+where match(content)
+against ('+database' in boolean mode);
+
+select * from example1
+where match(content)
+against ('-database' in boolean mode);
+
+select * from example1
+where match (content)
+against ('+web development -MO' in boolean mode);
+
+select * from example1
+where match (content)
+against ('+MO' in boolean mode);
+
+select * from example1
+where match (content)
+against ('+MO ~popular' in boolean mode);
+
+select * from example1
+where match (content)
+against ('MO*' in boolean mode);
+
+select * from example1
+where match (content)
+against ('+MO +(<popular >database)' in boolean mode);
+
+select * from example1
+where match (content)
+against ('+MO popular' in boolean mode);
+
+select * from example1
+where match (content)
+against ('popular' in boolean mode);
+drop table example1;
+
 drop database test_fulltext;

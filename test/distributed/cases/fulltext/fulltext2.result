@@ -229,4 +229,298 @@ id    name
 2    스마트폰
 3    手机
 drop table products;
+drop table if exists prepare_fulltext;
+create table prepare_fulltext (a char primary key , b varchar(20));
+insert into prepare_fulltext values (1, 11), (2, 22), (3, 33);
+prepare stmt1 from 'create fulltext index f06 on prepare_fulltext (a)';
+execute stmt1;
+show create table prepare_fulltext;
+
+select * from prepare_fulltext;
+a    b
+1    11
+2    22
+3    33
+drop table prepare_fulltext;
+drop table if exists pro;
+create table pro (
+id int auto_increment primary key,
+name varchar(255),
+details json
+);
+prepare stmt2 from 'alter table pro add fulltext index pro1(details) with PARSER json';
+execute stmt2;
+prepare stmt3 from 'alter table pro add fulltext index pro2(name)';
+execute stmt3;
+show create table pro;
+
+insert into pro (name, details) values('手机', '{"brand": "Apple", "model": "iPhone 12", "price": 800}');
+select * from pro;
+id    name    details
+1    手机    {"brand": "Apple", "model": "iPhone 12", "price": 800}
+drop table pro;
+drop table if exists test_table;
+create table test_table(
+col1 int auto_increment,
+col2 float,
+col3 bool,
+col4 Date,
+col5 varchar(255),
+col6 text,
+PRIMARY KEY (`col1`),
+fulltext(col5)
+);
+show create table test_table;
+
+load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
+select * from test_table;
+col1    col2    col3    col4    col5    col6
+0    0.1    true    1982-03-24    varchar_0    text_0
+1    1.1    false    1982-07-31    varchar_1    text_1
+2    2.1    true    2002-04-13    varchar_2    text_2
+3    3.1    false    2019-09-29    varchar_3    text_3
+4    4.1    true    1996-08-20    varchar_4    text_4
+5    5.1    false    2008-10-13    varchar_5    text_5
+6    6.1    true    2002-03-05    varchar_6    text_6
+7    7.1    false    1993-11-07    varchar_7    text_7
+8    8.1    true    1994-01-08    varchar_8    text_8
+9    9.1    false    1999-09-17    varchar_9    text_9
+10    10.1    true    2003-09-28    varchar_10    text_10
+11    11.1    false    1984-01-22    varchar_11    text_11
+12    12.1    true    1994-02-10    varchar_12    text_12
+13    13.1    false    1994-12-02    varchar_13    text_13
+14    14.1    true    2013-01-19    varchar_14    text_14
+15    15.1    false    2002-09-29    varchar_15    text_15
+16    16.1    true    2001-12-07    varchar_16    text_16
+17    17.1    false    1989-03-11    varchar_17    text_17
+18    18.1    true    2019-11-04    varchar_18    text_18
+19    19.1    false    2002-08-15    varchar_19    text_19
+20    20.1    true    1995-12-20    varchar_20    text_20
+21    21.1    false    2018-08-03    varchar_21    text_21
+22    22.1    true    1998-03-10    varchar_22    text_22
+23    23.1    false    2022-04-08    varchar_23    text_23
+24    24.1    true    1989-04-27    varchar_24    text_24
+25    25.1    false    2009-03-14    varchar_25    text_25
+26    26.1    true    2019-03-27    varchar_26    text_26
+27    27.1    false    1983-10-28    varchar_27    text_27
+28    28.1    true    1993-07-19    varchar_28    text_28
+29    29.1    false    1986-09-11    varchar_29    text_29
+30    30.1    true    1992-08-19    varchar_30    text_30
+31    31.1    false    1981-08-07    varchar_31    text_31
+32    32.1    true    1984-03-25    varchar_32    text_32
+33    33.1    false    2001-09-05    varchar_33    text_33
+34    34.1    true    2022-03-17    varchar_34    text_34
+35    35.1    false    2008-06-24    varchar_35    text_35
+36    36.1    true    1987-11-23    varchar_36    text_36
+37    37.1    false    2008-11-10    varchar_37    text_37
+38    38.1    true    1986-01-29    varchar_38    text_38
+39    39.1    false    1985-02-27    varchar_39    text_39
+40    40.1    true    2016-11-28    varchar_40    text_40
+41    41.1    false    1991-02-11    varchar_41    text_41
+42    42.1    true    2019-01-08    varchar_42    text_42
+43    43.1    false    2009-05-01    varchar_43    text_43
+44    44.1    true    1986-11-15    varchar_44    text_44
+45    45.1    false    2000-07-22    varchar_45    text_45
+46    46.1    true    2002-09-07    varchar_46    text_46
+47    47.1    false    1987-09-23    varchar_47    text_47
+48    48.1    true    1985-10-25    varchar_48    text_48
+49    49.1    false    1988-10-06    varchar_49    text_49
+drop table test_table;
+drop table if exists jsonline_t2;
+create table jsonline_t2(
+col1 char(225),
+col2 varchar(225) ,
+col3 text,
+col4 varchar(225) primary key
+);
+create fulltext index f05 on jsonline_t2(col3);
+load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
+select * from jsonline_t2;
+col1    col2    col3    col4
+a    中文    #¥%……&#    234cccc重要
+"a"    "b"    "c"    "d"
+'d'    '123456'    'b'    'a'
+"'a'"    "'b'"    "'c'"    abc
+ 123f fff     yeah     红tu    bb"
+"aa""""    aa"    "bb""""    bb"
+drop table jsonline_t2;
+drop table if exists t1;
+create table t1(
+col1 bool,
+col2 int primary key,
+col3 varchar(100),
+col4 date,
+col5 datetime,
+col6 timestamp,
+col7 decimal,
+col8 float,
+col9 json,
+col10 text,
+col11 json,
+col12 bool
+);
+create fulltext index f06 on t1(col9);
+load data infile {'filepath'='$resources/load_data/jsonline_object.jl','format'='jsonline','jsondata'='object'} into table t1;
+select * from t1;
+col1    col2    col3    col4    col5    col6    col7    col8    col9    col10    col11    col12
+true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1qaz    null    null
+true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1aza    null    null
+true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    ["1", 2, null, false, true, {"q": 1}]    1az    null    null
+true    1    var    2020-09-07    2020-09-07 00:00:00    2020-09-07 00:00:00    18    121.11    {"b": ["a", "b", {"q": 4}], "c": 1}    1qaz    null    null
+show create table t1;
+
+drop table t1;
+drop table if exists articles;
+create table articles (
+id int unsigned auto_increment not null primary key,
+title varchar(200),
+body text,
+fulltext (title, body)
+);
+insert into articles (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+select * from articles
+where match (title, body)
+against ('database' in natural language mode);
+id    title    body
+1    MO Tutorial    DBMS stands for DataBase ...
+5    MO vs. YourSQL    In the following database comparison ...
+select id, match (title, body)
+against ('Tutorial' in natural language mode) as score
+from articles;
+id    score
+1    0.2276447
+3    0.2276447
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles;
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+1    DBMS stands for DataBase ...    0.0
+2    After you went through a ...    0.0
+3    In this tutorial, we show ...    0.0
+5    In the following database comparison ...    0.0
+select id, body, match (title, body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from articles
+where match (title, body)
+against ('Security implications of running MO as root' in natural language mode);
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+1    DBMS stands for DataBase ...    0.0
+2    After you went through a ...    0.0
+3    In this tutorial, we show ...    0.0
+5    In the following database comparison ...    0.0
+drop table articles;
+drop table if exists article;
+create table article (
+id int unsigned auto_increment not null primary key,
+title varchar(200),
+body text,
+fulltext (body)
+);
+insert into article (title, body) VALUES
+('MO Tutorial', 'DBMS stands for DataBase ...'),
+('How To Use MO Well', 'After you went through a ...'),
+('Optimizing MO', 'In this tutorial, we show ...'),
+('1001 MO Tricks', '1. Never run MOd as root. 2. ...'),
+('MO vs. YourSQL', 'In the following database comparison ...'),
+('MO Security', 'When configured properly, MO ...');
+select * from article
+where match (body)
+against ('database' in natural language mode);
+id    title    body
+1    MO Tutorial    DBMS stands for DataBase ...
+5    MO vs. YourSQL    In the following database comparison ...
+select id, match (body)
+against ('DataBase' in natural language mode) as score
+from article;
+id    score
+1    0.2276447
+5    0.2276447
+select id, body, match (body)
+against ('Security implications of running MO as root' in natural language mode) as score
+from article
+where match (body)
+against ('Security implications of running MO as root' in natural language mode);
+id    body    score
+4    1. Never run MOd as root. 2. ...    1.2110387
+6    When configured properly, MO ...    0.60551935
+drop table article;
+drop table if exists example1;
+create table example1 (
+id INT auto_increment primary key,
+content TEXT,
+fulltext(content)
+);
+insert into example1 (content) values
+('MO is a database management system.'),
+('A database management system is a software that manages databases.'),
+('MO is a popular choice for development.'),
+('PHP is a popular server-side scripting language for web development.'),
+('Python is a high-level programming language used for various applications.');
+select * from example1
+where match (content)
+against ('+MO +database' in boolean mode);
+id    content
+1    MO is a database management system.
+select * from example1
+where match(content)
+against ('+database' in boolean mode);
+id    content
+1    MO is a database management system.
+2    A database management system is a software that manages databases.
+select * from example1
+where match(content)
+against ('-database' in boolean mode);
+id    content
+select * from example1
+where match (content)
+against ('+web development -MO' in boolean mode);
+id    content
+4    PHP is a popular server-side scripting language for web development.
+select * from example1
+where match (content)
+against ('+MO' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO ~popular' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('MO*' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO +(<popular >database)' in boolean mode);
+id    content
+1    MO is a database management system.
+3    MO is a popular choice for development.
+select * from example1
+where match (content)
+against ('+MO popular' in boolean mode);
+id    content
+3    MO is a popular choice for development.
+1    MO is a database management system.
+select * from example1
+where match (content)
+against ('popular' in boolean mode);
+id    content
+3    MO is a popular choice for development.
+4    PHP is a popular server-side scripting language for web development.
+drop table example1;
 drop database test_fulltext;
