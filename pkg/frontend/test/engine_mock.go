@@ -2058,6 +2058,20 @@ func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel in
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
 }
 
+// PrefetchTableMeta mocks base method.
+func (m *MockEngine) PrefetchTableMeta(ctx context.Context, key statsinfo.StatsInfoKey) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrefetchTableMeta", ctx, key)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// PrefetchTableMeta indicates an expected call of PrefetchTableMeta.
+func (mr *MockEngineMockRecorder) PrefetchTableMeta(ctx, key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrefetchTableMeta", reflect.TypeOf((*MockEngine)(nil).PrefetchTableMeta), ctx, key)
+}
+
 // Stats mocks base method.
 func (m *MockEngine) Stats(ctx context.Context, key statsinfo.StatsInfoKey, sync bool) *statsinfo.StatsInfo {
 	m.ctrl.T.Helper()
