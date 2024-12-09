@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"time"
 
@@ -83,6 +84,18 @@ func WithServerQueueWorkers(value int) ServerOption {
 	}
 }
 
+func WithTxnSender(sender TxnSender) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.sender = sender
+	}
+}
+
+const (
+	TxnLocalHandle = iota
+	TxnForwardWait
+	TxnForwarding
+)
+
 type server struct {
 	rt       runtime.Runtime
 	rpc      morpc.RPCServer
@@ -99,6 +112,17 @@ type server struct {
 		enableCompress       bool
 		maxChannelBufferSize int
 		workers              int
+	}
+
+	handleState struct {
+		sync.RWMutex
+		state int
+
+		forward struct {
+			target    string
+			sender    TxnSender
+			waitReady chan struct{}
+		}
 	}
 
 	// in order not to block tcp, the data read from tcp will be put into this ringbuffer. This ringbuffer will
@@ -266,6 +290,22 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-s.queue:
+			state, waitReady := s.getTxnHandleState()
+			switch state {
+			case TxnLocalHandle:
+			case TxnForwarding:
+				req.handler = s.forwardingTxnRequest
+			case TxnForwardWait:
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-waitReady:
+						req.handler = s.forwardingTxnRequest
+					}
+				}
+			}
+
 			if txnID, err := req.exec(); err != nil {
 				if s.rt.Logger().Enabled(zap.DebugLevel) {
 					s.rt.Logger().Error("handle txn request failed",
@@ -307,4 +347,88 @@ func checkMethodVersion(
 	req *txn.TxnRequest,
 ) error {
 	return runtime.CheckMethodVersionWithRuntime(ctx, rt, methodVersions, req)
+}
+
+/////////////////////// forward txn request to another tn /////////////////////
+
+func (s *server) SwitchTxnHandleStateTo(state int, target string) {
+	switch state {
+	case TxnLocalHandle:
+		s.enterLocalHandleState()
+	case TxnForwardWait:
+		s.enterForwardWaitState(target)
+	case TxnForwarding:
+		s.enterForwardingState()
+	}
+}
+
+func (s *server) getTxnHandleState() (int, chan struct{}) {
+	s.handleState.RLock()
+	defer s.handleState.RUnlock()
+
+	return s.handleState.state, s.handleState.forward.waitReady
+}
+
+func (s *server) enterForwardWaitState(target string) {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnForwardWait {
+		return
+	}
+
+	s.handleState.state = TxnForwardWait
+	s.handleState.forward.target = target
+	s.handleState.forward.waitReady = make(chan struct{})
+}
+
+func (s *server) enterForwardingState() {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnForwarding {
+		return
+	}
+
+	close(s.handleState.forward.waitReady)
+	s.handleState.forward.waitReady = nil
+	s.handleState.state = TxnForwarding
+}
+
+func (s *server) enterLocalHandleState() {
+	s.handleState.Lock()
+	defer s.handleState.Unlock()
+
+	if s.handleState.state == TxnLocalHandle {
+		return
+	}
+
+	if s.handleState.forward.waitReady != nil {
+		close(s.handleState.forward.waitReady)
+		s.handleState.forward.waitReady = nil
+	}
+
+	s.handleState.state = TxnLocalHandle
+}
+
+func (s *server) forwardingTxnRequest(
+	ctx context.Context,
+	req *txn.TxnRequest,
+	resp *txn.TxnResponse) error {
+
+	req.ResetTargetTN(metadata.TNShard{
+		Address:       s.handleState.forward.target,
+		TNShardRecord: metadata.TNShardRecord{},
+		ReplicaID:     0,
+	})
+
+	result, err := s.handleState.forward.sender.Send(ctx, []txn.TxnRequest{*req})
+	if err != nil {
+		return err
+	}
+
+	*resp = result.Responses[0]
+	result.Release()
+
+	return nil
 }

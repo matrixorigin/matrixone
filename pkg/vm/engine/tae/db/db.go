@@ -23,7 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
@@ -90,6 +90,8 @@ type DB struct {
 	Dir        string
 	TxnMode    atomic.Uint32
 	Controller *Controller
+
+	TxnServer rpc.TxnServer
 
 	Opts *options.Options
 
