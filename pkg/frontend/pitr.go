@@ -1712,19 +1712,22 @@ func restoreViewsWithPitr(
 
 	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
-			// try to parse with 1
-			stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
-			if err != nil {
-				return err
-			}
+			return err
 		}
 
 		compCtx.SetDatabase(view.dbName)
 		// build create sql to find dependent views
 		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
-			return err
+			stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
+			if err != nil {
+				return err
+			}
+			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			if err != nil {
+				return err
+			}
 		}
 
 		g.addVertex(key)
