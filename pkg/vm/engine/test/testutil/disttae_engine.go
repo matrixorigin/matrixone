@@ -69,6 +69,7 @@ type TestDisttaeEngine struct {
 	timestampWaiter          client.TimestampWaiter
 	mp                       *mpool.MPool
 	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold  uint64
 	insertEntryMaxCount      int
 
 	rootDir string
@@ -129,6 +130,9 @@ func NewTestDisttaeEngine(
 	}
 	if de.commitWorkspaceThreshold != 0 {
 		engineOpts = append(engineOpts, disttae.WithCommitWorkspaceThreshold(de.commitWorkspaceThreshold))
+	}
+	if de.writeWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithWriteWorkspaceThreshold(de.writeWorkspaceThreshold))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {
