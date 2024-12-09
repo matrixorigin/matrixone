@@ -411,10 +411,16 @@ func (r *reader) Read(
 		}
 
 		if injected, logLevel := objectio.LogReaderInjected("", r.name); injected || err != nil {
+			blkStr := "nil"
+			if blkInfo != nil {
+				blkStr = blkInfo.String()
+			}
 			if err != nil {
 				logutil.Error(
 					"LOGREADER-ERROR",
 					zap.String("name", r.name),
+					zap.Duration("duration", time.Since(start)),
+					zap.String("blk", blkStr),
 					zap.Error(err),
 				)
 				return
@@ -424,10 +430,12 @@ func (r *reader) Read(
 			}
 			if logLevel == 0 {
 				logutil.Info(
-					"LOGREADER-INJECTED-1",
+					"DEBUG-SLOW-TXN-READER",
 					zap.String("name", r.name),
 					zap.String("ts", r.ts.DebugString()),
 					zap.Int("data-len", outBatch.RowCount()),
+					zap.Duration("duration", time.Since(start)),
+					zap.String("blk", blkStr),
 					zap.Error(err),
 				)
 			} else {
@@ -439,8 +447,10 @@ func (r *reader) Read(
 					"LOGREADER-INJECTED-1",
 					zap.String("name", r.name),
 					zap.String("ts", r.ts.DebugString()),
+					zap.Duration("duration", time.Since(start)),
 					zap.Error(err),
 					zap.String("data", common.MoBatchToString(outBatch, maxLogCnt)),
+					zap.String("blk", blkStr),
 				)
 			}
 		}
