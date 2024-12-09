@@ -1478,6 +1478,7 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		batchSelectList: make(map[*batch.Batch][]int64),
 		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+		writeWorkspaceThreshold:                   txn.writeWorkspaceThreshold,
 	}
 
 	ws.readOnly.Store(true)
