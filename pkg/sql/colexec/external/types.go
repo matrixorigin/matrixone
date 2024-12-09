@@ -54,25 +54,23 @@ type ExParamConst struct {
 	IgnoreLineTag int
 	ParallelLoad  bool
 	StrictSqlMode bool
+	Close         byte
 	maxBatchSize  uint64
 	Idx           int
+	ColumnListLen int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
 	CreateSql     string
-	Close         byte
+
 	// letter case: origin
-	Attrs           []string
+	Attrs           []plan.ExternAttr
 	Cols            []*plan.ColDef
 	FileList        []string
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	// letter case: lower
-	Name2ColIndex map[string]int32
-	// letter case: lower
-	TbColToDataCol map[string]int32
-	Ctx            context.Context
-	Extern         *tree.ExternParam
-	tableDef       *plan.TableDef
-	ClusterTable   *plan.ClusterTable
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	tableDef        *plan.TableDef
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {
