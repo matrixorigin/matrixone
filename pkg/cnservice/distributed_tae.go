@@ -80,8 +80,11 @@ func (s *service) initDistributedTAE(
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold),
-		disttae.WithMoTableStats(s.cfg.Engine.Stats),
+		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
+		disttae.WithMoServerStateChecker(func() bool {
+			return frontend.MoServerIsStarted(s.cfg.UUID)
+		}),
 	)
 	pu.StorageEngine = s.storeEngine
 
