@@ -36,7 +36,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 		return err
 	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
