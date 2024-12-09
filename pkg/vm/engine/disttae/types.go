@@ -132,7 +132,8 @@ const (
 )
 
 const (
-	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
+	WriteWorkspaceThreshold        uint64 = 2 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -155,9 +156,9 @@ type IDGenerator interface {
 
 type EngineOptions func(*Engine)
 
-func WithWorkspaceThreshold(th uint64) EngineOptions {
+func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
-		e.config.workspaceThreshold = th
+		e.config.commitWorkspaceThreshold = th
 	}
 }
 
@@ -205,8 +206,8 @@ type Engine struct {
 	tnID     string
 
 	config struct {
-		workspaceThreshold  uint64
-		insertEntryMaxCount int
+		commitWorkspaceThreshold uint64
+		insertEntryMaxCount      int
 
 		cnTransferTxnLifespanThreshold time.Duration
 

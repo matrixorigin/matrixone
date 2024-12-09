@@ -16,15 +16,16 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -57,18 +58,18 @@ import (
 )
 
 type TestDisttaeEngine struct {
-	Engine              *disttae.Engine
-	logtailReceiver     chan morpc.Message
-	broken              chan struct{}
-	wg                  sync.WaitGroup
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	txnClient           client.TxnClient
-	txnOperator         client.TxnOperator
-	timestampWaiter     client.TimestampWaiter
-	mp                  *mpool.MPool
-	workspaceThreshold  uint64
-	insertEntryMaxCount int
+	Engine                   *disttae.Engine
+	logtailReceiver          chan morpc.Message
+	broken                   chan struct{}
+	wg                       sync.WaitGroup
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	txnClient                client.TxnClient
+	txnOperator              client.TxnOperator
+	timestampWaiter          client.TimestampWaiter
+	mp                       *mpool.MPool
+	commitWorkspaceThreshold uint64
+	insertEntryMaxCount      int
 
 	rootDir string
 }
@@ -126,8 +127,8 @@ func NewTestDisttaeEngine(
 	if de.insertEntryMaxCount != 0 {
 		engineOpts = append(engineOpts, disttae.WithInsertEntryMaxCount(de.insertEntryMaxCount))
 	}
-	if de.workspaceThreshold != 0 {
-		engineOpts = append(engineOpts, disttae.WithWorkspaceThreshold(de.workspaceThreshold))
+	if de.commitWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithCommitWorkspaceThreshold(de.commitWorkspaceThreshold))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {

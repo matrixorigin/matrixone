@@ -146,8 +146,8 @@ func (e *Engine) fillDefaults() {
 	if e.config.insertEntryMaxCount <= 0 {
 		e.config.insertEntryMaxCount = InsertEntryThreshold
 	}
-	if e.config.workspaceThreshold <= 0 {
-		e.config.workspaceThreshold = WorkspaceThreshold
+	if e.config.commitWorkspaceThreshold <= 0 {
+		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
@@ -156,7 +156,7 @@ func (e *Engine) fillDefaults() {
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("WorkspaceThreshold", e.config.workspaceThreshold),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
