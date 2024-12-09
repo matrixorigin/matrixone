@@ -133,12 +133,17 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			// lock version table
+			startTime := time.Now()
 			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
 				s.logger.Error("failed to lock table",
 					zap.String("table", catalog.MOVersionTable),
+					zap.Duration("lock_duration", time.Since(startTime)),
 					zap.Error(err))
 				return err
 			}
+			s.logger.Info("lock table successfully",
+				zap.String("table", catalog.MOVersionTable),
+				zap.Duration("lock_duration", time.Since(startTime)))
 
 			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
