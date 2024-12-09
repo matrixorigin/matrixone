@@ -133,32 +133,6 @@ func diff(a, b any, t types.T) uint64 {
 	case types.T_decimal64:
 		x, y := a.(types.Decimal64), b.(types.Decimal64)
 		return uint64(max(x, y) - min(x, y))
-	case types.T_decimal128:
-		x, y := a.(types.Decimal128), b.(types.Decimal128)
-		if x.Less(y) {
-			x, y = y, x
-		}
-		sub128, err := x.Sub128(y)
-		if err != nil {
-			return 0
-		}
-		return uint64(types.Decimal128ToFloat64(sub128, 0))
-	case types.T_uuid:
-		u1, u2 := a.(types.Uuid), b.(types.Uuid)
-		x, y := types.DecodeUint64(u1[:]), types.DecodeUint64(u2[:])
-		return max(x, y) - min(x, y)
-	case types.T_TS:
-		u1, u2 := a.(types.TS), b.(types.TS)
-		x, y := types.DecodeUint64(u1[:]), types.DecodeUint64(u2[:])
-		return max(x, y) - min(x, y)
-	case types.T_Rowid:
-		u1, u2 := a.(types.Rowid), b.(types.Rowid)
-		x, y := types.DecodeUint64(u1[:]), types.DecodeUint64(u2[:])
-		return max(x, y) - min(x, y)
-	case types.T_Blockid:
-		u1, u2 := a.(types.Blockid), b.(types.Blockid)
-		x, y := types.DecodeUint64(u1[:]), types.DecodeUint64(u2[:])
-		return max(x, y) - min(x, y)
 	default:
 	}
 	return math.MaxUint64

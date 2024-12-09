@@ -105,6 +105,8 @@ func TestRemoveOversize(t *testing.T) {
 }
 
 func TestDiff(t *testing.T) {
+	require.Equal(t, uint64(0), diff(false, false, types.T_bool))
+	require.Equal(t, uint64(1), diff(false, true, types.T_bool))
 	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
 	require.Equal(t, uint64(10), diff(uint8(1), uint8(11), types.T_uint8))
 	require.Equal(t, uint64(10), diff(int16(1), int16(11), types.T_int16))
@@ -119,6 +121,11 @@ func TestDiff(t *testing.T) {
 	require.Equal(t, uint64(10), diff(float64(1), float64(11), types.T_float64))
 	require.Equal(t, uint64(10), diff(types.Date(1), types.Date(11), types.T_date))
 	require.Equal(t, uint64(10), diff(types.Datetime(1), types.Datetime(11), types.T_datetime))
+	require.Equal(t, uint64(10), diff(types.Time(1), types.Time(11), types.T_time))
+	require.Equal(t, uint64(10), diff(types.Timestamp(1), types.Timestamp(11), types.T_timestamp))
+	require.Equal(t, uint64(10), diff(types.Enum(1), types.Enum(11), types.T_enum))
+	require.Equal(t, uint64(10), diff(types.Decimal64(1), types.Decimal64(11), types.T_decimal64))
+	require.Equal(t, uint64(math.MaxUint64), diff(types.Decimal128{}, types.Decimal128{}, types.T_decimal128))
 }
 
 func BenchmarkRemoveOversize(b *testing.B) {
