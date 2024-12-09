@@ -16,8 +16,8 @@ id    name    age
 4    Dora    29
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    0    idx1    1    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    0    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx1' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1');
 name    type    column_name
 idx1    UNIQUE    name
@@ -33,10 +33,10 @@ id    name    age
 4    Dora    29
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-t1    0    idx1    1    name    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    idx2    1    name    A    0    NULL    NULL    YES                    YES    NULL
-t1    1    idx2    2    age    A    0    NULL    NULL    YES                    YES    NULL
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    0    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
+t1    1    idx2    1    name    A    0    NULL    NULL    YES                    YES    name
+t1    1    idx2    2    age    A    0    NULL    NULL    YES                    YES    age
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1');
 name    type    column_name
 idx2    MULTIPLE    name
@@ -67,8 +67,8 @@ select * from t2;
 a    b
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t2    1    idx9    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
-t2    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t2    1    idx9    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    b
+t2    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx9' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't2');
 name    type    column_name
 idx9    MULTIPLE    b
@@ -85,8 +85,8 @@ insert into t3 values(1, "[1,2,3]");
 insert into t3 values(2, "[1,2,4]");
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
-t3    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t3    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    b
+t3    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table t3;
 Table    Create Table
 t3    CREATE TABLE `t3` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx10` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
@@ -103,7 +103,7 @@ entries
 alter table t3 drop column b;
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 show create table t3;
 Table    Create Table
 t3    CREATE TABLE `t3` (\n  `a` int NOT NULL,\n  PRIMARY KEY (`a`)\n)
@@ -124,8 +124,8 @@ insert into tbl values(8, "[130,40,90]");
 create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -142,8 +142,8 @@ entries
 alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    embedding
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
@@ -160,8 +160,8 @@ entries
 alter table tbl add c vecf32(3);
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
-tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    embedding
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `c` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops' \n)
@@ -180,8 +180,8 @@ create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
-tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    b
 show create table tbl;
 Table    Create Table
 tbl    CREATE TABLE `tbl` (\n  `a` int NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  `c` vecf64(5) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
@@ -208,9 +208,9 @@ insert into src1 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy c
 create fulltext index ftidx on src1 (body, title);
 show index from src1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-src1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-src1    1    ftidx    1    body    A    0    NULL    NULL    YES    fulltext                YES    NULL
-src1    1    ftidx    2    title    A    0    NULL    NULL    YES    fulltext                YES    NULL
+src1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+src1    1    ftidx    1    body    A    0    NULL    NULL    YES    fulltext                YES    body
+src1    1    ftidx    2    title    A    0    NULL    NULL    YES    fulltext                YES    title
 select name, type, column_name from mo_catalog.mo_indexes where name = 'ftidx' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src1');
 name    type    column_name
 ftidx    MULTIPLE    body
@@ -221,10 +221,10 @@ i
 alter table src1 add fulltext index ftidx2 (body);
 show index from src1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-src1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
-src1    1    ftidx    1    body    A    0    NULL    NULL    YES    fulltext                YES    NULL
-src1    1    ftidx    2    title    A    0    NULL    NULL    YES    fulltext                YES    NULL
-src1    1    ftidx2    1    body    A    0    NULL    NULL    YES    fulltext                YES    NULL
+src1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+src1    1    ftidx    1    body    A    0    NULL    NULL    YES    fulltext                YES    body
+src1    1    ftidx    2    title    A    0    NULL    NULL    YES    fulltext                YES    title
+src1    1    ftidx2    1    body    A    0    NULL    NULL    YES    fulltext                YES    body
 select name, type, column_name from mo_catalog.mo_indexes where name = 'ftidx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src1');
 name    type    column_name
 ftidx2    MULTIPLE    body
@@ -267,9 +267,9 @@ insert into src2 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy c
 (10, NULL, NULL);
 show index from src2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-src2    1        1    title    A    0    NULL    NULL    YES    fulltext                YES    NULL
-src2    1        2    body    A    0    NULL    NULL    YES    fulltext                YES    NULL
-src2    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+src2    1        1    title    A    0    NULL    NULL    YES    fulltext                YES    title
+src2    1        2    body    A    0    NULL    NULL    YES    fulltext                YES    body
+src2    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
 select name, type, column_name from mo_catalog.mo_indexes where table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src2');
 name    type    column_name
     MULTIPLE    title
