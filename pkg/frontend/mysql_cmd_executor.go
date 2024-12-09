@@ -398,37 +398,19 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
 		}()
 
-		// create tmp table
-		tmpDbName := fmt.Sprintf("tmp_%d", time.Now().UnixNano())
-		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("create database %s", tmpDbName)); err != nil {
-			return
-		}
-		defer func() {
-			_, _ = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("drop database %s", tmpDbName))
-		}()
-		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("use %s", tmpDbName)); err != nil {
-			return
-		}
-		if _, err = executeSQLInBackgroundSession(ctx, bh, "create table tmp (db varchar(256), tbl varchar(256))"); err != nil {
-			return
-		}
-
-		// insert data
 		sqlBuilder := strings.Builder{}
-		sqlBuilder.WriteString("insert into tmp values ")
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (values ")
 		for i, tblName := range tblNames {
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
 		}
-		if _, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
-			return
-		}
+		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
 		// get table stats
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, bh, "select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from tmp"); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
 			return
 		}
 
