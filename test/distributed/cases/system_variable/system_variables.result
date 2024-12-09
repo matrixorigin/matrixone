@@ -114,7 +114,7 @@ primary key(a)
 );
 show indexes from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database db1;
 use db1;
@@ -127,7 +127,7 @@ primary key(a)
 );
 show indexes from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 drop database db1;
 drop account acc_idx;
 use information_schema;
