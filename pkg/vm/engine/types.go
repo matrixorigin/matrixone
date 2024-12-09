@@ -764,6 +764,7 @@ type DataSource interface {
 		cols []string,
 		types []types.Type,
 		seqNums []uint16,
+		pkSeqNum int32,
 		memFilter any,
 		mp *mpool.MPool,
 		bat *batch.Batch,
@@ -1000,6 +1001,15 @@ type Engine interface {
 	// return value should not be cached
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
+
+	BuildBlockReaders(
+		ctx context.Context,
+		proc any,
+		ts timestamp.Timestamp,
+		expr *plan.Expr,
+		def *plan.TableDef,
+		relData RelData,
+		num int) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

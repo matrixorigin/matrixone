@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -51,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -133,6 +135,7 @@ func New(
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
+	e.pClient.ctx = ctx
 
 	initMoTableStatsConfig(ctx, e)
 
@@ -620,6 +623,68 @@ func (e *Engine) Nodes(
 func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
+}
+
+func (e *Engine) BuildBlockReaders(
+	ctx context.Context,
+	p any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
+	proc := p.(*process.Process)
+	blkCnt := relData.DataCnt()
+	newNum := num
+	if blkCnt < num {
+		newNum = blkCnt
+		for i := 0; i < num-blkCnt; i++ {
+			rds = append(rds, new(engine_util.EmptyReader))
+		}
+	}
+	if blkCnt == 0 {
+		return rds, nil
+	}
+	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	mod := blkCnt % newNum
+	divide := blkCnt / newNum
+	for i := 0; i < newNum; i++ {
+		if i == 0 {
+			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
+		} else {
+			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
+		}
+		ds := engine_util.NewRemoteDataSource(
+			ctx,
+			fs,
+			ts,
+			shard)
+		rd, err := engine_util.NewReader(
+			ctx,
+			proc.Mp(),
+			e.packerPool,
+			e.fs,
+			def,
+			ts,
+			expr,
+			ds,
+			engine_util.GetThresholdForReader(newNum),
+			engine.FilterHint{},
+		)
+		if err != nil {
+			return nil, err
+		}
+		rds = append(rds, rd)
+	}
+	return rds, nil
 }
 
 func (e *Engine) GetTNServices() []DNStore {

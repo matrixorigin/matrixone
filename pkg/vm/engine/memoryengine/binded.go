@@ -19,6 +19,7 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -63,6 +64,17 @@ func (b *BindedEngine) Delete(ctx context.Context, databaseName string, _ client
 
 func (b *BindedEngine) Hints() engine.Hints {
 	return b.engine.Hints()
+}
+
+func (b *BindedEngine) BuildBlockReaders(
+	ctx context.Context,
+	proc any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
+	return nil, nil
 }
 
 func (b *BindedEngine) New(ctx context.Context, _ client.TxnOperator) error {

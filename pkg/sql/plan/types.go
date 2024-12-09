@@ -74,6 +74,7 @@ type IndexDef = plan.IndexDef
 type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
+type ExternAttr = plan.ExternAttr
 
 type CompilerContext interface {
 	// Default database/schema in context
