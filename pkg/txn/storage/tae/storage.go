@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -48,12 +49,14 @@ func NewTAEStorage(
 	rt runtime.Runtime,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
+	txnServer rpc2.TxnServer,
 ) (storage.TxnStorage, error) {
 	if rt.ServiceUUID() != opt.SID {
 		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
 	}
 	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
+	tae.TxnServer = txnServer
 	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, nil)
 	if err != nil {

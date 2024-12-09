@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	rpc2 "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"sync"
 	"time"
 
@@ -148,6 +149,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// TODO
 
 	// 3. build forward write request tunnel to the new write candidate
+	c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnForwardWait, "target address")
 	// TODO
 
 	// 4. build logtail tunnel to the new write candidate
@@ -173,6 +175,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// TODO
 
 	// 10. forward the write requests to the new write candidate
+	c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnForwarding, "")
 	// TODO
 
 	// 11. replay the log entries from the logservice
@@ -231,7 +234,7 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	c.db.TxnMgr.ToWriteMode()
 
 	// 4. unfreeze the write requests
-	// TODO
+	c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle, "")
 
 	// 5. start merge scheduler|checkpoint|diskcleaner
 	// TODO

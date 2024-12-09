@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"io"
 	"sync/atomic"
 	"time"
@@ -66,6 +67,8 @@ type DB struct {
 	Dir        string
 	TxnMode    atomic.Uint32
 	Controller *Controller
+
+	TxnServer rpc.TxnServer
 
 	Opts *options.Options
 
