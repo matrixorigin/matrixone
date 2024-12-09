@@ -166,7 +166,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -456,7 +456,7 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -610,7 +610,7 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -892,7 +892,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -1211,7 +1211,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 		testutil.TestOptions{},
 		t,
 		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 	)
 	defer func() {
 		disttaeEngine.Close(ctx)
@@ -1381,7 +1381,8 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-			testutil.WithDisttaeEngineWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
+			testutil.WithDisttaeEngineWorkspaceWriteThreshold(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
@@ -1492,7 +1493,7 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 			testutil.TestOptions{},
 			t,
 			testutil.WithDisttaeEngineInsertEntryMaxCount(1),
-			testutil.WithDisttaeEngineWorkspaceThreshold(1),
+			testutil.WithDisttaeEngineWorkspaceCommitThreshold(1),
 		)
 		defer func() {
 			disttaeEngine.Close(ctx)
