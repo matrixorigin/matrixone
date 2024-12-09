@@ -130,6 +130,8 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
+	disttae.LaunchMTSTasksForUT()
+
 	disttae.NotifyCleanDeletes()
 	disttae.NotifyUpdateForgotten()
 
@@ -146,7 +148,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	dbId := rel.GetDBID(p.Ctx)
 	tblId := rel.GetTableID(p.Ctx)
 
-	_, err := disttae.QueryTableStats(context.Background(),
+	_, err, _ := disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
@@ -155,7 +157,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = disttae.HandleMoTableStatsCtl("use_old_impl:true")
 	require.Equal(t, "use old impl: false to true", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, false, nil)
@@ -167,7 +169,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = disttae.HandleMoTableStatsCtl("force_update:true")
 	require.Equal(t, "force update: false to true", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		true, false, nil)
@@ -176,7 +178,7 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 	ret = disttae.HandleMoTableStatsCtl("move_on: false")
 	require.Equal(t, "move on: true to false", ret)
 
-	_, err = disttae.QueryTableStats(context.Background(),
+	_, err, _ = disttae.QueryTableStats(context.Background(),
 		[]int{disttae.TableStatsTableRows},
 		[]uint64{0}, []uint64{dbId}, []uint64{tblId},
 		false, true, nil)
@@ -203,13 +205,10 @@ func TestMoTableStatsMoCtl2(t *testing.T) {
 }
 
 func TestHandleGetChangedList(t *testing.T) {
-
-	opt, err := testutil.GetS3SharedFileServiceOption(
-		context.Background(), testutil.GetDefaultTestPath("test", t))
-	require.NoError(t, err)
-
 	var opts testutil.TestOptions
-	opts.TaeEngineOptions = opt
+
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+
 	p := testutil.InitEnginePack(opts, t)
 	defer p.Close()
 
@@ -262,7 +261,7 @@ func TestHandleGetChangedList(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	req.From[len(tblNames)-1] = &ts
 
-	_, err = p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
+	_, err := p.T.GetRPCHandle().HandleGetChangedTableList(p.Ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
 
 	require.Equal(t, tblIds[:len(tblIds)-1], resp.TableIds)
