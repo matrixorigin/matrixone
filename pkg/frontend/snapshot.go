@@ -1006,7 +1006,7 @@ func restoreViews(
 
 	g := toposort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
 		if err != nil {
 			return err
 		}
