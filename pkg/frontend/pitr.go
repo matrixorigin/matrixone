@@ -1713,19 +1713,18 @@ func restoreViewsWithPitr(
 	}()
 
 	g := toposort{next: make(map[string][]string)}
-	for key, view := range viewMap {
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
+	for key, viewEntry := range viewMap {
+		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v", pitrName, viewEntry.tblName))
+		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
 		if err != nil {
 			return err
 		}
 
-		compCtx.SetDatabase(view.dbName)
+		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		if _, err = plan.BuildPlan(compCtx, stmts[0], false); err != nil {
-			stmts, err = parsers.Parse(ctx, dialect.MYSQL, view.createSql, 0)
-			if err != nil {
-				return err
-			}
+		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		if err != nil {
+			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			if err != nil {
 				return err
