@@ -149,6 +149,9 @@ func (e *Engine) fillDefaults() {
 	if e.config.commitWorkspaceThreshold <= 0 {
 		e.config.commitWorkspaceThreshold = CommitWorkspaceThreshold
 	}
+	if e.config.writeWorkspaceThreshold <= 0 {
+		e.config.writeWorkspaceThreshold = WriteWorkspaceThreshold
+	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
@@ -157,6 +160,7 @@ func (e *Engine) fillDefaults() {
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }

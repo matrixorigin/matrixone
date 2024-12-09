@@ -456,7 +456,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.engine.config.commitWorkspaceThreshold {
+		if txn.approximateInMemInsertSize < txn.engine.config.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -480,7 +480,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				size += uint64(txn.writes[i].bat.Size())
 			}
 		}
-		if size < txn.engine.config.commitWorkspaceThreshold {
+		if size < txn.engine.config.writeWorkspaceThreshold {
 			return nil
 		}
 		size = 0

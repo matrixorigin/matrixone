@@ -207,6 +207,7 @@ type Engine struct {
 
 	config struct {
 		commitWorkspaceThreshold uint64
+		writeWorkspaceThreshold  uint64
 		insertEntryMaxCount      int
 
 		cnTransferTxnLifespanThreshold time.Duration
@@ -353,6 +354,8 @@ type Transaction struct {
 	adjustCount int
 
 	haveDDL atomic.Bool
+
+	writeWorkspaceThreshold uint64
 }
 
 type Pos struct {
@@ -410,6 +413,15 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
+
+	writeWorkspaceThreshold := eng.config.writeWorkspaceThreshold
+	if injected, mb := objectio.WriteWorkspaceThresholdInjected(); injected {
+		newThreshold := uint64(mb) * mpool.MB
+		if newThreshold > writeWorkspaceThreshold {
+			writeWorkspaceThreshold = newThreshold
+		}
+	}
+
 	txn := &Transaction{
 		proc:               proc,
 		engine:             eng,
@@ -437,6 +449,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		toFreeBatches:        make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
+
+		writeWorkspaceThreshold: writeWorkspaceThreshold,
 	}
 
 	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
