@@ -160,6 +160,7 @@ func (opAlyzr *operatorAnalyzer) InputBlock() {
 	opAlyzr.opStats.InputBlocks += 1
 }
 
+// If the operator input batch is First, then the InputSize and InputRows will be counted
 func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Input: operatorAnalyzer.opStats is nil")
@@ -171,6 +172,7 @@ func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
 	}
 }
 
+// If the operator input batch is Last, then the OutputSize and OutputRows will be counted
 func (opAlyzr *operatorAnalyzer) Output(bat *batch.Batch) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Output: operatorAnalyzer.opStats is nil")
