@@ -34,9 +34,6 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,6 +71,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -399,18 +398,37 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
 		}()
 
-		sqlBuilder := strings.Builder{}
-		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (")
-		for i, tblName := range tblNames {
-			if i > 0 {
-				sqlBuilder.WriteString(" union all ")
-			}
-			sqlBuilder.WriteString(fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName))
+		// create tmp table
+		tmpDbName := fmt.Sprintf("tmp_%d", time.Now().UnixNano())
+		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("create database %s", tmpDbName)); err != nil {
+			return
 		}
-		sqlBuilder.WriteString(") tmp")
+		defer func() {
+			_, _ = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("drop database %s", tmpDbName))
+		}()
+		if _, err = executeSQLInBackgroundSession(ctx, bh, fmt.Sprintf("use %s", tmpDbName)); err != nil {
+			return
+		}
+		if _, err = executeSQLInBackgroundSession(ctx, bh, "create table tmp (db varchar(256), tbl varchar(256))"); err != nil {
+			return
+		}
 
+		// insert data
+		sqlBuilder := strings.Builder{}
+		sqlBuilder.WriteString("insert into tmp values ")
+		for i, tblName := range tblNames {
+			if i != 0 {
+				sqlBuilder.WriteString(", ")
+			}
+			sqlBuilder.WriteString(fmt.Sprintf("('%s', '%s')", dbName, tblName))
+		}
+		if _, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
+			return
+		}
+
+		// get table stats
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, "select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from tmp"); err != nil {
 			return
 		}
 
