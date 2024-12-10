@@ -225,6 +225,7 @@ func InjectLogging(
 		"echo",
 		iarg,
 		sarg,
+		false,
 	); err != nil {
 		return
 	}

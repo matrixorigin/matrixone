@@ -117,7 +117,7 @@ func TestRemoteRun(t *testing.T) {
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.PipelineClient, tPCli)
 
 	fault.Enable()
-	fault.AddFaultPoint(ctx, "inject_send_pipeline", ":::", "echo", 0, "test_tbl")
+	fault.AddFaultPoint(ctx, "inject_send_pipeline", ":::", "echo", 0, "test_tbl", false)
 
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 	proc.Base.TxnClient = txnCli
