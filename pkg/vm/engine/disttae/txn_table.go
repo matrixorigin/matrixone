@@ -1794,19 +1794,9 @@ func (tbl *txnTable) BuildReaders(
 	}
 
 	def := tbl.GetTableDef(ctx)
-	mod := blkCnt % newNum
-	divide := blkCnt / newNum
-	current := 0
-	var shard engine.RelData
+	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
-		if i < mod {
-			shard = relData.DataSlice(current, current+divide+1)
-			current = current + divide + 1
-		} else {
-			shard = relData.DataSlice(current, current+divide)
-			current = current + divide
-		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, tombstonePolicy, engine.GeneralLocalDataSource)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
 			return nil, err
 		}

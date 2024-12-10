@@ -357,6 +357,10 @@ func (rd *MemRelationData) BuildEmptyRelData(i int) engine.RelData {
 	return &MemRelationData{}
 }
 
+func (rd *MemRelationData) Split(i int) []engine.RelData {
+	panic("not supported")
+}
+
 func (rd *MemRelationData) DataCnt() int {
 	return rd.Shards.Len()
 }

@@ -95,6 +95,24 @@ func (relData *BlockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
+func (relData *BlockListRelData) Split(i int) []engine.RelData {
+	blkCnt := relData.DataCnt()
+	mod := blkCnt % i
+	divide := blkCnt / i
+	current := 0
+	shards := make([]engine.RelData, i)
+	for j := 0; j < i; j++ {
+		if j < mod {
+			shards[j] = relData.DataSlice(current, current+divide+1)
+			current = current + divide + 1
+		} else {
+			shards[j] = relData.DataSlice(current, current+divide)
+			current = current + divide
+		}
+	}
+	return shards
+}
+
 func (relData *BlockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
