@@ -2072,6 +2072,23 @@ func (mr *MockEngineMockRecorder) PrefetchTableMeta(ctx, key interface{}) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrefetchTableMeta", reflect.TypeOf((*MockEngine)(nil).PrefetchTableMeta), ctx, key)
 }
 
+// QueryTableStatsByAccounts mocks base method.
+func (m *MockEngine) QueryTableStatsByAccounts(ctx context.Context, wantedStatsIdxes []int, accs []uint64, forceUpdate, resetUpdateTime bool) ([][]any, []uint64, error, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "QueryTableStatsByAccounts", ctx, wantedStatsIdxes, accs, forceUpdate, resetUpdateTime)
+	ret0, _ := ret[0].([][]any)
+	ret1, _ := ret[1].([]uint64)
+	ret2, _ := ret[2].(error)
+	ret3, _ := ret[3].(bool)
+	return ret0, ret1, ret2, ret3
+}
+
+// QueryTableStatsByAccounts indicates an expected call of QueryTableStatsByAccounts.
+func (mr *MockEngineMockRecorder) QueryTableStatsByAccounts(ctx, wantedStatsIdxes, accs, forceUpdate, resetUpdateTime interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QueryTableStatsByAccounts", reflect.TypeOf((*MockEngine)(nil).QueryTableStatsByAccounts), ctx, wantedStatsIdxes, accs, forceUpdate, resetUpdateTime)
+}
+
 // Stats mocks base method.
 func (m *MockEngine) Stats(ctx context.Context, key statsinfo.StatsInfoKey, sync bool) *statsinfo.StatsInfo {
 	m.ctrl.T.Helper()
