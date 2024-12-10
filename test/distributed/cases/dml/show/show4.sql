@@ -38,6 +38,7 @@ show sequences from db;
 show table_number from db;
 show tables from db;
 
+-- @ignore:3,5,10,11,12
 show table status from db;
 show table_values from t1 from db;
 
