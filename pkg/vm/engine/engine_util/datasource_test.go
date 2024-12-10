@@ -116,7 +116,6 @@ func TestObjListRelData(t *testing.T) { // for test coverage
 	s.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
 	objlistRelData.AppendBlockInfoSlice(s)
 	objlistRelData.SetBlockList(s)
-	objlistRelData.SetBlockInfo(1, &objectio.BlockInfo{BlockID: types.Blockid{1}})
 	objlistRelData.AttachTombstones(nil)
 	buf, err := objlistRelData.MarshalBinary()
 	require.NoError(t, err)

@@ -115,13 +115,11 @@ func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
 }
 
 func (or *ObjListRelData) GetBlockInfo(i int) objectio.BlockInfo {
-	or.expand()
-	return or.blocklistRelData.GetBlockInfo(i)
+	panic("not supported")
 }
 
 func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
-	or.expand()
-	or.blocklistRelData.SetBlockInfo(i, blk)
+	panic("not supported")
 }
 
 func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
@@ -130,8 +128,7 @@ func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
 }
 
 func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
-	or.expand()
-	or.blocklistRelData.AppendBlockInfo(blk)
+	panic("not supported")
 }
 
 func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
