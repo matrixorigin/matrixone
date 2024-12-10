@@ -550,7 +550,7 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			defer bat.Clean(txn.proc.Mp())
 
 			keepElement = false
 		}
@@ -659,7 +659,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			newBat.SetRowCount(bat.Vecs[0].Length())
 
 			mp[tbKey] = append(mp[tbKey], newBat)
-			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
+			defer bat.Clean(txn.proc.Mp())
 
 			keepElement = false
 		}
@@ -1402,7 +1402,6 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
-	txn.CleanToFreeBatches()
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseMap = nil
@@ -1476,7 +1475,6 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		},
 		cnBlkId_Pos:     map[types.Blockid]Pos{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		toFreeBatches:   make(map[tableKey][]*batch.Batch),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 
@@ -1495,15 +1493,6 @@ func (txn *Transaction) SetHaveDDL(haveDDL bool) {
 
 func (txn *Transaction) GetHaveDDL() bool {
 	return txn.haveDDL.Load()
-}
-
-func (txn *Transaction) CleanToFreeBatches() {
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			bat.Clean(txn.proc.Mp())
-		}
-		delete(txn.toFreeBatches, key)
-	}
 }
 
 func newTableOps() *tableOpsChain {
