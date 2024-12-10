@@ -4051,6 +4051,7 @@ func (c *Compile) expandRanges(
 			begin = 1 //skip empty block info
 		}
 		rangesParam.PreAllocBlocks = 2
+		rangesParam.IsPartitionTable = true
 
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {

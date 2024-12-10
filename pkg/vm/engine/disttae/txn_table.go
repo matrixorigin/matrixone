@@ -559,8 +559,8 @@ func (tbl *txnTable) CollectTombstones(
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
-	if len(rangesParam.BlockFilters) == 0 {
-		//no block filters, no agg optimization, return objlist instead of blocklist
+	if len(rangesParam.BlockFilters) == 0 && !rangesParam.IsPartitionTable {
+		//no block filters, no agg optimization, not partition table, then we can return object list instead of block list
 		return tbl.getObjList(ctx, rangesParam)
 	}
 	return tbl.doRanges(ctx, rangesParam)

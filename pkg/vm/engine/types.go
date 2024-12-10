@@ -836,11 +836,12 @@ type RangesShuffleParam struct {
 }
 
 type RangesParam struct {
-	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
-	PreAllocBlocks int          //estimated count of blocks
-	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
-	Policy         DataCollectPolicy
-	Rsp            *RangesShuffleParam
+	BlockFilters     []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks   int          //estimated count of blocks
+	TxnOffset        int          //Transaction offset used to specify the starting position for reading data.
+	Policy           DataCollectPolicy
+	Rsp              *RangesShuffleParam
+	IsPartitionTable bool
 }
 
 var DefaultRangesParam RangesParam = RangesParam{
