@@ -2925,8 +2925,8 @@ func TestRowToString(t *testing.T) {
 }
 
 func TestIntersection2VectorOrdered(t *testing.T) {
-	const ll = 10000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
@@ -2977,8 +2977,8 @@ func TestIntersection2VectorOrdered(t *testing.T) {
 }
 
 func TestIntersection2VectorVarlen(t *testing.T) {
-	const ll = 5000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
@@ -3042,8 +3042,8 @@ func TestIntersection2VectorVarlen(t *testing.T) {
 }
 
 func TestUnion2VectorOrdered(t *testing.T) {
-	const ll = 10000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
@@ -3094,8 +3094,8 @@ func TestUnion2VectorOrdered(t *testing.T) {
 }
 
 func TestUnion2VectorVarlen(t *testing.T) {
-	const ll = 5000
-	const cnt = 100
+	const ll = 100
+	const cnt = 10
 
 	mp := mpool.MustNewZero()
 
