@@ -34,9 +34,6 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,6 +71,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -392,23 +391,24 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		// set session variable
-		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "yes"); err != nil {
+		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.reset_update_time", "no")
+			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
 		}()
 
 		sqlBuilder := strings.Builder{}
-		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (")
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (values ")
 		for i, tblName := range tblNames {
-			if i > 0 {
-				sqlBuilder.WriteString(" union all ")
+			if i != 0 {
+				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("select '%s' as db, '%s' as tbl", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
 		}
-		sqlBuilder.WriteString(") tmp")
+		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
+		// get table stats
 		var rets []ExecResult
 		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
 			return
