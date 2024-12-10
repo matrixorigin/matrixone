@@ -23,6 +23,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -199,13 +200,21 @@ func TestScope_CreateTable(t *testing.T) {
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
-		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
-		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "dept", gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
 
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.CreateTable(c))
@@ -216,6 +225,9 @@ func TestScope_CreateTable(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -224,9 +236,13 @@ func TestScope_CreateTable(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 
+		meta_relation := mock_frontend.NewMockRelation(ctrl)
+		meta_relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
-		mockDbMeta.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
-		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "dept", gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(meta_relation, nil).AnyTimes()
 
 		mockDbMeta2 := mock_frontend.NewMockDatabase(ctrl)
 		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
@@ -344,13 +360,20 @@ func TestScope_CreateView(t *testing.T) {
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		proc.ReplaceTopCtx(ctx)
+
+		meta_relation := mock_frontend.NewMockRelation(ctrl)
+		meta_relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
-		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
-		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "v1", gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(meta_relation, nil).AnyTimes()
 
 		sql := `create view v1 as select * from dept`
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
@@ -366,16 +389,23 @@ func TestScope_CreateView(t *testing.T) {
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		proc.ReplaceTopCtx(ctx)
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 
+		meta_relation := mock_frontend.NewMockRelation(ctrl)
+		meta_relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
-		mockDbMeta.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
-		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Relation(gomock.Any(), "v1", gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "v1", gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(meta_relation, nil).AnyTimes()
 
 		mockDbMeta2 := mock_frontend.NewMockDatabase(ctrl)
-		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
+		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test")).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, name string, arg any) (engine.Database, error) {
