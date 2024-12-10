@@ -139,3 +139,28 @@ func startMinio(dir string) (*exec.Cmd, error) {
 
 	return cmd, nil
 }
+
+func TestMinioSDKRoleARN(t *testing.T) {
+	_, err := NewMinioSDK(
+		context.Background(),
+		ObjectStorageArguments{
+			Endpoint:           "http://localhost",
+			RoleARN:            "abc",
+			NoBucketValidation: true,
+		},
+		nil,
+	)
+	assert.Nil(t, err)
+}
+
+func TestMinioSDKTianYiYun(t *testing.T) {
+	_, err := NewMinioSDK(
+		context.Background(),
+		ObjectStorageArguments{
+			Endpoint:           "http://ctyunapi.cn",
+			NoBucketValidation: true,
+		},
+		nil,
+	)
+	assert.Nil(t, err)
+}
