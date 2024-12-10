@@ -913,8 +913,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
-			blk := s.NodeInfo.Data.GetBlockInfo(0)
-			newRelData.AppendBlockInfo(&blk)
+			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
 			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
 			//otherwise put it into newRelData.
 			var (
