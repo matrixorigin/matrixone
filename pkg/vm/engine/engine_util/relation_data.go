@@ -126,7 +126,7 @@ func (or *ObjListRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 
 func (or *ObjListRelData) SetBlockList(slice objectio.BlockInfoSlice) {
 	or.expand()
-	or.blocklistRelData.SetBlockList()
+	or.blocklistRelData.SetBlockList(slice)
 }
 
 func (or *ObjListRelData) AppendBlockInfo(blk *objectio.BlockInfo) {
