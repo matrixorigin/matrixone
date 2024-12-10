@@ -280,9 +280,9 @@ func Open(
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 
-	db.GCJobs = tasks.NewCancelableJobs()
+	db.CronJobs = tasks.NewCancelableJobs()
 
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Transfer-Table",
 		opts.CheckpointCfg.TransferInterval,
 		func(ctx context.Context) {
@@ -292,7 +292,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Disk",
 		opts.GCCfg.ScanGCInterval,
 		func(ctx context.Context) {
@@ -300,7 +300,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Checkpoint",
 		opts.CheckpointCfg.GCCheckpointInterval,
 		func(ctx context.Context) {
@@ -320,7 +320,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Catalog-Cache",
 		opts.CatalogCfg.GCInterval,
 		func(ctx context.Context) {
@@ -335,7 +335,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-Logtail",
 		opts.CheckpointCfg.GCCheckpointInterval,
 		func(ctx context.Context) {
@@ -348,7 +348,7 @@ func Open(
 		},
 		1,
 	)
-	db.GCJobs.AddJob(
+	db.CronJobs.AddJob(
 		"GC-LockMerge",
 		options.DefaultLockMergePruneInterval,
 		func(ctx context.Context) {
@@ -357,8 +357,17 @@ func Open(
 		1,
 	)
 
+	db.CronJobs.AddJob(
+		"REPORT-MPOOL-STATS",
+		time.Second*10,
+		func(ctx context.Context) {
+			mpoolAllocatorSubTask()
+		},
+		1,
+	)
+
 	if opts.CheckpointCfg.MetadataCheckInterval != 0 {
-		db.GCJobs.AddJob(
+		db.CronJobs.AddJob(
 			"META-CHECK",
 			opts.CheckpointCfg.MetadataCheckInterval,
 			func(ctx context.Context) {
@@ -370,8 +379,6 @@ func Open(
 
 	db.Controller = NewController(db)
 	db.Controller.Start()
-
-	go TaeMetricsTask(ctx)
 
 	// For debug or test
 	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
@@ -389,22 +396,6 @@ func Open(
 // 	}
 // 	db.Catalog.RecurLoop(p)
 // }
-
-func TaeMetricsTask(ctx context.Context) {
-	logutil.Info("tae metrics task started")
-	defer logutil.Info("tae metrics task exit")
-
-	timer := time.NewTicker(time.Second * 10)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			mpoolAllocatorSubTask()
-		}
-	}
-
-}
 
 func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))

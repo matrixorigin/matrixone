@@ -76,7 +76,7 @@ type DB struct {
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
 
-	GCJobs *tasks.CancelableJobs
+	CronJobs *tasks.CancelableJobs
 
 	BGScanner          tasks.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
@@ -272,7 +272,7 @@ func (db *DB) Close() error {
 	}
 	db.Closed.Store(ErrClosed)
 	db.Controller.Stop()
-	db.GCJobs.Reset()
+	db.CronJobs.Reset()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
 	db.Runtime.Scheduler.Stop()
