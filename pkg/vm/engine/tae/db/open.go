@@ -251,14 +251,20 @@ func Open(
 	// Init timed scanner
 
 	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	db.BGScanner = tasks.NewHeartBeater(
+	scanner := newMergeScanner(db.Catalog, db.LogtailMgr, db.MergeScheduler)
+	db.MergeJob = tasks.NewCancelableCronJob(
+		"merge",
 		opts.CheckpointCfg.ScanInterval,
-		newMergeScanner(db.Catalog, db.LogtailMgr, db.MergeScheduler),
+		func(ctx context.Context) {
+			scanner.OnExec()
+		},
+		true,
+		1,
 	)
 
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
-	db.BGScanner.Start()
+	db.MergeJob.Start()
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
