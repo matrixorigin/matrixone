@@ -468,9 +468,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
-			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
-				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
-				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			if txn.writes[i].isCatalog() {
 				continue
 			}
 			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
