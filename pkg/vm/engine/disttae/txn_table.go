@@ -572,9 +572,11 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		NeedFirstEmpty: needUncommited,
 	}
 
-	var uncommittedObjects []objectio.ObjectStats
 	if needUncommited {
-		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommittedObjects, _ := tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		for i := range uncommittedObjects {
+			objRelData.AppendObj(&uncommittedObjects[i])
+		}
 	}
 
 	var part *logtailreplay.PartitionState
@@ -595,7 +597,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 			objRelData.AppendObj(&obj.ObjectStats)
 			return
 		},
-		part, nil, uncommittedObjects...); err != nil {
+		part, nil, nil...); err != nil {
 		return nil, err
 	}
 
