@@ -106,6 +106,10 @@ func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 	return e.Engine.UnsubscribeTable(ctx, dbID, tbID)
 }
 
+func (e *EntireEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
+	return e.Engine.PrefetchTableMeta(ctx, key)
+}
+
 func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.Engine.Stats(ctx, key, sync)
 }
