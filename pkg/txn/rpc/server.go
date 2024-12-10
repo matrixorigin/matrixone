@@ -90,6 +90,12 @@ func WithTxnSender(sender TxnSender) ServerOption {
 	}
 }
 
+func WithForwardTarget(tn metadata.TNShard) ServerOption {
+	return func(s *server) {
+		s.handleState.forward.target = tn
+	}
+}
+
 const (
 	TxnLocalHandle = iota
 	TxnForwardWait
@@ -119,7 +125,7 @@ type server struct {
 		state int
 
 		forward struct {
-			target    string
+			target    metadata.TNShard
 			sender    TxnSender
 			waitReady chan struct{}
 		}
@@ -351,15 +357,17 @@ func checkMethodVersion(
 
 /////////////////////// forward txn request to another tn /////////////////////
 
-func (s *server) SwitchTxnHandleStateTo(state int, target string) {
+func (s *server) SwitchTxnHandleStateTo(state int, opts ...ServerOption) error {
 	switch state {
 	case TxnLocalHandle:
-		s.enterLocalHandleState()
+		return s.enterLocalHandleState()
 	case TxnForwardWait:
-		s.enterForwardWaitState(target)
+		return s.enterForwardWaitState(opts...)
 	case TxnForwarding:
-		s.enterForwardingState()
+		return s.enterForwardingState()
 	}
+
+	return moerr.NewInternalErrorNoCtx("no state matched")
 }
 
 func (s *server) getTxnHandleState() (int, chan struct{}) {
@@ -369,38 +377,47 @@ func (s *server) getTxnHandleState() (int, chan struct{}) {
 	return s.handleState.state, s.handleState.forward.waitReady
 }
 
-func (s *server) enterForwardWaitState(target string) {
+func (s *server) enterForwardWaitState(opts ...ServerOption) error {
 	s.handleState.Lock()
 	defer s.handleState.Unlock()
 
-	if s.handleState.state == TxnForwardWait {
-		return
+	if len(opts) != 1 {
+		return moerr.NewInternalErrorNoCtx("no target tn specified")
 	}
 
+	if s.handleState.state == TxnForwardWait {
+		return nil
+	}
+
+	opts[0](s)
+
 	s.handleState.state = TxnForwardWait
-	s.handleState.forward.target = target
 	s.handleState.forward.waitReady = make(chan struct{})
+
+	return nil
 }
 
-func (s *server) enterForwardingState() {
+func (s *server) enterForwardingState() error {
 	s.handleState.Lock()
 	defer s.handleState.Unlock()
 
 	if s.handleState.state == TxnForwarding {
-		return
+		return nil
 	}
 
 	close(s.handleState.forward.waitReady)
 	s.handleState.forward.waitReady = nil
 	s.handleState.state = TxnForwarding
+
+	return nil
 }
 
-func (s *server) enterLocalHandleState() {
+func (s *server) enterLocalHandleState() error {
 	s.handleState.Lock()
 	defer s.handleState.Unlock()
 
 	if s.handleState.state == TxnLocalHandle {
-		return
+		return nil
 	}
 
 	if s.handleState.forward.waitReady != nil {
@@ -409,6 +426,8 @@ func (s *server) enterLocalHandleState() {
 	}
 
 	s.handleState.state = TxnLocalHandle
+
+	return nil
 }
 
 func (s *server) forwardingTxnRequest(
@@ -416,11 +435,7 @@ func (s *server) forwardingTxnRequest(
 	req *txn.TxnRequest,
 	resp *txn.TxnResponse) error {
 
-	req.ResetTargetTN(metadata.TNShard{
-		Address:       s.handleState.forward.target,
-		TNShardRecord: metadata.TNShardRecord{},
-		ReplicaID:     0,
-	})
+	req.ResetTargetTN(s.handleState.forward.target)
 
 	result, err := s.handleState.forward.sender.Send(ctx, []txn.TxnRequest{*req})
 	if err != nil {

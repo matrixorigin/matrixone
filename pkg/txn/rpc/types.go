@@ -44,8 +44,8 @@ type TxnServer interface {
 	Close() error
 	// RegisterMethodHandler register txn request handler func
 	RegisterMethodHandler(txn.TxnMethod, TxnRequestHandleFunc)
-	// SwitchTxnHandleState switch txn handle state during tn migration
-	SwitchTxnHandleStateTo(int, string)
+	// SwitchTxnHandleStateTo switch txn handle state during tn migration
+	SwitchTxnHandleStateTo(state int, opts ...ServerOption) error
 }
 
 // TxnRequestHandleFunc txn request handle func
