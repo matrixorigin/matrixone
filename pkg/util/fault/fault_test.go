@@ -187,8 +187,8 @@ func Test_panic(t *testing.T) {
 
 	Enable()
 	defer Disable()
-	AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr")
-	AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr")
+	AddFaultPoint(ctx, "panic_moerr", ":::", "panic", PanicUseMoErr, "use moerr", false)
+	AddFaultPoint(ctx, "panic_non_moerr", ":::", "panic", PanicUseNonMoErr, "use non moerr", false)
 
 	fun := func(useMoerr bool) {
 		defer func() {
