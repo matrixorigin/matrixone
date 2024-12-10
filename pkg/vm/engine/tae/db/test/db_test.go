@@ -10424,7 +10424,7 @@ func TestReplayDebugLog(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug")
+	fault.AddFaultPoint(ctx, "replay debug log", ":::", "echo", 0, "debug", false)
 	defer fault.RemoveFaultPoint(ctx, "replay debug log")
 
 	tae.Restart(ctx)
