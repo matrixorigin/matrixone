@@ -422,9 +422,6 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 		if s.Pattern[0].Operator == fulltext.PHRASE {
 			// phrase search widx is dummy and fill in value 1 for all keywords
 			nwords := s.Nkeywords
-			for i := 0; i < nwords; i++ {
-				u.aggcnt[i]++
-			}
 			docvec, ok := u.agghtab[doc_id]
 			if ok {
 				for i := 0; i < nwords; i++ {
@@ -439,9 +436,15 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				}
 				u.agghtab[doc_id] = docvec
 			}
+
+			// update only once per doc_id
+			for i := 0; i < nwords; i++ {
+				if docvec[i] == 1 {
+					u.aggcnt[i]++
+				}
+			}
 		} else {
 
-			u.aggcnt[widx]++
 			docvec, ok := u.agghtab[doc_id]
 			if ok {
 				if docvec[widx] < 255 {
@@ -452,6 +455,11 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				docvec = make([]uint8, s.Nkeywords)
 				docvec[widx] = 1
 				u.agghtab[doc_id] = docvec
+			}
+
+			// update only once per doc_id
+			if docvec[widx] == 1 {
+				u.aggcnt[widx]++
 			}
 
 		}
