@@ -44,12 +44,12 @@ func TestCreateTxnStorage(t *testing.T) {
 	}
 
 	s.cfg.Txn.Storage.Backend = StorageMEMKV
-	v, err := s.createTxnStorage(ctx, metadata.TNShard{})
+	v, err := s.createTxnStorage(ctx, metadata.TNShard{}, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
 
 	s.cfg.Txn.Storage.Backend = "error"
-	v, err = s.createTxnStorage(ctx, metadata.TNShard{})
+	v, err = s.createTxnStorage(ctx, metadata.TNShard{}, nil)
 	assert.Error(t, err)
 	assert.Nil(t, v)
 }

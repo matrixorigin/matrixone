@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
