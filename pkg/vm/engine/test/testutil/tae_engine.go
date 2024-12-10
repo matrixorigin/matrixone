@@ -61,8 +61,18 @@ func (ts *TestTxnStorage) Shard() metadata.TNShard {
 
 func (ts *TestTxnStorage) Start() error { return nil }
 func (ts *TestTxnStorage) Close(destroy bool) error {
-	err := ts.GetDB().Close()
-	return err
+	var firstErr error
+	if err := ts.GetDB().Close(); err != nil {
+		firstErr = err
+	}
+	if err := ts.logtailServer.Close(); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	ts.txnHandler.GCJob.Stop()
+	blockio.Stop("")
+	return firstErr
 }
 func (ts *TestTxnStorage) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil

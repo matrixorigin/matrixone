@@ -621,7 +621,12 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			}
 
 			// Wait for resuming logtail receiver.
-			<-c.resumeC
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-c.resumeC:
+			}
 			logutil.Infof("%s logtail receiver resumed", logTag)
 
 		default:
@@ -1835,6 +1840,9 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 		errHappen := false
 		for {
 			select {
+			case <-ctx.Done():
+				return
+
 			case cmd := <-receiver.signalChan:
 				if errHappen {
 					continue

@@ -66,9 +66,8 @@ func Test_BasicInsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -85,6 +84,8 @@ func Test_BasicInsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -153,9 +154,8 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -174,6 +174,8 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -288,9 +290,8 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -307,6 +308,8 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -443,9 +446,8 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -464,6 +466,8 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -597,9 +601,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaEnhanced(2, primaryKeyIdx, 2)
@@ -618,6 +621,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -770,9 +775,8 @@ func Test_BasicRollbackStatement(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -789,6 +793,8 @@ func Test_BasicRollbackStatement(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -879,9 +885,8 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -900,6 +905,8 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1028,9 +1035,8 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -1047,6 +1053,8 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1198,9 +1206,8 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
@@ -1219,6 +1226,8 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
@@ -1360,9 +1369,8 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	_ = colexec.NewServer(nil)
@@ -1389,6 +1397,8 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 	}
@@ -1474,9 +1484,8 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 		disttaeEngine *testutil.TestDisttaeEngine
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
 	// mock a schema with 4 columns and the 4th column as primary key
@@ -1500,6 +1509,8 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 			rpcAgent.Close()
 		}()
 
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
 		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 		require.NoError(t, err)
 	}
@@ -1549,9 +1560,8 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 		databaseName = "db1"
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 
 	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
@@ -1562,6 +1572,8 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	schema := catalog2.MockSchemaEnhanced(1, 0, 2)
 	schema.Name = tableName
 
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	cnTxnOp := p.StartCNTxn()
 	_, rel := p.CreateDBAndTable(cnTxnOp, databaseName, schema)
 	require.NotNil(t, rel)

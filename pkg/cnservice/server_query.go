@@ -157,7 +157,8 @@ func (s *service) handleFaultInjection(ctx context.Context, req *query.Request, 
 }
 
 func (s *service) handleMoTableStats(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	ret := disttae.HandleMoTableStatsCtl(req.CtlMoTableStatsRequest.Cmd)
+	e := s.storeEngine.(*disttae.Engine)
+	ret := e.HandleMoTableStatsCtl(req.CtlMoTableStatsRequest.Cmd)
 	resp.CtlMoTableStatsResponse = query.CtlMoTableStatsResponse{
 		Resp: ret,
 	}

@@ -137,9 +137,20 @@ func New(
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	e.pClient.ctx = ctx
 
-	initMoTableStatsConfig(ctx, e)
+	err = initMoTableStatsConfig(ctx, e)
+	if err != nil {
+		panic(err)
+	}
 
 	return e
+}
+
+func (e *Engine) Close() error {
+	if e.gcPool != nil {
+		e.gcPool.Release()
+	}
+	e.dynamicCtx.Close()
+	return nil
 }
 
 func (e *Engine) fillDefaults() {
