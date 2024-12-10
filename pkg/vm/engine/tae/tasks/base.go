@@ -20,15 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var WaitableCtx = &Context{Waitable: true}
 
 type Context struct {
 	ID       uint64
-	DoneCB   ops.OpDoneCB
+	DoneCB   OpDoneCB
 	Waitable bool
 }
 
@@ -37,7 +35,7 @@ type Context struct {
 // }
 
 type BaseTask struct {
-	ops.Op
+	Op
 	impl     Task
 	id       uint64
 	taskType TaskType
@@ -56,7 +54,7 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 		taskType: taskType,
 		impl:     impl,
 	}
-	var doneCB ops.OpDoneCB
+	var doneCB OpDoneCB
 	if ctx != nil {
 		if ctx.DoneCB == nil && !ctx.Waitable {
 			doneCB = task.onDone
@@ -67,20 +65,20 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	if impl == nil {
 		impl = task
 	}
-	task.Op = ops.Op{
-		Impl:   impl.(base.IOpInternal),
-		DoneCB: doneCB,
+	task.Op = Op{
+		impl:   impl.(IOpInternal),
+		doneCB: doneCB,
 	}
 	if doneCB == nil {
-		task.Op.ErrorC = make(chan error, 1)
+		task.Op.errorC = make(chan error, 1)
 	}
 	return task
 }
 
-func (task *BaseTask) onDone(_ base.IOp) {
+func (task *BaseTask) onDone(_ IOp) {
 	logutil.Debug("[Done]", common.OperationField(task.impl.Name()),
 		common.DurationField(time.Duration(task.GetExecutTime())),
-		common.ErrorField(task.Err))
+		common.ErrorField(task.err))
 }
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { panic("todo") }

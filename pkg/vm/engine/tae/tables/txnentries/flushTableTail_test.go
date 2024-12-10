@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
 
@@ -49,7 +48,7 @@ func (tSched *testScheduler) ScheduleMultiScopedTxnTask(ctx *tasks.Context, task
 	panic("implement me")
 }
 
-func (tSched *testScheduler) ScheduleMultiScopedTxnTaskWithObserver(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, factory tasks.TxnTaskFactory, observers ...iops.Observer) (tasks.Task, error) {
+func (tSched *testScheduler) ScheduleMultiScopedTxnTaskWithObserver(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, factory tasks.TxnTaskFactory, observers ...tasks.Observer) (tasks.Task, error) {
 	//TODO implement me
 	panic("implement me")
 }

@@ -16,27 +16,27 @@ package tasks
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 
 var (
 	ErrTaskHandleEnqueue = moerr.NewInternalErrorNoCtx("tae: task handle enqueue")
 )
 
-type BaseTaskHandler struct {
-	ops.OpWorker
+type baseTaskHandler struct {
+	OpWorker
 }
 
-func NewBaseEventHandler(ctx context.Context, name string) *BaseTaskHandler {
-	h := &BaseTaskHandler{
-		OpWorker: *ops.NewOpWorker(ctx, name),
+func NewBaseEventHandler(ctx context.Context, name string) *baseTaskHandler {
+	h := &baseTaskHandler{
+		OpWorker: *NewOpWorker(ctx, name),
 	}
 	return h
 }
 
-func (h *BaseTaskHandler) Enqueue(task Task) {
+func (h *baseTaskHandler) Enqueue(task Task) {
 	if !h.SendOp(task) {
 		task.SetError(ErrTaskHandleEnqueue)
 		err := task.Cancel()
@@ -46,22 +46,6 @@ func (h *BaseTaskHandler) Enqueue(task Task) {
 	}
 }
 
-func (h *BaseTaskHandler) Execute(task Task) {
-	h.ExecFunc(task)
-}
-
-func (h *BaseTaskHandler) Close() error {
-	h.Stop()
-	return nil
-}
-
-type singleWorkerHandler struct {
-	BaseTaskHandler
-}
-
-func NewSingleWorkerHandler(ctx context.Context, name string) *singleWorkerHandler {
-	h := &singleWorkerHandler{
-		BaseTaskHandler: *NewBaseEventHandler(ctx, name),
-	}
-	return h
+func (h *baseTaskHandler) Execute(task Task) {
+	h.execFunc(task)
 }

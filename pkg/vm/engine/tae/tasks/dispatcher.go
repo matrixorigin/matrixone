@@ -32,7 +32,7 @@ type Dispatcher interface {
 }
 
 type TaskHandler interface {
-	io.Closer
+	Stop()
 	Start()
 	Enqueue(Task)
 	Execute(Task)
@@ -43,10 +43,9 @@ type BaseDispatcher struct {
 }
 
 func NewBaseDispatcher() *BaseDispatcher {
-	d := &BaseDispatcher{
+	return &BaseDispatcher{
 		handlers: make(map[TaskType]TaskHandler),
 	}
-	return d
 }
 
 func (d *BaseDispatcher) Dispatch(task Task) {
@@ -63,7 +62,7 @@ func (d *BaseDispatcher) RegisterHandler(t TaskType, h TaskHandler) {
 
 func (d *BaseDispatcher) Close() error {
 	for _, h := range d.handlers {
-		h.Close()
+		h.Stop()
 	}
 	return nil
 }
@@ -107,7 +106,7 @@ func (d *BaseScopedDispatcher) Dispatch(task Task) {
 
 func (d *BaseScopedDispatcher) Close() error {
 	for _, h := range d.handlers {
-		h.Close()
+		h.Stop()
 	}
 	return nil
 }

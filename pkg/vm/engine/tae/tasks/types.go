@@ -17,12 +17,13 @@ package tasks
 import (
 	"context"
 	"hash/fnv"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
@@ -81,7 +82,7 @@ func NextTaskId() uint64 {
 }
 
 type Task interface {
-	base.IOp
+	IOp
 	ID() uint64
 	Type() TaskType
 	Cancel() error
@@ -163,4 +164,58 @@ func NewMultiScopedFnTask(ctx *Context, taskType TaskType, scopes []common.ID, f
 
 func (task *MultiScopedFnTask) Scopes() []common.ID {
 	return task.scopes
+}
+
+type IOpWorker interface {
+	Start()
+	Stop()
+	SendOp(IOp) bool
+	StopReceiver()
+	WaitStop()
+	StatsString() string
+}
+
+type IHeartbeater interface {
+	Start()
+	Stop()
+}
+
+type IHBHandle interface {
+	OnExec()
+	OnStopped()
+}
+
+type OpDoneCB func(IOp)
+
+type Op struct {
+	impl       IOpInternal
+	errorC     chan error
+	waitedOnce atomic.Bool
+	err        error
+	createTime time.Time
+	startTime  time.Time
+	endTime    time.Time
+	doneCB     OpDoneCB
+	observers  []Observer
+}
+
+type Observer interface {
+	OnExecDone(any)
+}
+
+type IOpInternal interface {
+	Execute(ctx context.Context) error
+}
+
+type IOp interface {
+	OnExec(ctx context.Context) error
+	SetError(err error)
+	GetError() error
+	WaitDone(ctx context.Context) error
+	Waitable() bool
+	GetCreateTime() time.Time
+	GetStartTime() time.Time
+	GetEndTime() time.Time
+	GetExecutTime() int64
+	AddObserver(Observer)
 }

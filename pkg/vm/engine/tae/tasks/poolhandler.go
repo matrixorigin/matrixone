@@ -19,8 +19,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -29,8 +27,8 @@ var (
 )
 
 type poolHandler struct {
-	BaseTaskHandler
-	opExec ops.OpExecFunc
+	baseTaskHandler
+	opExec OpExecFunc
 	pool   *ants.Pool
 	wg     *sync.WaitGroup
 }
@@ -41,12 +39,12 @@ func NewPoolHandler(ctx context.Context, num int) *poolHandler {
 		panic(err)
 	}
 	h := &poolHandler{
-		BaseTaskHandler: *NewBaseEventHandler(ctx, poolHandlerName),
+		baseTaskHandler: *NewBaseEventHandler(ctx, poolHandlerName),
 		pool:            pool,
 		wg:              &sync.WaitGroup{},
 	}
-	h.opExec = h.ExecFunc
-	h.ExecFunc = h.doHandle
+	h.opExec = h.execFunc
+	h.execFunc = h.doHandle
 	return h
 }
 
@@ -54,8 +52,8 @@ func (h *poolHandler) Execute(task Task) {
 	h.opExec(task)
 }
 
-func (h *poolHandler) doHandle(op iops.IOp) {
-	closure := func(o iops.IOp, wg *sync.WaitGroup) func() {
+func (h *poolHandler) doHandle(op IOp) {
+	closure := func(o IOp, wg *sync.WaitGroup) func() {
 		return func() {
 			h.opExec(o)
 			wg.Done()
@@ -70,9 +68,8 @@ func (h *poolHandler) doHandle(op iops.IOp) {
 	}
 }
 
-func (h *poolHandler) Close() error {
+func (h *poolHandler) Stop() {
 	h.pool.Release()
-	h.BaseTaskHandler.Close()
+	h.baseTaskHandler.Stop()
 	h.wg.Wait()
-	return nil
 }

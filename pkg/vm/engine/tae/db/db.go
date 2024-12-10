@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -79,7 +78,7 @@ type DB struct {
 
 	GCJobs *tasks.CancelableJobs
 
-	BGScanner          wb.IHeartbeater
+	BGScanner          tasks.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 
 	MergeScheduler *merge.Scheduler

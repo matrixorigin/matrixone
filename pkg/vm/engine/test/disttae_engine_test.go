@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 
@@ -565,7 +564,7 @@ func TestColumnsTransfer(t *testing.T) {
 	catalogDB, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
 	columnsTbl, _ := catalogDB.GetRelationByID(catalog.MO_COLUMNS_ID)
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -599,7 +598,7 @@ func TestInProgressTransfer(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -837,7 +836,7 @@ func TestShowDatabasesInRestoreTxn(t *testing.T) {
 	catalogDB, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
 	dbTbl, _ := catalogDB.GetRelationByID(catalog.MO_DATABASE_ID)
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -1090,7 +1089,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	udb, _ := txn.GetDatabaseByID(did)
 	utbl, _ := udb.GetRelationByID(tid)
 
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 
@@ -1157,7 +1156,7 @@ func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)
 	utbl, _ := udb.GetRelationByID(catalog.MO_COLUMNS_ID)
-	worker := ops.NewOpWorker(context.Background(), "xx")
+	worker := tasks.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	// flusht tombstone ahead of data insert

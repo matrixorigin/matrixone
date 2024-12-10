@@ -51,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/tidwall/btree"
 )
@@ -1126,7 +1125,7 @@ func (r *runner) crontask(ctx context.Context) {
 		// test env, no need to lag
 		lag = 0 * time.Second
 	}
-	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
+	hb := tasks.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
 		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		if !entry.IsEmpty() {

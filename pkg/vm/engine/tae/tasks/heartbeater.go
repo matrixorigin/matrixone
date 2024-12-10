@@ -12,35 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ops
+package tasks
 
 import (
 	"context"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
-type lamdaHandle struct {
+type lambdaHandle struct {
 	onExec func()
 	onStop func()
 }
 
-func (h *lamdaHandle) OnExec() {
+func (h *lambdaHandle) OnExec() {
 	if h.onExec != nil {
 		h.onExec()
 	}
 }
 
-func (h *lamdaHandle) OnStopped() {
+func (h *lambdaHandle) OnStopped() {
 	if h.onStop != nil {
 		h.onStop()
 	}
 }
 
 type heartbeater struct {
-	handle   base.IHBHandle
+	handle   IHBHandle
 	interval time.Duration
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -48,11 +46,11 @@ type heartbeater struct {
 }
 
 func NewHeartBeaterWithFunc(interval time.Duration, onExec, onStop func()) *heartbeater {
-	h := &lamdaHandle{onExec: onExec, onStop: onStop}
+	h := &lambdaHandle{onExec: onExec, onStop: onStop}
 	return NewHeartBeater(interval, h)
 }
 
-func NewHeartBeater(interval time.Duration, handle base.IHBHandle) *heartbeater {
+func NewHeartBeater(interval time.Duration, handle IHBHandle) *heartbeater {
 	c := &heartbeater{
 		interval: interval,
 		handle:   handle,

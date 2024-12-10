@@ -15,210 +15,74 @@
 package db
 
 import (
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
-type DBScanner interface {
-	base.IHBHandle
-	RegisterOp(ScannerOp)
+type mergeScanner struct {
+	logtailMgr *logtail.Manager
+	catalog    *catalog.Catalog
+	op         *merge.Scheduler
 }
 
-type ErrHandler interface {
-	OnObjectErr(entry *catalog.ObjectEntry, err error) error
-	OnTombstoneErr(entry *catalog.ObjectEntry, err error) error
-	OnTableErr(entry *catalog.TableEntry, err error) error
-	OnDatabaseErr(entry *catalog.DBEntry, err error) error
-}
-
-type NoopErrHandler struct{}
-
-func (h *NoopErrHandler) OnObjectErr(entry *catalog.ObjectEntry, err error) error    { return nil }
-func (h *NoopErrHandler) OnTombstoneErr(entry *catalog.ObjectEntry, err error) error { return nil }
-func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error      { return nil }
-func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error      { return nil }
-
-type dbScanner struct {
-	*catalog.LoopProcessor
-	db         *DB
-	ops        []ScannerOp
-	errHandler ErrHandler
-	dbmask     *roaring.Bitmap
-	tablemask  *roaring.Bitmap
-	objmask    *roaring.Bitmap
-}
-
-func (scanner *dbScanner) OnStopped() {
+func (scanner *mergeScanner) OnStopped() {
 	logutil.Infof("DBScanner Stopped")
 }
 
-func (scanner *dbScanner) OnExec() {
-	scanner.dbmask.Clear()
-	scanner.tablemask.Clear()
-	scanner.objmask.Clear()
+func (scanner *mergeScanner) OnExec() {
 	dbutils.PrintMemStats()
 
 	// compact logtail table
-	scanner.db.LogtailMgr.TryCompactTable()
+	scanner.logtailMgr.TryCompactTable()
 
-	for _, op := range scanner.ops {
-		err := op.PreExecute()
-		if err != nil {
-			panic(err)
-		}
+	err := scanner.op.PreExecute()
+	if err != nil {
+		panic(err)
 	}
-	if err := scanner.db.Catalog.RecurLoop(scanner); err != nil {
+	if err = scanner.catalog.RecurLoop(scanner); err != nil {
 		logutil.Errorf("DBScanner Execute: %v", err)
 	}
-	for _, op := range scanner.ops {
-		err := op.PostExecute()
-		if err != nil {
-			panic(err)
-		}
+	err = scanner.op.PostExecute()
+	if err != nil {
+		panic(err)
 	}
 }
 
-func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
-	if errHandler == nil {
-		errHandler = new(NoopErrHandler)
+func newMergeScanner(cata *catalog.Catalog, logtailMgr *logtail.Manager, scheduler *merge.Scheduler) *mergeScanner {
+	return &mergeScanner{
+		logtailMgr: logtailMgr,
+		catalog:    cata,
+		op:         scheduler,
 	}
-	scanner := &dbScanner{
-		LoopProcessor: new(catalog.LoopProcessor),
-		db:            db,
-		ops:           make([]ScannerOp, 0),
-		errHandler:    errHandler,
-		dbmask:        roaring.New(),
-		tablemask:     roaring.New(),
-		objmask:       roaring.New(),
-	}
-	scanner.ObjectFn = scanner.onObject
-	scanner.TombstoneFn = scanner.onTombstone
-	scanner.PostObjectFn = scanner.onPostObject
-	scanner.TableFn = scanner.onTable
-	scanner.PostTableFn = scanner.onPostTable
-	scanner.DatabaseFn = scanner.onDatabase
-	scanner.PostDatabaseFn = scanner.onPostDatabase
-	return scanner
 }
 
-func (scanner *dbScanner) RegisterOp(op ScannerOp) {
-	scanner.ops = append(scanner.ops, op)
+func (scanner *mergeScanner) OnPostObject(entry *catalog.ObjectEntry) (err error) {
+	return nil
 }
 
-func (scanner *dbScanner) onPostObject(entry *catalog.ObjectEntry) (err error) {
-	for _, op := range scanner.ops {
-		err = op.OnPostObject(entry)
-		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
-			break
-		}
-	}
-	return
+func (scanner *mergeScanner) OnPostTable(entry *catalog.TableEntry) (err error) {
+	return scanner.op.OnPostTable(entry)
 }
 
-func (scanner *dbScanner) onPostTable(entry *catalog.TableEntry) (err error) {
-	for _, op := range scanner.ops {
-		err = op.OnPostTable(entry)
-		if err = scanner.errHandler.OnTableErr(entry, err); err != nil {
-			break
-		}
-	}
-	return
+func (scanner *mergeScanner) OnPostDatabase(entry *catalog.DBEntry) (err error) {
+	return nil
 }
 
-func (scanner *dbScanner) onPostDatabase(entry *catalog.DBEntry) (err error) {
-	for _, op := range scanner.ops {
-		err = op.OnPostDatabase(entry)
-		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {
-			break
-		}
-	}
-	return
+func (scanner *mergeScanner) OnObject(entry *catalog.ObjectEntry) (err error) {
+	return scanner.op.OnObject(entry)
 }
 
-func (scanner *dbScanner) onObject(entry *catalog.ObjectEntry) (err error) {
-	scanner.objmask.Clear()
-	for i, op := range scanner.ops {
-		if scanner.tablemask.Contains(uint32(i)) {
-			scanner.objmask.Add(uint32(i))
-			continue
-		}
-		err = op.OnObject(entry)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.objmask.Add(uint32(i))
-		}
-		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
-			break
-		}
-	}
-	if scanner.objmask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = moerr.GetOkStopCurrRecur()
-	}
-	return
-}
-func (scanner *dbScanner) onTombstone(entry *catalog.ObjectEntry) (err error) {
-	scanner.objmask.Clear()
-	for i, op := range scanner.ops {
-		if scanner.tablemask.Contains(uint32(i)) {
-			scanner.objmask.Add(uint32(i))
-			continue
-		}
-		err = op.OnTombstone(entry)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.objmask.Add(uint32(i))
-		}
-		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
-			break
-		}
-	}
-	if scanner.objmask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = moerr.GetOkStopCurrRecur()
-	}
-	return
+func (scanner *mergeScanner) OnTombstone(entry *catalog.ObjectEntry) (err error) {
+	return scanner.op.OnTombstone(entry)
 }
 
-func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
-	scanner.tablemask.Clear()
-	for i, op := range scanner.ops {
-		// If the specified op was masked OnDatabase. skip it
-		if scanner.dbmask.Contains(uint32(i)) {
-			scanner.tablemask.Add(uint32(i))
-			continue
-		}
-		err = op.OnTable(entry)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.tablemask.Add(uint32(i))
-		}
-		if err = scanner.errHandler.OnTableErr(entry, err); err != nil {
-			break
-		}
-	}
-	if scanner.tablemask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = moerr.GetOkStopCurrRecur()
-	}
-	return
+func (scanner *mergeScanner) OnTable(entry *catalog.TableEntry) (err error) {
+	return scanner.op.OnTable(entry)
 }
 
-func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
-	// if entry.IsSystemDB() {
-	// 	err = catalog.ErrStopCurrRecur
-	// 	return
-	// }
-	scanner.dbmask.Clear()
-	for i, op := range scanner.ops {
-		err = op.OnDatabase(entry)
-		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.dbmask.Add(uint32(i))
-		}
-		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {
-			break
-		}
-	}
-	if scanner.dbmask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = moerr.GetOkStopCurrRecur()
-	}
-	return
+func (scanner *mergeScanner) OnDatabase(entry *catalog.DBEntry) (err error) {
+	return scanner.op.OnDatabase(entry)
 }

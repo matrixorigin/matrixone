@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ops
+package tasks
 
 import (
 	"context"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
@@ -58,15 +57,15 @@ func (t testOp) GetExecutTime() int64 {
 	return 0
 }
 
-func (t testOp) AddObserver(iops.Observer) {}
+func (t testOp) AddObserver(Observer) {}
 
 func TestOpWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	worker := NewOpWorker(ctx, "test", 100)
 	worker.Start()
-	worker.CmdC <- stuck
-	for len(worker.CmdC) > 0 {
+	worker.cmdC <- stuck
+	for len(worker.cmdC) > 0 {
 	}
 	for i := 0; i < 100; i++ {
 		require.True(t, worker.SendOp(testOp{}))

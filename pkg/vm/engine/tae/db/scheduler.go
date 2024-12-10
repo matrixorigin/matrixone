@@ -16,13 +16,11 @@ package db
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
@@ -51,7 +49,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 	jobHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.DataCompactionTask, jobHandler)
 	// jobDispatcher.RegisterHandler(tasks.GCTask, jobHandler)
-	gcHandler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, "gc")
+	gcHandler := tasks.NewBaseEventHandler(db.Opts.Ctx, "gc")
 	gcHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.GCTask, gcHandler)
 
@@ -61,14 +59,14 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 
 	ckpDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
 	for i := 0; i < 4; i++ {
-		handler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, fmt.Sprintf("[ckpworker-%d]", i))
+		handler := tasks.NewBaseEventHandler(db.Opts.Ctx, fmt.Sprintf("[ckpworker-%d]", i))
 		ckpDispatcher.AddHandle(handler)
 		handler.Start()
 	}
 
 	ioDispatcher := tasks.NewBaseScopedDispatcher(nil)
 	for i := 0; i < ioWorkers; i++ {
-		handler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, fmt.Sprintf("[ioworker-%d]", i))
+		handler := tasks.NewBaseEventHandler(db.Opts.Ctx, fmt.Sprintf("[ioworker-%d]", i))
 		ioDispatcher.AddHandle(handler)
 		handler.Start()
 	}
@@ -110,7 +108,7 @@ func (s *taskScheduler) ScheduleMultiScopedTxnTaskWithObserver(
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	factory tasks.TxnTaskFactory,
-	observers ...base.Observer) (task tasks.Task, err error) {
+	observers ...tasks.Observer) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
 	for _, observer := range observers {
 		task.AddObserver(observer)
