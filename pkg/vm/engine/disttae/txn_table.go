@@ -1755,7 +1755,7 @@ func (tbl *txnTable) buildLocalDataSource(
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
-	case engine.RelDataBlockList:
+	case engine.RelDataObjList, engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
 			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
