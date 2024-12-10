@@ -140,11 +140,13 @@ func (or *ObjListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSlice) {
 }
 
 func (or *ObjListRelData) UnmarshalBinary(buf []byte) error {
-	panic("not supported")
+	or.expanded = true
+	return or.blocklistRelData.UnmarshalBinary(buf)
 }
 
 func (or *ObjListRelData) MarshalBinary() ([]byte, error) {
-	panic("not supported")
+	or.expand()
+	return or.blocklistRelData.MarshalBinary()
 }
 
 func (or *ObjListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
