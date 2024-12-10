@@ -4034,12 +4034,12 @@ func (c *Compile) expandRanges(
 	counterSet := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
 	rangesParam := engine.RangesParam{
-		BlockFilters:     blockFilterList,
-		PreAllocBlocks:   preAllocBlocks,
-		TxnOffset:        c.TxnOffset,
-		Policy:           policy,
-		Rsp:              rsp,
-		IsPartitionTable: n.TableDef.Partition != nil,
+		BlockFilters:       blockFilterList,
+		PreAllocBlocks:     preAllocBlocks,
+		TxnOffset:          c.TxnOffset,
+		Policy:             policy,
+		Rsp:                rsp,
+		DontSupportRelData: n.TableDef.Partition != nil,
 	}
 	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
