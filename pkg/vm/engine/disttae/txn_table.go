@@ -77,6 +77,23 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
+// true if the prefetch is received
+// false if the prefetch is rejected
+func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
+	// TODO: remove this check
+	if !tbl.db.op.IsSnapOp() {
+		return tbl.eng.PrefetchTableMeta(
+			ctx,
+			pb.StatsInfoKey{
+				AccId:      tbl.accountId,
+				DatabaseID: tbl.db.databaseId,
+				TableID:    tbl.tableId,
+			},
+		)
+	}
+	return true
+}
+
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -613,26 +630,19 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if tbl.enableLogFilterExpr.Load() {
+		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok ||
+			err != nil ||
+			tbl.enableLogFilterExpr.Load() ||
+			cost > 5*time.Second {
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
-				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
-				zap.Int("ranges-len", blocks.Len()),
-				zap.Uint64("tbl-id", tbl.tableId),
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-			)
-		}
-
-		if ok, _ := objectio.RangesLogInjected(tbl.db.databaseName, tbl.tableDef.Name); ok {
-			logutil.Info(
-				"INJECT-TRACE-RANGES",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.String("blocks", blocks.String()),
 				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Duration("cost", cost),
 				zap.Error(err),
 			)
 		}
@@ -729,6 +739,7 @@ func (tbl *txnTable) rangesOnePart(
 		nil,
 		uncommittedObjects,
 		outBlocks,
+		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
 	); err != nil {
 		return err
