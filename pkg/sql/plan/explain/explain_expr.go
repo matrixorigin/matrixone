@@ -198,6 +198,19 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	return nil
 }
 
+func needSpecialHandling(funcExpr *plan.Function) bool {
+	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+		return true
+	}
+	col := funcExpr.Args[0].GetCol()
+	if col != nil {
+		if strings.Contains(col.Name, catalog.PrefixCBColName) || strings.Contains(col.Name, catalog.PrefixPriColName) {
+			return true
+		}
+	}
+	return false
+}
+
 // generator function expression(Expr_F) explain information
 func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Type, options *ExplainOptions, buf *bytes.Buffer) error {
 	// SysFunsAndOperatorsMap
@@ -212,7 +225,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 	switch layout {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
-		if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+		if needSpecialHandling(funcExpr) {
 			//contains invisible character, need special handling
 			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
 			if err != nil {
@@ -264,9 +277,11 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
-		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
-		if err != nil {
-			return err
+		if !needSpecialHandling(funcExpr) {
+			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.MULTIARY_LOGICAL_OPERATOR:
@@ -351,9 +366,11 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " (")
-		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
-		if err != nil {
-			return err
+		if !needSpecialHandling(funcExpr) {
+			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.EXISTS_ANY_PREDICATE:
