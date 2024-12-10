@@ -242,7 +242,6 @@ func ft_runSql_streaming_fn(proc *process.Process, sql string, stream_chan chan 
 
 // run SQL to get the (doc_id, word_index) of all patterns (words) in the search string
 func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
-	var union []string
 
 	var keywords []string
 	var indexes []int32
@@ -251,6 +250,8 @@ func runWordStats(u *fulltextState, proc *process.Process, s *fulltext.SearchAcc
 	for _, p := range s.Pattern {
 		keywords, indexes = fulltext.GetTextFromPattern(p, keywords, indexes)
 	}
+
+	union := make([]string, 0, len(keywords))
 
 	for i, kw := range keywords {
 		idx := indexes[i]
