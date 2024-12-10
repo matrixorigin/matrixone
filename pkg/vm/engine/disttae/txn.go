@@ -516,9 +516,9 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 }
 
 func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
-	mp := make(map[tableKey][]*batch.Batch)
 	lastWritesIndex := offset
 	writes := txn.writes
+	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
 			writes[lastWritesIndex] = writes[i]
@@ -548,7 +548,7 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 			newBatch.Vecs = bat.Vecs[1:]
 			newBatch.SetRowCount(bat.Vecs[0].Length())
 			mp[tbKey] = append(mp[tbKey], newBatch)
-			defer bat.Clean(txn.proc.Mp())
+			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
@@ -624,9 +624,9 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
 	deleteCnt := 0
-	mp := make(map[tableKey][]*batch.Batch)
 	lastWritesIndex := offset
 	writes := txn.writes
+	mp := make(map[tableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
 			writes[lastWritesIndex] = writes[i]
@@ -657,7 +657,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			newBat.SetRowCount(bat.Vecs[0].Length())
 
 			mp[tbKey] = append(mp[tbKey], newBat)
-			defer bat.Clean(txn.proc.Mp())
+			defer bat.Clean(txn.proc.GetMPool())
 
 			keepElement = false
 		}
