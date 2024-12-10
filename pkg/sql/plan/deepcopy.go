@@ -257,6 +257,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode.Stats = DeepCopyStats(node.Stats)
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
+	newNode.IndexName = node.IndexName
 	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
 
 	if node.WinSpecList != nil {

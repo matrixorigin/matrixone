@@ -839,8 +839,9 @@ message Node {
 
 	TableDef table_def = 17;
 	ObjectRef obj_ref = 18;
-	ObjectRef parent_obj_ref = 19;
-	RowsetData rowset_data = 20;
+	string index_name = 19;
+	ObjectRef parent_obj_ref = 20;
+	RowsetData rowset_data = 21;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
