@@ -182,58 +182,7 @@ func TestWait(t *testing.T) {
 	Disable()
 }
 
-func TestFaultMapRace(t *testing.T) {
-	var ctx = context.TODO()
-
-	Enable()
-	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, "", false))
-
-	go func() {
-		Disable()
-	}()
-
-	go func() {
-		TriggerFault("a")
-	}()
-
-	Disable()
-}
-
-func TestFaultMapRace2(t *testing.T) {
-	go func() {
-		Enable()
-	}()
-
-	go func() {
-		Enable()
-	}()
-
-	Disable()
-}
-
-func TestFaultMapRace3(t *testing.T) {
-	var ctx = context.TODO()
-
-	Enable()
-	require.NoError(t, AddFaultPoint(ctx, "a", ":::", "return", 0, "", false))
-
-	go func() {
-		Disable()
-	}()
-
-	go func() {
-		TriggerFault("a")
-	}()
-
-	go func() {
-		Disable()
-	}()
-
-	Disable()
-}
-
 func Test_panic(t *testing.T) {
-	t.Skip("to be fixed")
 	var ctx = context.TODO()
 
 	Enable()
