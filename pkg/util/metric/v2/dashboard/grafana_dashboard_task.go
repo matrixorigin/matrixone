@@ -41,6 +41,8 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
 			c.initTaskStorageUsageRow(),
+			c.initMoTableStatsTaskDurationRow(),
+			c.initMoTableStatsTaskCountingRow(),
 		)...)
 
 	if err != nil {
@@ -307,4 +309,65 @@ func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
 			SpanNulls(true),
 		),
 	)
+}
+
+func (c *DashboardCreator) initMoTableStatsTaskDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"Mo Table Stats Task Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="alpha_task_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="gama_task_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="bulk_update_only_ts_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="bulk_update_stats_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="calculate_stats_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="mo_table_size_rows_normal_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="mo_table_size_rows_force_update_duration"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_duration_bucket`, `type="mo_table_size_rows_reset_update_duration"`),
+			},
+
+			[]string{
+				"alpha_task_duration",
+				"gama_task_duration",
+				"bulk_update_only_ts_duration",
+				"bulk_update_stats_duration",
+				"calculate_stats_duration",
+				"mo_table_size_rows_normal_duration",
+				"mo_table_size_rows_force_update_duration",
+				"mo_table_size_rows_reset_update_duration",
+			},
+
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...)
+}
+
+func (c *DashboardCreator) initMoTableStatsTaskCountingRow() dashboard.Option {
+	return dashboard.Row(
+		"Mo Table Stats Task Counting",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="alpha_task_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="gama_task_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="bulk_update_only_ts_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="bulk_update_stats_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="mo_table_size_rows_normal_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="mo_table_size_rows_force_update_counting"`),
+				c.getMetricWithFilter(`mo_task_mo_table_stats_total_bucket`, `type="mo_table_size_rows_reset_update_counting"`),
+			},
+
+			[]string{
+				"alpha_task_counting",
+				"gama_task_counting",
+				"bulk_update_only_ts_counting",
+				"bulk_update_stats_counting",
+				"mo_table_size_rows_normal_counting",
+				"mo_table_size_rows_force_update_counting",
+				"mo_table_size_rows_reset_update_counting",
+			},
+
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Min(0))...)
 }

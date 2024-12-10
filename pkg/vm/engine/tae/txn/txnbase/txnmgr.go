@@ -34,7 +34,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+type TxnManagerOption func(*TxnManager)
+
+// WithTxnSkipFlag set the TxnSkipFlag
+// 0 or TxnSkipFlag_None: skip nothing
+// TxnFlag_Normal: skip normal txn
+// TxnFlag_Replay|TxnFlag_Normal: skip normal and replay txn
+// TxnFlag_Heartbeat|TxnFlag_Normal|TxnFlag_Replay or TxnSkipFlag_All: skip all txn
+func WithTxnSkipFlag(flag TxnFlag) TxnManagerOption {
+	return func(m *TxnManager) {
+		prevFlag := TxnFlag(m.txns.skipFlags.Load())
+		m.txns.skipFlags.Store(uint64(flag))
+		logutil.Info(
+			"TxnManager-TxnSkipFlag-Change",
+			zap.String("prev", prevFlag.String()),
+			zap.String("current", flag.String()),
+		)
+	}
+}
+
+// Here define the write mode:
+// TxnSkipFlag_None: skip nothing
+func WithWriteMode(mgr *TxnManager) {
+	WithTxnSkipFlag(TxnSkipFlag_None)(mgr)
+}
+
+// Here define the replay mode:
+// TxnFlag_Normal|TxnFlag_Heartbeat: skip normal and heartbeat txn
+func WithReplayMode(mgr *TxnManager) {
+	WithTxnSkipFlag(TxnFlag_Normal | TxnFlag_Heartbeat)(mgr)
+}
+
+// Here define the readonly mode:
+// TxnFlag_Normal|TxnFlag_Heartbeat|TxnFlag_Replay: skip all txn
+func WithReadonlyMode(mgr *TxnManager) {
+	WithTxnSkipFlag(TxnFlag_Normal | TxnFlag_Heartbeat | TxnFlag_Replay)(mgr)
+}
 
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
@@ -85,17 +123,31 @@ type TxnManager struct {
 	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
-	IDMap           *sync.Map
 	IdAlloc         *common.TxnIDAllocator
 	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
 	workers         *ants.Pool
+
+	heartbeatJob atomic.Pointer[tasks.CancelableJob]
+
+	txns struct {
+		// store all txns
+		store *sync.Map
+
+		// wg is used to wait all txns to be done
+		wg sync.WaitGroup
+
+		// TxnSkipFlag to skip some txn type
+		// 0: skip nothing
+		// TxnFlag_Normal: skip normal txn
+		// TxnFlag_Replay: skip replay txn
+		// TxnFlag_Heartbeat: skip heartbeat txn
+		// TxnFlag_Normal | TxnFlag_Replay: skip normal and replay txn
+		skipFlags atomic.Uint64
+	}
 
 	ts struct {
 		mu        sync.Mutex
@@ -108,18 +160,26 @@ type TxnManager struct {
 	prevPrepareTSInPrepareWAL types.TS
 }
 
-func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
+func NewTxnManager(
+	txnStoreFactory TxnStoreFactory,
+	txnFactory TxnFactory,
+	clock clock.Clock,
+	opts ...TxnManagerOption,
+) *TxnManager {
 	if txnFactory == nil {
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
-		IDMap:           new(sync.Map),
 		IdAlloc:         common.NewTxnIDAllocator(),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
-		wg:              sync.WaitGroup{},
+	}
+	mgr.txns.store = new(sync.Map)
+	mgr.txns.wg = sync.WaitGroup{}
+	for _, opt := range opts {
+		opt(mgr)
 	}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
@@ -128,7 +188,6 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
-	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
 }
@@ -147,6 +206,59 @@ func (mgr *TxnManager) Now() types.TS {
 	return mgr.ts.allocator.Alloc()
 }
 
+func (mgr *TxnManager) ToWriteMode() {
+	WithWriteMode(mgr)
+	mgr.ResetHeartbeat()
+}
+
+func (mgr *TxnManager) IsRelayMode() bool {
+	skipFlags := mgr.GetTxnSkipFlags()
+	if skipFlags&TxnFlag_Replay == 0 && skipFlags&TxnFlag_Normal != 0 && skipFlags&TxnFlag_Heartbeat != 0 {
+		return true
+	}
+	return false
+}
+
+func (mgr *TxnManager) IsWriteMode() bool {
+	skipFlags := mgr.GetTxnSkipFlags()
+	return skipFlags == TxnSkipFlag_None
+}
+
+// it is only safe to call this function in the readonly mode
+func (mgr *TxnManager) ToReplayMode() {
+	WithReplayMode(mgr)
+}
+
+func (mgr *TxnManager) SwitchToReadonly(ctx context.Context) (err error) {
+	now := time.Now()
+	defer func() {
+		logutil.Info(
+			"Wait-TxnManager-To-ReplayMode",
+			zap.Duration("duration", time.Since(now)),
+		)
+	}()
+
+	// 1. do not accept new txn
+	WithReadonlyMode(mgr)
+
+	// 2. try to abort slow txn: big-tombstone-txn and merge-txn
+	mgr.txns.store.Range(func(key, value any) bool {
+		// TODO
+		return true
+	})
+
+	// 3. wait all txn to be done.
+	// Note:
+	// the heartbeats may be still running. The controller
+	// should wait all logtail to be flushed
+	err = mgr.WaitEmpty(ctx)
+	return
+}
+
+func (mgr *TxnManager) GetTxnSkipFlags() TxnSkipFlag {
+	return TxnSkipFlag(mgr.txns.skipFlags.Load())
+}
+
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.ts.allocator.SetStart(prevTs)
@@ -156,7 +268,7 @@ func (mgr *TxnManager) Init(prevTs types.TS) error {
 
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.IDMap.Store(txn.GetID(), txn)
+	mgr.storeTxn(txn, TxnFlag_Replay)
 	return
 }
 
@@ -173,7 +285,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	mgr.storeTxn(txn, TxnFlag_Normal)
 	return
 }
 
@@ -190,36 +302,119 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
+	err = mgr.storeTxn(txn, TxnFlag_Normal)
 	return
+}
+
+func (mgr *TxnManager) WaitEmpty(ctx context.Context) (err error) {
+	c := make(chan struct{})
+	go func() {
+		mgr.txns.wg.Wait()
+		close(c)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c:
+		return
+	}
+}
+
+func (mgr *TxnManager) loadTxn(
+	id string,
+) (txnif.AsyncTxn, bool) {
+	if res, ok := mgr.txns.store.Load(id); ok {
+		return res.(txnif.AsyncTxn), true
+	}
+	return nil, false
+}
+
+func (mgr *TxnManager) loadAndDeleteTxn(
+	id string,
+) (txnif.AsyncTxn, bool) {
+	if res, ok := mgr.txns.store.LoadAndDelete(id); ok {
+		mgr.txns.wg.Done()
+		return res.(txnif.AsyncTxn), true
+	}
+	return nil, false
+}
+
+// flag: specify the txn type. only one bit is set
+func (mgr *TxnManager) storeTxn(
+	newTxn txnif.AsyncTxn, flag TxnFlag,
+) (err error) {
+	mgr.txns.wg.Add(1)
+
+	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
+	if skipFlags.Skip(flag) {
+		mgr.txns.wg.Done()
+		return moerr.NewTxnControlErrorNoCtxf(
+			"%s Skip %s",
+			skipFlags.String(),
+			flag.String(),
+		)
+	}
+
+	mgr.txns.store.Store(newTxn.GetID(), newTxn)
+	return
+}
+
+// flag: specify the txn type. only one bit is set
+func (mgr *TxnManager) loadOrStoreTxn(
+	newTxn txnif.AsyncTxn, flag TxnFlag,
+) (txnif.AsyncTxn, bool, error) {
+	mgr.txns.wg.Add(1)
+
+	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
+	if skipFlags.Skip(flag) {
+		mgr.txns.wg.Done()
+		return nil, false, moerr.NewTxnControlErrorNoCtxf(
+			"%s Skip %s",
+			skipFlags.String(),
+			flag.String(),
+		)
+	}
+
+	if actual, loaded := mgr.txns.store.LoadOrStore(
+		newTxn.GetID(), newTxn,
+	); loaded {
+		mgr.txns.wg.Done()
+		return actual.(txnif.AsyncTxn), true, nil
+	}
+	return newTxn, false, nil
 }
 
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
 func (mgr *TxnManager) GetOrCreateTxnWithMeta(
-	info []byte,
-	id []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	info []byte, id []byte, ts types.TS,
+) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); ok {
-		txn = value.(txnif.AsyncTxn)
-	} else {
-		store := mgr.TxnStoreFactory()
-		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
-		store.BindTxn(txn)
-		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
+	var ok bool
+	if txn, ok = mgr.loadTxn(util.UnsafeBytesToString(id)); ok {
+		return
 	}
+
+	store := mgr.TxnStoreFactory()
+	txn = mgr.TxnFactory(mgr, store, id, ts, ts)
+	store.BindTxn(txn)
+	txn, _, err = mgr.loadOrStoreTxn(txn, TxnFlag_Normal)
 	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id string) (err error) {
-	if _, ok := mgr.IDMap.LoadAndDelete(id); !ok {
+	if _, ok := mgr.loadAndDeleteTxn(id); !ok {
 		err = moerr.NewTxnNotFoundNoCtx()
-		logutil.Warnf("Txn %s not found", id)
-		return
+	}
+	if err != nil {
+		logutil.Warn(
+			"DeleteTxnError",
+			zap.String("txn", id),
+			zap.Error(err),
+		)
 	}
 	return
 }
@@ -229,33 +424,16 @@ func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
 }
 
 func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
-	if res, ok := mgr.IDMap.Load(id); ok {
-		return res.(txnif.AsyncTxn)
+	res, ok := mgr.loadTxn(id)
+	if !ok || res == nil {
+		return nil
 	}
-	return nil
+	return res
 }
 
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
 	return
-}
-
-func (mgr *TxnManager) heartbeat(ctx context.Context) {
-	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
-	for {
-		select {
-		case <-mgr.ctx.Done():
-			return
-		case <-heartbeatTicker.C:
-			op := mgr.newHeartbeatOpTxn(ctx)
-			op.Txn.(*Txn).Add(1)
-			_, err := mgr.PreparingSM.EnqueueReceived(op)
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
 }
 
 func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
@@ -594,7 +772,7 @@ func (mgr *TxnManager) OnException(new error) {
 // files that have been gc will not be used.
 func (mgr *TxnManager) MinTSForTest() types.TS {
 	minTS := types.MaxTs()
-	mgr.IDMap.Range(func(key, value any) bool {
+	mgr.txns.store.Range(func(key, value any) bool {
 		txn := value.(txnif.AsyncTxn)
 		startTS := txn.GetStartTS()
 		if startTS.LT(&minTS) {
@@ -605,16 +783,67 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	return minTS
 }
 
+func (mgr *TxnManager) StopHeartbeat() {
+	old := mgr.heartbeatJob.Load()
+	if old == nil {
+		return
+	}
+	old.Stop()
+	for swapped := mgr.heartbeatJob.CompareAndSwap(old, nil); !swapped; {
+		if old = mgr.heartbeatJob.Load(); old != nil {
+			old.Stop()
+		}
+	}
+}
+
+func (mgr *TxnManager) ResetHeartbeat() {
+	old := mgr.heartbeatJob.Load()
+	if old != nil {
+		old.Stop()
+	}
+	newJob := tasks.NewCancelableJob(func(ctx context.Context) {
+		prevReportTime := time.Now()
+		ticker := time.NewTicker(time.Millisecond * 2)
+		defer ticker.Stop()
+		logutil.Info(
+			"TxnManager-HB-Start",
+			zap.Duration("interval", time.Millisecond*2),
+		)
+		for {
+			select {
+			case <-ctx.Done():
+				logutil.Info("TxnManager-HB-Exit")
+				return
+			case <-ticker.C:
+				op := mgr.newHeartbeatOpTxn(ctx)
+				op.Txn.(*Txn).Add(1)
+				if err := mgr.OnOpTxn(op); err != nil {
+					if time.Since(prevReportTime) > time.Second*10 {
+						logutil.Warn(
+							"TxnManager-HB-Error",
+							zap.Error(err),
+						)
+					}
+				}
+			}
+		}
+	})
+	for swapped := mgr.heartbeatJob.CompareAndSwap(old, newJob); !swapped; {
+		if old = mgr.heartbeatJob.Load(); old != nil {
+			old.Stop()
+		}
+	}
+	newJob.Start()
+}
+
 func (mgr *TxnManager) Start(ctx context.Context) {
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
-	mgr.wg.Add(1)
-	go mgr.heartbeat(ctx)
+	mgr.ResetHeartbeat()
 }
 
 func (mgr *TxnManager) Stop() {
-	mgr.cancel()
-	mgr.wg.Wait()
+	mgr.StopHeartbeat()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
 	mgr.OnException(sm.ErrClose)
