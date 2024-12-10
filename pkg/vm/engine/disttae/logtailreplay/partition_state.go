@@ -640,7 +640,7 @@ func NewPartitionState(
 	tid uint64,
 ) *PartitionState {
 	opts := btree.Options{
-		Degree:  64,
+		Degree:  32, // may good for heap alloc
 		NoLocks: true,
 	}
 	ps := &PartitionState{
