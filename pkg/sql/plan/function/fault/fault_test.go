@@ -31,7 +31,7 @@ import (
 
 func Test_CanHandleFaultInjection(t *testing.T) {
 	id := uuid.New().String()
-	addr := "127.0.0.1:7777"
+	addr := "127.0.0.1:7775"
 	initRuntime([]string{id}, []string{addr})
 
 	runtime.SetupServiceBasedRuntime(id, runtime.ServiceRuntime(""))
