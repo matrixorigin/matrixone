@@ -15,11 +15,13 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"iter"
 	"net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"sync/atomic"
@@ -55,49 +57,69 @@ func NewMinioSDK(
 
 	options := new(minio.Options)
 
-	// credentials
-	var credentialProviders []credentials.Provider
+	// credential arguments
+	keyID := args.KeyID
+	keySecret := args.KeySecret
+	sessionToken := args.SessionToken
 	if args.shouldLoadDefaultCredentials() {
-		credentialProviders = append(credentialProviders,
-			// aws env
-			new(credentials.EnvAWS),
-			// minio env
-			new(credentials.EnvMinio),
+		keyID = firstNonZero(
+			args.KeyID,
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_ACCESS_KEY"),
+			os.Getenv("MINIO_ROOT_USER"),
+			os.Getenv("MINIO_ACCESS_KEY"),
+		)
+		keySecret = firstNonZero(
+			args.KeySecret,
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			os.Getenv("AWS_SECRET_KEY"),
+			os.Getenv("MINIO_ROOT_PASSWORD"),
+			os.Getenv("MINIO_SECRET_KEY"),
+		)
+		sessionToken = firstNonZero(
+			args.SessionToken,
+			os.Getenv("AWS_SESSION_TOKEN"),
 		)
 	}
-	if args.KeyID != "" && args.KeySecret != "" {
+
+	// credentials providers
+	var credentialProviders []credentials.Provider
+
+	if keyID != "" && keySecret != "" {
 		// static
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureV2,
 			},
 		})
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureV4,
 			},
 		})
 		credentialProviders = append(credentialProviders, &credentials.Static{
 			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
+				AccessKeyID:     keyID,
+				SecretAccessKey: keySecret,
+				SessionToken:    sessionToken,
 				SignerType:      credentials.SignatureDefault,
 			},
 		})
+
 	}
+
 	if args.RoleARN != "" {
 		// assume role
 		credentialProviders = append(credentialProviders, &credentials.STSAssumeRole{
 			Options: credentials.STSAssumeRoleOptions{
-				AccessKey:       args.KeyID,
-				SecretKey:       args.KeySecret,
+				AccessKey:       keyID,
+				SecretKey:       keySecret,
 				RoleARN:         args.RoleARN,
 				RoleSessionName: args.ExternalID,
 			},
@@ -106,23 +128,23 @@ func NewMinioSDK(
 
 	// special treatments for 天翼云
 	if strings.Contains(args.Endpoint, "ctyunapi.cn") {
-		if args.KeyID == "" {
+		if keyID == "" {
 			// try to fetch one
 			creds := credentials.NewChainCredentials(credentialProviders)
 			value, err := creds.Get()
 			if err != nil {
 				return nil, err
 			}
-			args.KeyID = value.AccessKeyID
-			args.KeySecret = value.SecretAccessKey
-			args.SessionToken = value.SessionToken
+			keyID = value.AccessKeyID
+			keySecret = value.SecretAccessKey
+			sessionToken = value.SessionToken
 		}
 		credentialProviders = []credentials.Provider{
 			&credentials.Static{
 				Value: credentials.Value{
-					AccessKeyID:     args.KeyID,
-					SecretAccessKey: args.KeySecret,
-					SessionToken:    args.SessionToken,
+					AccessKeyID:     keyID,
+					SecretAccessKey: keySecret,
+					SessionToken:    sessionToken,
 					SignerType:      credentials.SignatureV2,
 				},
 			},
@@ -315,15 +337,35 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	_, err = a.putObject(
-		ctx,
-		key,
-		r,
-		sizeHint,
-		expire,
-	)
-	if err != nil {
-		return err
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+			return a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		_, err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	if sizeHint != nil && n.Load() != *sizeHint {

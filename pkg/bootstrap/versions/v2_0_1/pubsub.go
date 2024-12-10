@@ -107,6 +107,11 @@ func migrateMoPubs(txn executor.TxnExecutor) (err error) {
 		if _, err = txn.Exec(insertSql, executor.StatementOption{}.WithAccountID(0)); err != nil {
 			return
 		}
+
+		deleteSql := fmt.Sprintf("delete from mo_catalog.mo_subs where pub_account_name = '%s' and pub_name = '%s' and sub_name is null", info.PubAccountName, info.PubName)
+		if _, err = txn.Exec(deleteSql, executor.StatementOption{}.WithAccountID(0)); err != nil {
+			return
+		}
 	}
 	return
 }

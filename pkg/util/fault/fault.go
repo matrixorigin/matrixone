@@ -52,6 +52,13 @@ const (
 	ECHO
 )
 
+const (
+	// PANIC with non-moerr
+	PanicUseNonMoErr = 0
+	// PANIC with moerr.NewXXXErr
+	PanicUseMoErr = 1
+)
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int     // command
@@ -157,7 +164,12 @@ func (e *faultEntry) do() (int64, string) {
 			ee.cond.Broadcast()
 		}
 	case PANIC:
-		panic(e.sarg)
+		switch e.iarg {
+		case PanicUseMoErr:
+			panic(moerr.NewInternalError(context.Background(), e.sarg))
+		default:
+			panic(e.sarg)
+		}
 	case ECHO:
 		return e.iarg, e.sarg
 	}

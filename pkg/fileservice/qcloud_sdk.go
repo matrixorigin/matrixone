@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"strconv"
 	"time"
@@ -63,12 +65,36 @@ func NewQCloudSDK(
 		return nil, err
 	}
 
+	// credential arguments
+	keyID := args.KeyID
+	keySecret := args.KeySecret
+	sessionToken := args.SessionToken
+	if args.shouldLoadDefaultCredentials() {
+		keyID = firstNonZero(
+			args.KeyID,
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_ACCESS_KEY"),
+			os.Getenv("TENCENTCLOUD_SECRETID"),
+		)
+		keySecret = firstNonZero(
+			args.KeySecret,
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			os.Getenv("AWS_SECRET_KEY"),
+			os.Getenv("TENCENTCLOUD_SECRETKEY"),
+		)
+		sessionToken = firstNonZero(
+			args.SessionToken,
+			os.Getenv("AWS_SESSION_TOKEN"),
+			os.Getenv("TENCENTCLOUD_SESSIONTOKEN"),
+		)
+	}
+
 	// http client
 	httpClient := newHTTPClient(args)
 	httpClient.Transport = &cos.AuthorizationTransport{
-		SecretID:     args.KeyID,
-		SecretKey:    args.KeySecret,
-		SessionToken: args.SessionToken,
+		SecretID:     keyID,
+		SecretKey:    keySecret,
+		SessionToken: sessionToken,
 		Transport:    httpClient.Transport,
 	}
 
@@ -220,15 +246,35 @@ func (a *QCloudSDK) Write(
 ) {
 	defer wrapSizeMismatchErr(&err)
 
-	err = a.putObject(
-		ctx,
-		key,
-		r,
-		sizeHint,
-		expire,
-	)
-	if err != nil {
-		return err
+	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		_, err = DoWithRetry("write", func() (int, error) {
+			return 0, a.putObject(
+				ctx,
+				key,
+				bytes.NewReader(data),
+				sizeHint,
+				expire,
+			)
+		}, maxRetryAttemps, IsRetryableError)
+		if err != nil {
+			return err
+		}
+
+	} else {
+		err = a.putObject(
+			ctx,
+			key,
+			r,
+			sizeHint,
+			expire,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return
