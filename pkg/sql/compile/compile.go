@@ -4034,11 +4034,12 @@ func (c *Compile) expandRanges(
 	counterSet := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
 	rangesParam := engine.RangesParam{
-		BlockFilters:   blockFilterList,
-		PreAllocBlocks: preAllocBlocks,
-		TxnOffset:      c.TxnOffset,
-		Policy:         policy,
-		Rsp:            rsp,
+		BlockFilters:     blockFilterList,
+		PreAllocBlocks:   preAllocBlocks,
+		TxnOffset:        c.TxnOffset,
+		Policy:           policy,
+		Rsp:              rsp,
+		IsPartitionTable: n.TableDef.Partition != nil,
 	}
 	relData, err := rel.Ranges(newCtx, rangesParam)
 	if err != nil {
@@ -4051,8 +4052,6 @@ func (c *Compile) expandRanges(
 			begin = 1 //skip empty block info
 		}
 		rangesParam.PreAllocBlocks = 2
-		rangesParam.IsPartitionTable = true
-
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
