@@ -670,7 +670,7 @@ type CdcTask struct {
 
 	activeRoutine *cdc2.ActiveRoutine
 	// watermarkUpdater update the watermark of the items that has been sunk to downstream
-	watermarkUpdater *cdc2.WatermarkUpdater
+	watermarkUpdater cdc2.IWatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
 

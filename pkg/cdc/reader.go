@@ -40,7 +40,7 @@ type tableReader struct {
 	packerPool           *fileservice.Pool[*types.Packer]
 	info                 *DbTableInfo
 	sinker               Sinker
-	wMarkUpdater         *WatermarkUpdater
+	wMarkUpdater         IWatermarkUpdater
 	tick                 *time.Ticker
 	resetWatermarkFunc   func(*DbTableInfo) error
 	initSnapshotSplitTxn bool
@@ -51,14 +51,14 @@ type tableReader struct {
 	delTsColIdx, delCompositedPkColIdx int
 }
 
-func NewTableReader(
+var NewTableReader = func(
 	cnTxnClient client.TxnClient,
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
 	info *DbTableInfo,
 	sinker Sinker,
-	wMarkUpdater *WatermarkUpdater,
+	wMarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
 	resetWatermarkFunc func(*DbTableInfo) error,
 	initSnapshotSplitTxn bool,

@@ -49,10 +49,10 @@ var (
 	dummy    = []byte("")
 )
 
-func NewSinker(
+var NewSinker = func(
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
 	retryTimes int,
 	retryDuration time.Duration,
@@ -78,7 +78,7 @@ func NewSinker(
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)))
 	// create table
 	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
-	if !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {
+	if len(createSql) < len(createTableIfNotExists) || !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {
 		createSql = createTableIfNotExists + createSql[len(createTable):]
 	}
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceDbName, dbTblInfo.SinkDbName)
@@ -92,12 +92,12 @@ var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *WatermarkUpdater
+	watermarkUpdater IWatermarkUpdater
 }
 
 func NewConsoleSinker(
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
 		dbTblInfo:        dbTblInfo,
@@ -159,7 +159,7 @@ var _ Sinker = new(mysqlSinker)
 type mysqlSinker struct {
 	mysql            Sink
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater *WatermarkUpdater
+	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
 
 	// buf of sql statement
@@ -196,7 +196,7 @@ type mysqlSinker struct {
 var NewMysqlSinker = func(
 	mysql Sink,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater *WatermarkUpdater,
+	watermarkUpdater IWatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
 	maxSqlLength uint64,

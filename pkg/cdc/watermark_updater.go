@@ -48,6 +48,8 @@ const (
 	updateErrMsgFormat = "update mo_catalog.mo_cdc_watermark set err_msg='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
 )
 
+var _ IWatermarkUpdater = new(WatermarkUpdater)
+
 type WatermarkUpdater struct {
 	accountId uint32
 	taskId    uuid.UUID

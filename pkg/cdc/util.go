@@ -624,7 +624,7 @@ var ExitRunSql = func(txnOp client.TxnOperator) {
 	txnOp.ExitRunSql()
 }
 
-func GetTableDef(
+var GetTableDef = func(
 	ctx context.Context,
 	txnOp client.TxnOperator,
 	cnEngine engine.Engine,

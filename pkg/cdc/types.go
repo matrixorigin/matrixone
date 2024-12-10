@@ -95,6 +95,18 @@ type Sink interface {
 	Close()
 }
 
+type IWatermarkUpdater interface {
+	Run(ctx context.Context, ar *ActiveRoutine)
+	InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error
+	GetFromMem(dbName, tblName string) types.TS
+	GetFromDb(dbName, tblName string) (watermark types.TS, err error)
+	UpdateMem(dbName, tblName string, watermark types.TS)
+	DeleteFromMem(dbName, tblName string)
+	DeleteFromDb(dbName, tblName string) error
+	DeleteAllFromDb() error
+	SaveErrMsg(dbName, tblName string, errMsg string) error
+}
+
 type ActiveRoutine struct {
 	sync.Mutex
 	Pause  chan struct{}

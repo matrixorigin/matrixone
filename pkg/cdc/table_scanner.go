@@ -30,8 +30,8 @@ import (
 )
 
 var (
-	tableScanner *TableScanner
-	once         sync.Once
+	scanner *TableScanner
+	once    sync.Once
 
 	scanSql = fmt.Sprintf("select "+
 		"  rel_id, "+
@@ -50,17 +50,21 @@ var (
 	)
 )
 
-func GetTableScanner(cnUUID string) *TableScanner {
+var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
+	v, _ := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
+	return v.(executor.SQLExecutor)
+}
+
+var GetTableScanner = func(cnUUID string) *TableScanner {
 	once.Do(func() {
-		tableScanner = &TableScanner{
-			Mutex: sync.Mutex{},
-			mp:    make(map[uint32]TblMap),
-			cbs:   make(map[string]func(map[uint32]TblMap)),
+		scanner = &TableScanner{
+			Mutex:     sync.Mutex{},
+			Mp:        make(map[uint32]TblMap),
+			Callbacks: make(map[string]func(map[uint32]TblMap)),
 		}
-		v, _ := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-		tableScanner.exec = v.(executor.SQLExecutor)
+		scanner.exec = getSqlExecutor(cnUUID)
 	})
-	return tableScanner
+	return scanner
 }
 
 // TblMap key is dbName.tableName, e.g. db1.t1
@@ -69,32 +73,30 @@ type TblMap map[string]*DbTableInfo
 type TableScanner struct {
 	sync.Mutex
 
-	mp map[uint32]TblMap
-	// callback
-	cbs  map[string]func(map[uint32]TblMap)
-	exec executor.SQLExecutor
-
-	cancel context.CancelFunc
+	Mp        map[uint32]TblMap
+	Callbacks map[string]func(map[uint32]TblMap)
+	exec      executor.SQLExecutor
+	cancel    context.CancelFunc
 }
 
 func (s *TableScanner) Register(id string, cb func(map[uint32]TblMap)) {
 	s.Lock()
 	defer s.Unlock()
 
-	if len(s.cbs) == 0 {
+	if len(s.Callbacks) == 0 {
 		ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		s.cancel = cancel
 		go s.scanTableLoop(ctx)
 	}
-	s.cbs[id] = cb
+	s.Callbacks[id] = cb
 }
 
 func (s *TableScanner) UnRegister(id string) {
 	s.Lock()
 	defer s.Unlock()
 
-	delete(s.cbs, id)
-	if len(s.cbs) == 0 {
+	delete(s.Callbacks, id)
+	if len(s.Callbacks) == 0 {
 		s.cancel()
 		s.cancel = nil
 	}
@@ -114,8 +116,8 @@ func (s *TableScanner) scanTableLoop(ctx context.Context) {
 		case <-timeTick:
 			s.scanTable()
 			// do callbacks
-			for _, cb := range s.cbs {
-				go cb(s.mp)
+			for _, cb := range s.Callbacks {
+				go cb(s.Mp)
 			}
 		}
 	}
@@ -164,6 +166,6 @@ func (s *TableScanner) scanTable() {
 
 	// replace the old table map
 	s.Lock()
-	s.mp = mp
+	s.Mp = mp
 	s.Unlock()
 }
